@@ -5,18 +5,13 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy
 )
 
-from napari_cellpose_stackmode.preprocessing_widget import PreprocessingWidget
-from napari_cellpose_stackmode.cell_tracking_widget import CellTrackingWidget
-from napari_cellpose_stackmode.segmentation_widget import SegmentationWidget
-from napari_cellpose_stackmode.data_manager import DataManager
-from napari_cellpose_stackmode.visualization_manager import VisualizationManager
-from napari_cellpose_stackmode.edge_analysis_widget import EdgeAnalysisWidget
-from napari_cellpose_stackmode.visualization_widget import VisualizationWidget
+from .preprocessing_widget import PreprocessingWidget
+from .data_manager import DataManager
+from .visualization_manager import VisualizationManager
 
 logger = logging.getLogger(__name__)
 
-
-class CellposeStackmodeWidget(QWidget):
+class napariTFMWidget(QWidget):
     def __init__(self, napari_viewer: "napari.Viewer"):
         super().__init__()
         self.viewer = napari_viewer
@@ -32,21 +27,21 @@ class CellposeStackmodeWidget(QWidget):
         container.setLayout(container_layout)
 
         # Add title
-        title = QLabel("Cellpose Stackmode")
+        title = QLabel("napariTFM")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         container_layout.addWidget(title)
 
         # Set size policy for container to prevent vertical stretching
         container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
-        # Initialize managers first
+        # Initialize managers
         self.data_manager = DataManager()
         self.visualization_manager = VisualizationManager(self.viewer, self.data_manager)
 
         # Create tab widget for different components
         tabs = QTabWidget()
 
-        # Initialize component widgets with the managers
+        # Initialize preprocessing widget
         self.preprocessing_widget = PreprocessingWidget(
             self.viewer,
             self.data_manager,
@@ -54,38 +49,8 @@ class CellposeStackmodeWidget(QWidget):
         )
         self.preprocessing_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
-        self.segmentation_widget = SegmentationWidget(
-            self.viewer,
-            self.data_manager,
-            self.visualization_manager
-        )
-
-        self.tracking_widget = CellTrackingWidget(
-            self.viewer,
-            self.data_manager,
-            self.visualization_manager
-        )
-
-
-        self.edge_analysis_widget = EdgeAnalysisWidget(
-            self.viewer,
-            self.data_manager,
-            self.visualization_manager
-        )
-
-        # # Initialize new visualization widget
-        # self.visualization_widget = VisualizationWidget(
-        #     self.viewer,
-        #     self.data_manager,
-        #     self.visualization_manager
-        # )
-
         # Add widgets to tabs
         tabs.addTab(self.preprocessing_widget, "Preprocessing")
-        tabs.addTab(self.segmentation_widget, "Segmentation")
-        tabs.addTab(self.tracking_widget, "Cell Tracking")
-        tabs.addTab(self.edge_analysis_widget, "Edge Analysis")
-        # tabs.addTab(self.visualization_widget, "Visualization")
 
         # Add tabs to container
         container_layout.addWidget(tabs)
@@ -106,18 +71,6 @@ class CellposeStackmodeWidget(QWidget):
         self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
         self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
 
-        # Connect segmentation signals
-        self.segmentation_widget.processing_completed.connect(self._on_segmentation_completed)
-        self.segmentation_widget.processing_failed.connect(self._on_segmentation_failed)
-
-        # Connect tracking signals
-        self.tracking_widget.processing_completed.connect(self._on_tracking_completed)
-        self.tracking_widget.processing_failed.connect(self._on_tracking_failed)
-        #
-        # # Connect visualization widget signals to handle visualization events
-        # self.visualization_widget.visualization_completed.connect(self._on_visualization_completed)
-        # self.visualization_widget.visualization_failed.connect(self._on_visualization_failed)
-
     def _on_preprocessing_completed(self, processed_stack, preprocessing_info):
         """Handle completion of preprocessing"""
         logger.info("Preprocessing completed successfully")
@@ -127,33 +80,3 @@ class CellposeStackmodeWidget(QWidget):
         """Handle preprocessing failure"""
         logger.error(f"Preprocessing failed: {error_msg}")
         QMessageBox.critical(self, "Error", f"Preprocessing failed: {error_msg}")
-
-    def _on_segmentation_completed(self, result):
-        """Handle completion of segmentation"""
-        logger.info("Segmentation completed successfully")
-        self.data_manager.segmentation_data = result
-
-    def _on_segmentation_failed(self, error_msg):
-        """Handle segmentation failure"""
-        logger.error(f"Segmentation failed: {error_msg}")
-        QMessageBox.critical(self, "Error", f"Segmentation failed: {error_msg}")
-
-    def _on_tracking_completed(self, tracked_data):
-        """Handle completion of tracking"""
-        logger.info("Tracking completed successfully")
-        self.data_manager.tracked_data = tracked_data
-
-    def _on_tracking_failed(self, error_msg):
-        """Handle tracking failure"""
-        logger.error(f"Tracking failed: {error_msg}")
-        QMessageBox.critical(self, "Error", f"Tracking failed: {error_msg}")
-
-    def _on_visualization_completed(self):
-        """Handle completion of visualization generation"""
-        logger.info("Visualization generation completed successfully")
-        QMessageBox.information(self, "Success", "Visualizations generated successfully")
-
-    def _on_visualization_failed(self, error_msg):
-        """Handle visualization failure"""
-        logger.error(f"Visualization failed: {error_msg}")
-        QMessageBox.critical(self, "Error", f"Visualization generation failed: {error_msg}")

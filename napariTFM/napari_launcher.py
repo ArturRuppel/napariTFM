@@ -5,14 +5,16 @@ import napari
 from qtpy.QtWidgets import QMessageBox
 
 import os
-os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
-hiii
+
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 # Set up logging
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
 
 def setup_debug_environment():
     """Setup the debug environment and verify imports"""
@@ -26,16 +28,27 @@ def setup_debug_environment():
 
         # Import the widget
         try:
-            from napari_cellpose_stackmode._widget import CellposeStackmodeWidget
-            logger.debug("Successfully imported CellposeStackmodeWidget")
-            return CellposeStackmodeWidget
+            # Import the main widget class
+            from napariTFM._widget import napariTFMWidget
+            logger.debug("Successfully imported napariTFMWidget")
+
+            # Verify other critical imports
+            from napariTFM.preprocessing_widget import PreprocessingWidget
+            from napariTFM.data_manager import DataManager
+            from napariTFM.visualization_manager import VisualizationManager
+            logger.debug("Successfully imported all required modules")
+
+            return napariTFMWidget
+
         except ImportError as e:
-            logger.error(f"Failed to import CellposeStackmodeWidget: {e}")
-            raise
+            logger.error(f"Failed to import required modules: {e}")
+            raise ImportError(f"Failed to import required modules: {e}\n"
+                              f"Please ensure all required files are in the correct location.")
 
     except Exception as e:
         logger.error(f"Error setting up debug environment: {e}")
         raise
+
 
 def create_viewer_with_widget():
     """Create the napari viewer and add the widget"""
@@ -45,13 +58,13 @@ def create_viewer_with_widget():
         logger.debug("Created napari viewer")
 
         # Get the widget class
-        CellposeStackmodeWidget = setup_debug_environment()
+        napariTFMWidget = setup_debug_environment()
 
         # Create and add the widget
-        widget = CellposeStackmodeWidget(viewer)
+        widget = napariTFMWidget(viewer)
         dock_widget = viewer.window.add_dock_widget(
             widget,
-            name="Cellpose Stackmode",
+            name="napariTFM",
             area='right'
         )
         logger.debug("Added widget to viewer")
@@ -62,6 +75,7 @@ def create_viewer_with_widget():
         logger.error(f"Error creating viewer with widget: {e}")
         raise
 
+
 def main():
     """Main entry point with error handling"""
     try:
@@ -71,11 +85,18 @@ def main():
 
     except Exception as e:
         logger.error(f"Fatal error in napari launcher: {e}")
-        # Show error dialog
-        QMessageBox.critical(None, "Fatal Error",
-                           f"Error starting napari: {str(e)}\n\n"
-                           f"Check the console for more details.")
+        # Show error dialog with more detailed information
+        error_message = (
+            f"Error starting napari: {str(e)}\n\n"
+            "This might be caused by:\n"
+            "1. Missing required files\n"
+            "2. Incorrect file structure\n"
+            "3. Missing dependencies\n\n"
+            "Check the console for more details."
+        )
+        QMessageBox.critical(None, "Fatal Error", error_message)
         raise
+
 
 if __name__ == "__main__":
     main()

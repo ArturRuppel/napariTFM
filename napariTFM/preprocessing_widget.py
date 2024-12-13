@@ -1,29 +1,29 @@
-import logging
 from typing import Optional
 
 import numpy as np
-from napari.utils.events import Event
-from qtpy.QtCore import Signal, Qt
+from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QSlider, QFrame, QLabel, QGroupBox, QProgressBar,
-    QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton, QSizePolicy,
-    QFormLayout
+    QVBoxLayout, QHBoxLayout, QGroupBox, QInputDialog,
+    QRadioButton, QLabel, QFrame, QProgressBar, QSpinBox,
+    QDoubleSpinBox, QCheckBox, QPushButton,
+    QComboBox, QMessageBox
 )
 from qtrangeslider import QRangeSlider
-
-from .base_widget import BaseAnalysisWidget, ProcessingError
-from .data_manager import DataManager
-from .preprocessing import PreprocessingParameters, ImagePreprocessor
-from .visualization_manager import VisualizationManager
-
-logger = logging.getLogger(__name__)
+import napari
+from napariTFM.base_widget import BaseAnalysisWidget
+from napariTFM.data_manager import DataManager
+from napariTFM.error_handling import ProcessingError
+from napariTFM.preprocessing import (
+    PreprocessingParameters,
+    ImagePreprocessor
+)
+from napariTFM.visualization_manager import VisualizationManager
 
 
 class PreprocessingWidget(BaseAnalysisWidget):
     """Widget for controlling image preprocessing parameters"""
-    """Widget for controlling image preprocessing parameters"""
 
-    preprocessing_completed = Signal(np.ndarray, list)  # Processed stack and info
+    preprocessing_completed = Signal(dict)  # Emits dict of processed data types
 
     def __init__(
             self,
@@ -31,374 +31,526 @@ class PreprocessingWidget(BaseAnalysisWidget):
             data_manager: DataManager,
             visualization_manager: VisualizationManager
     ):
+        self.load_beads_btn = None
+        self.load_reference_btn = None
+        self.load_cells_btn = None
+        self.bead_status = None
+        self.reference_status = None
+        self.cell_status = None
+
         super().__init__(
             viewer=viewer,
             data_manager=data_manager,
             visualization_manager=visualization_manager,
         )
 
-        # Initialize preprocessing components
         self.preprocessor = ImagePreprocessor()
         self.preview_enabled = False
         self.original_layer = None
         self.preview_layer = None
-        self.current_min_intensity = 0
-        self.current_max_intensity = 255
+        self.current_data_type = 'beads'  # For preview purposes
 
-        # Setup UI
         self._setup_ui()
         self._connect_signals()
 
-        # Add layer removal event handler
         self.viewer.layers.events.removed.connect(self._handle_layer_removal)
+        self._update_ui_state()
+
+
+    def _load_active_layer(self, data_type: str):
+        """Load the currently active layer as the specified data type"""
+        active_layer = self._get_active_image_layer()
+        if active_layer is None:
+            self._show_warning("No active image layer found")
+            return
+
+        try:
+            if data_type == 'beads':
+                self.data_manager.set_bead_stack(active_layer.data)
+            elif data_type == 'reference':
+                self.data_manager.set_reference_image(active_layer.data)
+            elif data_type == 'cells':
+                self.data_manager.set_cell_stack(active_layer.data)
+            else:
+                raise ValueError(f"Invalid data type: {data_type}")
+
+            self._update_ui_state()
+            self._update_status(f"Loaded {data_type} data: {active_layer.data.shape}")
+
+        except Exception as e:
+            self._show_warning(str(e))
+
+    def update_parameters(self):
+        """Update preprocessing parameters from UI controls"""
+        try:
+            # Get current intensity range from slider (as percentiles)
+            min_percentile = self.intensity_slider.value()[0] / 100
+            max_percentile = self.intensity_slider.value()[1] / 100
+
+            # Create new parameters
+            params = PreprocessingParameters(
+                min_intensity_percentile=min_percentile,
+                max_intensity_percentile=max_percentile,
+                enable_gaussian_filter=self.gaussian_check.isChecked(),
+                gaussian_sigma=self.gaussian_sigma_spin.value(),
+                enable_registration=self.registration_check.isChecked(),
+                registration_mode=self.registration_mode_combo.currentText().lower(),
+                reference_frame=self.ref_frame_spin.value()
+            )
+
+            # Validate and update preprocessor
+            params.validate()
+            self.preprocessor.update_parameters(params)
+
+            # Update preview if enabled
+            if self.preview_enabled:
+                self.update_preview_frame()
+
+        except Exception as e:
+            self._handle_error(ProcessingError(
+                "Failed to update parameters",
+                str(e)
+            ))
 
     def _setup_ui(self):
-        # Create a container widget that won't stretch
-        container = QWidget()
-        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-
-        # Main layout with fixed spacing
         main_layout = QVBoxLayout()
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(6, 6, 6, 6)
-        container.setLayout(main_layout)
 
-        # Outer layout that can stretch
-        outer_layout = QVBoxLayout()
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.addWidget(container)
-        outer_layout.addStretch()  # This pushes the widget to the top
-        self.setLayout(outer_layout)
+        # Data Loading Group
+        load_group = QGroupBox("Load Data")
+        load_layout = QVBoxLayout()
 
-        # Title
-        title = QLabel("Image Preprocessing")
-        title.setStyleSheet("font-weight: bold; font-size: 12px;")
-        title.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        main_layout.addWidget(title)
+        # Initialize buttons and status labels
+        self.load_beads_btn = QPushButton("Load Active Layer as Bead Stack")
+        self.load_reference_btn = QPushButton("Load Active Layer as Reference")
+        self.load_cells_btn = QPushButton("Load Active Layer as Cell Stack")
+
+        self.bead_status = QLabel("Bead Stack: Not loaded")
+        self.reference_status = QLabel("Reference Image: Not loaded")
+        self.cell_status = QLabel("Cell Stack: Not loaded")
+
+        # Add widgets to layout
+        for btn, label in [
+            (self.load_beads_btn, self.bead_status),
+            (self.load_reference_btn, self.reference_status),
+            (self.load_cells_btn, self.cell_status)
+        ]:
+            layout = QHBoxLayout()
+            layout.addWidget(btn)
+            layout.addWidget(label)
+            load_layout.addLayout(layout)
+
+        load_group.setLayout(load_layout)
+        main_layout.addWidget(load_group)
+
+
+        # Data selection group
+        data_group = QGroupBox("Available Data")
+        data_layout = QVBoxLayout()
+
+        # Data status indicators
+        self.bead_status = QLabel("Bead Stack: Not loaded")
+        self.reference_status = QLabel("Reference Image: Not loaded")
+        self.cell_status = QLabel("Cell Stack: Not loaded")
+
+        data_layout.addWidget(self.bead_status)
+        data_layout.addWidget(self.reference_status)
+        data_layout.addWidget(self.cell_status)
+
+        data_group.setLayout(data_layout)
+        main_layout.addWidget(data_group)
+
+        # Preview selection (only for checking preprocessing effects)
+        preview_select_group = QGroupBox("Preview Data Type")
+        preview_layout = QHBoxLayout()
+        self.bead_radio = QRadioButton("Bead Stack")
+        self.reference_radio = QRadioButton("Reference Image")
+        self.cell_radio = QRadioButton("Cell Stack")
+        self.bead_radio.setChecked(True)
+
+        preview_layout.addWidget(self.bead_radio)
+        preview_layout.addWidget(self.reference_radio)
+        preview_layout.addWidget(self.cell_radio)
+        preview_select_group.setLayout(preview_layout)
+        main_layout.addWidget(preview_select_group)
 
         # Intensity Range Group
-        intensity_group = self._create_group_box("Intensity Range")
+        intensity_group = QGroupBox("Intensity Range")
         intensity_layout = QVBoxLayout()
-        intensity_layout.setSpacing(5)
-        intensity_group.setLayout(intensity_layout)
 
-        # Range slider
         self.intensity_slider = QRangeSlider(Qt.Horizontal)
-        self.intensity_slider.setRange(0, 255)
-        self.intensity_slider.setValue((0, 255))
+        self.intensity_slider.setRange(0, 100)
+        self.intensity_slider.setValue((0, 100))
         intensity_layout.addWidget(self.intensity_slider)
 
-        # Spin boxes in horizontal layout with fixed width
-        spin_layout = QHBoxLayout()
-        spin_layout.setSpacing(5)
+        percentile_layout = QHBoxLayout()
+        self.min_percentile_label = QLabel("0%")
+        self.max_percentile_label = QLabel("100%")
+        percentile_layout.addWidget(self.min_percentile_label)
+        percentile_layout.addStretch()
+        percentile_layout.addWidget(self.max_percentile_label)
+        intensity_layout.addLayout(percentile_layout)
 
-        self.min_spin = QSpinBox()
-        self.max_spin = QSpinBox()
-        for spin in (self.min_spin, self.max_spin):
-            spin.setRange(0, 255)
-            spin.setFixedWidth(70)
-            spin_layout.addWidget(spin)
-
-        intensity_layout.addLayout(spin_layout)
+        intensity_group.setLayout(intensity_layout)
         main_layout.addWidget(intensity_group)
 
-        # Filters Group
-        filters_group = self._create_group_box("Filters")
-        filters_layout = QFormLayout()
-        filters_layout.setSpacing(8)
-        filters_group.setLayout(filters_layout)
+        # Gaussian Filter Group
+        filter_group = QGroupBox("Gaussian Filter")
+        filter_layout = QVBoxLayout()
 
-        # Create filter controls with consistent spacing
-        self.median_check, self.median_size_spin, self.median_slider = self._create_filter_control(
-            "Median", 3, 15, 3, step=2, odd_only=True
+        self.gaussian_check = QCheckBox("Enable Gaussian Filter")
+        filter_layout.addWidget(self.gaussian_check)
+
+        sigma_layout = QHBoxLayout()
+        sigma_layout.addWidget(QLabel("Sigma:"))
+        self.gaussian_sigma_spin = QDoubleSpinBox()
+        self.gaussian_sigma_spin.setRange(0.1, 10.0)
+        self.gaussian_sigma_spin.setValue(1.0)
+        self.gaussian_sigma_spin.setSingleStep(0.1)
+        self.gaussian_sigma_spin.setEnabled(False)
+        sigma_layout.addWidget(self.gaussian_sigma_spin)
+
+        filter_layout.addLayout(sigma_layout)
+        filter_group.setLayout(filter_layout)
+        main_layout.addWidget(filter_group)
+
+        # Registration Group
+        registration_group = QGroupBox("Registration")
+        registration_layout = QVBoxLayout()
+
+        self.registration_check = QCheckBox("Enable Registration")
+        registration_layout.addWidget(self.registration_check)
+
+        # Registration requirements note
+        self.registration_note = QLabel(
+            "Note: Registration requires both reference image and bead stack"
         )
-        filters_layout.addRow("Median:", self._wrap_filter_controls(
-            self.median_check, self.median_size_spin, self.median_slider
-        ))
+        self.registration_note.setWordWrap(True)
+        registration_layout.addWidget(self.registration_note)
 
-        self.gaussian_check, self.gaussian_sigma_spin, self.gaussian_slider = self._create_filter_control(
-            "Gaussian", 0.1, 10.0, 1.0, step=0.1, double=True
-        )
-        filters_layout.addRow("Gaussian:", self._wrap_filter_controls(
-            self.gaussian_check, self.gaussian_sigma_spin, self.gaussian_slider
-        ))
+        # Add reference frame spinner
+        ref_frame_layout = QHBoxLayout()
+        ref_frame_layout.addWidget(QLabel("Reference Frame:"))
+        self.ref_frame_spin = QSpinBox()
+        self.ref_frame_spin.setMinimum(0)
+        self.ref_frame_spin.setMaximum(0)  # Will be updated when data is loaded
+        self.ref_frame_spin.setEnabled(False)
+        ref_frame_layout.addWidget(self.ref_frame_spin)
+        registration_layout.addLayout(ref_frame_layout)
 
-        self.clahe_check, self.clahe_clip_spin, self.clahe_clip_slider = self._create_filter_control(
-            "CLAHE", 0.1, 100.0, 16.0, step=0.1, double=True
-        )
-        filters_layout.addRow("CLAHE:", self._wrap_filter_controls(
-            self.clahe_check, self.clahe_clip_spin, self.clahe_clip_slider
-        ))
+        # Registration mode
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("Mode:"))
+        self.registration_mode_combo = QComboBox()
+        self.registration_mode_combo.addItems(['Translation', 'Rigid'])
+        self.registration_mode_combo.setEnabled(False)
+        mode_layout.addWidget(self.registration_mode_combo)
+        registration_layout.addLayout(mode_layout)
 
-        self.clahe_grid_control, self.clahe_grid_spin, self.clahe_grid_slider = self._create_filter_control(
-            "Grid Size", 1, 64, 16, checkbox=False
-        )
-        filters_layout.addRow("Grid Size:", self._wrap_filter_controls(
-            self.clahe_grid_control, self.clahe_grid_spin, self.clahe_grid_slider
-        ))
-
-        main_layout.addWidget(filters_group)
+        registration_group.setLayout(registration_layout)
+        main_layout.addWidget(registration_group)
 
         # Preview Section
         preview_frame = QFrame()
-        preview_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         preview_layout = QHBoxLayout()
-        preview_layout.setContentsMargins(5, 5, 5, 5)
         self.preview_check = QCheckBox("Show Preview")
         preview_layout.addWidget(self.preview_check)
-        preview_layout.addStretch()
         preview_frame.setLayout(preview_layout)
         main_layout.addWidget(preview_frame)
 
         # Action Buttons
-        button_frame = QFrame()
-        button_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         button_layout = QHBoxLayout()
-        button_layout.setContentsMargins(5, 5, 5, 5)
-        button_layout.setSpacing(10)
-
         self.preprocess_btn = QPushButton("Run Preprocessing")
         self.reset_btn = QPushButton("Reset Parameters")
-
-        # Set fixed height for buttons
-        for btn in (self.preprocess_btn, self.reset_btn):
-            btn.setFixedHeight(30)
-
         button_layout.addWidget(self.preprocess_btn)
         button_layout.addWidget(self.reset_btn)
-        button_frame.setLayout(button_layout)
-        main_layout.addWidget(button_frame)
+        main_layout.addLayout(button_layout)
 
         # Status and Progress
-        status_frame = QFrame()
-        status_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        status_layout = QVBoxLayout()
-        status_layout.setContentsMargins(5, 5, 5, 5)
-        status_layout.setSpacing(5)
-
         self.progress_bar = QProgressBar()
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFixedHeight(20)
-        status_layout.addWidget(self.progress_bar)
-
         self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-        self.status_label.setFixedHeight(55)
-        status_layout.addWidget(self.status_label)
+        main_layout.addWidget(self.progress_bar)
+        main_layout.addWidget(self.status_label)
 
-        status_frame.setLayout(status_layout)
-        main_layout.addWidget(status_frame)
-
-        # Register controls
+        self.setLayout(main_layout)
         self._register_controls()
 
-    def _create_group_box(self, title: str) -> QGroupBox:
-        """Create a group box with consistent styling"""
-        group = QGroupBox(title)
-        group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        return group
+    def run_preprocessing(self):
+        """Run preprocessing on all available data"""
+        if self.preview_enabled:
+            self.preview_check.setChecked(False)
 
-    def _create_filter_control(self, label, min_val, max_val, default_val, step=1.0,
-                               checkbox=True, double=False, odd_only=False):
-        """Create a consistent set of filter controls"""
-        if checkbox:
-            check = QCheckBox()
-            check.setFixedWidth(20)
+        try:
+            self._set_controls_enabled(False)
+            self._update_status("Starting preprocessing...", 0)
+
+            # Get parameters
+            params = PreprocessingParameters(
+                min_intensity_percentile=self.intensity_slider.value()[0] / 100,
+                max_intensity_percentile=self.intensity_slider.value()[1] / 100,
+                enable_gaussian_filter=self.gaussian_check.isChecked(),
+                gaussian_sigma=self.gaussian_sigma_spin.value(),
+                enable_registration=self.registration_check.isChecked(),
+                registration_mode=self.registration_mode_combo.currentText().lower(),
+                reference_frame=self.ref_frame_spin.value()
+            )
+
+            self.preprocessor.update_parameters(params)
+
+            # Process all data
+            results = self.preprocessor.preprocess_all(
+                bead_stack=self.data_manager.bead_stack,
+                reference_image=self.data_manager.reference_image,
+                cell_stack=self.data_manager.cell_stack
+            )
+
+            # Update visualization
+            self._update_visualization(results)
+
+            self._update_status("Preprocessing complete", 100)
+
+            # Emit results dictionary
+            self.preprocessing_completed.emit(results)
+
+        except Exception as e:
+            error_msg = str(e)
+            self._handle_error(error_msg)
+            self.processing_failed.emit(error_msg)
+        finally:
+            self._set_controls_enabled(True)
+
+    def _update_visualization(self, results):
+        """Update visualization of processed results"""
+        try:
+            # Remove existing preprocessed layers
+            for layer_name in ['Preprocessed Beads', 'Preprocessed Reference', 'Preprocessed Cells']:
+                if layer_name in self.viewer.layers:
+                    self.viewer.layers.remove(layer_name)
+
+            # Add new layers
+            if 'beads' in results:
+                processed_beads, _ = results['beads']
+                self.viewer.add_image(
+                    processed_beads,
+                    name='Preprocessed Beads',
+                    visible=True
+                )
+
+            if 'reference' in results:
+                processed_ref, _ = results['reference']
+                self.viewer.add_image(
+                    processed_ref,
+                    name='Preprocessed Reference',
+                    visible=True
+                )
+
+            if 'cells' in results:
+                processed_cells, _ = results['cells']
+                self.viewer.add_image(
+                    processed_cells,
+                    name='Preprocessed Cells',
+                    visible=True
+                )
+
+        except Exception as e:
+            self._handle_error(f"Error updating visualization: {str(e)}")
+    def _update_ui_state(self):
+        """Update UI elements based on available data and current state"""
+        # Update data status indicators
+        bead_status = "Loaded" if self.data_manager.bead_stack is not None else "Not loaded"
+        ref_status = "Loaded" if self.data_manager.reference_image is not None else "Not loaded"
+        cell_status = "Loaded" if self.data_manager.cell_stack is not None else "Not loaded"
+
+        self.bead_status.setText(f"Bead Stack: {bead_status}")
+        self.reference_status.setText(f"Reference Image: {ref_status}")
+        self.cell_status.setText(f"Cell Stack: {cell_status}")
+
+        # Update registration controls
+        can_register = (
+                self.data_manager.bead_stack is not None and
+                self.data_manager.reference_image is not None
+        )
+        self.registration_check.setEnabled(can_register)
+        self.registration_mode_combo.setEnabled(can_register and self.registration_check.isChecked())
+        self.ref_frame_spin.setEnabled(can_register and self.registration_check.isChecked())
+
+        # Update reference frame spinner range if bead stack is available
+        if self.data_manager.bead_stack is not None:
+            self.ref_frame_spin.setMaximum(len(self.data_manager.bead_stack) - 1)
         else:
-            check = QWidget()
-            check.setFixedWidth(20)
+            self.ref_frame_spin.setMaximum(0)
 
-        spin = QDoubleSpinBox() if double else QSpinBox()
-        spin.setRange(min_val, max_val)
-        spin.setValue(default_val)
-        spin.setSingleStep(step if not odd_only else 2)
-        spin.setFixedWidth(70)
-        if checkbox:
-            spin.setEnabled(False)
+        self.registration_note.setVisible(not can_register)
 
-        slider = QSlider(Qt.Horizontal)
-        if odd_only:
-            slider_range = int((max_val - min_val) / 2)
-            slider.setRange(0, slider_range)
-            slider.setValue(int((default_val - min_val) / 2))
-        else:
-            slider.setRange(int(min_val * (1 / step)), int(max_val * (1 / step)))
-            slider.setValue(int(default_val * (1 / step)))
-        if checkbox:
-            slider.setEnabled(False)
+        # Update preview radio buttons
+        self.bead_radio.setEnabled(self.data_manager.bead_stack is not None)
+        self.reference_radio.setEnabled(self.data_manager.reference_image is not None)
+        self.cell_radio.setEnabled(self.data_manager.cell_stack is not None)
 
-        return check, spin, slider
-
-    def _wrap_filter_controls(self, check, spin, slider):
-        """Wrap filter controls in a consistent layout"""
-        container = QWidget()
-        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
-
-        layout.addWidget(check)
-        layout.addWidget(spin)
-        layout.addWidget(slider, 1)  # Give slider a stretch factor of 1
-
-        container.setLayout(layout)
-        return container
-
-    def _register_controls(self):
-        """Register all controls with the base widget"""
-        controls = [
-            self.intensity_slider, self.min_spin, self.max_spin,
-            self.median_check, self.median_size_spin, self.median_slider,
-            self.gaussian_check, self.gaussian_sigma_spin, self.gaussian_slider,
-            self.clahe_check, self.clahe_clip_spin, self.clahe_clip_slider,
-            self.clahe_grid_spin, self.clahe_grid_slider,
-            self.preview_check, self.preprocess_btn, self.reset_btn
-        ]
-
-        for control in controls:
-            self.register_control(control)
-
-    def _create_filter_controls(self, form_layout: QFormLayout):
-        """Create filter parameter controls"""
-
-        def create_parameter_group(
-                label: str,
-                min_val: float,
-                max_val: float,
-                default_val: float,
-                step: float = 1.0,
-                checkbox: bool = True,
-                double: bool = False,
-                odd_only: bool = False
-        ):
-            control_layout = QHBoxLayout()
-
-            if checkbox:
-                check = QCheckBox("")
-                check.setFixedWidth(30)
-                control_layout.addWidget(check)
-            else:
-                check = None
-                spacer = QWidget()
-                spacer.setFixedWidth(30)
-                control_layout.addWidget(spacer)
-
-            spin = QDoubleSpinBox() if double else QSpinBox()
-            spin.setRange(min_val, max_val)
-            spin.setValue(default_val)
-            spin.setSingleStep(step if not odd_only else 2)
-            spin.setFixedWidth(80)
-            if checkbox:
-                spin.setEnabled(False)
-            control_layout.addWidget(spin)
-
-            slider = QSlider(Qt.Horizontal)
-            if odd_only:
-                slider_range = int((max_val - min_val) / 2)
-                slider.setRange(0, slider_range)
-                slider.setValue(int((default_val - min_val) / 2))
-            else:
-                slider.setRange(int(min_val * (1 / step)), int(max_val * (1 / step)))
-                slider.setValue(int(default_val * (1 / step)))
-            if checkbox:
-                slider.setEnabled(False)
-            control_layout.addWidget(slider, stretch=1)
-
-            form_layout.addRow(label + ":", control_layout)
-            return check, spin, slider
-
-        # Create controls
-        self.median_check, self.median_size_spin, self.median_slider = create_parameter_group(
-            "Median Filter", 3, 15, 3, step=2, odd_only=True
-        )
-
-        self.gaussian_check, self.gaussian_sigma_spin, self.gaussian_slider = create_parameter_group(
-            "Gaussian Filter", 0.1, 10.0, 1.0, step=0.1, double=True
-        )
-
-        self.clahe_check, self.clahe_clip_spin, self.clahe_clip_slider = create_parameter_group(
-            "CLAHE Clip Limit", 0.1, 100.0, 16.0, step=0.1, double=True
-        )
-
-        self.clahe_grid_control, self.clahe_grid_spin, self.clahe_grid_slider = create_parameter_group(
-            "CLAHE Grid Size", 1, 64, 16, checkbox=False
-        )
+        # Enable preprocessing button if we have any data
+        has_data = any([
+            self.data_manager.bead_stack is not None,
+            self.data_manager.reference_image is not None,
+            self.data_manager.cell_stack is not None
+        ])
+        self.preprocess_btn.setEnabled(has_data)
 
     def _connect_signals(self):
         """Connect widget signals"""
-        # Intensity range
-        self.intensity_slider.valueChanged.connect(self._update_from_intensity_slider)
-        self.min_spin.valueChanged.connect(self._update_from_intensity_spinboxes)
-        self.max_spin.valueChanged.connect(self._update_from_intensity_spinboxes)
+        # Connect load buttons
+        self.load_beads_btn.clicked.connect(lambda: self._load_active_layer('beads'))
+        self.load_reference_btn.clicked.connect(lambda: self._load_active_layer('reference'))
+        self.load_cells_btn.clicked.connect(lambda: self._load_active_layer('cells'))
 
-        def connect_slider_spin(slider, spinbox, checkbox=None, scale_factor=1.0, odd_only=False):
-            def update_from_slider(value):
-                spinbox.blockSignals(True)
-                if odd_only:
-                    actual_value = 3 + (value * 2)
-                    spinbox.setValue(actual_value)
-                else:
-                    spinbox.setValue(value * scale_factor)
-                spinbox.blockSignals(False)
-                self.update_parameters()
+        # Preview data type selection
+        self.bead_radio.toggled.connect(self._on_preview_type_changed)
+        self.reference_radio.toggled.connect(self._on_preview_type_changed)
+        self.cell_radio.toggled.connect(self._on_preview_type_changed)
 
-            def update_from_spin(value):
-                slider.blockSignals(True)
-                if odd_only:
-                    slider_value = int((value - 3) / 2)
-                    slider.setValue(slider_value)
-                else:
-                    slider.setValue(int(value / scale_factor))
-                slider.blockSignals(False)
-                self.update_parameters()
+        # Parameter controls
+        self.intensity_slider.valueChanged.connect(self._update_intensity_labels)
+        self.gaussian_check.toggled.connect(self.gaussian_sigma_spin.setEnabled)
+        self.gaussian_check.toggled.connect(self.update_parameters)
+        self.gaussian_sigma_spin.valueChanged.connect(self.update_parameters)
+        self.registration_check.toggled.connect(self._update_registration_controls)
+        self.registration_mode_combo.currentTextChanged.connect(self.update_parameters)
 
-            slider.valueChanged.connect(update_from_slider)
-            spinbox.valueChanged.connect(update_from_spin)
-
-            if checkbox:
-                checkbox.toggled.connect(slider.setEnabled)
-                checkbox.toggled.connect(spinbox.setEnabled)
-                checkbox.toggled.connect(self.update_parameters)
-
-        # Connect parameter controls
-        connect_slider_spin(self.median_slider, self.median_size_spin, self.median_check, odd_only=True)
-        connect_slider_spin(self.gaussian_slider, self.gaussian_sigma_spin, self.gaussian_check, 0.1)
-        connect_slider_spin(self.clahe_clip_slider, self.clahe_clip_spin, self.clahe_check, 0.1)
-        connect_slider_spin(self.clahe_grid_slider, self.clahe_grid_spin)
-
-        # CLAHE checkbox controls both clip and grid parameters
-        self.clahe_check.toggled.connect(self.clahe_grid_spin.setEnabled)
-        self.clahe_check.toggled.connect(self.clahe_grid_slider.setEnabled)
+        # Add reference frame spinner connection
+        self.ref_frame_spin.valueChanged.connect(self.update_parameters)
 
         # Preview
         self.preview_check.toggled.connect(self.toggle_preview)
 
         # Action buttons
-        self.preprocess_btn.clicked.connect(self.run_preprocessing)  # Add this line
-        self.reset_btn.clicked.connect(self.reset_parameters)  # Add this line
+        self.preprocess_btn.clicked.connect(self.run_preprocessing)
+        self.reset_btn.clicked.connect(self.reset_parameters)
 
-        # Viewer dims change
-        if self.viewer is not None:
-            self.viewer.dims.events.current_step.connect(self.update_preview_frame)
+    def _on_preview_type_changed(self):
+        """Handle preview data type selection change"""
+        if self.bead_radio.isChecked():
+            self.current_data_type = 'beads'
+        elif self.reference_radio.isChecked():
+            self.current_data_type = 'reference'
+        else:
+            self.current_data_type = 'cells'
 
-    def _handle_layer_removal(self, event):
-        """Handle layer removal events"""
-        removed_layer = event.value
+        if self.preview_enabled:
+            self.update_preview_frame()
 
-        if removed_layer == self.preview_layer:
-            logger.debug("Preview layer was removed")
-            self.preview_layer = None
-            self.preview_enabled = False
-            self.preview_check.setChecked(False)
+    def _update_registration_controls(self, enabled: bool):
+        """Update registration controls state"""
+        self.registration_mode_combo.setEnabled(enabled)
 
-        if removed_layer == self.original_layer:
-            logger.debug("Original layer was removed")
-            self.original_layer = None
-            if self.preview_layer is not None:
-                self.viewer.layers.remove(self.preview_layer)
-                self.preview_layer = None
-            self.preview_enabled = False
-            self.preview_check.setChecked(False)
+        # Check if we have required data for registration
+        if enabled and (
+                self.data_manager.bead_stack is None or
+                self.data_manager.reference_image is None
+        ):
+            self.registration_check.setChecked(False)
+            self._show_warning(
+                "Registration requires both reference image and bead stack"
+            )
+            return
+
+        self.update_parameters()
+
+    def _register_controls(self):
+        """Register all controls with the base widget"""
+        controls = [
+            self.intensity_slider,
+            self.min_percentile_label,
+            self.max_percentile_label,
+            self.gaussian_check,
+            self.gaussian_sigma_spin,
+            self.registration_check,
+            self.registration_mode_combo,
+            self.preview_check,
+            self.preprocess_btn,
+            self.reset_btn,
+            self.bead_radio,
+            self.reference_radio,
+            self.cell_radio,
+            self.progress_bar,
+            self.status_label,
+            self.bead_status,
+            self.reference_status,
+            self.cell_status,
+            self.ref_frame_spin,
+        ]
+
+        for control in controls:
+            self.register_control(control)
+
+
+
+    def _get_layer_name(self) -> str:
+        """Get appropriate layer name based on current data type"""
+        if self.current_data_type == 'beads':
+            return 'Preprocessed Beads'
+        elif self.current_data_type == 'reference':
+            return 'Preprocessed Reference'
+        else:
+            return 'Preprocessed Cells'
+
+
+
+    def _update_intensity_labels(self, values):
+        """Update intensity range labels with percentile values"""
+        min_val, max_val = values
+        self.min_percentile_label.setText(f"{min_val}%")
+        self.max_percentile_label.setText(f"{max_val}%")
+        self.update_parameters()
+
+
+    def _on_data_type_changed(self):
+        """Handle data type selection change"""
+        if self.bead_radio.isChecked():
+            self.current_data_type = 'beads'
+        elif self.reference_radio.isChecked():
+            self.current_data_type = 'reference'
+        else:
+            self.current_data_type = 'cells'
+
+        self._update_ui_state()
+
+        if self.preview_enabled:
+            self.update_preview_frame()
+
+
+
+    def _get_current_data(self) -> Optional[np.ndarray]:
+        """Get data for current type"""
+        if self.current_data_type == 'beads':
+            return self.data_manager.bead_stack
+        elif self.current_data_type == 'reference':
+            return self.data_manager.reference_image
+        else:
+            return self.data_manager.cell_stack
+
+
+    def reset_parameters(self):
+        """Reset all parameters to defaults"""
+        # Reset intensity range
+        self.intensity_slider.setValue((0, 100))
+
+        # Reset gaussian filter
+        self.gaussian_check.setChecked(False)
+        self.gaussian_sigma_spin.setValue(1.0)
+
+        # Reset registration
+        self.registration_check.setChecked(False)
+        self.registration_mode_combo.setCurrentText('Translation')
+        self.ref_frame_spin.setValue(0)
+
+        self._update_status("Parameters reset to defaults")
+        self.update_parameters()
+
+
+    def _show_warning(self, message: str):
+        """Show warning message to user"""
+        QMessageBox.warning(self, "Warning", message)
+
 
     def toggle_preview(self, enabled: bool):
         """Toggle preview mode"""
@@ -406,11 +558,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         try:
             if enabled:
+                # Get current layer and data
                 if self.original_layer is None:
                     self.original_layer = self._get_active_image_layer()
                     if self.original_layer is None:
                         raise ProcessingError("No image layer found")
 
+                # Create preview layer if it doesn't exist
                 if self.preview_layer is None:
                     preview_data = (self.original_layer.data[0] if self.original_layer.data.ndim == 3
                                     else self.original_layer.data)
@@ -422,6 +576,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
                 self.update_preview_frame()
             else:
+                # Remove preview layer if it exists
                 if self.preview_layer is not None and self.preview_layer in self.viewer.layers:
                     self.viewer.layers.remove(self.preview_layer)
                 self.preview_layer = None
@@ -434,12 +589,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.preview_layer = None
             raise ProcessingError("Preview failed", str(e))
 
-    def update_preview_frame(self, event: Optional[Event] = None):
+    def update_preview_frame(self, event: Optional["Event"] = None):
         """Update the preview for the current frame"""
         if not self.preview_enabled or self.original_layer is None:
             return
 
         try:
+            # Get current frame
             if self.original_layer.data.ndim == 3:
                 current_step = self.viewer.dims.current_step[0]
                 frame = self.original_layer.data[current_step].copy()
@@ -450,213 +606,150 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 raise ProcessingError(f"Invalid frame dimensions: {frame.shape}")
 
             # Process frame
-            frame_8bit = self.preprocessor.convert_to_8bit(frame)
-            processed_frame, info = self.preprocessor.preprocess_frame(frame_8bit)
+            params = PreprocessingParameters(
+                min_intensity_percentile=self.intensity_slider.value()[0] / 100,
+                max_intensity_percentile=self.intensity_slider.value()[1] / 100,
+                enable_gaussian_filter=self.gaussian_check.isChecked(),
+                gaussian_sigma=self.gaussian_sigma_spin.value(),
+                enable_registration=self.registration_check.isChecked(),
+                registration_mode=self.registration_mode_combo.currentText().lower(),
+                reference_frame=self.ref_frame_spin.value()
+            )
+            self.preprocessor.update_parameters(params)
 
-            # Update preview
+            processed_frame, frame_info = self.preprocessor.preprocess_frame(frame)
+
+            # Update preview layer
             if self.preview_layer is None:
                 self.preview_layer = self.viewer.add_image(
-                    np.zeros_like(frame_8bit, dtype=np.uint8),
+                    processed_frame,
                     name='Preview',
                     visible=True
                 )
-
-            self.preview_layer.data = processed_frame
-            self.preview_layer.contrast_limits = (0, 255)
+            else:
+                self.preview_layer.data = processed_frame
 
             # Update status
             info_text = (
-                f"Preview - Original range: ({frame.min():.0f}, {frame.max():.0f})\n"
-                f"Original mean: {frame.mean():.1f}, std: {frame.std():.1f}\n"
-                f"Final mean: {info['final_mean']:.1f}"
+                f"Preview - Original range: ({frame.min():.1f}, {frame.max():.1f})\n"
+                f"Mean: {frame_info['final_mean']:.1f}, Std: {frame_info['final_std']:.1f}"
             )
             self._update_status(info_text)
 
         except Exception as e:
-            raise ProcessingError("Preview failed", str(e))
+            self._handle_error(ProcessingError(
+                "Preview failed",
+                str(e)
+            ))
 
-    def update_parameters(self):
-        """Update preprocessing parameters from UI controls"""
+    def _handle_layer_removal(self, event):
+        """Handle layer removal events"""
         try:
-            params = PreprocessingParameters(
-                min_intensity=self.current_min_intensity,
-                max_intensity=self.current_max_intensity,
-                enable_median_filter=self.median_check.isChecked(),
-                median_filter_size=self.median_size_spin.value(),
-                enable_gaussian_filter=self.gaussian_check.isChecked(),
-                gaussian_sigma=self.gaussian_sigma_spin.value(),
-                enable_clahe=self.clahe_check.isChecked(),
-                clahe_clip_limit=self.clahe_clip_spin.value(),
-                clahe_grid_size=self.clahe_grid_spin.value()
-            )
+            removed_layer = event.value
 
-            params.validate()
-            self.preprocessor.update_parameters(params)
+            if removed_layer == self.preview_layer:
+                self._update_status("Preview layer was removed")
+                self.preview_layer = None
+                self.preview_enabled = False
+                self.preview_check.setChecked(False)
 
-            self._update_status("Parameters updated")
-            self.parameters_updated.emit()
-
-            if self.preview_enabled:
-                self.update_preview_frame()
-
-        except ValueError as e:
-            raise ProcessingError("Invalid parameters", str(e))
-
-    def reset_parameters(self):
-        """Reset all parameters to defaults"""
-        # Reset intensity range
-        self.intensity_slider.setValue((0, 255))
-        self.min_spin.setValue(0)
-        self.max_spin.setValue(255)
-        self.current_min_intensity = 0
-        self.current_max_intensity = 255
-
-        # Reset filters
-        self.median_check.setChecked(False)
-        self.median_size_spin.setValue(3)
-        self.median_slider.setValue(0)
-
-        self.gaussian_check.setChecked(False)
-        self.gaussian_sigma_spin.setValue(1.0)
-        self.gaussian_slider.setValue(10)
-
-        self.clahe_check.setChecked(False)
-        self.clahe_clip_spin.setValue(16.0)
-        self.clahe_clip_slider.setValue(160)
-        self.clahe_grid_spin.setValue(16)
-        self.clahe_grid_slider.setValue(16)
-
-        self._update_status("Parameters reset to defaults")
-        self.update_parameters()
-
-    def _update_from_intensity_slider(self, values):
-        """Update spinboxes when intensity range slider changes"""
-        min_val, max_val = values
-        self.min_spin.blockSignals(True)
-        self.max_spin.blockSignals(True)
-
-        self.min_spin.setValue(min_val)
-        self.max_spin.setValue(max_val)
-
-        self.current_min_intensity = min_val
-        self.current_max_intensity = max_val
-
-        self.min_spin.blockSignals(False)
-        self.max_spin.blockSignals(False)
-
-        self.update_parameters()
-
-    def _update_from_intensity_spinboxes(self):
-        """Update intensity range slider when spinboxes change"""
-        min_val = self.min_spin.value()
-        max_val = self.max_spin.value()
-
-        # Ensure min <= max
-        if min_val > max_val:
-            if self.sender() == self.min_spin:
-                max_val = min_val
-                self.max_spin.setValue(max_val)
-            else:
-                min_val = max_val
-                self.min_spin.setValue(min_val)
-
-        self.current_min_intensity = min_val
-        self.current_max_intensity = max_val
-
-        self.intensity_slider.blockSignals(True)
-        self.intensity_slider.setValue((min_val, max_val))
-        self.intensity_slider.blockSignals(False)
-
-        self.update_parameters()
-
-    def run_preprocessing(self):
-        """Run preprocessing on the entire stack"""
-        if self.preview_enabled:
-            self.preview_check.setChecked(False)
-
-        try:
-            # Get active layer
-            active_layer = self._get_active_image_layer()
-            if active_layer is None:
-                raise ProcessingError("No image layer selected")
-
-            # Disable controls during processing
-            self._set_controls_enabled(False)
-            self._update_status("Starting preprocessing...", 0)
-
-            # Get and validate the image data
-            stack = self._ensure_stack_format(active_layer.data)
-            if not self._validate_input_data(stack):
-                raise ProcessingError("Invalid input data format")
-
-            total_frames = len(stack)
-            processed_frames = []
-            preprocessing_info = []
-
-            # Process each frame
-            for frame_idx in range(total_frames):
-                progress = int(5 + (90 * frame_idx / total_frames))
-                self._update_status(f"Processing frame {frame_idx + 1}/{total_frames}", progress)
-
-                # Get frame
-                frame = stack[frame_idx].copy()
-
-                # Convert to 8-bit and process
+            if removed_layer == self.original_layer:
+                self._update_status("Original layer was removed")
+                self.original_layer = None
                 try:
-                    frame_8bit = self.preprocessor.convert_to_8bit(frame)
-                    processed_frame, frame_info = self.preprocessor.preprocess_frame(frame_8bit)
-                    processed_frames.append(processed_frame)
-                    preprocessing_info.append(frame_info)
+                    if self.preview_layer is not None:
+                        self.viewer.layers.remove(self.preview_layer)
                 except Exception as e:
-                    raise ProcessingError(
-                        f"Error processing frame {frame_idx}",
-                        str(e)
-                    )
+                    self._handle_error(ProcessingError(
+                        "Failed to remove preview layer",
+                        str(e),
+                    ))
+                finally:
+                    self.preview_layer = None
+                    self.preview_enabled = False
+                    self.preview_check.setChecked(False)
 
-            # Combine processed frames
-            processed_stack = np.stack(processed_frames, axis=0)
-
-            # Update visualization
-            self._update_status("Updating visualization...", 95)
-
-            # Remove existing preprocessed layer if it exists
-            for layer in self.viewer.layers[:]:
-                if layer.name == 'Preprocessed':
-                    self.viewer.layers.remove(layer)
-
-            # Add new preprocessed layer
-            preprocessed_layer = self.viewer.add_image(
-                processed_stack,
-                name='Preprocessed',
-                visible=True,
-                metadata={'preprocessing_info': preprocessing_info}
-            )
-
-            # Set consistent contrast limits for 8-bit
-            preprocessed_layer.contrast_limits = (0, 255)
-
-            # Store results
-            self.data_manager.preprocessed_data = processed_stack
-            self.data_manager.preprocessing_info = preprocessing_info
-
-            self._update_status("Preprocessing complete", 100)
-            self.preprocessing_completed.emit(processed_stack, preprocessing_info)
-
-        except ProcessingError as e:
-            self._handle_error(e)
         except Exception as e:
             self._handle_error(ProcessingError(
-                "Preprocessing failed",
+                "Error handling layer removal",
                 str(e),
-                self.__class__.__name__
             ))
-        finally:
-            self._set_controls_enabled(True)
 
-    def cleanup(self):
-        """Clean up resources"""
-        if self.preview_layer is not None and self.preview_layer in self.viewer.layers:
-            self.viewer.layers.remove(self.preview_layer)
-        self.preview_layer = None
-        self.original_layer = None
-        super().cleanup()
+
+    def _load_bead_stack(self):
+        """Load bead stack from napari layer"""
+        layers = [layer for layer in self.viewer.layers if isinstance(layer, napari.layers.Image)]
+        if not layers:
+            self._show_warning("No image layers found in napari viewer")
+            return
+
+        layer_names = [layer.name for layer in layers]
+        selected_layer, ok = QInputDialog.getItem(
+            self,
+            "Select Bead Stack",
+            "Choose the bead stack layer:",
+            layer_names,
+            0,
+            False
+        )
+
+        if ok and selected_layer:
+            layer = next(layer for layer in layers if layer.name == selected_layer)
+            try:
+                self.data_manager.set_bead_stack(layer.data)
+                self._update_ui_state()
+                self._update_status(f"Loaded bead stack: {layer.data.shape}")
+            except ValueError as e:
+                self._show_warning(str(e))
+
+    def _load_reference_image(self):
+        """Load reference image from napari layer"""
+        layers = [layer for layer in self.viewer.layers if isinstance(layer, napari.layers.Image)]
+        if not layers:
+            self._show_warning("No image layers found in napari viewer")
+            return
+
+        layer_names = [layer.name for layer in layers]
+        selected_layer, ok = QInputDialog.getItem(
+            self,
+            "Select Reference Image",
+            "Choose the reference image layer:",
+            layer_names,
+            0,
+            False
+        )
+
+        if ok and selected_layer:
+            layer = next(layer for layer in layers if layer.name == selected_layer)
+            try:
+                self.data_manager.set_reference_image(layer.data)
+                self._update_ui_state()
+                self._update_status(f"Loaded reference image: {layer.data.shape}")
+            except ValueError as e:
+                self._show_warning(str(e))
+
+    def _load_cell_stack(self):
+        """Load cell stack from napari layer"""
+        layers = [layer for layer in self.viewer.layers if isinstance(layer, napari.layers.Image)]
+        if not layers:
+            self._show_warning("No image layers found in napari viewer")
+            return
+
+        layer_names = [layer.name for layer in layers]
+        selected_layer, ok = QInputDialog.getItem(
+            self,
+            "Select Cell Stack",
+            "Choose the cell stack layer:",
+            layer_names,
+            0,
+            False
+        )
+
+        if ok and selected_layer:
+            layer = next(layer for layer in layers if layer.name == selected_layer)
+            try:
+                self.data_manager.set_cell_stack(layer.data)
+                self._update_ui_state()
+                self._update_status(f"Loaded cell stack: {layer.data.shape}")
+            except ValueError as e:
+                self._show_warning(str(e))
