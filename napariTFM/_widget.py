@@ -71,10 +71,25 @@ class napariTFMWidget(QWidget):
         self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
         self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
 
-    def _on_preprocessing_completed(self, processed_stack, preprocessing_info):
+    def _on_preprocessing_completed(self, results):
         """Handle completion of preprocessing"""
         logger.info("Preprocessing completed successfully")
-        self.data_manager.preprocessed_data = processed_stack
+
+        # Unpack results - each value is a tuple of (processed_data, preprocessing_info)
+        if 'beads' in results:
+            processed_data, preprocessing_info = results['beads']
+            self.data_manager.preprocessed_bead_stack = processed_data
+            self.data_manager.bead_preprocessing_info = preprocessing_info
+
+        if 'reference' in results:
+            processed_data, preprocessing_info = results['reference']
+            self.data_manager.preprocessed_reference = processed_data
+            self.data_manager.reference_preprocessing_info = preprocessing_info
+
+        if 'cells' in results:
+            processed_data, preprocessing_info = results['cells']
+            self.data_manager.preprocessed_cell_stack = processed_data
+            self.data_manager.cell_preprocessing_info = preprocessing_info
 
     def _on_preprocessing_failed(self, error_msg):
         """Handle preprocessing failure"""

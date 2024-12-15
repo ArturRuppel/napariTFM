@@ -11,29 +11,38 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PreprocessingParameters:
     """Parameters for image preprocessing with relative intensity values"""
-    # Contrast enhancement (relative intensity values between 0 and 1)
+    # Bead/Reference contrast enhancement
     min_intensity_percentile: float = 0.0
     max_intensity_percentile: float = 1.0
 
-    # Optional gaussian filter
+    # Cell contrast enhancement
+    cell_min_intensity_percentile: float = 0.0
+    cell_max_intensity_percentile: float = 1.0
+
+    # Bead/Reference gaussian filter
     enable_gaussian_filter: bool = False
     gaussian_sigma: float = 1.0
+
+    # Cell gaussian filter
+    enable_cell_gaussian_filter: bool = False
+    cell_gaussian_sigma: float = 1.0
 
     # Registration parameters
     enable_registration: bool = False
     registration_mode: str = 'translation'  # 'translation' or 'rigid'
-    reference_frame: int = 0
 
     def validate(self):
         """Validate parameter values"""
         if not 0 <= self.min_intensity_percentile < self.max_intensity_percentile <= 1:
             raise ValueError("Intensity percentiles must be between 0 and 1")
+        if not 0 <= self.cell_min_intensity_percentile < self.cell_max_intensity_percentile <= 1:
+            raise ValueError("Cell intensity percentiles must be between 0 and 1")
         if self.gaussian_sigma <= 0:
             raise ValueError("Gaussian sigma must be positive")
+        if self.cell_gaussian_sigma <= 0:
+            raise ValueError("Cell gaussian sigma must be positive")
         if self.registration_mode not in ['translation', 'rigid']:
             raise ValueError("Invalid registration mode")
-        if self.reference_frame < 0:
-            raise ValueError("Reference frame must be non-negative")
 
 class RegistrationResult:
     """Stores registration transformation matrices"""
@@ -61,114 +70,26 @@ class RegistrationResult:
 
         return registered_stack
 
+
 class ImagePreprocessor:
-    """Handles image preprocessing with intensity scaling and registration"""
-
-
+    """Handles image preprocessing operations."""
     def __init__(self, parameters: Optional[PreprocessingParameters] = None):
+        """Initialize with optional parameters."""
         self.params = parameters or PreprocessingParameters()
         self.registration_result = None
 
-    def preprocess_all(
-            self,
-            bead_stack: Optional[np.ndarray] = None,
-            reference_image: Optional[np.ndarray] = None,
-            cell_stack: Optional[np.ndarray] = None
-    ) -> Dict[str, Tuple[np.ndarray, List[dict]]]:
+    def register_images(self, moving_image: np.ndarray, reference_image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Preprocess all image data maintaining proper registration dependencies.
-
-        Args:
-            bead_stack: 3D numpy array of bead images
-            reference_image: 2D numpy array of reference image
-            cell_stack: 3D numpy array of cell images
-
-        Returns:
-            Dictionary containing processed data and preprocessing info for each type
+        Register a moving image to a reference image.
+        Returns the registered image and the transformation matrix.
         """
-        results = {}
+        # Convert images to 8-bit for registration
+        moving_norm = ((moving_image - moving_image.min()) * 255 /
+                       (moving_image.max() - moving_image.min())).astype(np.uint8)
+        ref_norm = ((reference_image - reference_image.min()) * 255 /
+                    (reference_image.max() - reference_image.min())).astype(np.uint8)
 
-        # First process reference image if available
-        if reference_image is not None:
-            processed_ref, ref_info = self.preprocess_frame(reference_image)
-            results['reference'] = (processed_ref, [ref_info])
-
-            # Store processed reference for registration
-            self.registration_result = None
-            reference_for_registration = processed_ref
-        else:
-            reference_for_registration = None
-
-        # Process and register bead stack if available
-        if bead_stack is not None:
-            # First apply basic preprocessing to each frame
-            processed_frames = []
-            preprocessing_info = []
-
-            for frame in bead_stack:
-                proc_frame, frame_info = self.preprocess_frame(frame)
-                processed_frames.append(proc_frame)
-                preprocessing_info.append(frame_info)
-
-            processed_stack = np.stack(processed_frames)
-
-            # Register against reference image if available and registration is enabled
-            if self.params.enable_registration and reference_for_registration is not None:
-                registered_stack, reg_result = self.register_stack_to_reference(
-                    processed_stack,
-                    reference_for_registration
-                )
-                self.registration_result = reg_result
-                results['beads'] = (registered_stack, preprocessing_info)
-            else:
-                results['beads'] = (processed_stack, preprocessing_info)
-
-        # Process and register cell stack if available
-        if cell_stack is not None:
-            processed_frames = []
-            preprocessing_info = []
-
-            for frame in cell_stack:
-                proc_frame, frame_info = self.preprocess_frame(frame)
-                processed_frames.append(proc_frame)
-                preprocessing_info.append(frame_info)
-
-            processed_stack = np.stack(processed_frames)
-
-            # Apply bead registration transforms if available
-            if self.registration_result is not None:
-                registered_stack = self.registration_result.apply_to_stack(processed_stack)
-                results['cells'] = (registered_stack, preprocessing_info)
-            else:
-                results['cells'] = (processed_stack, preprocessing_info)
-
-        return results
-
-    def register_stack_to_reference(
-            self,
-            stack: np.ndarray,
-            reference: np.ndarray
-    ) -> Tuple[np.ndarray, RegistrationResult]:
-        """
-        Register all frames in a stack to a reference image.
-
-        Args:
-            stack: 3D numpy array (frames, height, width)
-            reference: 2D numpy array of reference image
-
-        Returns:
-            Tuple of (registered stack, registration result)
-        """
-        if not self.params.enable_registration:
-            return stack, None
-
-        num_frames = len(stack)
-        registration_result = RegistrationResult(num_frames)
-        registration_result.reference_image = reference
-
-        registered_stack = np.zeros_like(stack)
-
-        # Define registration method
+        # Define registration method based on mode
         if self.params.registration_mode == 'translation':
             warp_mode = cv2.MOTION_TRANSLATION
             warp_matrix = np.eye(2, 3, dtype=np.float32)
@@ -177,52 +98,39 @@ class ImagePreprocessor:
             warp_matrix = np.eye(2, 3, dtype=np.float32)
 
         # Define termination criteria
-        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 1e-7)
+        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 1000, 1e-10)
 
-        for i in range(num_frames):
-            try:
-                # Find transformation
-                _, matrix = cv2.findTransformECC(
-                    reference.astype(np.float32),
-                    stack[i].astype(np.float32),
-                    warp_matrix,
-                    warp_mode,
-                    criteria,
-                    None,
-                    5
-                )
+        # Run registration with error handling
+        try:
+            cc, warp_matrix = cv2.findTransformECC(
+                ref_norm,
+                moving_norm,
+                warp_matrix,
+                warp_mode,
+                criteria,
+                inputMask=None,
+                gaussFiltSize=1
+            )
+        except cv2.error as e:
+            logger.warning(f"Registration failed: {str(e)}. Using identity transform.")
+            warp_matrix = np.eye(2, 3, dtype=np.float32)
 
-                # Store transformation
-                full_matrix = np.eye(3)
-                full_matrix[:2, :] = matrix
-                registration_result.matrices[i] = full_matrix
+        # Apply transformation to original image with inverse map flag
+        registered = cv2.warpAffine(
+            moving_image,
+            warp_matrix,
+            (moving_image.shape[1], moving_image.shape[0]),
+            flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
+        )
 
-                # Apply transformation
-                registered_stack[i] = cv2.warpAffine(
-                    stack[i],
-                    matrix,
-                    (stack[i].shape[1], stack[i].shape[0]),
-                    flags=cv2.INTER_LINEAR
-                )
+        return registered, warp_matrix
 
-            except cv2.error as e:
-                logger.warning(f"Registration failed for frame {i}: {e}")
-                registered_stack[i] = stack[i]
-                registration_result.matrices[i] = None
-
-        return registered_stack, registration_result
-
-    def preprocess_frame(self, image: np.ndarray) -> Tuple[np.ndarray, dict]:
+    def preprocess_frame(self, image: np.ndarray, is_cell: bool = False,
+                         apply_registration: bool = True,
+                         reference_image: Optional[np.ndarray] = None) -> Tuple[np.ndarray, dict]:
         """
         Preprocess a single image frame.
-
-        Args:
-            image: 2D numpy array
-
-        Returns:
-            Tuple of (preprocessed image, preprocessing info dictionary)
         """
-        # Store original statistics
         info = {
             'original_dtype': image.dtype,
             'original_range': (float(image.min()), float(image.max())),
@@ -232,17 +140,29 @@ class ImagePreprocessor:
 
         processed = image.copy()
 
+        # Use appropriate parameters based on image type
+        if is_cell:
+            min_percentile = self.params.cell_min_intensity_percentile
+            max_percentile = self.params.cell_max_intensity_percentile
+            use_gaussian = self.params.enable_cell_gaussian_filter
+            gaussian_sigma = self.params.cell_gaussian_sigma
+        else:
+            min_percentile = self.params.min_intensity_percentile
+            max_percentile = self.params.max_intensity_percentile
+            use_gaussian = self.params.enable_gaussian_filter
+            gaussian_sigma = self.params.gaussian_sigma
+
         # Calculate intensity limits based on percentiles
-        min_val = np.percentile(processed, self.params.min_intensity_percentile * 100)
-        max_val = np.percentile(processed, self.params.max_intensity_percentile * 100)
+        min_val = np.percentile(processed, min_percentile * 100)
+        max_val = np.percentile(processed, max_percentile * 100)
 
         # Apply intensity scaling
         processed = np.clip(processed, min_val, max_val)
         processed = (processed - min_val) / (max_val - min_val)
 
         # Apply gaussian filter if enabled
-        if self.params.enable_gaussian_filter:
-            processed = gaussian_filter(processed, self.params.gaussian_sigma)
+        if use_gaussian:
+            processed = gaussian_filter(processed, gaussian_sigma)
 
         # Store final statistics
         info.update({
@@ -253,76 +173,114 @@ class ImagePreprocessor:
 
         return processed, info
 
-    def register_stack(self, stack: np.ndarray) -> Tuple[np.ndarray, RegistrationResult]:
-        """
-        Register all frames in a stack to a reference frame.
+    def preprocess_all(
+            self,
+            bead_stack: Optional[np.ndarray] = None,
+            reference_image: Optional[np.ndarray] = None,
+            cell_stack: Optional[np.ndarray] = None,
+            progress_callback: Optional[callable] = None
+    ) -> Dict[str, Tuple[np.ndarray, List[Dict]]]:
+        """Preprocess all available data."""
+        results = {}
+        self.transform_matrices = []
 
-        Args:
-            stack: 3D numpy array (frames, height, width)
+        # Calculate total steps for progress
+        total_steps = 0
+        current_step = 0
+        if reference_image is not None:
+            total_steps += 1
+        if bead_stack is not None:
+            total_steps += len(bead_stack)
+        if cell_stack is not None:
+            total_steps += len(cell_stack)
 
-        Returns:
-            Tuple of (registered stack, registration result)
-        """
-        if not self.params.enable_registration:
-            return stack, None
+        # Process reference image first if provided
+        processed_ref = None
+        if reference_image is not None:
+            if progress_callback:
+                progress_callback(current_step / total_steps * 100, "Processing reference image...")
+            processed_ref, ref_info = self.preprocess_frame(reference_image)
+            results['reference'] = (processed_ref, [ref_info])
+            current_step += 1
 
-        num_frames = len(stack)
-        reference_frame = stack[self.params.reference_frame]
-        registration_result = RegistrationResult(num_frames)
-        registration_result.reference_frame = self.params.reference_frame
+        # Process bead stack if provided
+        if bead_stack is not None:
+            processed_stack = np.zeros_like(bead_stack, dtype=float)
+            info_list = []
+            self.transform_matrices = []
 
-        registered_stack = np.zeros_like(stack)
-        registered_stack[self.params.reference_frame] = reference_frame
+            for i in range(bead_stack.shape[0]):
+                if progress_callback:
+                    progress_callback(
+                        current_step / total_steps * 100,
+                        f"Processing bead frame {i + 1}/{bead_stack.shape[0]}..."
+                    )
 
-        # Define registration method
-        if self.params.registration_mode == 'translation':
-            warp_mode = cv2.MOTION_TRANSLATION
-            warp_matrix = np.eye(2, 3, dtype=np.float32)
-        else:  # rigid
-            warp_mode = cv2.MOTION_EUCLIDEAN
-            warp_matrix = np.eye(2, 3, dtype=np.float32)
-
-        # Define termination criteria
-        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 1e-7)
-
-        for i in range(num_frames):
-            if i == self.params.reference_frame:
-                continue
-
-            try:
-                # Find transformation
-                _, matrix = cv2.findTransformECC(
-                    reference_frame.astype(np.float32),
-                    stack[i].astype(np.float32),
-                    warp_matrix,
-                    warp_mode,
-                    criteria,
-                    None,
-                    5
+                # Get preprocessed frame without registration first
+                frame, frame_info = self.preprocess_frame(
+                    bead_stack[i],
+                    apply_registration=False
                 )
 
-                # Store transformation
-                full_matrix = np.eye(3)
-                full_matrix[:2, :] = matrix
-                registration_result.matrices[i] = full_matrix
+                # Perform registration if enabled and reference is available
+                if self.params.enable_registration and processed_ref is not None:
+                    registered_frame, transform_matrix = self.register_images(frame, processed_ref)
+                    self.transform_matrices.append(transform_matrix)
+                    processed_stack[i] = registered_frame
+                else:
+                    processed_stack[i] = frame
+                    if self.params.enable_registration:
+                        self.transform_matrices.append(np.eye(2, 3, dtype=np.float32))
 
-                # Apply transformation
-                registered_stack[i] = cv2.warpAffine(
-                    stack[i],
-                    matrix,
-                    (stack[i].shape[1], stack[i].shape[0]),
-                    flags=cv2.INTER_LINEAR
+                info_list.append(frame_info)
+                current_step += 1
+
+            results['beads'] = (processed_stack, info_list)
+
+        # Process cell stack if provided
+        if cell_stack is not None:
+            processed_cells = np.zeros_like(cell_stack, dtype=float)
+            info_list = []
+
+            for i in range(cell_stack.shape[0]):
+                if progress_callback:
+                    progress_callback(
+                        current_step / total_steps * 100,
+                        f"Processing cell frame {i + 1}/{cell_stack.shape[0]}..."
+                    )
+
+                # Preprocess cell frame
+                processed_frame, frame_info = self.preprocess_frame(
+                    cell_stack[i],
+                    is_cell=True,
+                    apply_registration=False
                 )
 
-            except cv2.error as e:
-                logger.warning(f"Registration failed for frame {i}: {e}")
-                registered_stack[i] = stack[i]
-                registration_result.matrices[i] = None
+                # Apply registration transform if available
+                if self.params.enable_registration and len(self.transform_matrices) > i:
+                    transform_matrix = self.transform_matrices[i]
+                    processed_frame = cv2.warpAffine(
+                        processed_frame,
+                        transform_matrix,
+                        (processed_frame.shape[1], processed_frame.shape[0]),
+                        flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
+                    )
 
-        return registered_stack, registration_result
+                processed_cells[i] = processed_frame
+                info_list.append(frame_info)
+                current_step += 1
 
-    def update_parameters(self, new_params: PreprocessingParameters) -> None:
-        """Update preprocessing parameters"""
-        new_params.validate()
-        self.params = new_params
-        logger.debug(f"Updated preprocessing parameters: {new_params}")
+            results['cells'] = (processed_cells, info_list)
+
+        if progress_callback:
+            progress_callback(100, "Preprocessing complete")
+
+        return results
+
+
+
+    def update_parameters(self, parameters: PreprocessingParameters):
+        """Update preprocessing parameters."""
+        parameters.validate()  # Validate parameters before updating
+        self.params = parameters
+
