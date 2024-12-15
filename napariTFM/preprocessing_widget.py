@@ -19,9 +19,7 @@ from napariTFM.preprocessing import (
 )
 from napariTFM.visualization_manager import VisualizationManager
 
-# TODO
-# finder contrast control on bead stack
-# progress updates through preprocessing. Particularly for registration, which can be long
+
 class PreprocessingWidget(BaseAnalysisWidget):
     """Widget for controlling image preprocessing parameters"""
 
