@@ -248,14 +248,14 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # TV-L1 parameters
         params = [
             ("tau", "Tau:", 0.01, 1.0, 0.01, 0.25),
-            ("lambda_", "Lambda:", 0.01, 1.0, 0.01, 0.15),
+            ("lambda_", "Lambda:", 0.01, 1.0, 0.01, 0.4),
             ("theta", "Theta:", 0.1, 1.0, 0.1, 0.3),
-            ("nscales", "Pyramid Scales:", 1, 10, 1, 5),
-            ("warps", "Warps:", 1, 10, 1, 5),
+            ("nscales", "Pyramid Scales:", 1, 10, 1, 3),
+            ("warps", "Warps:", 1, 10, 1, 3),
             ("epsilon", "Epsilon:", 0.001, 0.1, 0.001, 0.01),
-            ("inner_iterations", "Inner Iterations:", 1, 50, 1, 30),
-            ("outer_iterations", "Outer Iterations:", 1, 20, 1, 10),
-            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01, 0.8),
+            ("inner_iterations", "Inner Iterations:", 1, 50, 1, 15),
+            ("outer_iterations", "Outer Iterations:", 1, 20, 1, 5),
+            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01, 0.5),
             ("median_filtering", "Median Filter Size:", 1, 9, 2, 5)
         ]
 
@@ -521,7 +521,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         return frame
 
     def _update_visualization(self, flow: np.ndarray):
-        """Update displacement visualization."""
+        """Update displacement visualization with corrected vector field."""
         try:
             # Clear existing visualization layers
             layer_names = ['Flow Vectors', 'Displacement Magnitude']
@@ -542,20 +542,44 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             # Show flow vectors
             if self.show_vectors_check.isChecked():
                 stride = self.vector_stride_spin.value()
-                y, x = np.mgrid[0:flow.shape[0]:stride, 0:flow.shape[1]:stride]
-                vectors = np.stack([
-                    x, y,
-                    x + flow[y, x, 0],
-                    y + flow[y, x, 1]
-                ], axis=1)
+                h, w = flow.shape[:2]
 
-                self.viewer.add_vectors(
-                    vectors,
-                    name='Flow Vectors',
-                    edge_width=2,
-                    length=1.0,
-                    edge_color='yellow'
-                )
+                # Create coordinate grids
+                y, x = np.mgrid[0:h:stride, 0:w:stride]
+
+                # Get flow components at grid points
+                u = flow[y, x, 0]  # x-displacement
+                v = flow[y, x, 1]  # y-displacement
+
+                # Calculate magnitudes
+                magnitudes = np.sqrt(u ** 2 + v ** 2)
+                threshold = magnitudes.max() * 0.05
+
+                # Create mask for significant vectors
+                mask = magnitudes > threshold
+
+                if mask.any():
+                    # Number of vectors
+                    n_vectors = mask.sum()
+
+                    # Initialize vectors array with correct shape for napari
+                    vectors = np.zeros((n_vectors, 2, 2))
+
+                    # Fill in start points (x,y)
+                    vectors[:, 0, 0] = x[mask]
+                    vectors[:, 0, 1] = y[mask]
+
+                    # Add displacement to get end points
+                    vectors[:, 1, 0] = u[mask]  # end x
+                    vectors[:, 1, 1] = v[mask]  # end y
+
+                    self.viewer.add_vectors(
+                        vectors,
+                        name='Flow Vectors',
+                        edge_width=2,
+                        edge_color='yellow',
+                        length=10.0
+                    )
 
         except Exception as e:
             self._handle_error(str(e))

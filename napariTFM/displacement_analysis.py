@@ -10,18 +10,17 @@ from dataclasses import dataclass
 class TVL1Parameters:
     """Parameters for TV-L1 optical flow analysis."""
     tau: float = 0.25
-    lambda_: float = 0.15
+    lambda_: float = 0.4
     theta: float = 0.3
-    nscales: int = 5
-    warps: int = 5
+    nscales: int = 3
+    warps: int = 3
     epsilon: float = 0.01
-    inner_iterations: int = 30
-    outer_iterations: int = 10
-    scale_step: float = 0.8
+    inner_iterations: int = 15
+    outer_iterations: int = 5
+    scale_step: float = 0.5
     gamma: float = 0.0
     median_filtering: int = 5
     use_initial_flow: bool = False
-
 class DisplacementAnalyzer:
     """Analyzes displacements using TV-L1 optical flow."""
 
