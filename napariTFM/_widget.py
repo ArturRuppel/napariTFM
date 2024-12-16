@@ -5,6 +5,7 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy
 )
 
+from .displacement_analysis_widget import DisplacementAnalysisWidget
 from .preprocessing_widget import PreprocessingWidget
 from .data_manager import DataManager
 from .visualization_manager import VisualizationManager
@@ -49,8 +50,16 @@ class napariTFMWidget(QWidget):
         )
         self.preprocessing_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
+        self.displacement_widget = DisplacementAnalysisWidget(
+            self.viewer,
+            self.data_manager,
+            self.visualization_manager
+        )
+
         # Add widgets to tabs
         tabs.addTab(self.preprocessing_widget, "Preprocessing")
+        tabs.addTab(self.displacement_widget, "Displacement")
+
 
         # Add tabs to container
         container_layout.addWidget(tabs)
