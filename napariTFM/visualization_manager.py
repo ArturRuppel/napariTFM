@@ -13,15 +13,20 @@ from .error_handling import ErrorSeverity, ErrorHandlingMixin, ApplicationError
 
 logger = logging.getLogger(__name__)
 
+import colorsys
+import logging
+from threading import Lock
+from typing import Optional, Dict, List, Tuple, Union
+
+import napari
+import numpy as np
+from napari.layers import Layer, Labels, Points
+from napari.utils.transforms import Affine
+
 
 class VisualizationManager(ErrorHandlingMixin):
-    """Manages visualization of cell tracking results in napari."""
-
     def __init__(self, viewer: "napari.Viewer", data_manager: "DataManager"):
-        # Initialize ErrorHandlingMixin
         super().__init__()
-
-        # Store main components
         self.viewer = viewer
         self.data_manager = data_manager
 
@@ -31,25 +36,231 @@ class VisualizationManager(ErrorHandlingMixin):
         self._intercalation_layer = None
         self._analysis_layer = None
 
+        # Add displacement-specific attributes
+        self._displacement_layers = {}
+        self._d_max = None
+
         # Initialize state variables
         self._updating = False
         self._layer_lock = Lock()
         self._current_dims = None
 
-        # Initialize color generation
-        self._color_cycle = np.random.RandomState(42)  # For reproducible colors
-        self._used_colors = set()
+        # Store colorbar layer
+        self._colorbar_layer = None
 
-        # Connect to layer removal event with error handling
+    def _create_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
+        """Create colored overlay of two images with blue channel."""
+        # Normalize images
+        img1_norm = img1.astype(float) / img1.max()
+        img2_norm = img2.astype(float) / img2.max()
+
+        # Create RGB overlay
+        overlay = np.zeros((*img1.shape, 3))
+        overlay[..., 0] = img1_norm * 0.7  # Red channel for first image
+        overlay[..., 1] = img2_norm * 0.7  # Green channel for second image
+        overlay[..., 2] = (img1_norm + img2_norm) * 0.3  # Blue channel mixed from both
+
+        return np.clip(overlay, 0, 1)
+
+    def update_displacement_visualization(
+            self,
+            reference: Optional[np.ndarray] = None,
+            moving: Optional[np.ndarray] = None,
+            flow: Optional[np.ndarray] = None,
+            cells: Optional[np.ndarray] = None,
+            show_overlay: bool = True,
+            show_vectors: bool = True,
+            show_magnitude: bool = True,
+            vector_stride: int = 20
+    ) -> None:
+        """Update displacement visualization with magnitude colorbar."""
+        if self._updating:
+            logger.debug("VisualizationManager: Update cancelled - already updating")
+            return
+
         try:
-            self.viewer.layers.events.removed.connect(self._handle_layer_removal)
+            self._updating = True
+            with self._layer_lock:
+                # Remove existing displacement layers
+                self._clear_displacement_layers()
+
+                if flow is None:
+                    raise ValueError("No displacement data available")
+
+                with self.viewer.events.blocker_all():
+                    if show_overlay and reference is not None and moving is not None:
+                        overlay = self._create_overlay(reference, moving)
+                        self._displacement_layers['overlay'] = self.viewer.add_image(
+                            overlay,
+                            name='Displacement Overlay',
+                            rgb=True,
+                            blending='additive'
+                        )
+
+                    if show_magnitude:
+                        magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
+
+                        # Create magnitude layer with proper contrast limits
+                        magnitude_layer = self.viewer.add_image(
+                            magnitude,
+                            name='Displacement Magnitude',
+                            colormap='viridis',
+                            blending='additive',
+                            contrast_limits=[0, self._d_max if self._d_max is not None else magnitude.max()]
+                        )
+
+                        # Add colorbar
+                        colorbar = self.viewer.window.add_dock_widget(
+                            self._create_colorbar_widget(magnitude_layer),
+                            name='Displacement Colorbar',
+                            area='right'
+                        )
+
+                        self._displacement_layers['magnitude'] = magnitude_layer
+                        self._displacement_layers['colorbar'] = colorbar
+
+                    if cells is not None:
+                        self._displacement_layers['cells'] = self.viewer.add_image(
+                            cells,
+                            name='Cell Overlay',
+                            colormap='gray',
+                            opacity=0.5,
+                            blending='additive'
+                        )
+
         except Exception as e:
             self.handle_error(self.create_error(
-                message="Failed to connect layer events",
+                message="Failed to update displacement visualization",
                 details=str(e),
-                severity=ErrorSeverity.WARNING,
-                recovery_hint="Layer removal events may not be handled properly"
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check input data and parameters"
             ))
+        finally:
+            self._updating = False
+
+    def _create_colorbar_widget(self, layer: "napari.layers.Image") -> "QWidget":
+        """Create a colorbar widget for the magnitude layer."""
+        from qtpy.QtWidgets import QWidget, QVBoxLayout
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+        from matplotlib.figure import Figure
+
+        # Create figure and canvas
+        fig = Figure(figsize=(1, 4))
+        canvas = FigureCanvasQTAgg(fig)
+
+        # Create colorbar
+        ax = fig.add_axes([0.2, 0.05, 0.2, 0.9])
+        fig.colorbar(
+            plt.cm.ScalarMappable(
+                norm=plt.Normalize(
+                    vmin=0,
+                    vmax=self._d_max if self._d_max is not None else layer.data.max()
+                ),
+                cmap='viridis'
+            ),
+            cax=ax,
+            label='Displacement (pixels)'
+        )
+
+        # Create widget
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.addWidget(canvas)
+        widget.setLayout(layout)
+
+        return widget
+
+    def _clear_displacement_layers(self):
+        """Remove all displacement-related layers efficiently."""
+        layers_to_remove = []
+        for layer in self.viewer.layers:
+            if isinstance(layer, Layer) and layer.name in [
+                'Displacement Overlay',
+                'Displacement Magnitude',
+                'Flow Vectors',
+                'Cell Overlay'
+            ]:
+                layers_to_remove.append(layer)
+
+        for layer in layers_to_remove:
+            self.viewer.layers.remove(layer)
+
+        # Remove colorbar if it exists
+        if 'colorbar' in self._displacement_layers:
+            self.viewer.window.remove_dock_widget(self._displacement_layers['colorbar'])
+
+        self._displacement_layers.clear()
+    def set_d_max(self, value: float):
+        """Set maximum displacement value for visualization scaling."""
+        self._d_max = value
+        # Update visualization if displacement data exists
+        if 'Displacement Magnitude' in self.viewer.layers:
+            self.update_displacement_visualization()
+
+
+    def _create_vector_data(self, flow: np.ndarray, stride: int = 20) -> np.ndarray:
+        """Create vector data for napari visualization with bounds checking."""
+        h, w = flow.shape[:2]
+
+        # Ensure stride is at least 1
+        stride = max(1, stride)
+
+        # Calculate grid points with bounds checking
+        y_points = np.arange(0, h - stride, stride)
+        x_points = np.arange(0, w - stride, stride)
+        y, x = np.meshgrid(y_points, x_points, indexing='ij')
+
+        # Get flow components for valid points
+        u = flow[y, x, 0]  # x-component
+        v = flow[y, x, 1]  # y-component
+
+        # Calculate magnitudes
+        magnitudes = np.sqrt(u ** 2 + v ** 2)
+
+        # Create mask for significant displacements
+        if self._d_max is not None:
+            threshold = self._d_max * 0.05  # 5% of max displacement
+        else:
+            threshold = magnitudes.max() * 0.05
+
+        mask = magnitudes > threshold
+
+        if not np.any(mask):
+            return np.array([])
+
+        # Create vectors array with bounds checking
+        vectors = []
+        for i in range(len(y.flat)):
+            if mask.flat[i]:
+                start_x, start_y = x.flat[i], y.flat[i]
+                end_x = start_x + u.flat[i]
+                end_y = start_y + v.flat[i]
+
+                # Check if endpoint is within image bounds
+                if 0 <= end_x < w and 0 <= end_y < h:
+                    vectors.append([start_x, start_y, end_x, end_y])
+
+        vectors = np.array(vectors)
+        return vectors.reshape(-1, 2, 2) if len(vectors) > 0 else np.array([])
+
+    def _calculate_magnitude(self, flow: np.ndarray) -> np.ndarray:
+        """Calculate displacement magnitude with optional scaling."""
+        magnitude = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2)
+
+        if self._d_max is not None:
+            magnitude = np.clip(magnitude / self._d_max, 0, 1)
+
+        return magnitude
+
+    def get_displacement_statistics(self, flow: np.ndarray) -> dict:
+        """Calculate displacement statistics."""
+        magnitude = self._calculate_magnitude(flow)
+        return {
+            'max': magnitude.max(),
+            'mean': magnitude.mean(),
+            'std': magnitude.std(),
+            'median': np.median(magnitude)
+        }
 
     def _generate_distinct_color(self) -> np.ndarray:
         """Generate a distinct color using golden ratio."""
@@ -428,17 +639,6 @@ class VisualizationManager(ErrorHandlingMixin):
         self.clear_visualization()
         self.viewer = None
 
-    def _generate_distinct_color(self) -> np.ndarray:
-        """Generate a distinct color using golden ratio"""
-        golden_ratio = 0.618033988749895
-        hue = self._color_cycle.random()
-        hue += golden_ratio
-        hue %= 1
-        # Convert to RGB
-        hsv = np.array([hue, 0.8, 0.95])
-        rgb = np.array(colorsys.hsv_to_rgb(*hsv))
-        return np.append(rgb, 1.0)  # Add alpha channel
-
     def clear_edge_layers(self) -> None:
         """Remove all edge-related layers"""
         layer_names = ['Edge Analysis', 'Intercalation Events', 'Cell Edges']
@@ -484,4 +684,16 @@ class VisualizationManager(ErrorHandlingMixin):
         """The current edge analysis layer"""
         return self._analysis_layer
 
+    def _create_image_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
+        """Create colored overlay of two images."""
+        # Normalize images
+        img1_norm = img1.astype(float) / img1.max()
+        img2_norm = img2.astype(float) / img2.max()
+
+        # Create RGB overlay
+        overlay = np.zeros((*img1.shape, 3))
+        overlay[..., 0] += img1_norm * 0.9  # Red channel for first image
+        overlay[..., 1] += img2_norm * 0.9  # Green channel for second image
+
+        return np.clip(overlay, 0, 1)
 
