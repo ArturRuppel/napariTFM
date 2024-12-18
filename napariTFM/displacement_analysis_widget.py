@@ -28,6 +28,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Initialize state variables
         self.current_flow = None
         self.parameter_spins = {}  # Initialize dictionary before UI setup
+        self.visualization_params = {}  # New dictionary for visualization parameters
 
         # Setup UI first
         self._setup_ui()
@@ -59,6 +60,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Add all component groups
         main_layout.addWidget(self._create_data_loading_group())
         main_layout.addWidget(self._create_parameters_group())
+        main_layout.addWidget(self._create_visualization_parameters_group())  # New group
         main_layout.addWidget(self._create_action_buttons())
         main_layout.addWidget(self._create_status_frame())
 
@@ -78,7 +80,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         group = QGroupBox("Analysis Parameters")
         layout = QVBoxLayout()
 
-        # TV-L1 parameters including d_max
+        # TV-L1 parameters (removed d_max)
         params = [
             ("tau", "Tau:", 0.01, 1.0, 0.01, 0.25),
             ("lambda_", "Lambda:", 0.01, 1.0, 0.01, 0.4),
@@ -89,8 +91,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             ("inner_iterations", "Inner Iterations:", 1, 50, 1, 15),
             ("outer_iterations", "Outer Iterations:", 1, 20, 1, 5),
             ("scale_step", "Scale Step:", 0.1, 0.99, 0.01, 0.5),
-            ("median_filtering", "Median Filter Size:", 1, 9, 2, 5),
-            ("d_max", "Max Displacement:", 0.1, 100.0, 0.1, 10.0)
+            ("median_filtering", "Median Filter Size:", 1, 9, 2, 5)
         ]
 
         # Add all parameters
@@ -109,6 +110,101 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
+
+    def _create_visualization_parameters_group(self) -> QGroupBox:
+        """Create the visualization parameters group with expanded ranges."""
+        group = QGroupBox("Visualization Parameters")
+        layout = QVBoxLayout()
+
+        # Vector stride control
+        stride_layout = QHBoxLayout()
+        stride_layout.addWidget(QLabel("Vector Stride:"))
+        self.visualization_params['vector_stride'] = QSpinBox()
+        self.visualization_params['vector_stride'].setRange(1, 100)  # Increased range
+        self.visualization_params['vector_stride'].setValue(20)
+        self.visualization_params['vector_stride'].setToolTip("Display every nth vector")
+        stride_layout.addWidget(self.visualization_params['vector_stride'])
+        layout.addLayout(stride_layout)
+
+        # Arrow scale control with increased range
+        arrow_layout = QHBoxLayout()
+        arrow_layout.addWidget(QLabel("Arrow Scale:"))
+        self.visualization_params['arrow_scale'] = QDoubleSpinBox()
+        self.visualization_params['arrow_scale'].setRange(0.1, 50.0)  # Increased range
+        self.visualization_params['arrow_scale'].setSingleStep(0.5)
+        self.visualization_params['arrow_scale'].setValue(1.0)
+        self.visualization_params['arrow_scale'].setToolTip("Scale factor for arrow length")
+        arrow_layout.addWidget(self.visualization_params['arrow_scale'])
+        layout.addLayout(arrow_layout)
+
+        # Maximum displacement visualization control
+        dmax_layout = QHBoxLayout()
+        dmax_layout.addWidget(QLabel("Max Displacement:"))
+        self.visualization_params['d_max'] = QDoubleSpinBox()
+        self.visualization_params['d_max'].setRange(0.1, 200.0)  # Increased range
+        self.visualization_params['d_max'].setSingleStep(1.0)
+        self.visualization_params['d_max'].setValue(10.0)
+        self.visualization_params['d_max'].setToolTip("Maximum displacement for color scaling")
+        dmax_layout.addWidget(self.visualization_params['d_max'])
+        layout.addLayout(dmax_layout)
+
+        group.setLayout(layout)
+        return group
+
+    def _update_visualization(self, flow: np.ndarray, reference: np.ndarray, moving: np.ndarray,
+                              vector_stride: Optional[int] = None,
+                              arrow_scale: Optional[float] = None,
+                              d_max: Optional[float] = None):
+        """Update displacement visualization with separated arrow scaling."""
+        # Get cell data if available
+        cells = None
+        if self.data_manager.preprocessed_cell_stack is not None:
+            cells = self.data_manager.preprocessed_cell_stack[self.viewer.dims.current_step[0]]
+        elif self.data_manager.cell_stack is not None:
+            cells = self.data_manager.cell_stack[self.viewer.dims.current_step[0]]
+
+        # Use provided parameters or get from UI
+        if vector_stride is None:
+            vector_stride = self.visualization_params['vector_stride'].value()
+        if arrow_scale is None:
+            arrow_scale = self.visualization_params['arrow_scale'].value()
+        if d_max is None:
+            d_max = self.visualization_params['d_max'].value()
+
+        # Update visualization manager with original flow for magnitude and scaled flow for vectors
+        self.visualization_manager.update_displacement_visualization(
+            reference=reference,
+            moving=moving,
+            flow=flow,  # Original flow for magnitude calculation
+            flow_scaled=flow * arrow_scale,  # Scaled flow for vector display
+            cells=cells,
+            show_overlay=True,
+            show_vectors=True,
+            show_magnitude=True,
+            vector_stride=vector_stride,
+            d_max=d_max
+        )
+
+    def _update_visualization_params(self):
+        """Update visualization when parameters change."""
+        if self.current_flow is not None:
+            # Get current frame data
+            reference = (self.data_manager.preprocessed_reference if self.data_manager.preprocessed_reference is not None
+                        else self.data_manager.reference_image)
+            bead_stack = (self.data_manager.preprocessed_bead_stack if self.data_manager.preprocessed_bead_stack is not None
+                         else self.data_manager.bead_stack)
+            current_frame = self.viewer.dims.current_step[0]
+            moving = bead_stack[current_frame]
+
+            # Update visualization with new parameters
+            self._update_visualization(
+                self.current_flow,
+                reference,
+                moving,
+                vector_stride=self.visualization_params['vector_stride'].value(),
+                arrow_scale=self.visualization_params['arrow_scale'].value(),
+                d_max=self.visualization_params['d_max'].value()
+            )
 
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame."""
@@ -257,27 +353,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
-
-    def _update_visualization(self, flow: np.ndarray, reference: np.ndarray, moving: np.ndarray):
-        """Update displacement visualization."""
-        # Get cell data if available
-        cells = None
-        if self.data_manager.preprocessed_cell_stack is not None:
-            cells = self.data_manager.preprocessed_cell_stack[self.viewer.dims.current_step[0]]
-        elif self.data_manager.cell_stack is not None:
-            cells = self.data_manager.cell_stack[self.viewer.dims.current_step[0]]
-
-        # Update visualization with all components enabled
-        self.visualization_manager.update_displacement_visualization(
-            reference=reference,
-            moving=moving,
-            flow=flow,
-            cells=cells,
-            show_overlay=True,
-            show_vectors=True,
-            show_magnitude=True,
-            vector_stride=20
-        )
 
     def _on_frame_changed(self, event=None):
         """Handle frame change events."""

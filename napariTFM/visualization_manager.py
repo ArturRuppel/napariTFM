@@ -6,6 +6,7 @@ from typing import Tuple, Union
 
 import napari
 import numpy as np
+from matplotlib import pyplot as plt
 from napari.layers import Layer, Labels, Points
 from napari.utils.transforms import Affine
 
@@ -48,46 +49,36 @@ class VisualizationManager(ErrorHandlingMixin):
         # Store colorbar layer
         self._colorbar_layer = None
 
-    def _create_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
-        """Create colored overlay of two images with blue channel."""
-        # Normalize images
-        img1_norm = img1.astype(float) / img1.max()
-        img2_norm = img2.astype(float) / img2.max()
-
-        # Create RGB overlay
-        overlay = np.zeros((*img1.shape, 3))
-        overlay[..., 0] = img1_norm * 0.7  # Red channel for first image
-        overlay[..., 1] = img2_norm * 0.7  # Green channel for second image
-        overlay[..., 2] = (img1_norm + img2_norm) * 0.3  # Blue channel mixed from both
-
-        return np.clip(overlay, 0, 1)
-
     def update_displacement_visualization(
             self,
             reference: Optional[np.ndarray] = None,
             moving: Optional[np.ndarray] = None,
             flow: Optional[np.ndarray] = None,
+            flow_scaled: Optional[np.ndarray] = None,  # New parameter for scaled arrows
             cells: Optional[np.ndarray] = None,
             show_overlay: bool = True,
             show_vectors: bool = True,
             show_magnitude: bool = True,
-            vector_stride: int = 20
+            vector_stride: int = 20,
+            d_max: Optional[float] = None
     ) -> None:
-        """Update displacement visualization with magnitude colorbar."""
+        """Update displacement visualization with separated magnitude and arrow scaling."""
         if self._updating:
             logger.debug("VisualizationManager: Update cancelled - already updating")
             return
 
         try:
             self._updating = True
+            self._d_max = d_max
+
             with self._layer_lock:
-                # Remove existing displacement layers
                 self._clear_displacement_layers()
 
                 if flow is None:
                     raise ValueError("No displacement data available")
 
                 with self.viewer.events.blocker_all():
+                    # Image overlay
                     if show_overlay and reference is not None and moving is not None:
                         overlay = self._create_overlay(reference, moving)
                         self._displacement_layers['overlay'] = self.viewer.add_image(
@@ -97,27 +88,47 @@ class VisualizationManager(ErrorHandlingMixin):
                             blending='additive'
                         )
 
+                    # Magnitude display - uses original unscaled flow
                     if show_magnitude:
                         magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
+                        contrast_limits = [0, self._d_max if self._d_max is not None else magnitude.max()]
 
-                        # Create magnitude layer with proper contrast limits
                         magnitude_layer = self.viewer.add_image(
                             magnitude,
                             name='Displacement Magnitude',
                             colormap='viridis',
                             blending='additive',
-                            contrast_limits=[0, self._d_max if self._d_max is not None else magnitude.max()]
+                            contrast_limits=contrast_limits
                         )
-
-                        # Add colorbar
-                        colorbar = self.viewer.window.add_dock_widget(
-                            self._create_colorbar_widget(magnitude_layer),
-                            name='Displacement Colorbar',
-                            area='right'
-                        )
-
                         self._displacement_layers['magnitude'] = magnitude_layer
-                        self._displacement_layers['colorbar'] = colorbar
+
+                    # Vector display - uses scaled flow for arrows
+                    if show_vectors:
+                        vector_data = self._create_vector_data(
+                            flow_scaled if flow_scaled is not None else flow,
+                            vector_stride
+                        )
+                        if len(vector_data) > 0:
+                            # Use original flow magnitudes for coloring
+                            orig_magnitudes = np.sqrt(np.sum(flow ** 2, axis=-1))
+                            max_mag = self._d_max if self._d_max is not None else orig_magnitudes.max()
+
+                            # Sample magnitudes at vector positions
+                            y_indices = vector_data[:, 0, 0].astype(int)
+                            x_indices = vector_data[:, 0, 1].astype(int)
+                            vector_magnitudes = orig_magnitudes[y_indices, x_indices]
+
+                            colors = plt.cm.viridis(vector_magnitudes / max_mag)
+
+                            vectors_layer = self.viewer.add_shapes(
+                                vector_data,
+                                shape_type='line',
+                                name='Flow Vectors',
+                                edge_color=colors,
+                                edge_width=2,
+                                blending='additive'
+                            )
+                            self._displacement_layers['vectors'] = vectors_layer
 
                     if cells is not None:
                         self._displacement_layers['cells'] = self.viewer.add_image(
@@ -137,6 +148,61 @@ class VisualizationManager(ErrorHandlingMixin):
             ))
         finally:
             self._updating = False
+
+    def _create_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
+        """Create colored overlay of two images with blue channel."""
+        # Normalize images
+        img1_norm = img1.astype(float) / img1.max()
+        img2_norm = img2.astype(float) / img2.max()
+
+        # Create RGB overlay
+        overlay = np.zeros((*img1.shape, 3))
+        overlay[..., 0] = img1_norm * 0.7  # Red channel for first image
+        overlay[..., 1] = img2_norm * 0.7  # Green channel for second image
+        overlay[..., 2] = (img1_norm + img2_norm) * 0.3  # Blue channel mixed from both
+
+        return np.clip(overlay, 0, 1)
+
+    def _create_vector_data(self, flow: np.ndarray, stride: int = 20) -> np.ndarray:
+        """Create vector data for napari visualization with bounds checking."""
+        h, w = flow.shape[:2]
+
+        # Ensure stride is at least 1
+        stride = max(1, stride)
+
+        # Calculate grid points with bounds checking
+        y_points = np.arange(stride // 2, h - stride // 2, stride)
+        x_points = np.arange(stride // 2, w - stride // 2, stride)
+        y, x = np.meshgrid(y_points, x_points, indexing='ij')
+
+        # Get flow components for valid points
+        u = flow[y, x, 0]  # x-component
+        v = flow[y, x, 1]  # y-component
+
+        # Calculate magnitudes
+        magnitudes = np.sqrt(u ** 2 + v ** 2)
+
+        # Create mask for significant displacements
+        if self._d_max is not None:
+            threshold = self._d_max * 0.05  # 5% of max displacement
+        else:
+            threshold = magnitudes.max() * 0.05
+
+        mask = magnitudes > threshold
+
+        # Create vectors array with bounds checking
+        vectors = []
+        for i in range(len(y.flat)):
+            if mask.flat[i]:
+                start_x, start_y = x.flat[i], y.flat[i]
+                end_x = start_x + u.flat[i]
+                end_y = start_y + v.flat[i]
+
+                # Check if endpoint is within image bounds
+                if 0 <= end_x < w and 0 <= end_y < h:
+                    vectors.append([[start_x, start_y], [end_x, end_y]])
+
+        return np.array(vectors) if vectors else np.zeros((0, 2, 2))
 
     def _create_colorbar_widget(self, layer: "napari.layers.Image") -> "QWidget":
         """Create a colorbar widget for the magnitude layer."""
@@ -190,58 +256,6 @@ class VisualizationManager(ErrorHandlingMixin):
             self.viewer.window.remove_dock_widget(self._displacement_layers['colorbar'])
 
         self._displacement_layers.clear()
-    def set_d_max(self, value: float):
-        """Set maximum displacement value for visualization scaling."""
-        self._d_max = value
-        # Update visualization if displacement data exists
-        if 'Displacement Magnitude' in self.viewer.layers:
-            self.update_displacement_visualization()
-
-
-    def _create_vector_data(self, flow: np.ndarray, stride: int = 20) -> np.ndarray:
-        """Create vector data for napari visualization with bounds checking."""
-        h, w = flow.shape[:2]
-
-        # Ensure stride is at least 1
-        stride = max(1, stride)
-
-        # Calculate grid points with bounds checking
-        y_points = np.arange(0, h - stride, stride)
-        x_points = np.arange(0, w - stride, stride)
-        y, x = np.meshgrid(y_points, x_points, indexing='ij')
-
-        # Get flow components for valid points
-        u = flow[y, x, 0]  # x-component
-        v = flow[y, x, 1]  # y-component
-
-        # Calculate magnitudes
-        magnitudes = np.sqrt(u ** 2 + v ** 2)
-
-        # Create mask for significant displacements
-        if self._d_max is not None:
-            threshold = self._d_max * 0.05  # 5% of max displacement
-        else:
-            threshold = magnitudes.max() * 0.05
-
-        mask = magnitudes > threshold
-
-        if not np.any(mask):
-            return np.array([])
-
-        # Create vectors array with bounds checking
-        vectors = []
-        for i in range(len(y.flat)):
-            if mask.flat[i]:
-                start_x, start_y = x.flat[i], y.flat[i]
-                end_x = start_x + u.flat[i]
-                end_y = start_y + v.flat[i]
-
-                # Check if endpoint is within image bounds
-                if 0 <= end_x < w and 0 <= end_y < h:
-                    vectors.append([start_x, start_y, end_x, end_y])
-
-        vectors = np.array(vectors)
-        return vectors.reshape(-1, 2, 2) if len(vectors) > 0 else np.array([])
 
     def _calculate_magnitude(self, flow: np.ndarray) -> np.ndarray:
         """Calculate displacement magnitude with optional scaling."""
