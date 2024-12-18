@@ -237,7 +237,7 @@ class VisualizationManager(ErrorHandlingMixin):
         return widget
 
     def _clear_displacement_layers(self):
-        """Remove all displacement-related layers efficiently."""
+        """Remove all displacement-related layers."""
         layers_to_remove = []
         for layer in self.viewer.layers:
             if isinstance(layer, Layer) and layer.name in [
@@ -250,10 +250,6 @@ class VisualizationManager(ErrorHandlingMixin):
 
         for layer in layers_to_remove:
             self.viewer.layers.remove(layer)
-
-        # Remove colorbar if it exists
-        if 'colorbar' in self._displacement_layers:
-            self.viewer.window.remove_dock_widget(self._displacement_layers['colorbar'])
 
         self._displacement_layers.clear()
 
