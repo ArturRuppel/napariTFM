@@ -10,7 +10,7 @@ from qtpy.QtWidgets import (
 )
 import napari
 
-from .base_widget import BaseAnalysisWidget
+from .base_widget import BaseAnalysisWidget, logger
 from .displacement_analysis import DisplacementAnalyzer, TVL1Parameters
 
 
@@ -194,13 +194,17 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                     blending='additive'
                 )
 
-                self.viewer.add_image(
+                # Add magnitude layer and colorbar
+                magnitude_layer = self.viewer.add_image(
                     results['magnitudes'],
                     name='Displacement Magnitude',
                     colormap='viridis',
                     blending='additive',
                     contrast_limits=[0, d_max]
                 )
+
+                # Update colorbar through visualization manager
+                self.visualization_manager._update_colorbar(magnitude_layer, "Displacement (pixels)")
 
             # Create initial vector layer
             self._update_vector_layer()
@@ -213,6 +217,130 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
+
+    def preview_displacement(self):
+        """Preview displacement calculation on current frame."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating displacement...", 0)
+
+            # Get current frame index and data
+            current_frame = self.viewer.dims.current_step[0]
+
+            # Use preprocessed data if available, otherwise use raw data
+            reference = self.data_manager.preprocessed_reference
+            if reference is None:
+                reference = self.data_manager.reference_image
+
+            bead_stack = self.data_manager.preprocessed_bead_stack
+            if bead_stack is None:
+                bead_stack = self.data_manager.bead_stack
+
+            moving = bead_stack[current_frame]
+
+            # Calculate flow
+            self.current_flow = self.analyzer.calculate_flow(reference, moving)
+
+            self._update_status("Updating visualization...", 50)
+
+            # Get cell data if available
+            cells = None
+            if self.data_manager.preprocessed_cell_stack is not None:
+                cells = self.data_manager.preprocessed_cell_stack[current_frame]
+            elif self.data_manager.cell_stack is not None:
+                cells = self.data_manager.cell_stack[current_frame]
+
+            # Calculate magnitude and create layer
+            magnitude = np.sqrt(self.current_flow[..., 0] ** 2 + self.current_flow[..., 1] ** 2)
+            d_max = self.visualization_params['d_max'].value()
+
+            # Remove existing magnitude layer if it exists
+            if 'Displacement Magnitude' in self.viewer.layers:
+                self.viewer.layers.remove('Displacement Magnitude')
+
+            # Add new magnitude layer
+            magnitude_layer = self.viewer.add_image(
+                magnitude,
+                name='Displacement Magnitude',
+                colormap='viridis',
+                blending='additive',
+                contrast_limits=[0, d_max]
+            )
+
+            # Update colorbar through visualization manager
+            self.visualization_manager._update_colorbar(magnitude_layer, "Displacement (pixels)")
+
+            # Create and update vector visualization
+            vector_stride = self.visualization_params['vector_stride'].value()
+            arrow_scale = self.visualization_params['arrow_scale'].value()
+
+            flow_scaled = self.current_flow * arrow_scale
+            vector_data = self._create_vector_data(flow_scaled, vector_stride)
+
+            if len(vector_data) > 0:
+                orig_magnitudes = np.sqrt(np.sum(self.current_flow ** 2, axis=-1))
+                max_mag = d_max if d_max is not None else orig_magnitudes.max()
+
+                y_indices = vector_data[:, 0, 0].astype(int)
+                x_indices = vector_data[:, 0, 1].astype(int)
+                vector_magnitudes = orig_magnitudes[y_indices, x_indices]
+                colors = plt.cm.viridis(vector_magnitudes / max_mag)
+            else:
+                vector_data = np.zeros((0, 2, 2))
+                colors = np.zeros((0, 4))
+
+            # Update or create vector layer
+            if 'Flow Vectors' in self.viewer.layers:
+                vector_layer = self.viewer.layers['Flow Vectors']
+                vector_layer.data = vector_data
+                vector_layer.edge_color = colors
+            else:
+                self.viewer.add_shapes(
+                    vector_data,
+                    shape_type='line',
+                    name='Flow Vectors',
+                    edge_color=colors,
+                    edge_width=2,
+                    blending='additive'
+                )
+
+            # Update status with displacement statistics
+            stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
+            self._update_status(
+                f"Max displacement: {stats['max']:.2f} pixels\n"
+                f"Mean displacement: {stats['mean']:.2f} pixels",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self._set_controls_enabled(True)
+
+    def cleanup(self):
+        """Clean up resources and event connections."""
+        try:
+            # Remove colorbar if it exists
+            if hasattr(self.visualization_manager, '_colorbar_widget') and self.visualization_manager._colorbar_widget is not None:
+                self.viewer.window.remove_dock_widget(self.visualization_manager._colorbar_widget)
+                self.visualization_manager._colorbar_widget = None
+                self.visualization_manager._active_magnitude_layer = None
+
+            # Disconnect from viewer events
+            self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
+
+            # Remove any remaining layers
+            for layer_name in ['Displacement Overlay', 'Displacement Magnitude', 'Flow Vectors']:
+                if layer_name in self.viewer.layers:
+                    self.viewer.layers.remove(layer_name)
+
+        except Exception as e:
+            logger.error(f"Error during cleanup: {str(e)}")
+        finally:
+            super().cleanup()
 
     def _update_vector_layer(self, event=None):
         """Update vector layer using cached data."""
@@ -290,15 +418,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(f"Failed to update vector layer: {str(e)}")
-    def cleanup(self):
-        """Clean up resources and event connections."""
-        try:
-            # Disconnect from viewer events
-            self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
-        except Exception:
-            pass
-
-        super().cleanup()
 
     def _create_visualization_layers(self, results):
         """Create stack-based visualization layers."""
@@ -668,57 +787,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             return False
 
         return True
-
-    def preview_displacement(self):
-        """Preview displacement calculation on current frame."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating displacement...", 0)
-
-            # Get current frame index and data
-            current_frame = self.viewer.dims.current_step[0]
-
-            # Use preprocessed data if available, otherwise use raw data
-            reference = self.data_manager.preprocessed_reference
-            if reference is None:
-                reference = self.data_manager.reference_image
-
-            bead_stack = self.data_manager.preprocessed_bead_stack
-            if bead_stack is None:
-                bead_stack = self.data_manager.bead_stack
-
-            moving = bead_stack[current_frame]
-
-            # Calculate flow
-            self.current_flow = self.analyzer.calculate_flow(reference, moving)
-
-            self._update_status("Updating visualization...", 50)
-
-            # Get cell data if available
-            cells = None
-            if self.data_manager.preprocessed_cell_stack is not None:
-                cells = self.data_manager.preprocessed_cell_stack[current_frame]
-            elif self.data_manager.cell_stack is not None:
-                cells = self.data_manager.cell_stack[current_frame]
-
-            # Update visualization
-            self._update_visualization(self.current_flow, reference, moving)
-
-            # Update status with displacement statistics
-            stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
-            self._update_status(
-                f"Max displacement: {stats['max']:.2f} pixels\n"
-                f"Mean displacement: {stats['mean']:.2f} pixels",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self._set_controls_enabled(True)
 
     def _register_controls(self):
         """Register all controls with the base widget."""

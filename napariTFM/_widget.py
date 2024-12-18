@@ -6,6 +6,7 @@ from qtpy.QtWidgets import (
 )
 
 from .displacement_analysis_widget import DisplacementAnalysisWidget
+from .force_calculation_widget import ForceCalculationWidget
 from .preprocessing_widget import PreprocessingWidget
 from .data_manager import DataManager
 from .visualization_manager import VisualizationManager
@@ -50,7 +51,15 @@ class napariTFMWidget(QWidget):
         )
         self.preprocessing_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
+        # Initialize displacement widget
         self.displacement_widget = DisplacementAnalysisWidget(
+            self.viewer,
+            self.data_manager,
+            self.visualization_manager
+        )
+
+        # Initialize force calculation widget
+        self.force_widget = ForceCalculationWidget(
             self.viewer,
             self.data_manager,
             self.visualization_manager
@@ -59,7 +68,7 @@ class napariTFMWidget(QWidget):
         # Add widgets to tabs
         tabs.addTab(self.preprocessing_widget, "Preprocessing")
         tabs.addTab(self.displacement_widget, "Displacement")
-
+        tabs.addTab(self.force_widget, "Force Analysis")
 
         # Add tabs to container
         container_layout.addWidget(tabs)
@@ -79,6 +88,12 @@ class napariTFMWidget(QWidget):
         # Connect preprocessing signals
         self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
         self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
+
+        # Connect displacement signals
+        self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
+
+        # Connect force calculation signals
+        self.force_widget.force_calculated.connect(self._on_force_completed)
 
     def _on_preprocessing_completed(self, results):
         """Handle completion of preprocessing"""
@@ -104,3 +119,13 @@ class napariTFMWidget(QWidget):
         """Handle preprocessing failure"""
         logger.error(f"Preprocessing failed: {error_msg}")
         QMessageBox.critical(self, "Error", f"Preprocessing failed: {error_msg}")
+
+    def _on_displacement_completed(self, results):
+        """Handle completion of displacement analysis"""
+        logger.info("Displacement analysis completed successfully")
+        self.data_manager.displacement_results = results
+
+    def _on_force_completed(self, results):
+        """Handle completion of force calculation"""
+        logger.info("Force calculation completed successfully")
+        self.data_manager.force_results = results

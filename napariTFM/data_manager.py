@@ -24,10 +24,15 @@ class DataManager:
         # Registration information
         self.registration_transforms: Optional[Dict[str, Any]] = None
 
+        # Displacement results
+        self.displacement_results: Optional[Dict[str, Any]] = None
+
+        # Force calculation results
+        self._force_results: Optional[Dict[str, Any]] = None
+
         # Internal state
         self._num_frames: Optional[int] = None
         self._image_shape: Optional[Tuple[int, ...]] = None
-
     def set_bead_stack(self, data: np.ndarray):
         """Set bead stack data after validation"""
         if data.ndim not in [2, 3]:
@@ -201,3 +206,33 @@ class DataManager:
                     return False, f"Data shape {data.shape[1:]} doesn't match expected shape {self._image_shape}"
 
         return True, "Data valid"
+
+    @property
+    def force_results(self) -> Optional[Dict[str, Any]]:
+        """Get force calculation results"""
+        return self._force_results
+
+    @force_results.setter
+    def force_results(self, results: Optional[Dict[str, Any]]):
+        """Set force calculation results after validation"""
+        if results is not None:
+            required_keys = ['tx', 'ty', 'energy', 'contractile_force', 'parameters']
+            if not all(key in results for key in required_keys):
+                raise ValueError("Force results missing required fields")
+
+            # Validate array shapes
+            if not all(isinstance(results[key], np.ndarray) for key in ['tx', 'ty', 'energy']):
+                raise ValueError("Force results must contain numpy arrays")
+
+            if results['tx'].shape != results['ty'].shape:
+                raise ValueError("Force components tx and ty must have same shape")
+
+        self._force_results = results
+
+    def clear_force_results(self):
+        """Clear force calculation results"""
+        self._force_results = None
+
+    def has_required_force_data(self) -> bool:
+        """Check if required data for force calculation is available"""
+        return self.displacement_results is not None and 'flows' in self.displacement_results
