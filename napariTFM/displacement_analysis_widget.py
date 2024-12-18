@@ -93,62 +93,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Only update the vector layer
         self._update_vector_layer()
 
-    def _update_vector_layer(self, event=None):
-        """Update only the vector layer while preserving its state."""
-        try:
-            current_frame = self.viewer.dims.current_step[0]
-            flow = self.data_manager.displacement_results['flows'][current_frame]
-            flow_scaled = flow * self.visualization_params['arrow_scale'].value()
-
-            # Create vector data
-            vector_data = self._create_vector_data(
-                flow_scaled,
-                self.visualization_params['vector_stride'].value()
-            )
-
-            if len(vector_data) > 0:
-                # Calculate colors based on original flow magnitudes
-                orig_magnitudes = np.sqrt(np.sum(flow ** 2, axis=-1))
-                d_max = self.visualization_params['d_max'].value()
-                max_mag = d_max if d_max is not None else orig_magnitudes.max()
-
-                y_indices = vector_data[:, 0, 0].astype(int)
-                x_indices = vector_data[:, 0, 1].astype(int)
-                vector_magnitudes = orig_magnitudes[y_indices, x_indices]
-                colors = plt.cm.viridis(vector_magnitudes / max_mag)
-
-                # Find existing vector layer
-                vector_layer = None
-                for layer in self.viewer.layers:
-                    if layer.name == 'Flow Vectors':
-                        vector_layer = layer
-                        break
-
-                with self.viewer.events.blocker_all():
-                    if vector_layer is not None:
-                        # Store current state
-                        visible = vector_layer.visible
-
-                        # Update data and colors
-                        vector_layer.data = vector_data
-                        vector_layer.edge_color = colors
-
-                        # Restore state
-                        vector_layer.visible = visible
-                    else:
-                        # Create new vector layer if none exists
-                        self.viewer.add_shapes(
-                            vector_data,
-                            shape_type='line',
-                            name='Flow Vectors',
-                            edge_color=colors,
-                            edge_width=2,
-                            blending='additive'
-                        )
-
-        except Exception as e:
-            self._handle_error(f"Failed to update vector layer: {str(e)}")
-
     def analyze_all_frames(self):
         """Analyze displacement for all frames and create visualization stacks."""
         try:
@@ -171,6 +115,14 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             magnitudes = np.zeros((num_frames, *bead_stack.shape[1:]))
             overlay_stack = np.zeros((num_frames, *bead_stack.shape[1:], 3))
 
+            # Pre-calculate vector data for all frames
+            vector_data_cache = []
+            vector_colors_cache = []
+
+            d_max = self.visualization_params['d_max'].value()
+            stride = self.visualization_params['vector_stride'].value()
+            arrow_scale = self.visualization_params['arrow_scale'].value()
+
             # Process each frame
             for i in range(num_frames):
                 progress = (i + 1) / num_frames * 100
@@ -187,12 +139,41 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 # Create overlay
                 overlay_stack[i] = self.visualization_manager._create_overlay(reference, bead_stack[i])
 
-            # Store results
+                # Pre-calculate vector data and colors
+                flow_scaled = flow * arrow_scale
+                vectors = self._create_vector_data(flow_scaled, stride)
+
+                if len(vectors) > 0:
+                    # Calculate colors
+                    orig_magnitudes = np.sqrt(np.sum(flow ** 2, axis=-1))
+                    max_mag = d_max if d_max is not None else orig_magnitudes.max()
+
+                    y_indices = vectors[:, 0, 0].astype(int)
+                    x_indices = vectors[:, 0, 1].astype(int)
+                    vector_magnitudes = orig_magnitudes[y_indices, x_indices]
+                    colors = plt.cm.viridis(vector_magnitudes / max_mag)
+                else:
+                    vectors = np.zeros((0, 2, 2))
+                    colors = np.zeros((0, 4))
+
+                vector_data_cache.append(vectors)
+                vector_colors_cache.append(colors)
+
+            # Store results including vector cache
             results = {
                 'flows': flows,
                 'magnitudes': magnitudes,
                 'overlay_stack': overlay_stack,
-                'parameters': self.analyzer.params
+                'parameters': self.analyzer.params,
+                'vector_cache': {
+                    'data': vector_data_cache,
+                    'colors': vector_colors_cache,
+                    'parameters': {
+                        'd_max': d_max,
+                        'stride': stride,
+                        'arrow_scale': arrow_scale
+                    }
+                }
             }
 
             self.data_manager.displacement_results = results
@@ -218,7 +199,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                     name='Displacement Magnitude',
                     colormap='viridis',
                     blending='additive',
-                    contrast_limits=[0, self.visualization_params['d_max'].value()]
+                    contrast_limits=[0, d_max]
                 )
 
             # Create initial vector layer
@@ -233,6 +214,82 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         finally:
             self._set_controls_enabled(True)
 
+    def _update_vector_layer(self, event=None):
+        """Update vector layer using cached data."""
+        try:
+            if not hasattr(self.data_manager, 'displacement_results'):
+                return
+
+            results = self.data_manager.displacement_results
+            if not results or 'vector_cache' not in results:
+                return
+
+            current_frame = self.viewer.dims.current_step[0]
+            cache = results['vector_cache']
+
+            if current_frame >= len(cache['data']):
+                return
+
+            # Check if visualization parameters have changed
+            current_params = {
+                'd_max': self.visualization_params['d_max'].value(),
+                'stride': self.visualization_params['vector_stride'].value(),
+                'arrow_scale': self.visualization_params['arrow_scale'].value()
+            }
+
+            # If parameters changed, need to recalculate for current frame
+            if current_params != cache['parameters']:
+                flow = results['flows'][current_frame]
+                flow_scaled = flow * current_params['arrow_scale']
+                vector_data = self._create_vector_data(flow_scaled, current_params['stride'])
+
+                if len(vector_data) > 0:
+                    orig_magnitudes = np.sqrt(np.sum(flow ** 2, axis=-1))
+                    max_mag = current_params['d_max'] if current_params['d_max'] is not None else orig_magnitudes.max()
+
+                    y_indices = vector_data[:, 0, 0].astype(int)
+                    x_indices = vector_data[:, 0, 1].astype(int)
+                    vector_magnitudes = orig_magnitudes[y_indices, x_indices]
+                    colors = plt.cm.viridis(vector_magnitudes / max_mag)
+                else:
+                    vector_data = np.zeros((0, 2, 2))
+                    colors = np.zeros((0, 4))
+            else:
+                # Use cached data
+                vector_data = cache['data'][current_frame]
+                colors = cache['colors'][current_frame]
+
+            # Update or create vector layer
+            vector_layer = None
+            for layer in self.viewer.layers:
+                if layer.name == 'Flow Vectors':
+                    vector_layer = layer
+                    break
+
+            with self.viewer.events.blocker_all():
+                if vector_layer is not None:
+                    # Store current state
+                    visible = vector_layer.visible
+
+                    # Update data and colors
+                    vector_layer.data = vector_data
+                    vector_layer.edge_color = colors
+
+                    # Restore state
+                    vector_layer.visible = visible
+                else:
+                    # Create new vector layer if none exists
+                    self.viewer.add_shapes(
+                        vector_data,
+                        shape_type='line',
+                        name='Flow Vectors',
+                        edge_color=colors,
+                        edge_width=2,
+                        blending='additive'
+                    )
+
+        except Exception as e:
+            self._handle_error(f"Failed to update vector layer: {str(e)}")
     def cleanup(self):
         """Clean up resources and event connections."""
         try:
