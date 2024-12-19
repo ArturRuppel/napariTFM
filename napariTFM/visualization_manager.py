@@ -1,29 +1,19 @@
-import colorsys
 import logging
-from threading import Lock
-from typing import Optional, Dict, List
-from typing import Tuple, Union
 
-import napari
-import numpy as np
 from matplotlib import pyplot as plt
-from napari.layers import Layer, Labels, Points
-from napari.utils.transforms import Affine
+from napari.layers import Layer
 from qtpy import QtWidgets
 
-from .error_handling import ErrorSeverity, ErrorHandlingMixin, ApplicationError
+from .error_handling import ErrorSeverity, ErrorHandlingMixin
 
 logger = logging.getLogger(__name__)
 
-import colorsys
-import logging
 from threading import Lock
-from typing import Optional, Dict, List, Tuple, Union
+from typing import Optional, Dict
 
 import napari
 import numpy as np
-from napari.layers import Layer, Labels, Points
-from napari.utils.transforms import Affine
+from napari.layers import Layer
 
 
 class VisualizationManager(ErrorHandlingMixin):
@@ -81,62 +71,6 @@ class VisualizationManager(ErrorHandlingMixin):
 
         except Exception as e:
             self._handle_error(f"Failed to update visualization: {str(e)}")
-
-    def _create_magnitude_with_colorbar(self, magnitude_data: np.ndarray) -> np.ndarray:
-        """Create magnitude data with integrated colorbar."""
-        if magnitude_data.ndim == 2:
-            return self._create_single_magnitude_with_colorbar(magnitude_data)
-        elif magnitude_data.ndim == 3:
-            # Handle stack of magnitude data
-            frames = []
-            for frame in magnitude_data:
-                frames.append(self._create_single_magnitude_with_colorbar(frame))
-            return np.stack(frames)
-        else:
-            raise ValueError(f"Invalid magnitude data dimensions: {magnitude_data.ndim}")
-
-    def _create_single_magnitude_with_colorbar(self, magnitude: np.ndarray) -> np.ndarray:
-        """Create a single frame with integrated colorbar."""
-        # Calculate dimensions
-        data_height, data_width = magnitude.shape
-        colorbar_width = max(50, data_width // 20)  # Adaptive width, min 50 pixels
-        padding = max(10, data_width // 100)  # Adaptive padding
-
-        # Create combined image
-        total_width = data_width + colorbar_width + padding
-        combined = np.zeros((data_height, total_width))
-
-        # Add magnitude data
-        combined[:, :data_width] = magnitude
-
-        # Create colorbar
-        vmin, vmax = np.nanmin(magnitude), np.nanmax(magnitude)
-        if vmin == vmax:
-            vmax = vmin + 1  # Prevent division by zero
-
-        colorbar_values = np.linspace(vmin, vmax, data_height)
-        colorbar = np.tile(colorbar_values[::-1], (colorbar_width, 1)).T
-
-        # Add colorbar
-        combined[:, -colorbar_width:] = colorbar
-
-        # Add text labels (optional)
-        # We could add value labels here using cv2.putText if needed
-
-        return combined
-
-    def _update_colormap_range(self, layer: "napari.layers.Image"):
-        """Update colormap range for the magnitude layer."""
-        if layer.data.ndim == 3:
-            # For image stack
-            data_portion = layer.data[:, :, :-self.colorbar_width]
-        else:
-            # For single image
-            data_portion = layer.data[:, :-self.colorbar_width]
-
-        vmin = np.nanmin(data_portion)
-        vmax = np.nanmax(data_portion)
-        layer.contrast_limits = (vmin, vmax)
 
     def update_displacement_visualization(
             self,
@@ -251,36 +185,6 @@ class VisualizationManager(ErrorHandlingMixin):
                 self.viewer.window.remove_dock_widget(self._colorbar_widget)
                 self._colorbar_widget = None
                 self._active_magnitude_layer = None
-
-    def _add_magnitude_layer(self, magnitude_data: np.ndarray, title: str = "Magnitude"):
-        """Create a magnitude layer with integrated colorbar."""
-        # Calculate dimensions for the combined image
-        data_height, data_width = magnitude_data.shape
-        colorbar_width = 50  # Width in pixels for colorbar
-        padding = 10  # Padding between data and colorbar
-
-        # Create combined image with space for colorbar
-        combined = np.zeros((data_height, data_width + colorbar_width + padding))
-
-        # Add magnitude data to main portion
-        combined[:, :data_width] = magnitude_data
-
-        # Create colorbar data
-        colorbar = np.linspace(magnitude_data.min(), magnitude_data.max(), data_height)
-        colorbar = np.tile(colorbar[::-1], (colorbar_width, 1)).T
-
-        # Add colorbar to the right portion
-        combined[:, -colorbar_width:] = colorbar
-
-        # Add to viewer
-        layer = self.viewer.add_image(
-            combined,
-            name=title,
-            colormap='viridis',
-            blending='additive'
-        )
-
-        return layer
 
     def _update_colorbar(self, layer: "napari.layers.Image", title: str = "Magnitude"):
         """Update or create colorbar for the given layer."""
@@ -469,19 +373,7 @@ class VisualizationManager(ErrorHandlingMixin):
             'median': np.median(magnitude)
         }
 
-removed
 
-
-
-    def _prepare_full_stack(self, data: np.ndarray) -> np.ndarray:
-        """Prepare full stack data for update."""
-        if data.ndim == 2:
-            data = data[np.newaxis, ...]
-        if data.shape[0] < self.data_manager._num_frames:
-            new_data = np.zeros((self.data_manager._num_frames, *data.shape[1:]), dtype=data.dtype)
-            new_data[:data.shape[0]] = data
-            return new_data
-        return data.copy()
 
 
 
@@ -489,18 +381,6 @@ removed
         """Allow setting the data manager after initialization."""
         self.data_manager = data_manager
 
-    def _setup_layer_transforms(self, layer: "napari.layers.Layer", data_shape: Tuple[int, ...]) -> None:
-        """Set up proper transforms for the layer based on data dimensions."""
-        ndim = len(data_shape)
-        scale = np.ones(ndim)
-        translate = np.zeros(ndim)
-
-        affine_matrix = np.eye(ndim + 1)
-        affine_matrix[:-1, :-1] = np.diag(scale)
-        affine_matrix[:-1, -1] = translate
-
-        transform = Affine(affine_matrix=affine_matrix)
-        layer.affine = transform
 
 
     def cleanup(self) -> None:
@@ -539,17 +419,4 @@ removed
                         vector_layer.edge_color = colors
 
 
-
-    # def _create_image_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
-    #     """Create colored overlay of two images."""
-    #     # Normalize images
-    #     img1_norm = img1.astype(float) / img1.max()
-    #     img2_norm = img2.astype(float) / img2.max()
-    #
-    #     # Create RGB overlay
-    #     overlay = np.zeros((*img1.shape, 3))
-    #     overlay[..., 0] += img1_norm * 0.9  # Red channel for first image
-    #     overlay[..., 1] += img2_norm * 0.9  # Green channel for second image
-    #
-    #     return np.clip(overlay, 0, 1)
 
