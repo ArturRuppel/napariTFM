@@ -32,10 +32,9 @@ class VisualizationManager(ErrorHandlingMixin):
         self.viewer = viewer
         self.data_manager = data_manager
 
-        # State management
+        # Remove colorbar-related state
         self._layers: Dict[str, Layer] = {}
         self._d_max: Optional[float] = None
-        self._colorbar_widget: Optional[QWidget] = None
         self._active_magnitude_layer: Optional["napari.layers.Image"] = None
         self._preview_config = PreviewConfig()
 
@@ -70,7 +69,7 @@ class VisualizationManager(ErrorHandlingMixin):
                         blending='additive'
                     )
 
-                # Create magnitude layer
+                # Create magnitude layer with colorbar
                 magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
                 if d_max is not None:
                     magnitude = np.clip(magnitude, 0, d_max)
@@ -79,10 +78,11 @@ class VisualizationManager(ErrorHandlingMixin):
                     magnitude,
                     name='Displacement Magnitude',
                     colormap='viridis',
-                    blending='additive'
+                    blending='additive',
+                    colorbar=True,  # Enable colorbar
+                    colorbar_label='Displacement (pixels)'  # Add label
                 )
                 self._layers['magnitude'] = magnitude_layer
-                self._update_colorbar(magnitude_layer, "Displacement (pixels)")
 
                 # Create vector visualization
                 flow_scaled = flow * arrow_scale
@@ -129,17 +129,18 @@ class VisualizationManager(ErrorHandlingMixin):
             # Calculate magnitude stack
             magnitude_stack = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
 
-            # Add magnitude layer
+            # Add magnitude layer with colorbar
             magnitude_layer = self.viewer.add_image(
                 magnitude_stack,
                 name='Force Magnitude',
                 colormap='inferno',
-                blending='additive'
+                blending='additive',
+                colorbar=True,  # Enable colorbar
+                colorbar_label='Force (Pa)'  # Add label
             )
             self._layers['force_magnitude'] = magnitude_layer
-            self._update_colorbar(magnitude_layer, "Force (Pa)")
 
-            # Return basic statistics without contractile force
+            # Return basic statistics
             return {
                 'mean_force': np.mean(magnitude_stack),
                 'max_force': np.max(magnitude_stack)
@@ -148,6 +149,20 @@ class VisualizationManager(ErrorHandlingMixin):
         except Exception as e:
             logger.error(f"Failed to update force visualization: {str(e)}")
             raise
+
+
+    def _on_layer_removed(self, event) -> None:
+        """Handle layer removal events"""
+        layer = event.value
+        if layer == self._active_magnitude_layer:
+            self._active_magnitude_layer = None
+
+    def cleanup(self) -> None:
+        """Clean up resources"""
+        self._clear_layers([name for name in self._layers])
+        self._layers.clear()
+        self.viewer = None
+
 
     def update_preprocessing_visualization(self, results: Dict[str, Tuple[np.ndarray, List[Dict]]]) -> None:
         """Update preprocessing visualization"""
@@ -271,61 +286,6 @@ class VisualizationManager(ErrorHandlingMixin):
 
         return np.clip(overlay, 0, 1)
 
-    def _update_colorbar(self, layer: "napari.layers.Image", title: str) -> None:
-        """Update or create colorbar for the given layer"""
-        try:
-            # Remove existing colorbar
-            if self._colorbar_widget is not None:
-                self.viewer.window.remove_dock_widget(self._colorbar_widget)
-
-            # Create new colorbar
-            fig = Figure(figsize=(1.0, 4))
-            fig.patch.set_facecolor('#262930')
-
-            canvas = FigureCanvasQTAgg(fig)
-            canvas.setStyleSheet("background-color: #262930;")
-
-            ax = fig.add_axes([0.35, 0.03, 0.3, 0.94])
-            ax.patch.set_alpha(0)
-
-            mappable = plt.cm.ScalarMappable(
-                norm=plt.Normalize(
-                    vmin=layer.contrast_limits[0],
-                    vmax=layer.contrast_limits[1]
-                ),
-                cmap=layer.colormap.name
-            )
-
-            colorbar = fig.colorbar(mappable, cax=ax, label=title)
-            colorbar.ax.yaxis.label.set_color('white')
-            colorbar.ax.tick_params(colors='white')
-
-            # Create widget
-            widget = QWidget()
-            widget.setStyleSheet("background-color: #262930; color: white;")
-            widget.setFixedWidth(100)
-
-            layout = QVBoxLayout()
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setAlignment(Qt.AlignCenter)
-            layout.addWidget(canvas)
-            widget.setLayout(layout)
-
-            self._colorbar_widget = widget
-            self._active_magnitude_layer = layer
-
-            # Add to viewer
-            self.viewer.window.add_dock_widget(
-                widget,
-                name=f"{title} Colorbar",
-                area='right',
-                allowed_areas=['right']
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to update colorbar: {str(e)}")
-            raise
-
     def _clear_layers(self, layer_names: List[str]) -> None:
         """Remove specified layers from viewer"""
         for name in layer_names:
@@ -345,74 +305,6 @@ class VisualizationManager(ErrorHandlingMixin):
                         vector_layer.data = results['vector_cache']['data'][current_frame]
                         vector_layer.edge_color = results['vector_cache']['colors'][current_frame]
 
-    def _on_layer_removed(self, event) -> None:
-        """Handle layer removal events"""
-        layer = event.value
-        if layer == self._active_magnitude_layer:
-            if self._colorbar_widget is not None:
-                self.viewer.window.remove_dock_widget(self._colorbar_widget)
-                self._colorbar_widget = None
-                self._active_magnitude_layer = None
-
-    def cleanup(self) -> None:
-        """Clean up resources"""
-        if self._colorbar_widget is not None:
-            self.viewer.window.remove_dock_widget(self._colorbar_widget)
-        self._clear_layers([name for name in self._layers])
-        self._layers.clear()
-        self.viewer = None
-
-    def _refresh_colorbar(self, title: str = "Magnitude"):
-        """Refresh the colorbar after changes to the layer."""
-        if self._active_magnitude_layer is not None and self._colorbar_widget is not None:
-            self._update_colorbar(self._active_magnitude_layer, title)
-
-    def _create_colorbar_widget(self, layer: "napari.layers.Image", title: str = "Magnitude"):
-        """Create a colorbar widget with optimized size and appearance."""
-        from qtpy.QtWidgets import QWidget, QVBoxLayout
-        from qtpy.QtCore import Qt
-        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-        from matplotlib.figure import Figure
-
-        # Create figure with adjusted size ratio
-        fig = Figure(figsize=(1.0, 4))
-        fig.patch.set_facecolor('#262930')
-
-        # Create canvas
-        canvas = FigureCanvasQTAgg(fig)
-        canvas.setStyleSheet("background-color: #262930;")
-
-        # Create colorbar axes with adjusted position
-        ax = fig.add_axes([0.35, 0.03, 0.3, 0.94])
-        ax.patch.set_alpha(0)
-
-        mappable = plt.cm.ScalarMappable(
-            norm=plt.Normalize(
-                vmin=layer.contrast_limits[0],
-                vmax=layer.contrast_limits[1]
-            ),
-            cmap='viridis'
-        )
-
-        colorbar = fig.colorbar(mappable, cax=ax, label=title)
-        colorbar.ax.yaxis.label.set_color('white')
-        colorbar.ax.tick_params(colors='white')
-
-        # Create widget with specific sizing policy
-        widget = QWidget()
-        widget.setStyleSheet("background-color: #262930; color: white;")
-        widget.setSizePolicy(
-            QtWidgets.QSizePolicy.Fixed,
-            QtWidgets.QSizePolicy.MinimumExpanding
-        )
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setAlignment(Qt.AlignCenter)
-        layout.addWidget(canvas)
-        widget.setLayout(layout)
-
-        return widget, canvas
 
     def get_displacement_statistics(self, flow: np.ndarray) -> dict:
         """Calculate displacement statistics."""

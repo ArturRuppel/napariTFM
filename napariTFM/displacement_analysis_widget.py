@@ -14,6 +14,7 @@ from .base_widget import BaseAnalysisWidget, logger
 from .data_manager import DataManager
 from .displacement_analysis import DisplacementAnalyzer, TVL1Parameters
 from .visualization_manager import VisualizationManager
+from .vispy_colorbar import VispyColorbarManager
 
 
 class DisplacementAnalysisWidget(BaseAnalysisWidget):
@@ -28,15 +29,105 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Initialize analyzer
         self.analyzer = DisplacementAnalyzer()
 
+        # Initialize colorbar manager
+        self.colorbar_manager = VispyColorbarManager()
+        self.colorbar_widget = None
+
         # Initialize state variables
         self.current_flow = None
         self.parameter_spins = {}
         self.visualization_params = {}
 
-        # Setup UI and connect signals
+        # Setup UI
         self._setup_ui()
+
+        # Connect signals - moved after UI setup
         self._connect_signals()
+
+        # Update initial UI state
         self._update_ui_state()
+
+    def _on_frame_changed(self, event=None):
+        """Handle frame change events."""
+        try:
+            if not hasattr(self.data_manager, 'displacement_results'):
+                return
+
+            results = self.data_manager.displacement_results
+            if results is None or 'vector_cache' not in results:
+                return
+
+            current_frame = self.viewer.dims.current_step[0]
+            cache = results['vector_cache']
+
+            if current_frame >= len(cache['data']):
+                return
+
+            # Find the vector layer
+            vector_layer = None
+            for layer in self.viewer.layers:
+                if layer.name == 'Flow Vectors':
+                    vector_layer = layer
+                    break
+
+            # Update or create vector layer
+            with self.viewer.events.blocker_all():
+                if vector_layer is not None:
+                    # Store current state
+                    visible = vector_layer.visible
+
+                    # Update data and colors
+                    vector_layer.data = cache['data'][current_frame]
+                    vector_layer.edge_color = cache['colors'][current_frame]
+
+                    # Restore state
+                    vector_layer.visible = visible
+                else:
+                    # Create new vector layer if none exists
+                    self.viewer.add_shapes(
+                        cache['data'][current_frame],
+                        shape_type='line',
+                        name='Flow Vectors',
+                        edge_color=cache['colors'][current_frame],
+                        edge_width=2,
+                        blending='additive'
+                    )
+
+        except Exception as e:
+            logger.error(f"Error updating vectors on frame change: {str(e)}")
+
+    def _connect_signals(self):
+        """Connect all widget signals."""
+        # Existing signal connections
+        self.load_beads_btn.clicked.connect(lambda: self._load_data('beads'))
+        self.load_reference_btn.clicked.connect(lambda: self._load_data('reference'))
+        self.load_cells_btn.clicked.connect(lambda: self._load_data('cells'))
+
+        # Parameter updates
+        for spin in self.parameter_spins.values():
+            spin.valueChanged.connect(self.update_parameters)
+
+        # Action buttons
+        self.preview_btn.clicked.connect(self.preview_displacement)
+        self.analyze_btn.clicked.connect(self.analyze_all_frames)
+
+        # Connect frame change handler
+        self.viewer.dims.events.current_step.connect(self._on_frame_changed)
+
+
+    def cleanup(self):
+        """Clean up resources and event connections."""
+        try:
+            # Disconnect frame change handler
+            self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
+        except Exception:
+            pass
+
+        if self.colorbar_manager is not None:
+            self.colorbar_manager.cleanup()
+
+        super().cleanup()
+
 
     def preview_displacement(self):
         """Preview displacement calculation on current frame."""
@@ -70,16 +161,70 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             elif self.data_manager.cell_stack is not None:
                 cells = self.data_manager.cell_stack[current_frame]
 
-            # Update visualization through manager
-            self.visualization_manager.update_displacement_visualization(
-                flow=self.current_flow,
-                reference=reference,
-                moving=moving,
-                cells=cells,
-                vector_stride=vector_stride,
-                arrow_scale=arrow_scale,
-                d_max=d_max
+            # Clear existing layers
+            self.visualization_manager._clear_layers([
+                'Displacement Overlay',
+                'Displacement Magnitude',
+                'Flow Vectors',
+                'Cell Overlay'
+            ])
+
+            # Create vector data
+            flow_scaled = self.current_flow * arrow_scale
+            vectors, colors = self.visualization_manager._create_vector_visualization(
+                flow_scaled,
+                self.current_flow,
+                vector_stride,
+                d_max
             )
+
+            # Create and add visualization layers
+            with self.viewer.events.blocker_all():
+                # Add overlay
+                overlay = self.visualization_manager._create_overlay(reference, moving)
+                self.viewer.add_image(
+                    overlay,
+                    name='Displacement Overlay',
+                    rgb=True,
+                    blending='additive'
+                )
+
+                # Add magnitude
+                magnitude = np.sqrt(np.sum(self.current_flow ** 2, axis=-1))
+                if d_max is not None:
+                    magnitude = np.clip(magnitude, 0, d_max)
+
+                self.viewer.add_image(
+                    magnitude,
+                    name='Displacement Magnitude',
+                    colormap='viridis',
+                    blending='additive'
+                )
+
+                # Add vectors
+                if len(vectors) > 0:
+                    self.viewer.add_shapes(
+                        vectors,
+                        shape_type='line',
+                        name='Flow Vectors',
+                        edge_color=colors,
+                        edge_width=2,
+                        blending='additive'
+                    )
+
+                # Add cell overlay if available
+                if cells is not None:
+                    self.viewer.add_image(
+                        cells,
+                        name='Cell Overlay',
+                        colormap='gray',
+                        opacity=0.5,
+                        blending='additive'
+                    )
+
+            # Update colorbar
+            vmax = d_max if d_max is not None else magnitude.max()
+            self._update_colorbar(0, vmax)
 
             # Update status with displacement statistics
             stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
@@ -93,6 +238,91 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
+
+    def _validate_input_data(self) -> bool:
+        """Validate required input data is available."""
+        reference = (self.data_manager.preprocessed_reference or
+                     self.data_manager.reference_image)
+        bead_stack = (self.data_manager.preprocessed_bead_stack or
+                      self.data_manager.bead_stack)
+
+        if reference is None:
+            QMessageBox.warning(self, "Error", "Reference image required")
+            return False
+
+        if bead_stack is None:
+            QMessageBox.warning(self, "Error", "Bead stack required")
+            return False
+
+        return True
+
+    def _update_ui_state(self):
+        """Update UI elements based on current state."""
+        # Check for either preprocessed or raw data
+        reference = (self.data_manager.preprocessed_reference or
+                     self.data_manager.reference_image)
+        bead_stack = (self.data_manager.preprocessed_bead_stack or
+                      self.data_manager.bead_stack)
+
+        has_reference = reference is not None
+        has_beads = bead_stack is not None
+
+        # Update status labels
+        self.reference_status.setText("Loaded: " + str(reference.shape) if has_reference else "Not loaded")
+        self.bead_status.setText("Loaded: " + str(bead_stack.shape) if has_beads else "Not loaded")
+
+        # Both conditions must be met to enable analyze and preview buttons
+        can_analyze = has_beads and has_reference
+
+        # Update button states
+        self.analyze_btn.setEnabled(can_analyze)
+        self.preview_btn.setEnabled(can_analyze)
+
+        # Update status message if data is missing
+        if not can_analyze:
+            missing = []
+            if not has_beads:
+                missing.append("bead stack")
+            if not has_reference:
+                missing.append("reference image")
+            if missing:
+                self.status_label.setText(f"Missing required data: {', '.join(missing)}")
+        else:
+            self.status_label.setText("Ready for analysis")
+
+    def _load_data(self, data_type: str):
+        """Load data from active layer."""
+        active_layer = self._get_active_image_layer()
+        if active_layer is None:
+            QMessageBox.warning(self, "Warning", "No active image layer")
+            return
+
+        try:
+            data = active_layer.data
+
+            # Ensure 3D data for stacks
+            if data_type in ['beads', 'cells']:
+                if data.ndim == 2:
+                    data = data[np.newaxis, ...]
+                if data.ndim != 3:
+                    raise ValueError(f"{data_type} stack must be 3D (frames, height, width)")
+            else:  # reference
+                if data.ndim != 2:
+                    raise ValueError("Reference image must be 2D (height, width)")
+
+            # Set data in manager
+            if data_type == 'beads':
+                self.data_manager.bead_stack = data
+            elif data_type == 'reference':
+                self.data_manager.reference_image = data
+            elif data_type == 'cells':
+                self.data_manager.cell_stack = data
+
+            # Update UI state after any data load
+            self._update_ui_state()
+
+        except ValueError as e:
+            QMessageBox.warning(self, "Error", str(e))
 
     def analyze_all_frames(self):
         """Analyze displacement for all frames and create visualization stacks."""
@@ -142,7 +372,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                     reference, bead_stack[i]
                 )
 
-                # Pre-calculate vector data and colors
+                # Calculate vector data for this frame
                 flow_scaled = flow * arrow_scale
                 vectors, colors = self.visualization_manager._create_vector_visualization(
                     flow_scaled,
@@ -170,8 +400,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 }
             }
 
-            self.data_manager.displacement_results = results
-
             # Clear existing layers
             self.visualization_manager._clear_layers([
                 'Displacement Overlay',
@@ -180,7 +408,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 'Cell Overlay'
             ])
 
-            # Add visualization layers as stacks
+            # Add visualization layers
             with self.viewer.events.blocker_all():
                 # Add overlay stack
                 self.viewer.add_image(
@@ -191,6 +419,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 )
 
                 # Add magnitude stack
+                if d_max is not None:
+                    magnitudes = np.clip(magnitudes, 0, d_max)
                 magnitude_layer = self.viewer.add_image(
                     magnitudes,
                     name='Displacement Magnitude',
@@ -198,15 +428,16 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                     blending='additive'
                 )
 
-                # Add vector layer for first frame (will be updated by frame change handler)
-                self.viewer.add_shapes(
-                    vector_data_cache[0],
-                    shape_type='line',
-                    name='Flow Vectors',
-                    edge_color=vector_colors_cache[0],
-                    edge_width=2,
-                    blending='additive'
-                )
+                # Add initial vector layer
+                if len(vector_data_cache[0]) > 0:
+                    self.viewer.add_shapes(
+                        vector_data_cache[0],
+                        shape_type='line',
+                        name='Flow Vectors',
+                        edge_color=vector_colors_cache[0],
+                        edge_width=2,
+                        blending='additive'
+                    )
 
                 # Add cell stack if available
                 if self.data_manager.preprocessed_cell_stack is not None:
@@ -218,8 +449,12 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                         blending='additive'
                     )
 
-            # Update colorbar
-            self._update_colorbar(magnitude_layer, "Displacement (pixels)")
+            # Update colorbar limits
+            vmax = d_max if d_max is not None else magnitudes.max()
+            self._update_colorbar(0, vmax)
+
+            # Store results in data manager
+            self.data_manager.displacement_results = results
 
             # Emit results
             self.displacement_calculated.emit(results)
@@ -229,10 +464,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
-    def cleanup(self):
-        """Clean up resources and event connections."""
-        self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
-        super().cleanup()
+
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -252,7 +484,23 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Add all component groups
         main_layout.addWidget(self._create_data_loading_group())
         main_layout.addWidget(self._create_parameters_group())
-        main_layout.addWidget(self._create_visualization_parameters_group())  # New group
+        main_layout.addWidget(self._create_visualization_parameters_group())
+
+        # Create and add colorbar
+        colorbar_group = QGroupBox("Displacement Magnitude")
+        colorbar_layout = QVBoxLayout()
+        self.colorbar_widget = self.colorbar_manager.create_colorbar(
+            width=300,
+            height=50,
+            colormap_name='viridis',
+            label="Displacement (pixels)",
+            clim=(0, 10),  # Initial limits
+            orientation='bottom'
+        )
+        colorbar_layout.addWidget(self.colorbar_widget)
+        colorbar_group.setLayout(colorbar_layout)
+        main_layout.addWidget(colorbar_group)
+
         main_layout.addWidget(self._create_action_buttons())
         main_layout.addWidget(self._create_status_frame())
 
@@ -267,22 +515,10 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         self._register_controls()
 
-    def _on_frame_changed(self, event=None):
-        """Handle frame change events efficiently by only updating vector layer."""
-        # Skip if no results available
-        if not hasattr(self.data_manager, 'displacement_results'):
-            return
-
-        results = self.data_manager.displacement_results
-        if not results or 'flows' not in results:
-            return
-
-        current_frame = self.viewer.dims.current_step[0]
-        if current_frame >= len(results['flows']):
-            return
-
-        # Only update the vector layer
-        self._update_vector_layer()
+    def _update_colorbar(self, vmin: float, vmax: float):
+        """Update the colorbar limits."""
+        if self.colorbar_manager is not None:
+            self.colorbar_manager.update_limits(vmin, vmax)
 
     def _update_vector_layer(self, event=None):
         """Update vector layer using cached data."""
@@ -533,21 +769,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         except ValueError as e:
             self._handle_error(str(e))
 
-    def _connect_signals(self):
-        """Connect all widget signals."""
-        # Data loading
-        self.load_beads_btn.clicked.connect(lambda: self._load_data('beads'))
-        self.load_reference_btn.clicked.connect(lambda: self._load_data('reference'))
-        self.load_cells_btn.clicked.connect(lambda: self._load_data('cells'))
-
-        # Parameter updates
-        for spin in self.parameter_spins.values():
-            spin.valueChanged.connect(self.update_parameters)
-
-        # Action buttons
-        self.preview_btn.clicked.connect(self.preview_displacement)
-        self.analyze_btn.clicked.connect(self.analyze_all_frames)
-
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
         group = QGroupBox("Data")
@@ -630,85 +851,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                     vectors.append([[start_x, start_y], [end_x, end_y]])
 
         return np.array(vectors) if vectors else np.zeros((0, 2, 2))
-
-    def _load_data(self, data_type: str):
-        """Load data from active layer."""
-        active_layer = self._get_active_image_layer()
-        if active_layer is None:
-            QMessageBox.warning(self, "Warning", "No active image layer")
-            return
-
-        try:
-            data = active_layer.data
-
-            # Ensure 3D data for stacks
-            if data_type in ['beads', 'cells']:
-                if data.ndim == 2:
-                    data = data[np.newaxis, ...]
-                if data.ndim != 3:
-                    raise ValueError(f"{data_type} stack must be 3D (frames, height, width)")
-            else:  # reference
-                if data.ndim != 2:
-                    raise ValueError("Reference image must be 2D (height, width)")
-
-            # Set data in manager
-            if data_type == 'beads':
-                self.data_manager.bead_stack = data
-                self.bead_status.setText(f"Loaded: {data.shape}")
-            elif data_type == 'reference':
-                self.data_manager.reference_image = data
-                self.reference_status.setText(f"Loaded: {data.shape}")
-            elif data_type == 'cells':
-                self.data_manager.cell_stack = data
-                self.cell_status.setText(f"Loaded: {data.shape}")
-
-            # Update UI state after any data load
-            self._update_ui_state()
-
-        except ValueError as e:
-            QMessageBox.warning(self, "Error", str(e))
-
-    def _update_ui_state(self):
-        """Update UI elements based on current state."""
-        # Check for either preprocessed or raw data independently
-        has_reference = (self.data_manager.preprocessed_reference is not None or
-                         self.data_manager.reference_image is not None)
-        has_beads = (self.data_manager.preprocessed_bead_stack is not None or
-                     self.data_manager.bead_stack is not None)
-
-        # Both conditions must be met to enable analyze and preview buttons
-        can_analyze = has_beads and has_reference
-
-        # Update button states
-        self.analyze_btn.setEnabled(can_analyze)
-        self.preview_btn.setEnabled(can_analyze)
-
-        # Optional: Update status for better user feedback
-        if not can_analyze:
-            missing = []
-            if not has_beads:
-                missing.append("bead stack")
-            if not has_reference:
-                missing.append("reference image")
-            if missing:
-                self.status_label.setText(f"Missing required data: {', '.join(missing)}")
-
-    def _validate_input_data(self) -> bool:
-        """Validate required input data is available."""
-        has_reference = (self.data_manager.preprocessed_reference is not None or
-                         self.data_manager.reference_image is not None)
-        has_beads = (self.data_manager.preprocessed_bead_stack is not None or
-                     self.data_manager.bead_stack is not None)
-
-        if not has_reference:
-            QMessageBox.warning(self, "Error", "Reference image required")
-            return False
-
-        if not has_beads:
-            QMessageBox.warning(self, "Error", "Bead stack required")
-            return False
-
-        return True
 
     def _register_controls(self):
         """Register all controls with the base widget."""
