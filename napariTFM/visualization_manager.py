@@ -122,34 +122,112 @@ class VisualizationManager(ErrorHandlingMixin):
             ))
 
     def update_force_visualization(self, results: Dict) -> Dict[str, float]:
-        """Update force calculation visualization"""
+        """Update force calculation visualization with both magnitude and vector representation"""
         try:
             self._clear_layers(['Force Magnitude', 'Force Vectors'])
 
             # Calculate magnitude stack
             magnitude_stack = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
 
-            # Add magnitude layer with colorbar
+            # Add magnitude layer
             magnitude_layer = self.viewer.add_image(
                 magnitude_stack,
                 name='Force Magnitude',
                 colormap='inferno',
-                blending='additive',
-                colorbar=True,  # Enable colorbar
-                colorbar_label='Force (Pa)'  # Add label
+                blending='additive'
             )
             self._layers['force_magnitude'] = magnitude_layer
 
-            # Return basic statistics
-            return {
-                'mean_force': np.mean(magnitude_stack),
-                'max_force': np.max(magnitude_stack)
+            # Create vector visualization
+            vector_stride = 20  # Can be made configurable if needed
+            arrow_scale = 1.0  # Can be made configurable if needed
+            d_max = magnitude_stack.max()  # Use maximum force for scaling
+
+            num_frames = len(results['tx'])
+            vector_data_cache = []
+            vector_colors_cache = []
+
+            for frame in range(num_frames):
+                # Combine force components into flow-like array
+                force_field = np.stack(
+                    (results['tx'][frame], results['ty'][frame]),
+                    axis=-1
+                )
+
+                # Scale the forces for visualization
+                force_field_scaled = force_field * arrow_scale
+
+                # Create vector visualization
+                vectors, colors = self._create_vector_visualization(
+                    force_field_scaled,
+                    force_field,
+                    vector_stride,
+                    d_max
+                )
+
+                vector_data_cache.append(vectors)
+                vector_colors_cache.append(colors)
+
+            # Add initial vector layer
+            if len(vector_data_cache[0]) > 0:
+                vector_layer = self.viewer.add_shapes(
+                    vector_data_cache[0],
+                    shape_type='line',
+                    name='Force Vectors',
+                    edge_color=vector_colors_cache[0],
+                    edge_width=2,
+                    blending='additive'
+                )
+                self._layers['force_vectors'] = vector_layer
+
+            # Store vector cache for frame changes
+            if not hasattr(self.data_manager, 'force_vector_cache'):
+                self.data_manager.force_vector_cache = {}
+
+            self.data_manager.force_vector_cache = {
+                'data': vector_data_cache,
+                'colors': vector_colors_cache,
+                'parameters': {
+                    'stride': vector_stride,
+                    'arrow_scale': arrow_scale,
+                    'd_max': d_max
+                }
             }
+
+            # Return basic statistics
+            stats = {
+                'mean_force': float(np.mean(magnitude_stack)),
+                'max_force': float(np.max(magnitude_stack))
+            }
+
+            return stats
 
         except Exception as e:
             logger.error(f"Failed to update force visualization: {str(e)}")
             raise
 
+    def _on_frame_changed(self, event=None) -> None:
+        """Handle frame change events for both displacement and force visualizations"""
+        current_frame = self.viewer.dims.current_step[0]
+
+        # Handle displacement vectors
+        if hasattr(self.data_manager, 'displacement_results'):
+            results = self.data_manager.displacement_results
+            if results and 'vector_cache' in results:
+                if current_frame < len(results['vector_cache']['data']):
+                    if 'vectors' in self._layers:
+                        vector_layer = self._layers['vectors']
+                        vector_layer.data = results['vector_cache']['data'][current_frame]
+                        vector_layer.edge_color = results['vector_cache']['colors'][current_frame]
+
+        # Handle force vectors
+        if hasattr(self.data_manager, 'force_vector_cache'):
+            cache = self.data_manager.force_vector_cache
+            if current_frame < len(cache['data']):
+                if 'force_vectors' in self._layers:
+                    vector_layer = self._layers['force_vectors']
+                    vector_layer.data = cache['data'][current_frame]
+                    vector_layer.edge_color = cache['colors'][current_frame]
 
     def _on_layer_removed(self, event) -> None:
         """Handle layer removal events"""
@@ -292,19 +370,6 @@ class VisualizationManager(ErrorHandlingMixin):
             for layer in list(self.viewer.layers):
                 if layer.name == name:
                     self.viewer.layers.remove(layer)
-
-    def _on_frame_changed(self, event=None) -> None:
-        """Handle frame change events"""
-        if hasattr(self.data_manager, 'displacement_results'):
-            results = self.data_manager.displacement_results
-            if results and 'vector_cache' in results:
-                current_frame = self.viewer.dims.current_step[0]
-                if current_frame < len(results['vector_cache']['data']):
-                    if 'vectors' in self._layers:
-                        vector_layer = self._layers['vectors']
-                        vector_layer.data = results['vector_cache']['data'][current_frame]
-                        vector_layer.edge_color = results['vector_cache']['colors'][current_frame]
-
 
     def get_displacement_statistics(self, flow: np.ndarray) -> dict:
         """Calculate displacement statistics."""

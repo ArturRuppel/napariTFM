@@ -340,7 +340,9 @@ class EnhancedColorBarWidget(Widget):
     def clim(self, clim):
         vmin, vmax = clim
         self._original_clim = (vmin, vmax)
-        self._colorbar.clim = (vmax, vmin)  # Invert for the visual
+        self._colorbar.clim = (vmin, vmax)
+        self._update_label_position()
+        self._update_tick_positions()
 
     @border_color.setter
     def border_color(self, color):
@@ -430,8 +432,10 @@ class ColorbarManager:
         """Update the colorbar limits"""
         if self._colorbar is not None:
             vmin, vmax = min(vmin, vmax), max(vmin, vmax)
-            self._colorbar.clim = (vmin, vmax)
+            # Store the original limits
             self._current_clim = (vmin, vmax)
+            # Invert the limits for the colorbar visual
+            self._colorbar.clim = (vmax, vmin)
 
     def update_colormap(self, colormap_name):
         """Update the colormap"""

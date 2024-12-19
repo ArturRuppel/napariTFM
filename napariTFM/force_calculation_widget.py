@@ -22,7 +22,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
     """Widget for calculating traction forces using FTTC method."""
 
     force_calculated = Signal(dict)  # Emits force calculation results
-
     def __init__(
             self,
             viewer: "napari.Viewer",
@@ -48,16 +47,16 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
     def _setup_ui(self):
         """Set up the user interface."""
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # Main layout
+        main_layout = QHBoxLayout()
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        container = QWidget()
-        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-
-        horizontal_layout = QHBoxLayout()
-        horizontal_layout.setSpacing(8)
-        horizontal_layout.setContentsMargins(6, 6, 6, 6)
+        # Create and set up colorbar container
+        colorbar_container = QWidget()
+        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        colorbar_layout = QVBoxLayout()
+        colorbar_layout.setContentsMargins(6, 6, 6, 6)
 
         # Create colorbar using base class method
         colorbar_group = self.create_colorbar_widget(
@@ -66,31 +65,123 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             clim=(1000, 0),
             colorbar_manager=self.colorbar_manager
         )
-        horizontal_layout.addWidget(colorbar_group)
-        # Main content layout
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(0, 0, 0, 0)
+        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        # Add colorbar to its container with alignment
+        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        colorbar_layout.addStretch()
+        colorbar_container.setLayout(colorbar_layout)
+
+        main_layout.addWidget(colorbar_container)
+
+        # Container for the right side content
+        right_container = QWidget()
+        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(6, 6, 6, 6)
 
         # Add all component groups
-        main_layout.addWidget(self._create_material_params_group())
-        main_layout.addWidget(self._create_filter_params_group())
-        main_layout.addWidget(self._create_action_buttons())
-        main_layout.addWidget(self._create_status_frame())
+        right_layout.addWidget(self._create_material_params_group())
+        right_layout.addWidget(self._create_filter_params_group())
+        right_layout.addWidget(self._create_action_buttons())
+        right_layout.addWidget(self._create_status_frame())
+        right_layout.addStretch()
 
-        main_content = QWidget()
-        main_content.setLayout(main_layout)
-        horizontal_layout.addWidget(main_content)
+        right_container.setLayout(right_layout)
+        right_container.setFixedWidth(300)  # Fixed width for the right side
 
-        container.setLayout(horizontal_layout)
-        scroll.setWidget(container)
+        # Add right container to main layout
+        main_layout.addWidget(right_container)
+        main_layout.addStretch(1)  # Add stretch after the container
 
+        self.setLayout(main_layout)
+    def _create_material_params_group(self) -> QGroupBox:
+        """Create the material parameters group."""
+        group = QGroupBox("Material Parameters")
+        group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(scroll)
-        self.setLayout(layout)
 
-        self._register_controls()
+        # Create spin boxes first
+        self.young_spin = QDoubleSpinBox()
+        self.poisson_spin = QDoubleSpinBox()
+        self.height_spin = QDoubleSpinBox()
+        self.pixel_spin = QDoubleSpinBox()
+
+        params = [
+            ("Young's Modulus (Pa):", self.young_spin, 100, 1000000, 100, self.young_modulus),
+            ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, self.poisson_ratio),
+            ("Gel Height (μm):", self.height_spin, 0, 1000, 10, 0),
+            ("Pixel Size (μm):", self.pixel_spin, 0.001, 10, 0.1, self.pixel_size)
+        ]
+
+        for label_text, spin, min_val, max_val, step, default in params:
+            row = QHBoxLayout()
+            label = QLabel(label_text)
+            label.setFixedWidth(120)  # Fixed width for labels
+            row.addWidget(label)
+
+            spin.setRange(min_val, max_val)
+            spin.setSingleStep(step)
+            spin.setValue(default)
+            if label_text.startswith("Gel Height"):
+                spin.setSpecialValueText("∞")
+            row.addWidget(spin)
+            layout.addLayout(row)
+
+        group.setLayout(layout)
+        return group
+    def _create_filter_params_group(self) -> QGroupBox:
+        """Create the filter parameters group."""
+        group = QGroupBox("Filter Parameters")
+        group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        layout = QVBoxLayout()
+
+        row = QHBoxLayout()
+        label = QLabel("Filter Size (μm):")
+        label.setFixedWidth(120)  # Fixed width for consistency
+        row.addWidget(label)
+
+        self.filter_size_spin = QDoubleSpinBox()
+        self.filter_size_spin.setRange(0.1, 50)
+        self.filter_size_spin.setValue(self.filter_size)
+        self.filter_size_spin.setSingleStep(0.5)
+        row.addWidget(self.filter_size_spin)
+
+        layout.addLayout(row)
+        group.setLayout(layout)
+        return group
+
+    def _create_action_buttons(self) -> QFrame:
+        """Create the action buttons frame."""
+        frame = QFrame()
+        frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        layout = QHBoxLayout()
+
+        self.calculate_btn = QPushButton("Calculate Forces")
+        self.reset_btn = QPushButton("Reset Parameters")
+
+        layout.addWidget(self.calculate_btn)
+        layout.addWidget(self.reset_btn)
+
+        frame.setLayout(layout)
+        return frame
+
+    def _create_status_frame(self) -> QFrame:
+        """Create the status and progress frame."""
+        frame = QFrame()
+        frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        layout = QVBoxLayout()
+
+        self.progress_bar = QProgressBar()
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)  # Allow text wrapping
+
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.status_label)
+
+        frame.setLayout(layout)
+        return frame
 
     def _update_colorbar(self, vmin: float, vmax: float):
         """Update the colorbar limits and appearance."""
@@ -145,6 +236,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         super().cleanup()
 
     def calculate_forces(self):
+
         """Calculate traction forces using FTTC method."""
         try:
             if not self._validate_input_data():
@@ -238,101 +330,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
         for control in controls:
             self.register_control(control)
-
-    def _create_material_params_group(self) -> QGroupBox:
-        """Create the material parameters group."""
-        group = QGroupBox("Material Parameters")
-        layout = QVBoxLayout()
-
-        # Young's modulus
-        young_layout = QHBoxLayout()
-        young_layout.addWidget(QLabel("Young's Modulus (Pa):"))
-        self.young_spin = QDoubleSpinBox()
-        self.young_spin.setRange(100, 1000000)
-        self.young_spin.setValue(self.young_modulus)
-        self.young_spin.setSingleStep(100)
-        young_layout.addWidget(self.young_spin)
-        layout.addLayout(young_layout)
-
-        # Poisson ratio
-        poisson_layout = QHBoxLayout()
-        poisson_layout.addWidget(QLabel("Poisson Ratio:"))
-        self.poisson_spin = QDoubleSpinBox()
-        self.poisson_spin.setRange(0, 0.5)
-        self.poisson_spin.setValue(self.poisson_ratio)
-        self.poisson_spin.setSingleStep(0.01)
-        poisson_layout.addWidget(self.poisson_spin)
-        layout.addLayout(poisson_layout)
-
-        # Gel height
-        height_layout = QHBoxLayout()
-        height_layout.addWidget(QLabel("Gel Height (μm):"))
-        self.height_spin = QDoubleSpinBox()
-        self.height_spin.setRange(0, 1000)
-        self.height_spin.setSpecialValueText("∞")
-        self.height_spin.setValue(0)  # 0 represents infinite
-        self.height_spin.setSingleStep(10)
-        height_layout.addWidget(self.height_spin)
-        layout.addLayout(height_layout)
-
-        # Pixel size
-        pixel_layout = QHBoxLayout()
-        pixel_layout.addWidget(QLabel("Pixel Size (μm):"))
-        self.pixel_spin = QDoubleSpinBox()
-        self.pixel_spin.setRange(0.001, 10)
-        self.pixel_spin.setValue(self.pixel_size)
-        self.pixel_spin.setSingleStep(0.1)
-        pixel_layout.addWidget(self.pixel_spin)
-        layout.addLayout(pixel_layout)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_filter_params_group(self) -> QGroupBox:
-        """Create the filter parameters group."""
-        group = QGroupBox("Filter Parameters")
-        layout = QVBoxLayout()
-
-        # Filter size
-        size_layout = QHBoxLayout()
-        size_layout.addWidget(QLabel("Filter Size (μm):"))
-        self.filter_size_spin = QDoubleSpinBox()
-        self.filter_size_spin.setRange(0.1, 50)
-        self.filter_size_spin.setValue(self.filter_size)
-        self.filter_size_spin.setSingleStep(0.5)
-        size_layout.addWidget(self.filter_size_spin)
-        layout.addLayout(size_layout)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_action_buttons(self) -> QFrame:
-        """Create the action buttons frame."""
-        frame = QFrame()
-        layout = QHBoxLayout()
-
-        self.calculate_btn = QPushButton("Calculate Forces")
-        self.reset_btn = QPushButton("Reset Parameters")
-
-        layout.addWidget(self.calculate_btn)
-        layout.addWidget(self.reset_btn)
-
-        frame.setLayout(layout)
-        return frame
-
-    def _create_status_frame(self) -> QFrame:
-        """Create the status and progress frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        self.progress_bar = QProgressBar()
-        self.status_label = QLabel("")
-
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.status_label)
-
-        frame.setLayout(layout)
-        return frame
 
     def _connect_signals(self):
         """Connect widget signals."""
