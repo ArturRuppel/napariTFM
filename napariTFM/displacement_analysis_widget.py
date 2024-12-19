@@ -66,11 +66,9 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             border_width=1.0,
             padding=(0.1, 0.1),
             axis_ratio=0.05,
-            # label_offset=(-15, 0),
-            label_offset=(0, 0),
+            label_offset=(-15, 0),
             label_rotation=0,
-            # tick_label_offset=(-40, -45),
-            tick_label_offset = (0, 0)
+            tick_label_offset=(-44, -45)
         )
 
         colorbar_group.setFixedWidth(120)
@@ -112,9 +110,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         for spin in self.parameter_spins.values():
             spin.valueChanged.connect(self.update_parameters)
 
-        for param in self.visualization_params.values():
-            param.valueChanged.connect(self._update_visualization_params)
-
         self.preview_btn.clicked.connect(self.preview_displacement)
         self.analyze_btn.clicked.connect(self.analyze_all_frames)
 
@@ -123,19 +118,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     def _update_colorbar(self, vmin: float, vmax: float):
         """Update the colorbar limits and appearance."""
         if self.colorbar_manager is not None:
-            self.colorbar_manager.update_limits(vmax, vmin)
-
-            # if hasattr(self, 'visualization_params'):
-            #     if 'd_max' in self.visualization_params:
-            #         max_val = self.visualization_params['d_max'].value()
-                    # if max_val is not None:
-                    #     # Adjust label position based on value range
-                    #     if max_val > 100:
-                    #         self.colorbar_manager.update_label_position(offset=(0.2, 0))
-                    #     elif max_val > 50:
-                    #         self.colorbar_manager.update_label_position(offset=(0.15, 0))
-                    #     else:
-                    #         self.colorbar_manager.update_label_position(offset=(0.1, 0))
+            self.colorbar_manager.update_limits(vmin, vmax)
 
     def _update_visualization_params(self):
         """Update visualization when parameters change."""
@@ -723,7 +706,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         return group
 
     def _create_visualization_parameters_group(self) -> QGroupBox:
-        """Create the visualization parameters group with expanded ranges."""
+        """Create the visualization parameters group."""
         group = QGroupBox("Visualization Parameters")
         layout = QVBoxLayout()
 
@@ -731,20 +714,22 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         stride_layout = QHBoxLayout()
         stride_layout.addWidget(QLabel("Vector Stride:"))
         self.visualization_params['vector_stride'] = QSpinBox()
-        self.visualization_params['vector_stride'].setRange(1, 100)  # Increased range
+        self.visualization_params['vector_stride'].setRange(1, 100)
         self.visualization_params['vector_stride'].setValue(20)
         self.visualization_params['vector_stride'].setToolTip("Display every nth vector")
+        # Remove valueChanged connection
         stride_layout.addWidget(self.visualization_params['vector_stride'])
         layout.addLayout(stride_layout)
 
-        # Arrow scale control with increased range
+        # Arrow scale control
         arrow_layout = QHBoxLayout()
         arrow_layout.addWidget(QLabel("Arrow Scale:"))
         self.visualization_params['arrow_scale'] = QDoubleSpinBox()
-        self.visualization_params['arrow_scale'].setRange(0.1, 50.0)  # Increased range
+        self.visualization_params['arrow_scale'].setRange(0.1, 50.0)
         self.visualization_params['arrow_scale'].setSingleStep(0.5)
         self.visualization_params['arrow_scale'].setValue(1.0)
         self.visualization_params['arrow_scale'].setToolTip("Scale factor for arrow length")
+        # Remove valueChanged connection
         arrow_layout.addWidget(self.visualization_params['arrow_scale'])
         layout.addLayout(arrow_layout)
 
@@ -752,10 +737,11 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         dmax_layout = QHBoxLayout()
         dmax_layout.addWidget(QLabel("Max Displacement:"))
         self.visualization_params['d_max'] = QDoubleSpinBox()
-        self.visualization_params['d_max'].setRange(0.1, 200.0)  # Increased range
+        self.visualization_params['d_max'].setRange(0.1, 200.0)
         self.visualization_params['d_max'].setSingleStep(1.0)
         self.visualization_params['d_max'].setValue(10.0)
         self.visualization_params['d_max'].setToolTip("Maximum displacement for color scaling")
+        # Remove valueChanged connection
         dmax_layout.addWidget(self.visualization_params['d_max'])
         layout.addLayout(dmax_layout)
 

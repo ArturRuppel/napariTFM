@@ -58,19 +58,26 @@ class EnhancedColorBarWidget(Widget):
         self._label_rotation = label_rotation
         self._orientation = orientation
 
-        # Create the ColorBarVisual first
+        # Invert the clim values for the colorbar visual
+        vmin, vmax = clim
+        inverted_clim = (vmax, vmin)
+
+        # Create the ColorBarVisual with inverted limits
         self._colorbar = ColorBarVisual(
             size=(1, 1),  # dummy size
             cmap=cmap,
             orientation=orientation,
             label=label,
-            clim=clim,
+            clim=inverted_clim,  # Use inverted limits here
             label_color=label_color,
             border_width=border_width,
             border_color=border_color,
             **kwargs
         )
         self._colorbar.unfreeze()
+
+        # Store original clim for reference
+        self._original_clim = clim
 
         # NOW initialize the Widget base class
         Widget.__init__(self)
@@ -96,23 +103,23 @@ class EnhancedColorBarWidget(Widget):
         # Calculate base positions for both ticks based on orientation
         if self._orientation == 'left':
             base_x = center_x - width * 0.3
-            base_y1 = center_y - height * 0.4  # Bottom tick
-            base_y2 = center_y + height * 0.4  # Top tick
+            base_y1 = center_y - height * 0.4
+            base_y2 = center_y + height * 0.4
             final_positions = [
                 (base_x + self._tick_label_offset[0],
-                 base_y1 + self._tick_label_offset[1]),  # Bottom label moves down
+                 base_y1 + self._tick_label_offset[1]),
                 (base_x + self._tick_label_offset[0],
-                 base_y2 - self._tick_label_offset[1])  # Top label moves up
+                 base_y2 - self._tick_label_offset[1])
             ]
         elif self._orientation == 'right':
             base_x = center_x + width * 0.3
-            base_y1 = center_y - height * 0.4  # Bottom tick
-            base_y2 = center_y + height * 0.4  # Top tick
+            base_y1 = center_y - height * 0.4 + 5  # Microadjustments
+            base_y2 = center_y + height * 0.4
             final_positions = [
                 (base_x + self._tick_label_offset[0],
-                 base_y1 + self._tick_label_offset[1]),  # Bottom label moves down
+                 base_y1 + self._tick_label_offset[1]),
                 (base_x + self._tick_label_offset[0],
-                 base_y2 - self._tick_label_offset[1])  # Top label moves up
+                 base_y2 - self._tick_label_offset[1])
             ]
         elif self._orientation == 'top':
             base_y = center_y + height * 0.3
@@ -146,21 +153,6 @@ class EnhancedColorBarWidget(Widget):
         # New tick position update
         self._update_tick_positions()
 
-    @property
-    def tick_label_offset(self):
-        """Get the current tick label offset"""
-        return self._tick_label_offset
-
-    @tick_label_offset.setter
-    def tick_label_offset(self, offset):
-        """Set the tick label offset and update positions"""
-        self._tick_label_offset = offset
-        self._update_tick_positions()
-
-    def on_resize(self, event):
-        """Resize event handler"""
-        self._update_colorbar()
-
     def _update_colorbar(self):
         """Update colorbar position and size"""
         self._colorbar.pos = self.rect.center
@@ -168,21 +160,6 @@ class EnhancedColorBarWidget(Widget):
         self._update_label_position()
         self._update_tick_positions()
         self.update()
-
-    def _calc_size(self):
-        """Calculate colorbar size based on container dimensions"""
-        total_halfx, total_halfy = self.rect.right, self.rect.top
-        if self._orientation in ["bottom", "top"]:
-            total_major_axis, total_minor_axis = total_halfx, total_halfy
-        else:
-            total_major_axis, total_minor_axis = total_halfy, total_halfx
-
-        major_axis = total_major_axis * (1.0 - self._major_axis_padding)
-        minor_axis = major_axis * self._minor_axis_ratio
-        minor_axis = np.minimum(minor_axis,
-                                total_minor_axis * (1.0 - self._minor_axis_padding))
-
-        return (major_axis, minor_axis)
 
     def _update_label_position(self):
         """Update the label position with offset and rotation"""
@@ -218,7 +195,48 @@ class EnhancedColorBarWidget(Widget):
         if self._label_rotation != 0:
             self._colorbar._label.rotation = self._label_rotation
 
-    # Forward border color property to colorbar
+    def on_resize(self, event):
+        """Resize event handler"""
+        self._update_colorbar()
+
+    def _calc_size(self):
+        """Calculate colorbar size based on container dimensions"""
+        total_halfx, total_halfy = self.rect.right, self.rect.top
+        if self._orientation in ["bottom", "top"]:
+            total_major_axis, total_minor_axis = total_halfx, total_halfy
+        else:
+            total_major_axis, total_minor_axis = total_halfy, total_halfx
+
+        major_axis = total_major_axis * (1.0 - self._major_axis_padding)
+        minor_axis = major_axis * self._minor_axis_ratio
+        minor_axis = np.minimum(minor_axis,
+                                total_minor_axis * (1.0 - self._minor_axis_padding))
+
+        return (major_axis, minor_axis)
+
+    def _modify_label_transform(self):
+        """Apply custom offset and rotation to label transform"""
+        if not hasattr(self._colorbar, '_label') or self._colorbar._label is None:
+            return
+
+        # Get base transform from original method
+        base_transform = self._original_label_transform()
+
+        # Calculate pixel offsets based on widget size
+        offset_x = self._label_offset[0]
+        offset_y = self._label_offset[1]
+
+        # Create translation transform for offset
+        from vispy.visuals.transforms import STTransform
+        offset_transform = STTransform(translate=[offset_x, offset_y, 0])
+
+        # Combine transforms
+        self._colorbar._label.transform = base_transform * offset_transform
+
+        # Apply rotation if specified
+        if self._label_rotation != 0:
+            self._colorbar._label.rotation = self._label_rotation
+
     @property
     def border_color(self):
         return self._colorbar.border_color
@@ -250,35 +268,21 @@ class EnhancedColorBarWidget(Widget):
         self._label_offset = offset
         self._update_label_position()
 
-
     @label_rotation.setter
     def label_rotation(self, angle):
         self._label_rotation = angle
         self._update_label_position()
 
-    def _modify_label_transform(self):
-        """Apply custom offset and rotation to label transform"""
-        if not hasattr(self._colorbar, '_label') or self._colorbar._label is None:
-            return
+    @property
+    def tick_label_offset(self):
+        """Get the current tick label offset"""
+        return self._tick_label_offset
 
-        # Get base transform from original method
-        base_transform = self._original_label_transform()
-
-        # Calculate pixel offsets based on widget size
-        offset_x = self._label_offset[0]
-        offset_y = self._label_offset[1]
-
-        # Create translation transform for offset
-        from vispy.visuals.transforms import STTransform
-        offset_transform = STTransform(translate=[offset_x, offset_y, 0])
-
-        # Combine transforms
-        self._colorbar._label.transform = base_transform * offset_transform
-
-        # Apply rotation if specified
-        if self._label_rotation != 0:
-            self._colorbar._label.rotation = self._label_rotation
-
+    @tick_label_offset.setter
+    def tick_label_offset(self, offset):
+        """Set the tick label offset and update positions"""
+        self._tick_label_offset = offset
+        self._update_tick_positions()
 
     @label_offset.setter
     def label_offset(self, offset):
@@ -289,7 +293,6 @@ class EnhancedColorBarWidget(Widget):
     def label_rotation(self, angle):
         self._label_rotation = angle
         self._modify_label_transform()
-
 
     def _get_base_label_position(self):
         """Calculate the base position for the label"""
@@ -331,12 +334,13 @@ class EnhancedColorBarWidget(Widget):
 
     @property
     def clim(self):
-        return self._colorbar.clim
+        return self._original_clim
 
     @clim.setter
     def clim(self, clim):
-        self._colorbar.clim = clim
-
+        vmin, vmax = clim
+        self._original_clim = (vmin, vmax)
+        self._colorbar.clim = (vmax, vmin)  # Invert for the visual
 
     @border_color.setter
     def border_color(self, color):
@@ -397,12 +401,13 @@ class ColorbarManager:
             print(f"Colormap {colormap_name} not found, using viridis")
             self._colormap = vp_color.get_colormap('viridis')
 
+        vmin, vmax = min(clim), max(clim)
         self._colorbar = EnhancedColorBarWidget(
             self._colormap,
             orientation,
             label=label,
             label_color=label_color,
-            clim=clim,
+            clim=(vmin, vmax),  # Pass in consistent order
             border_width=border_width,
             border_color=border_color,
             padding=padding,
@@ -413,7 +418,7 @@ class ColorbarManager:
         )
 
         self._canvas.central_widget.add_widget(self._colorbar)
-        self._current_clim = clim
+        self._current_clim = (vmin, vmax)
         return self._canvas.native
 
     def update_tick_label_offset(self, offset):
@@ -424,6 +429,7 @@ class ColorbarManager:
     def update_limits(self, vmin, vmax):
         """Update the colorbar limits"""
         if self._colorbar is not None:
+            vmin, vmax = min(vmin, vmax), max(vmin, vmax)
             self._colorbar.clim = (vmin, vmax)
             self._current_clim = (vmin, vmax)
 
