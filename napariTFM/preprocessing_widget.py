@@ -31,58 +31,174 @@ class PreprocessingWidget(BaseAnalysisWidget):
             data_manager: DataManager,
             visualization_manager: VisualizationManager
     ):
-        super().__init__(
-            viewer=viewer,
-            data_manager=data_manager,
-            visualization_manager=visualization_manager,
-        )
+        super().__init__(viewer, data_manager, visualization_manager)
 
-        # Initialize instance variables before UI setup
+        # Initialize instance variables
         self.preprocessor = ImagePreprocessor()
         self.preview_enabled = False
-        self.original_layer = None
-        self.preview_layer = None
-        self.current_data_type = 'beads'  # For preview purposes
+        self.current_data_type = 'beads'
 
-        # Initialize UI elements to None
-        self.load_beads_btn = None
-        self.load_reference_btn = None
-        self.load_cells_btn = None
-        self.bead_status = None
-        self.reference_status = None
-        self.cell_status = None
-        self.intensity_slider = None
-        self.min_spinbox = None
-        self.max_spinbox = None
-        self.gaussian_check = None
-        self.gaussian_sigma_spin = None
-        self.registration_check = None
-        self.registration_mode_combo = None
-        self.preview_check = None
-        self.preprocess_btn = None
-        self.reset_btn = None
-        self.bead_radio = None
-        self.reference_radio = None
-        self.cell_radio = None
-        self.progress_bar = None
-        self.status_label = None
-        self.cell_intensity_slider = None
-        self.cell_min_spinbox = None
-        self.cell_max_spinbox = None
-        self.cell_gaussian_check = None
-        self.cell_gaussian_sigma_spin = None
-
-        # Setup UI elements
+        # Setup UI and connect signals
         self._setup_ui()
-
-        # Connect signals after UI is set up
         self._connect_signals()
-
-        # Connect to viewer events
-        self.viewer.layers.events.removed.connect(self._handle_layer_removal)
-
-        # Update initial UI state
         self._update_ui_state()
+
+    def toggle_preview(self, enabled: bool):
+        """Toggle preview mode"""
+        try:
+            if enabled:
+                # Get current data type
+                if self.bead_radio.isChecked():
+                    data = self.data_manager.bead_stack
+                elif self.reference_radio.isChecked():
+                    data = self.data_manager.reference_image
+                else:
+                    data = self.data_manager.cell_stack
+
+                if data is None:
+                    raise ProcessingError(f"No {self.current_data_type} data available")
+
+                # Get current frame if data is a stack
+                if data.ndim == 3:
+                    current_step = self.viewer.dims.current_step[0]
+                    frame = data[current_step].copy()
+                else:
+                    frame = data.copy()
+
+                # Process the frame
+                processed_frame, frame_info = self.preprocessor.preprocess_frame(
+                    frame,
+                    is_cell=(self.current_data_type == 'cells')
+                )
+
+                # Update visualization through manager
+                self.visualization_manager.handle_preview(
+                    frame=processed_frame,
+                    enable=True,
+                    layer_name='Preview'
+                )
+
+                # Update status with frame information
+                info_text = (
+                    f"Preview - Original range: ({frame.min():.1f}, {frame.max():.1f})\n"
+                    f"Applied range: {frame_info['intensity_range']}\n"
+                    f"Mean: {frame_info['final_mean']:.1f}, Std: {frame_info['final_std']:.1f}"
+                )
+                self._update_status(info_text)
+
+            else:
+                # Disable preview through visualization manager
+                self.visualization_manager.handle_preview(
+                    frame=None,
+                    enable=False
+                )
+
+            self.preview_enabled = enabled
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.preview_check.setChecked(False)
+            self.preview_enabled = False
+
+    def update_preview_frame(self):
+        """Update the preview for the current frame"""
+        if not self.preview_enabled:
+            return
+
+        try:
+            # Force update by toggling preview
+            self.toggle_preview(True)
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def _on_preview_type_changed(self):
+        """Handle preview data type selection change"""
+        if self.bead_radio.isChecked():
+            self.current_data_type = 'beads'
+        elif self.reference_radio.isChecked():
+            self.current_data_type = 'reference'
+        else:
+            self.current_data_type = 'cells'
+
+        if self.preview_enabled:
+            self.update_preview_frame()
+
+    def run_preprocessing(self):
+        """Run preprocessing on all available data"""
+        if self.preview_enabled:
+            self.preview_check.setChecked(False)
+
+        try:
+            self._set_controls_enabled(False)
+            self._update_status("Starting preprocessing...", 0)
+
+            # Get parameters
+            params = PreprocessingParameters(
+                min_intensity_percentile=self.min_spinbox.value() / 100,
+                max_intensity_percentile=self.max_spinbox.value() / 100,
+                enable_gaussian_filter=self.gaussian_check.isChecked(),
+                gaussian_sigma=self.gaussian_sigma_spin.value(),
+                cell_min_intensity_percentile=self.cell_min_spinbox.value() / 100,
+                cell_max_intensity_percentile=self.cell_max_spinbox.value() / 100,
+                enable_cell_gaussian_filter=self.cell_gaussian_check.isChecked(),
+                cell_gaussian_sigma=self.cell_gaussian_sigma_spin.value(),
+                enable_registration=self.registration_check.isChecked(),
+                registration_mode=self.registration_mode_combo.currentText().lower()
+            )
+
+            self.preprocessor.update_parameters(params)
+
+            # Process all data with progress updates
+            results = self.preprocessor.preprocess_all(
+                bead_stack=self.data_manager.bead_stack,
+                reference_image=self.data_manager.reference_image,
+                cell_stack=self.data_manager.cell_stack,
+                progress_callback=lambda progress, message: self._update_status(message, int(progress))
+            )
+
+            # Update visualization through manager
+            self.visualization_manager.update_preprocessing_visualization(results)
+
+            self._update_status("Preprocessing complete", 100)
+            self.preprocessing_completed.emit(results)
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.processing_failed.emit(str(e))
+        finally:
+            self._set_controls_enabled(True)
+
+    def _handle_layer_removal(self, event):
+        """Handle layer removal events"""
+        removed_layer = event.value
+
+        try:
+            if removed_layer == self.original_layer:
+                self._update_status("Original layer was removed")
+                self.original_layer = None
+                self.visualization_manager.handle_preview(
+                    frame=None,
+                    enable=False
+                )
+                self.preview_enabled = False
+                self.preview_check.setChecked(False)
+
+        except Exception as e:
+            self._handle_error(ProcessingError(
+                "Error handling layer removal",
+                str(e)
+            ))
+
+    def cleanup(self):
+        """Clean up resources and event connections."""
+        # Ensure preview is disabled
+        if self.preview_enabled:
+            self.visualization_manager.handle_preview(
+                frame=None,
+                enable=False
+            )
+        super().cleanup()
 
     def _create_intensity_range_group(self):
         """Create the intensity range group."""
@@ -151,63 +267,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         self.update_parameters()
 
-    def run_preprocessing(self):
-        """Run preprocessing on all available data"""
-        if self.preview_enabled:
-            self.preview_check.setChecked(False)
-
-        try:
-            self._set_controls_enabled(False)
-            self._update_status("Starting preprocessing...", 0)
-
-            # Get parameters for both bead/reference and cell preprocessing
-            params = PreprocessingParameters(
-                # Bead/Reference parameters
-                min_intensity_percentile=self.min_spinbox.value() / 100,
-                max_intensity_percentile=self.max_spinbox.value() / 100,
-                enable_gaussian_filter=self.gaussian_check.isChecked(),
-                gaussian_sigma=self.gaussian_sigma_spin.value(),
-
-                # Cell parameters
-                cell_min_intensity_percentile=self.cell_min_spinbox.value() / 100,
-                cell_max_intensity_percentile=self.cell_max_spinbox.value() / 100,
-                enable_cell_gaussian_filter=self.cell_gaussian_check.isChecked(),
-                cell_gaussian_sigma=self.cell_gaussian_sigma_spin.value(),
-
-                # Registration parameters
-                enable_registration=self.registration_check.isChecked(),
-                registration_mode=self.registration_mode_combo.currentText().lower()
-            )
-
-            self.preprocessor.update_parameters(params)
-
-            def progress_callback(progress: float, message: str):
-                self._update_status(message, int(progress))
-
-            # Process all data with progress updates
-            results = self.preprocessor.preprocess_all(
-                bead_stack=self.data_manager.bead_stack,
-                reference_image=self.data_manager.reference_image,
-                cell_stack=self.data_manager.cell_stack,
-                progress_callback=progress_callback
-            )
-
-            # Update visualization
-            self._update_visualization(results)
-
-            self._update_status("Preprocessing complete", 100)
-
-            # Emit the complete results dictionary
-            self.preprocessing_completed.emit(results)
-
-        except Exception as e:
-            error_msg = str(e)
-            self._handle_error(error_msg)
-            self.processing_failed.emit(error_msg)
-        finally:
-            self._set_controls_enabled(True)
-
-
     def update_parameters(self):
         """Update preprocessing parameters from UI controls"""
         try:
@@ -269,7 +328,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         return spinbox_layout
 
-
     def _create_cell_params_group(self):
         """Create the cell stack parameters group."""
         cell_params_group = QGroupBox("Cell Stack Parameters")
@@ -310,60 +368,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         cell_params_group.setLayout(cell_params_layout)
         return cell_params_group
-
-    def update_preview_frame(self, event: Optional["Event"] = None):
-        """Update the preview for the current frame"""
-        if not self.preview_enabled:
-            return
-
-        try:
-            # Get current data based on selected type
-            if self.current_data_type == 'beads':
-                data = self.data_manager.bead_stack
-            elif self.current_data_type == 'reference':
-                data = self.data_manager.reference_image
-            else:  # cells
-                data = self.data_manager.cell_stack
-
-            if data is None:
-                raise ProcessingError(f"No {self.current_data_type} data available")
-
-            # Get current frame
-            if data.ndim == 3:
-                current_step = self.viewer.dims.current_step[0]
-                frame = data[current_step].copy()
-            else:
-                frame = data.copy()
-
-            if frame.ndim != 2:
-                raise ProcessingError(f"Invalid frame dimensions: {frame.shape}")
-
-            # Process the frame
-            processed_frame, frame_info = self.preprocessor.preprocess_frame(
-                frame,
-                is_cell=(self.current_data_type == 'cells')
-            )
-
-            # Update or create preview layer
-            if self.preview_layer is None:
-                self.preview_layer = self.viewer.add_image(
-                    processed_frame,
-                    name='Preview',
-                    visible=True
-                )
-            else:
-                self.preview_layer.data = processed_frame
-
-            # Update status with frame information
-            info_text = (
-                f"Preview - Original range: ({frame.min():.1f}, {frame.max():.1f})\n"
-                f"Applied range: {frame_info['intensity_range']}\n"
-                f"Mean: {frame_info['final_mean']:.1f}, Std: {frame_info['final_std']:.1f}"
-            )
-            self._update_status(info_text)
-
-        except Exception as e:
-            self._handle_error(ProcessingError("Preview failed", str(e)))
 
     def _load_active_layer(self, data_type: str):
         """Load the currently active layer as the specified data type"""
@@ -440,6 +444,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         self._update_status("Parameters reset to defaults")
         self.update_parameters()
+
     def _setup_ui(self):
         """Set up the complete user interface for the preprocessing widget."""
         scroll = self._create_scroll_area()
@@ -570,7 +575,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         return sigma_layout
 
-
     def _create_registration_group(self):
         """Create the registration group."""
         registration_group = QGroupBox("Registration")
@@ -634,42 +638,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         status_frame.setLayout(status_layout)
         return status_frame
 
-    def _update_visualization(self, results):
-        """Update visualization of processed results"""
-        try:
-            # Remove existing preprocessed layers
-            for layer_name in ['Preprocessed Beads', 'Preprocessed Reference', 'Preprocessed Cells']:
-                if layer_name in self.viewer.layers:
-                    self.viewer.layers.remove(layer_name)
-
-            # Add new layers
-            if 'beads' in results:
-                processed_beads, _ = results['beads']
-                self.viewer.add_image(
-                    processed_beads,
-                    name='Preprocessed Beads',
-                    visible=True
-                )
-
-            if 'reference' in results:
-                processed_ref, _ = results['reference']
-                self.viewer.add_image(
-                    processed_ref,
-                    name='Preprocessed Reference',
-                    visible=True
-                )
-
-            if 'cells' in results:
-                processed_cells, _ = results['cells']
-                self.viewer.add_image(
-                    processed_cells,
-                    name='Preprocessed Cells',
-                    visible=True
-                )
-
-        except Exception as e:
-            self._handle_error(f"Error updating visualization: {str(e)}")
-
     def _update_ui_state(self):
         """Update UI elements based on available data and current state"""
         # Update data status indicators
@@ -714,6 +682,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.data_manager.cell_stack is not None
         ])
         self.preprocess_btn.setEnabled(has_data)
+
     def _connect_signals(self):
         """Connect widget signals"""
         # Connect load buttons
@@ -769,17 +738,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.cell_intensity_slider.blockSignals(False)
 
         self.update_parameters()
-    def _on_preview_type_changed(self):
-        """Handle preview data type selection change"""
-        if self.bead_radio.isChecked():
-            self.current_data_type = 'beads'
-        elif self.reference_radio.isChecked():
-            self.current_data_type = 'reference'
-        else:
-            self.current_data_type = 'cells'
-
-        if self.preview_enabled:
-            self.update_preview_frame()
 
     def _update_registration_controls(self, enabled: bool):
         """Update registration controls state"""
@@ -829,7 +787,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         for control in controls:
             self.register_control(control)
 
-
     def _get_layer_name(self) -> str:
         """Get appropriate layer name based on current data type"""
         if self.current_data_type == 'beads':
@@ -853,7 +810,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         if self.preview_enabled:
             self.update_preview_frame()
 
-
     def _get_current_data(self) -> Optional[np.ndarray]:
         """Get data for current type"""
         if self.current_data_type == 'beads':
@@ -863,77 +819,5 @@ class PreprocessingWidget(BaseAnalysisWidget):
         else:
             return self.data_manager.cell_stack
 
-    def _show_warning(self, message: str):
-        """Show warning message to user"""
-        QMessageBox.warning(self, "Warning", message)
 
 
-    def toggle_preview(self, enabled: bool):
-        """Toggle preview mode"""
-        self.preview_enabled = enabled
-
-        try:
-            if enabled:
-                # Get current layer and data
-                if self.original_layer is None:
-                    self.original_layer = self._get_active_image_layer()
-                    if self.original_layer is None:
-                        raise ProcessingError("No image layer found")
-
-                # Create preview layer if it doesn't exist
-                if self.preview_layer is None:
-                    preview_data = (self.original_layer.data[0] if self.original_layer.data.ndim == 3
-                                    else self.original_layer.data)
-                    self.preview_layer = self.viewer.add_image(
-                        np.zeros_like(preview_data),
-                        name='Preview',
-                        visible=True
-                    )
-
-                self.update_preview_frame()
-            else:
-                # Remove preview layer if it exists
-                if self.preview_layer is not None and self.preview_layer in self.viewer.layers:
-                    self.viewer.layers.remove(self.preview_layer)
-                self.preview_layer = None
-
-        except Exception as e:
-            self.preview_check.setChecked(False)
-            self.preview_enabled = False
-            if self.preview_layer is not None and self.preview_layer in self.viewer.layers:
-                self.viewer.layers.remove(self.preview_layer)
-            self.preview_layer = None
-            raise ProcessingError("Preview failed", str(e))
-
-    def _handle_layer_removal(self, event):
-        """Handle layer removal events"""
-        try:
-            removed_layer = event.value
-
-            if removed_layer == self.preview_layer:
-                self._update_status("Preview layer was removed")
-                self.preview_layer = None
-                self.preview_enabled = False
-                self.preview_check.setChecked(False)
-
-            if removed_layer == self.original_layer:
-                self._update_status("Original layer was removed")
-                self.original_layer = None
-                try:
-                    if self.preview_layer is not None:
-                        self.viewer.layers.remove(self.preview_layer)
-                except Exception as e:
-                    self._handle_error(ProcessingError(
-                        "Failed to remove preview layer",
-                        str(e),
-                    ))
-                finally:
-                    self.preview_layer = None
-                    self.preview_enabled = False
-                    self.preview_check.setChecked(False)
-
-        except Exception as e:
-            self._handle_error(ProcessingError(
-                "Error handling layer removal",
-                str(e),
-            ))

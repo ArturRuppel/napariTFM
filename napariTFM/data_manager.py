@@ -93,22 +93,7 @@ class DataManager:
         """Clear all stored data"""
         self.__init__()
 
-    def has_required_registration_data(self) -> bool:
-        """Check if required data for registration is available"""
-        has_beads = self._bead_stack is not None or self._preprocessed_bead_stack is not None
-        has_reference = self._reference_image is not None or self._preprocessed_reference is not None
-        return has_beads and has_reference
 
-    def has_any_data(self) -> bool:
-        """Check if any data is loaded"""
-        return any([
-            self._bead_stack is not None,
-            self._reference_image is not None,
-            self._cell_stack is not None,
-            self._preprocessed_bead_stack is not None,
-            self._preprocessed_reference is not None,
-            self._preprocessed_cell_stack is not None
-        ])
 
     @property
     def bead_stack(self) -> Optional[np.ndarray]:
@@ -185,27 +170,7 @@ class DataManager:
             data = data[np.newaxis, ...]
         self._preprocessed_cell_stack = data
 
-    def validate_data(self, data: np.ndarray, is_reference: bool = False) -> Tuple[bool, str]:
-        """Validate input data format."""
-        if data is None:
-            return False, "No data provided"
 
-        if not isinstance(data, np.ndarray):
-            return False, "Data must be a numpy array"
-
-        if is_reference:
-            if data.ndim != 2:
-                return False, "Reference image must be 2D"
-            if self._image_shape is not None and data.shape != self._image_shape:
-                return False, f"Reference image shape {data.shape} doesn't match expected shape {self._image_shape}"
-        else:
-            if data.ndim not in [2, 3]:
-                return False, f"Invalid data dimensions: {data.ndim}"
-            if data.ndim == 3 and self._image_shape is not None:
-                if data.shape[1:] != self._image_shape:
-                    return False, f"Data shape {data.shape[1:]} doesn't match expected shape {self._image_shape}"
-
-        return True, "Data valid"
 
     @property
     def force_results(self) -> Optional[Dict[str, Any]]:
@@ -216,12 +181,13 @@ class DataManager:
     def force_results(self, results: Optional[Dict[str, Any]]):
         """Set force calculation results after validation"""
         if results is not None:
-            required_keys = ['tx', 'ty', 'energy', 'contractile_force', 'parameters']
+            # Check for required fields
+            required_keys = ['tx', 'ty', 'parameters']
             if not all(key in results for key in required_keys):
                 raise ValueError("Force results missing required fields")
 
             # Validate array shapes
-            if not all(isinstance(results[key], np.ndarray) for key in ['tx', 'ty', 'energy']):
+            if not all(isinstance(results[key], np.ndarray) for key in ['tx', 'ty']):
                 raise ValueError("Force results must contain numpy arrays")
 
             if results['tx'].shape != results['ty'].shape:

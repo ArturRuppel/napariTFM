@@ -1,19 +1,29 @@
 import logging
+from typing import Optional, Dict, List, Tuple
+from dataclasses import dataclass
 
+import napari
+import numpy as np
 from matplotlib import pyplot as plt
-from napari.layers import Layer
+from qtpy.QtWidgets import QWidget, QVBoxLayout
 from qtpy import QtWidgets
+from qtpy.QtCore import Qt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
+from napari.layers import Layer
 
 from .error_handling import ErrorSeverity, ErrorHandlingMixin
 
 logger = logging.getLogger(__name__)
 
-from threading import Lock
-from typing import Optional, Dict
 
-import napari
-import numpy as np
-from napari.layers import Layer
+@dataclass
+class PreviewConfig:
+    """Configuration for preview visualization"""
+    enabled: bool = False
+    current_data_type: str = 'beads'  # 'beads', 'reference', or 'cells'
+    original_layer: Optional["napari.layers.Layer"] = None
+    preview_layer: Optional["napari.layers.Layer"] = None
 
 
 class VisualizationManager(ErrorHandlingMixin):
@@ -22,163 +32,321 @@ class VisualizationManager(ErrorHandlingMixin):
         self.viewer = viewer
         self.data_manager = data_manager
 
-        # Initialize attributes
-        self._displacement_layers = {}
-        self._d_max = None
-        self._updating = False
-        self._layer_lock = Lock()
-        self._current_dims = None
-
-        # Initialize colorbar attributes
-        self._colorbar_widget = None
-        self._active_magnitude_layer = None
+        # State management
+        self._layers: Dict[str, Layer] = {}
+        self._d_max: Optional[float] = None
+        self._colorbar_widget: Optional[QWidget] = None
+        self._active_magnitude_layer: Optional["napari.layers.Image"] = None
+        self._preview_config = PreviewConfig()
 
         # Connect to viewer events
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
 
-    def _update_visualization(self, results: Dict):
-        """Update visualization of force calculation results with integrated colorbar."""
-        try:
-            # Remove existing force layers
-            for layer_name in ['Force Magnitude', 'Force Vectors']:
-                if layer_name in self.viewer.layers:
-                    self.viewer.layers.remove(layer_name)
-
-            # Calculate magnitude stack with integrated colorbar
-            magnitude_stack = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
-            magnitude_with_colorbar = self._create_magnitude_with_colorbar(magnitude_stack)
-
-            # Add magnitude layer
-            self.viewer.add_image(
-                magnitude_with_colorbar,
-                name='Force Magnitude',
-                colormap='inferno',
-                blending='additive'
-            )
-
-            # Update status with statistics
-            mean_force = np.mean(magnitude_stack)
-            max_force = np.max(magnitude_stack)
-            mean_contractile = np.mean(results['contractile_force'])
-
-            stats_text = (
-                f"Mean force magnitude: {mean_force:.2f} Pa\n"
-                f"Max force magnitude: {max_force:.2f} Pa\n"
-                f"Mean contractile force: {mean_contractile:.2e} N"
-            )
-            self._update_status(stats_text)
-
-        except Exception as e:
-            self._handle_error(f"Failed to update visualization: {str(e)}")
-
     def update_displacement_visualization(
             self,
+            flow: np.ndarray,
             reference: Optional[np.ndarray] = None,
             moving: Optional[np.ndarray] = None,
-            flow: Optional[np.ndarray] = None,
-            flow_scaled: Optional[np.ndarray] = None,
             cells: Optional[np.ndarray] = None,
-            show_overlay: bool = True,
-            show_vectors: bool = True,
-            show_magnitude: bool = True,
             vector_stride: int = 20,
+            arrow_scale: float = 1.0,
             d_max: Optional[float] = None
     ) -> None:
-        """Update displacement visualization with integrated colorbar."""
-        if self._updating:
-            return
-
+        """Update displacement visualization with all components"""
         try:
-            self._updating = True
-            self._d_max = d_max
             logger.debug("Starting displacement visualization update")
+            self._d_max = d_max
+            self._clear_layers(['Displacement Overlay', 'Displacement Magnitude', 'Flow Vectors', 'Cell Overlay'])
 
-            with self._layer_lock:
-                self._clear_displacement_layers()
+            with self.viewer.events.blocker_all():
+                # Create overlay if reference and moving images are provided
+                if reference is not None and moving is not None:
+                    overlay = self._create_overlay(reference, moving)
+                    self._layers['overlay'] = self.viewer.add_image(
+                        overlay,
+                        name='Displacement Overlay',
+                        rgb=True,
+                        blending='additive'
+                    )
 
-                if flow is None:
-                    raise ValueError("No displacement data available")
+                # Create magnitude layer
+                magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
+                if d_max is not None:
+                    magnitude = np.clip(magnitude, 0, d_max)
 
-                with self.viewer.events.blocker_all():
-                    # Image overlay
-                    if show_overlay and reference is not None and moving is not None:
-                        logger.debug("Adding displacement overlay")
-                        overlay = self._create_overlay(reference, moving)
-                        self._displacement_layers['overlay'] = self.viewer.add_image(
-                            overlay,
-                            name='Displacement Overlay',
-                            rgb=True,
-                            blending='additive'
-                        )
+                magnitude_layer = self.viewer.add_image(
+                    magnitude,
+                    name='Displacement Magnitude',
+                    colormap='viridis',
+                    blending='additive'
+                )
+                self._layers['magnitude'] = magnitude_layer
+                self._update_colorbar(magnitude_layer, "Displacement (pixels)")
 
-                    # Magnitude display with integrated colorbar
-                    if show_magnitude:
-                        logger.debug("Adding magnitude layer with colorbar")
-                        magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
-                        if d_max is not None:
-                            magnitude = np.clip(magnitude, 0, d_max)
+                # Create vector visualization
+                flow_scaled = flow * arrow_scale
+                vector_data, colors = self._create_vector_visualization(
+                    flow_scaled,
+                    flow,
+                    vector_stride,
+                    d_max
+                )
 
-                        magnitude_with_colorbar = self._create_magnitude_with_colorbar(magnitude)
-                        magnitude_layer = self.viewer.add_image(
-                            magnitude_with_colorbar,
-                            name='Displacement Magnitude',
-                            colormap='viridis',
-                            blending='additive'
-                        )
-                        self._displacement_layers['magnitude'] = magnitude_layer
+                if len(vector_data) > 0:
+                    self._layers['vectors'] = self.viewer.add_shapes(
+                        vector_data,
+                        shape_type='line',
+                        name='Flow Vectors',
+                        edge_color=colors,
+                        edge_width=2,
+                        blending='additive'
+                    )
 
-                    # Vector display
-                    if show_vectors and flow_scaled is not None:
-                        logger.debug("Adding vector layer")
-                        vector_data = self._create_vector_data(flow_scaled, vector_stride)
-                        if len(vector_data) > 0:
-                            orig_magnitudes = np.sqrt(np.sum(flow ** 2, axis=-1))
-                            max_mag = self._d_max if self._d_max is not None else orig_magnitudes.max()
-
-                            y_indices = vector_data[:, 0, 0].astype(int)
-                            x_indices = vector_data[:, 0, 1].astype(int)
-                            vector_magnitudes = orig_magnitudes[y_indices, x_indices]
-                            colors = plt.cm.viridis(vector_magnitudes / max_mag)
-
-                            vectors_layer = self.viewer.add_shapes(
-                                vector_data,
-                                shape_type='line',
-                                name='Flow Vectors',
-                                edge_color=colors,
-                                edge_width=2,
-                                blending='additive'
-                            )
-                            self._displacement_layers['vectors'] = vectors_layer
-
-                    if cells is not None:
-                        logger.debug("Adding cell overlay")
-                        self._displacement_layers['cells'] = self.viewer.add_image(
-                            cells,
-                            name='Cell Overlay',
-                            colormap='gray',
-                            opacity=0.5,
-                            blending='additive'
-                        )
+                # Add cell overlay if provided
+                if cells is not None:
+                    self._layers['cells'] = self.viewer.add_image(
+                        cells,
+                        name='Cell Overlay',
+                        colormap='gray',
+                        opacity=0.5,
+                        blending='additive'
+                    )
 
         except Exception as e:
             logger.error(f"Failed to update displacement visualization: {str(e)}")
             self.handle_error(self.create_error(
-                message="Failed to update displacement visualization",
+                message="Visualization update failed",
                 details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Check input data and parameters"
+                severity=ErrorSeverity.ERROR
             ))
-        finally:
-            self._updating = False
 
-    def _refresh_colorbar(self, title: str = "Magnitude"):
-        """Refresh the colorbar after changes to the layer."""
-        if self._active_magnitude_layer is not None and self._colorbar_widget is not None:
-            self._update_colorbar(self._active_magnitude_layer, title)
+    def update_force_visualization(self, results: Dict) -> Dict[str, float]:
+        """Update force calculation visualization"""
+        try:
+            self._clear_layers(['Force Magnitude', 'Force Vectors'])
 
-    def _on_layer_removed(self, event):
-        """Handle layer removal events."""
+            # Calculate magnitude stack
+            magnitude_stack = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
+
+            # Add magnitude layer
+            magnitude_layer = self.viewer.add_image(
+                magnitude_stack,
+                name='Force Magnitude',
+                colormap='inferno',
+                blending='additive'
+            )
+            self._layers['force_magnitude'] = magnitude_layer
+            self._update_colorbar(magnitude_layer, "Force (Pa)")
+
+            # Return basic statistics without contractile force
+            return {
+                'mean_force': np.mean(magnitude_stack),
+                'max_force': np.max(magnitude_stack)
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to update force visualization: {str(e)}")
+            raise
+
+    def update_preprocessing_visualization(self, results: Dict[str, Tuple[np.ndarray, List[Dict]]]) -> None:
+        """Update preprocessing visualization"""
+        try:
+            # Remove existing preprocessed layers
+            self._clear_layers(['Preprocessed Beads', 'Preprocessed Reference', 'Preprocessed Cells'])
+
+            # Add new layers
+            if 'beads' in results:
+                processed_beads, _ = results['beads']
+                self._layers['preprocessed_beads'] = self.viewer.add_image(
+                    processed_beads,
+                    name='Preprocessed Beads',
+                    visible=True
+                )
+
+            if 'reference' in results:
+                processed_ref, _ = results['reference']
+                self._layers['preprocessed_ref'] = self.viewer.add_image(
+                    processed_ref,
+                    name='Preprocessed Reference',
+                    visible=True
+                )
+
+            if 'cells' in results:
+                processed_cells, _ = results['cells']
+                self._layers['preprocessed_cells'] = self.viewer.add_image(
+                    processed_cells,
+                    name='Preprocessed Cells',
+                    visible=True
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to update preprocessing visualization: {str(e)}")
+            raise
+
+    def handle_preview(self, frame: np.ndarray, enable: bool = True, layer_name: str = 'Preview') -> None:
+        """Handle preview visualization"""
+        try:
+            if enable:
+                if self._preview_config.preview_layer is None:
+                    self._preview_config.preview_layer = self.viewer.add_image(
+                        frame,
+                        name=layer_name,
+                        visible=True
+                    )
+                else:
+                    self._preview_config.preview_layer.data = frame
+            else:
+                if self._preview_config.preview_layer is not None:
+                    self.viewer.layers.remove(self._preview_config.preview_layer)
+                    self._preview_config.preview_layer = None
+
+        except Exception as e:
+            logger.error(f"Preview handling failed: {str(e)}")
+            raise
+
+    def _create_vector_visualization(
+            self,
+            flow_scaled: np.ndarray,
+            original_flow: np.ndarray,
+            stride: int,
+            d_max: Optional[float]
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Create vector data and colors for visualization"""
+        h, w = flow_scaled.shape[:2]
+        stride = max(1, stride)
+
+        # Calculate grid points
+        y_points = np.arange(stride // 2, h - stride // 2, stride)
+        x_points = np.arange(stride // 2, w - stride // 2, stride)
+        y, x = np.meshgrid(y_points, x_points, indexing='ij')
+
+        # Get flow components
+        u = flow_scaled[y, x, 0]
+        v = flow_scaled[y, x, 1]
+
+        # Calculate magnitudes
+        orig_magnitudes = np.sqrt(
+            original_flow[y, x, 0] ** 2 +
+            original_flow[y, x, 1] ** 2
+        )
+
+        # Create mask for significant displacements
+        threshold = d_max * 0.05 if d_max is not None else orig_magnitudes.max() * 0.05
+        mask = orig_magnitudes > threshold
+
+        # Create vectors array
+        vectors = []
+        valid_magnitudes = []
+
+        for i in range(len(y.flat)):
+            if mask.flat[i]:
+                start_x, start_y = x.flat[i], y.flat[i]
+                end_x = start_x + u.flat[i]
+                end_y = start_y + v.flat[i]
+
+                if 0 <= end_x < w and 0 <= end_y < h:
+                    vectors.append([[start_x, start_y], [end_x, end_y]])
+                    valid_magnitudes.append(orig_magnitudes.flat[i])
+
+        if vectors:
+            vectors = np.array(vectors)
+            max_mag = d_max if d_max is not None else max(valid_magnitudes)
+            colors = plt.cm.viridis(np.array(valid_magnitudes) / max_mag)
+        else:
+            vectors = np.zeros((0, 2, 2))
+            colors = np.zeros((0, 4))
+
+        return vectors, colors
+
+    def _create_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
+        """Create colored overlay of two images"""
+        img1_norm = img1.astype(float) / img1.max()
+        img2_norm = img2.astype(float) / img2.max()
+
+        overlay = np.zeros((*img1.shape, 3))
+        overlay[..., 0] = img1_norm * 0.7  # Red channel
+        overlay[..., 1] = img2_norm * 0.7  # Green channel
+        overlay[..., 2] = (img1_norm + img2_norm) * 0.3  # Blue channel
+
+        return np.clip(overlay, 0, 1)
+
+    def _update_colorbar(self, layer: "napari.layers.Image", title: str) -> None:
+        """Update or create colorbar for the given layer"""
+        try:
+            # Remove existing colorbar
+            if self._colorbar_widget is not None:
+                self.viewer.window.remove_dock_widget(self._colorbar_widget)
+
+            # Create new colorbar
+            fig = Figure(figsize=(1.0, 4))
+            fig.patch.set_facecolor('#262930')
+
+            canvas = FigureCanvasQTAgg(fig)
+            canvas.setStyleSheet("background-color: #262930;")
+
+            ax = fig.add_axes([0.35, 0.03, 0.3, 0.94])
+            ax.patch.set_alpha(0)
+
+            mappable = plt.cm.ScalarMappable(
+                norm=plt.Normalize(
+                    vmin=layer.contrast_limits[0],
+                    vmax=layer.contrast_limits[1]
+                ),
+                cmap=layer.colormap.name
+            )
+
+            colorbar = fig.colorbar(mappable, cax=ax, label=title)
+            colorbar.ax.yaxis.label.set_color('white')
+            colorbar.ax.tick_params(colors='white')
+
+            # Create widget
+            widget = QWidget()
+            widget.setStyleSheet("background-color: #262930; color: white;")
+            widget.setFixedWidth(100)
+
+            layout = QVBoxLayout()
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setAlignment(Qt.AlignCenter)
+            layout.addWidget(canvas)
+            widget.setLayout(layout)
+
+            self._colorbar_widget = widget
+            self._active_magnitude_layer = layer
+
+            # Add to viewer
+            self.viewer.window.add_dock_widget(
+                widget,
+                name=f"{title} Colorbar",
+                area='right',
+                allowed_areas=['right']
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to update colorbar: {str(e)}")
+            raise
+
+    def _clear_layers(self, layer_names: List[str]) -> None:
+        """Remove specified layers from viewer"""
+        for name in layer_names:
+            for layer in list(self.viewer.layers):
+                if layer.name == name:
+                    self.viewer.layers.remove(layer)
+
+    def _on_frame_changed(self, event=None) -> None:
+        """Handle frame change events"""
+        if hasattr(self.data_manager, 'displacement_results'):
+            results = self.data_manager.displacement_results
+            if results and 'vector_cache' in results:
+                current_frame = self.viewer.dims.current_step[0]
+                if current_frame < len(results['vector_cache']['data']):
+                    if 'vectors' in self._layers:
+                        vector_layer = self._layers['vectors']
+                        vector_layer.data = results['vector_cache']['data'][current_frame]
+                        vector_layer.edge_color = results['vector_cache']['colors'][current_frame]
+
+    def _on_layer_removed(self, event) -> None:
+        """Handle layer removal events"""
         layer = event.value
         if layer == self._active_magnitude_layer:
             if self._colorbar_widget is not None:
@@ -186,54 +354,18 @@ class VisualizationManager(ErrorHandlingMixin):
                 self._colorbar_widget = None
                 self._active_magnitude_layer = None
 
-    def _update_colorbar(self, layer: "napari.layers.Image", title: str = "Magnitude"):
-        """Update or create colorbar for the given layer."""
-        logger.debug(f"Updating colorbar for {title}")
-        try:
-            # Remove existing colorbar if it exists
-            if self._colorbar_widget is not None:
-                logger.debug("Removing existing colorbar")
-                try:
-                    self.viewer.window.remove_dock_widget(self._colorbar_widget)
-                except Exception:
-                    logger.debug("Could not remove existing colorbar widget")
-                    pass
+    def cleanup(self) -> None:
+        """Clean up resources"""
+        if self._colorbar_widget is not None:
+            self.viewer.window.remove_dock_widget(self._colorbar_widget)
+        self._clear_layers([name for name in self._layers])
+        self._layers.clear()
+        self.viewer = None
 
-            # Create new colorbar
-            logger.debug("Creating new colorbar")
-            widget_tuple = self._create_colorbar_widget(layer, title)
-            if isinstance(widget_tuple, tuple):
-                self._colorbar_widget, canvas = widget_tuple
-            else:
-                self._colorbar_widget = widget_tuple
-                canvas = None
-
-            self._active_magnitude_layer = layer
-
-            # Add the colorbar widget to the right side of the main viewer
-            logger.debug("Adding colorbar to viewer")
-            self.viewer.window.add_dock_widget(
-                self._colorbar_widget,
-                name=f"{title} Colorbar",
-                area='right',
-                allowed_areas=['right'],  # Only allow right docking
-                add_vertical_stretch=False
-            )
-
-            # Set size constraints
-            self._colorbar_widget.setFixedWidth(100)
-            if hasattr(self._colorbar_widget, 'setMaximumHeight'):
-                self._colorbar_widget.setMaximumHeight(400)
-
-            # Connect to layer events if layer is valid
-            logger.debug("Connecting layer events")
-            if hasattr(layer, 'events') and hasattr(layer.events, 'contrast_limits'):
-                layer.events.contrast_limits.connect(lambda _: self._refresh_colorbar(title))
-            logger.debug("Colorbar update complete")
-
-        except Exception as e:
-            logger.error(f"Failed to update colorbar: {str(e)}")
-            raise
+    def _refresh_colorbar(self, title: str = "Magnitude"):
+        """Refresh the colorbar after changes to the layer."""
+        if self._active_magnitude_layer is not None and self._colorbar_widget is not None:
+            self._update_colorbar(self._active_magnitude_layer, title)
 
     def _create_colorbar_widget(self, layer: "napari.layers.Image", title: str = "Magnitude"):
         """Create a colorbar widget with optimized size and appearance."""
@@ -282,141 +414,14 @@ class VisualizationManager(ErrorHandlingMixin):
 
         return widget, canvas
 
-    def _create_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
-        """Create colored overlay of two images with blue channel."""
-        # Normalize images
-        img1_norm = img1.astype(float) / img1.max()
-        img2_norm = img2.astype(float) / img2.max()
-
-        # Create RGB overlay
-        overlay = np.zeros((*img1.shape, 3))
-        overlay[..., 0] = img1_norm * 0.7  # Red channel for first image
-        overlay[..., 1] = img2_norm * 0.7  # Green channel for second image
-        overlay[..., 2] = (img1_norm + img2_norm) * 0.3  # Blue channel mixed from both
-
-        return np.clip(overlay, 0, 1)
-
-    def _create_vector_data(self, flow: np.ndarray, stride: int = 20) -> np.ndarray:
-        """Create vector data for napari visualization with bounds checking."""
-        h, w = flow.shape[:2]
-
-        # Ensure stride is at least 1
-        stride = max(1, stride)
-
-        # Calculate grid points with bounds checking
-        y_points = np.arange(stride // 2, h - stride // 2, stride)
-        x_points = np.arange(stride // 2, w - stride // 2, stride)
-        y, x = np.meshgrid(y_points, x_points, indexing='ij')
-
-        # Get flow components for valid points
-        u = flow[y, x, 0]  # x-component
-        v = flow[y, x, 1]  # y-component
-
-        # Calculate magnitudes
-        magnitudes = np.sqrt(u ** 2 + v ** 2)
-
-        # Create mask for significant displacements
-        if self._d_max is not None:
-            threshold = self._d_max * 0.05  # 5% of max displacement
-        else:
-            threshold = magnitudes.max() * 0.05
-
-        mask = magnitudes > threshold
-
-        # Create vectors array with bounds checking
-        vectors = []
-        for i in range(len(y.flat)):
-            if mask.flat[i]:
-                start_x, start_y = x.flat[i], y.flat[i]
-                end_x = start_x + u.flat[i]
-                end_y = start_y + v.flat[i]
-
-                # Check if endpoint is within image bounds
-                if 0 <= end_x < w and 0 <= end_y < h:
-                    vectors.append([[start_x, start_y], [end_x, end_y]])
-
-        return np.array(vectors) if vectors else np.zeros((0, 2, 2))
-
-    def _clear_displacement_layers(self):
-        """Remove all displacement-related layers."""
-        layers_to_remove = []
-        for layer in self.viewer.layers:
-            if isinstance(layer, Layer) and layer.name in [
-                'Displacement Overlay',
-                'Displacement Magnitude',
-                'Flow Vectors',
-                'Cell Overlay'
-            ]:
-                layers_to_remove.append(layer)
-
-        for layer in layers_to_remove:
-            self.viewer.layers.remove(layer)
-
-        self._displacement_layers.clear()
-
-    def _calculate_magnitude(self, flow: np.ndarray) -> np.ndarray:
-        """Calculate displacement magnitude with optional scaling."""
-        magnitude = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2)
-
-        if self._d_max is not None:
-            magnitude = np.clip(magnitude / self._d_max, 0, 1)
-
-        return magnitude
-
     def get_displacement_statistics(self, flow: np.ndarray) -> dict:
         """Calculate displacement statistics."""
-        magnitude = self._calculate_magnitude(flow)
+        magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
         return {
             'max': magnitude.max(),
             'mean': magnitude.mean(),
             'std': magnitude.std(),
             'median': np.median(magnitude)
         }
-
-
-
-
-
-    def set_data_manager(self, data_manager: "DataManager"):
-        """Allow setting the data manager after initialization."""
-        self.data_manager = data_manager
-
-
-
-    def cleanup(self) -> None:
-        """Clean up resources when closing."""
-        self.clear_visualization()
-        self.viewer = None
-
-
-
-    def _on_frame_changed(self, event=None):
-        """Handle frame change events by updating vector layer if needed."""
-        # Skip if no displacement results available
-        if not hasattr(self.data_manager, 'displacement_results'):
-            return
-
-        results = self.data_manager.displacement_results
-        if not results or 'flows' not in results:
-            return
-
-        current_frame = self.viewer.dims.current_step[0]
-        if current_frame >= len(results['flows']):
-            return
-
-        # Only update vector layer if it exists
-        if 'vectors' in self._displacement_layers:
-            vector_layer = self._displacement_layers['vectors']
-            if vector_layer in self.viewer.layers:
-                # Get cached vector data for current frame
-                if 'vector_cache' in results and current_frame < len(results['vector_cache']['data']):
-                    vector_data = results['vector_cache']['data'][current_frame]
-                    colors = results['vector_cache']['colors'][current_frame]
-
-                    # Update vector layer
-                    with self.viewer.events.blocker_all():
-                        vector_layer.data = vector_data
-                        vector_layer.edge_color = colors
-
 
 

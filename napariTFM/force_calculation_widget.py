@@ -42,6 +42,84 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self._setup_ui()
         self._connect_signals()
 
+    def calculate_forces(self):
+        """Calculate traction forces using FTTC method."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating forces...", 0)
+
+            # Get displacement data
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            num_frames = len(flows)
+
+            # Initialize result arrays
+            force_results = {
+                'tx': [],
+                'ty': []
+            }
+
+            # Process each frame
+            for i, flow in enumerate(flows):
+                progress = (i + 1) / num_frames * 100
+                self._update_status(f"Processing frame {i + 1}/{num_frames}...", progress)
+
+                # Extract u and v components
+                u = flow[..., 0]
+                v = flow[..., 1]
+
+                # Calculate forces using TFM functions
+                tx, ty = tfm_functions.TFM_tractions(
+                    u=u,
+                    v=v,
+                    pixelsize1=self.pixel_size,
+                    pixelsize2=self.pixel_size,
+                    h="infinite" if self.gel_height is None else self.gel_height,
+                    young=self.young_modulus,
+                    sigma=self.poisson_ratio,
+                    spatial_filter=self.spatial_filter,
+                    fs=self.filter_size
+                )
+
+                # Store results
+                force_results['tx'].append(tx)
+                force_results['ty'].append(ty)
+
+            # Convert lists to arrays
+            force_results['tx'] = np.stack(force_results['tx'])
+            force_results['ty'] = np.stack(force_results['ty'])
+            force_results['parameters'] = {
+                'young_modulus': self.young_modulus,
+                'poisson_ratio': self.poisson_ratio,
+                'gel_height': self.gel_height,
+                'pixel_size': self.pixel_size,
+                'spatial_filter': self.spatial_filter,
+                'filter_size': self.filter_size
+            }
+
+            # Store results in data manager
+            self.data_manager.force_results = force_results
+
+            # Update visualization through manager
+            stats = self.visualization_manager.update_force_visualization(force_results)
+
+            # Update status with statistics
+            stats_text = (
+                f"Mean force magnitude: {stats['mean_force']:.2f} Pa\n"
+                f"Max force magnitude: {stats['max_force']:.2f} Pa"
+            )
+            self._update_status(stats_text, 100)
+
+            # Emit results
+            self.force_calculated.emit(force_results)
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self._set_controls_enabled(True)
     def _register_controls(self):
         """Register all controls with the base widget."""
         controls = [
@@ -220,113 +298,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.filter_size_spin.setValue(6)
 
         self._update_status("Parameters reset to defaults")
-
-    def calculate_forces(self):
-        """Calculate traction forces using FTTC method."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating forces...", 0)
-
-            # Get displacement data
-            if not hasattr(self.data_manager, 'displacement_results'):
-                raise ProcessingError("No displacement data available")
-
-            displacement_results = self.data_manager.displacement_results
-            if 'flows' not in displacement_results:
-                raise ProcessingError("Invalid displacement data")
-
-            flows = displacement_results['flows']
-            num_frames = len(flows)
-
-            # Initialize result arrays
-            force_results = {
-                'tx': [],
-                'ty': [],
-                'energy': [],
-                'contractile_force': [],
-                'centers': []
-            }
-
-            # Process each frame
-            for i, flow in enumerate(flows):
-                progress = (i + 1) / num_frames * 100
-                self._update_status(f"Processing frame {i + 1}/{num_frames}...", progress)
-
-                # Extract u and v components
-                u = flow[..., 0]
-                v = flow[..., 1]
-
-                # Calculate forces using TFM functions
-                tx, ty = tfm_functions.TFM_tractions(
-                    u=u,
-                    v=v,
-                    pixelsize1=self.pixel_size,
-                    pixelsize2=self.pixel_size,
-                    h="infinite" if self.gel_height is None else self.gel_height,
-                    young=self.young_modulus,
-                    sigma=self.poisson_ratio,
-                    spatial_filter=self.spatial_filter,
-                    fs=self.filter_size
-                )
-
-                # Calculate strain energy
-                energy = tfm_functions.strain_energy_points(
-                    u=u,
-                    v=v,
-                    tx=tx,
-                    ty=ty,
-                    pixelsize1=self.pixel_size,
-                    pixelsize2=self.pixel_size
-                )
-
-                # Create mask for contractility calculation
-                mask = ~np.isnan(tx) & ~np.isnan(ty)
-
-                # Calculate contractile force
-                contractile_force, proj_x, proj_y, center = tfm_functions.contractillity(
-                    tx=tx,
-                    ty=ty,
-                    pixelsize=self.pixel_size,
-                    mask=mask
-                )
-
-                # Store results
-                force_results['tx'].append(tx)
-                force_results['ty'].append(ty)
-                force_results['energy'].append(energy)
-                force_results['contractile_force'].append(contractile_force)
-                force_results['centers'].append(center)
-
-            # Convert lists to arrays
-            force_results['tx'] = np.stack(force_results['tx'])
-            force_results['ty'] = np.stack(force_results['ty'])
-            force_results['energy'] = np.stack(force_results['energy'])
-            force_results['parameters'] = {
-                'young_modulus': self.young_modulus,
-                'poisson_ratio': self.poisson_ratio,
-                'gel_height': self.gel_height,
-                'pixel_size': self.pixel_size,
-                'spatial_filter': self.spatial_filter,
-                'filter_size': self.filter_size
-            }
-
-            # Store results in data manager
-            self.data_manager.force_results = force_results
-
-            # Update visualization
-            self._update_visualization(force_results)
-
-            # Emit results
-            self.force_calculated.emit(force_results)
-            self._update_status("Force calculation complete", 100)
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self._set_controls_enabled(True)
 
     def _validate_input_data(self) -> bool:
         """Validate required input data is available."""

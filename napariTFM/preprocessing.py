@@ -51,25 +51,6 @@ class RegistrationResult:
         self.matrices = [np.eye(3) for _ in range(num_frames)]
         self.reference_image = None
 
-    def apply_to_stack(self, stack: np.ndarray) -> np.ndarray:
-        """Apply stored transformations to a stack"""
-        if len(self.matrices) != len(stack):
-            raise ValueError("Number of frames doesn't match transformation matrices")
-
-        registered_stack = np.zeros_like(stack)
-        for i, (frame, matrix) in enumerate(zip(stack, self.matrices)):
-            if matrix is not None:
-                registered_stack[i] = cv2.warpAffine(
-                    frame,
-                    matrix[:2, :],  # Use only first two rows for 2D transformation
-                    (frame.shape[1], frame.shape[0]),
-                    flags=cv2.INTER_LINEAR
-                )
-            else:
-                registered_stack[i] = frame
-
-        return registered_stack
-
 
 class ImagePreprocessor:
     """Handles image preprocessing operations."""

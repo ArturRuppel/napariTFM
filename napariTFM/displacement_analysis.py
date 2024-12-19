@@ -1,10 +1,9 @@
-import numpy as np
-import cv2
-import matplotlib.pyplot as plt
-from matplotlib.colorbar import Colorbar  # Add this import
-from typing import Tuple, List, Optional
-import tifffile
 from dataclasses import dataclass
+from typing import Optional
+
+import cv2
+import numpy as np
+
 
 @dataclass
 class TVL1Parameters:
