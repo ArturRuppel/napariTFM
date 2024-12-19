@@ -14,7 +14,7 @@ from .base_widget import BaseAnalysisWidget, logger
 from .data_manager import DataManager
 from .displacement_analysis import DisplacementAnalyzer, TVL1Parameters
 from .visualization_manager import VisualizationManager
-from .vispy_colorbar import VispyColorbarManager
+from .colorbar import ColorbarManager
 
 
 class DisplacementAnalysisWidget(BaseAnalysisWidget):
@@ -26,108 +26,211 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                  visualization_manager: "VisualizationManager"):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Initialize analyzer
         self.analyzer = DisplacementAnalyzer()
-
-        # Initialize colorbar manager
-        self.colorbar_manager = VispyColorbarManager()
+        self.colorbar_manager = ColorbarManager()
         self.colorbar_widget = None
-
-        # Initialize state variables
         self.current_flow = None
         self.parameter_spins = {}
         self.visualization_params = {}
 
-        # Setup UI
         self._setup_ui()
-
-        # Connect signals - moved after UI setup
         self._connect_signals()
-
-        # Update initial UI state
         self._update_ui_state()
 
-    def _on_frame_changed(self, event=None):
-        """Handle frame change events."""
-        try:
-            if not hasattr(self.data_manager, 'displacement_results'):
-                return
+    def _setup_ui(self):
+        """Set up the user interface."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-            results = self.data_manager.displacement_results
-            if results is None or 'vector_cache' not in results:
-                return
+        container = QWidget()
+        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
-            current_frame = self.viewer.dims.current_step[0]
-            cache = results['vector_cache']
+        horizontal_layout = QHBoxLayout()
+        horizontal_layout.setSpacing(8)
+        horizontal_layout.setContentsMargins(6, 6, 6, 6)
 
-            if current_frame >= len(cache['data']):
-                return
+        # Create colorbar group
+        colorbar_group = QGroupBox("Displacement Magnitude")
+        colorbar_layout = QVBoxLayout()
 
-            # Find the vector layer
-            vector_layer = None
-            for layer in self.viewer.layers:
-                if layer.name == 'Flow Vectors':
-                    vector_layer = layer
-                    break
+        self.colorbar_widget = self.colorbar_manager.create_colorbar(
+            width=80,
+            height=200,
+            colormap_name='viridis',
+            label="Displacement (pixels)",
+            clim=(0, 10),
+            orientation='right',
+            label_color='white',
+            border_color='gray',
+            border_width=1.0,
+            padding=(0.1, 0.1),
+            axis_ratio=0.05,
+            label_offset=(-15, 0),
+            label_rotation=0
+        )
 
-            # Update or create vector layer
-            with self.viewer.events.blocker_all():
-                if vector_layer is not None:
-                    # Store current state
-                    visible = vector_layer.visible
+        colorbar_group.setFixedWidth(120)
+        colorbar_layout.addWidget(self.colorbar_widget)
+        colorbar_group.setLayout(colorbar_layout)
+        horizontal_layout.addWidget(colorbar_group)
 
-                    # Update data and colors
-                    vector_layer.data = cache['data'][current_frame]
-                    vector_layer.edge_color = cache['colors'][current_frame]
+        # Main content layout
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-                    # Restore state
-                    vector_layer.visible = visible
-                else:
-                    # Create new vector layer if none exists
-                    self.viewer.add_shapes(
-                        cache['data'][current_frame],
-                        shape_type='line',
-                        name='Flow Vectors',
-                        edge_color=cache['colors'][current_frame],
-                        edge_width=2,
-                        blending='additive'
-                    )
+        main_layout.addWidget(self._create_data_loading_group())
+        main_layout.addWidget(self._create_parameters_group())
+        main_layout.addWidget(self._create_visualization_parameters_group())
+        main_layout.addWidget(self._create_action_buttons())
+        main_layout.addWidget(self._create_status_frame())
 
-        except Exception as e:
-            logger.error(f"Error updating vectors on frame change: {str(e)}")
+        main_content = QWidget()
+        main_content.setLayout(main_layout)
+        horizontal_layout.addWidget(main_content)
+
+        container.setLayout(horizontal_layout)
+        scroll.setWidget(container)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll)
+        self.setLayout(layout)
+
+        self._register_controls()
 
     def _connect_signals(self):
         """Connect all widget signals."""
-        # Existing signal connections
         self.load_beads_btn.clicked.connect(lambda: self._load_data('beads'))
         self.load_reference_btn.clicked.connect(lambda: self._load_data('reference'))
         self.load_cells_btn.clicked.connect(lambda: self._load_data('cells'))
 
-        # Parameter updates
         for spin in self.parameter_spins.values():
             spin.valueChanged.connect(self.update_parameters)
 
-        # Action buttons
+        for param in self.visualization_params.values():
+            param.valueChanged.connect(self._update_visualization_params)
+
         self.preview_btn.clicked.connect(self.preview_displacement)
         self.analyze_btn.clicked.connect(self.analyze_all_frames)
 
-        # Connect frame change handler
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
 
+    def _update_colorbar(self, vmin: float, vmax: float):
+        """Update the colorbar limits and appearance."""
+        if self.colorbar_manager is not None:
+            self.colorbar_manager.update_limits(vmin, vmax)
+
+            if hasattr(self, 'visualization_params'):
+                if 'd_max' in self.visualization_params:
+                    max_val = self.visualization_params['d_max'].value()
+                    if max_val is not None:
+                        # Adjust label position based on value range
+                        if max_val > 100:
+                            self.colorbar_manager.update_label_position(offset=(0.2, 0))
+                        elif max_val > 50:
+                            self.colorbar_manager.update_label_position(offset=(0.15, 0))
+                        else:
+                            self.colorbar_manager.update_label_position(offset=(0.1, 0))
+
+    def _update_visualization_params(self):
+        """Update visualization when parameters change."""
+        if self.current_flow is not None:
+            reference = (self.data_manager.preprocessed_reference or
+                         self.data_manager.reference_image)
+            bead_stack = (self.data_manager.preprocessed_bead_stack or
+                          self.data_manager.bead_stack)
+            current_frame = self.viewer.dims.current_step[0]
+            moving = bead_stack[current_frame]
+
+            d_max = self.visualization_params['d_max'].value()
+            vector_stride = self.visualization_params['vector_stride'].value()
+            arrow_scale = self.visualization_params['arrow_scale'].value()
+
+            # Update vector layer
+            flow_scaled = self.current_flow * arrow_scale
+            vectors, colors = self.visualization_manager._create_vector_visualization(
+                flow_scaled, self.current_flow, vector_stride, d_max)
+
+            # Update layers
+            with self.viewer.events.blocker_all():
+                # Update magnitude layer
+                magnitude = np.sqrt(np.sum(self.current_flow ** 2, axis=-1))
+                if d_max is not None:
+                    magnitude = np.clip(magnitude, 0, d_max)
+
+                mag_layer = None
+                for layer in self.viewer.layers:
+                    if layer.name == 'Displacement Magnitude':
+                        mag_layer = layer
+                        break
+
+                if mag_layer is not None:
+                    mag_layer.data = magnitude
+                else:
+                    self.viewer.add_image(
+                        magnitude,
+                        name='Displacement Magnitude',
+                        colormap='viridis',
+                        blending='additive'
+                    )
+
+                # Update vector layer
+                vector_layer = None
+                for layer in self.viewer.layers:
+                    if layer.name == 'Flow Vectors':
+                        vector_layer = layer
+                        break
+
+                if vector_layer is not None:
+                    vector_layer.data = vectors
+                    vector_layer.edge_color = colors
+                else:
+                    self.viewer.add_shapes(
+                        vectors,
+                        shape_type='line',
+                        name='Flow Vectors',
+                        edge_color=colors,
+                        edge_width=2,
+                        blending='additive'
+                    )
+
+            # Update colorbar
+            self._update_colorbar(0, d_max if d_max is not None else magnitude.max())
+
+    def _on_frame_changed(self, event=None):
+        """Handle frame change events."""
+        if hasattr(self.data_manager, 'displacement_results'):
+            results = self.data_manager.displacement_results
+            if results and 'vector_cache' in results:
+                current_frame = self.viewer.dims.current_step[0]
+                if current_frame < len(results['vector_cache']['data']):
+                    with self.viewer.events.blocker_all():
+                        vector_layer = None
+                        for layer in self.viewer.layers:
+                            if layer.name == 'Flow Vectors':
+                                vector_layer = layer
+                                break
+
+                        if vector_layer is not None:
+                            vector_layer.data = results['vector_cache']['data'][current_frame]
+                            vector_layer.edge_color = results['vector_cache']['colors'][current_frame]
 
     def cleanup(self):
-        """Clean up resources and event connections."""
+        """Clean up resources."""
         try:
-            # Disconnect frame change handler
             self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
+
+            if self.colorbar_manager is not None:
+                self.colorbar_manager.cleanup()
+                self.colorbar_manager = None
+                self.colorbar_widget = None
+
         except Exception:
             pass
 
-        if self.colorbar_manager is not None:
-            self.colorbar_manager.cleanup()
-
         super().cleanup()
-
 
     def preview_displacement(self):
         """Preview displacement calculation on current frame."""
@@ -465,61 +568,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         finally:
             self._set_controls_enabled(True)
 
-
-    def _setup_ui(self):
-        """Set up the user interface."""
-        # Create scroll area and container
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        container = QWidget()
-        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-
-        # Main layout
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Add all component groups
-        main_layout.addWidget(self._create_data_loading_group())
-        main_layout.addWidget(self._create_parameters_group())
-        main_layout.addWidget(self._create_visualization_parameters_group())
-
-        # Create and add colorbar
-        colorbar_group = QGroupBox("Displacement Magnitude")
-        colorbar_layout = QVBoxLayout()
-        self.colorbar_widget = self.colorbar_manager.create_colorbar(
-            width=300,
-            height=50,
-            colormap_name='viridis',
-            label="Displacement (pixels)",
-            clim=(0, 10),  # Initial limits
-            orientation='bottom'
-        )
-        colorbar_layout.addWidget(self.colorbar_widget)
-        colorbar_group.setLayout(colorbar_layout)
-        main_layout.addWidget(colorbar_group)
-
-        main_layout.addWidget(self._create_action_buttons())
-        main_layout.addWidget(self._create_status_frame())
-
-        container.setLayout(main_layout)
-        scroll.setWidget(container)
-
-        # Set the final layout
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(scroll)
-        self.setLayout(layout)
-
-        self._register_controls()
-
-    def _update_colorbar(self, vmin: float, vmax: float):
-        """Update the colorbar limits."""
-        if self.colorbar_manager is not None:
-            self.colorbar_manager.update_limits(vmin, vmax)
-
     def _update_vector_layer(self, event=None):
         """Update vector layer using cached data."""
         try:
@@ -710,27 +758,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
-
-    def _update_visualization_params(self):
-        """Update visualization when parameters change."""
-        if self.current_flow is not None:
-            # Get current frame data
-            reference = (self.data_manager.preprocessed_reference if self.data_manager.preprocessed_reference is not None
-                         else self.data_manager.reference_image)
-            bead_stack = (self.data_manager.preprocessed_bead_stack if self.data_manager.preprocessed_bead_stack is not None
-                          else self.data_manager.bead_stack)
-            current_frame = self.viewer.dims.current_step[0]
-            moving = bead_stack[current_frame]
-
-            # Update visualization with new parameters
-            self._update_visualization(
-                self.current_flow,
-                reference,
-                moving,
-                vector_stride=self.visualization_params['vector_stride'].value(),
-                arrow_scale=self.visualization_params['arrow_scale'].value(),
-                d_max=self.visualization_params['d_max'].value()
-            )
 
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame."""
