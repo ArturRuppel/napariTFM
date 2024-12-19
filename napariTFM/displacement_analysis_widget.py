@@ -59,15 +59,18 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             height=200,
             colormap_name='viridis',
             label="Displacement (pixels)",
-            clim=(0, 10),
+            clim=(10, 0),
             orientation='right',
             label_color='white',
             border_color='gray',
             border_width=1.0,
             padding=(0.1, 0.1),
             axis_ratio=0.05,
-            label_offset=(-15, 0),
-            label_rotation=0
+            # label_offset=(-15, 0),
+            label_offset=(0, 0),
+            label_rotation=0,
+            # tick_label_offset=(-40, -45),
+            tick_label_offset = (0, 0)
         )
 
         colorbar_group.setFixedWidth(120)
@@ -120,19 +123,19 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     def _update_colorbar(self, vmin: float, vmax: float):
         """Update the colorbar limits and appearance."""
         if self.colorbar_manager is not None:
-            self.colorbar_manager.update_limits(vmin, vmax)
+            self.colorbar_manager.update_limits(vmax, vmin)
 
-            if hasattr(self, 'visualization_params'):
-                if 'd_max' in self.visualization_params:
-                    max_val = self.visualization_params['d_max'].value()
-                    if max_val is not None:
-                        # Adjust label position based on value range
-                        if max_val > 100:
-                            self.colorbar_manager.update_label_position(offset=(0.2, 0))
-                        elif max_val > 50:
-                            self.colorbar_manager.update_label_position(offset=(0.15, 0))
-                        else:
-                            self.colorbar_manager.update_label_position(offset=(0.1, 0))
+            # if hasattr(self, 'visualization_params'):
+            #     if 'd_max' in self.visualization_params:
+            #         max_val = self.visualization_params['d_max'].value()
+                    # if max_val is not None:
+                    #     # Adjust label position based on value range
+                    #     if max_val > 100:
+                    #         self.colorbar_manager.update_label_position(offset=(0.2, 0))
+                    #     elif max_val > 50:
+                    #         self.colorbar_manager.update_label_position(offset=(0.15, 0))
+                    #     else:
+                    #         self.colorbar_manager.update_label_position(offset=(0.1, 0))
 
     def _update_visualization_params(self):
         """Update visualization when parameters change."""
@@ -892,7 +895,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
             # Action buttons
             self.analyze_btn,
-            self.preview_btn,  # Added this line to register preview button
+            self.preview_btn,
 
             # Status elements
             self.progress_bar,

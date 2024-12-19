@@ -41,10 +41,22 @@ class EnhancedColorBarWidget(Widget):
                  label="", label_color='black', clim=("", ""),
                  border_width=0.0, border_color="black",
                  padding=(0.2, 0.2), axis_ratio=0.05,
-                 label_offset=(0, 0), label_rotation=0, **kwargs):
+                 label_offset=(0, 0), label_rotation=0,
+                 **kwargs):
 
-        # Remove tick_label_offset from kwargs if present
-        kwargs.pop('tick_label_offset', None)
+        # Get tick_label_offset from kwargs with default value
+        self._tick_label_offset = kwargs.pop('tick_label_offset', (0, 0))
+
+        # Initialize widget WITHOUT calling super yet
+        self.unfreeze()
+
+        # Store parameters as instance attributes
+        self._major_axis_padding = padding[0]
+        self._minor_axis_padding = padding[1]
+        self._minor_axis_ratio = axis_ratio
+        self._label_offset = label_offset
+        self._label_rotation = label_rotation
+        self._orientation = orientation
 
         # Create the ColorBarVisual first
         self._colorbar = ColorBarVisual(
@@ -60,17 +72,8 @@ class EnhancedColorBarWidget(Widget):
         )
         self._colorbar.unfreeze()
 
-        # Now initialize the Widget
+        # NOW initialize the Widget base class
         Widget.__init__(self)
-        self.unfreeze()
-
-        # Store parameters as instance attributes
-        self._major_axis_padding = padding[0]
-        self._minor_axis_padding = padding[1]
-        self._minor_axis_ratio = axis_ratio
-        self._label_offset = label_offset
-        self._label_rotation = label_rotation
-        self._orientation = orientation
 
         # Add the colorbar visual to the widget
         self.add_subvisual(self._colorbar)
@@ -81,6 +84,79 @@ class EnhancedColorBarWidget(Widget):
         # Refreeze after setup
         self.freeze()
 
+    def _update_tick_positions(self):
+        """Update the tick label positions with offset"""
+        if not hasattr(self._colorbar, '_ticks') or not self._colorbar._ticks:
+            return
+
+        # Get the base position based on orientation
+        width, height = self.rect.size
+        center_x, center_y = self.rect.center
+
+        # Calculate base positions for both ticks based on orientation
+        if self._orientation == 'left':
+            base_x = center_x - width * 0.3
+            base_y1 = center_y - height * 0.4  # Bottom tick
+            base_y2 = center_y + height * 0.4  # Top tick
+            final_positions = [
+                (base_x + self._tick_label_offset[0],
+                 base_y1 + self._tick_label_offset[1]),  # Bottom label moves down
+                (base_x + self._tick_label_offset[0],
+                 base_y2 - self._tick_label_offset[1])  # Top label moves up
+            ]
+        elif self._orientation == 'right':
+            base_x = center_x + width * 0.3
+            base_y1 = center_y - height * 0.4  # Bottom tick
+            base_y2 = center_y + height * 0.4  # Top tick
+            final_positions = [
+                (base_x + self._tick_label_offset[0],
+                 base_y1 + self._tick_label_offset[1]),  # Bottom label moves down
+                (base_x + self._tick_label_offset[0],
+                 base_y2 - self._tick_label_offset[1])  # Top label moves up
+            ]
+        elif self._orientation == 'top':
+            base_y = center_y + height * 0.3
+            base_x1 = center_x - width * 0.4  # Left tick
+            base_x2 = center_x + width * 0.4  # Right tick
+            final_positions = [
+                (base_x1 + self._tick_label_offset[0],
+                 base_y + self._tick_label_offset[1]),
+                (base_x2 + self._tick_label_offset[0],
+                 base_y + self._tick_label_offset[1])
+            ]
+        else:  # bottom
+            base_y = center_y - height * 0.3
+            base_x1 = center_x - width * 0.4  # Left tick
+            base_x2 = center_x + width * 0.4  # Right tick
+            final_positions = [
+                (base_x1 + self._tick_label_offset[0],
+                 base_y + self._tick_label_offset[1]),
+                (base_x2 + self._tick_label_offset[0],
+                 base_y + self._tick_label_offset[1])
+            ]
+
+        # Update positions
+        for tick, pos in zip(self._colorbar._ticks, final_positions):
+            tick.pos = pos
+
+    def _update_positions(self):
+        """Update all positions"""
+        # Original label position update
+        self._update_label_position()
+        # New tick position update
+        self._update_tick_positions()
+
+    @property
+    def tick_label_offset(self):
+        """Get the current tick label offset"""
+        return self._tick_label_offset
+
+    @tick_label_offset.setter
+    def tick_label_offset(self, offset):
+        """Set the tick label offset and update positions"""
+        self._tick_label_offset = offset
+        self._update_tick_positions()
+
     def on_resize(self, event):
         """Resize event handler"""
         self._update_colorbar()
@@ -90,6 +166,7 @@ class EnhancedColorBarWidget(Widget):
         self._colorbar.pos = self.rect.center
         self._colorbar.size = self._calc_size()
         self._update_label_position()
+        self._update_tick_positions()
         self.update()
 
     def _calc_size(self):
@@ -308,7 +385,8 @@ class ColorbarManager:
                         padding=(0.2, 0.2),
                         axis_ratio=0.05,
                         label_offset=(0, 0),
-                        label_rotation=0):
+                        label_rotation=0,
+                        tick_label_offset=(-10, 0)):
         """Create a new colorbar with the specified parameters"""
 
         self._canvas = scene.SceneCanvas(size=(width, height), bgcolor='transparent')
@@ -330,7 +408,8 @@ class ColorbarManager:
             padding=padding,
             axis_ratio=axis_ratio,
             label_offset=label_offset,
-            label_rotation=label_rotation
+            label_rotation=label_rotation,
+            tick_label_offset=tick_label_offset
         )
 
         self._canvas.central_widget.add_widget(self._colorbar)
