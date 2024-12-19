@@ -14,6 +14,8 @@ from qtpy.QtWidgets import (
 import force_calculation as tfm_functions
 from napariTFM.error_handling import ProcessingError
 from .base_widget import BaseAnalysisWidget
+from .data_manager import DataManager
+from .visualization_manager import VisualizationManager
 
 
 class ForceCalculationWidget(BaseAnalysisWidget):

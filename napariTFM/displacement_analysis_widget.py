@@ -11,7 +11,9 @@ from qtpy.QtWidgets import (
 import napari
 
 from .base_widget import BaseAnalysisWidget, logger
+from .data_manager import DataManager
 from .displacement_analysis import DisplacementAnalyzer, TVL1Parameters
+from .visualization_manager import VisualizationManager
 
 
 class DisplacementAnalysisWidget(BaseAnalysisWidget):
