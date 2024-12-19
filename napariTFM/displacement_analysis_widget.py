@@ -50,30 +50,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         horizontal_layout.setSpacing(8)
         horizontal_layout.setContentsMargins(6, 6, 6, 6)
 
-        # Create colorbar group
-        colorbar_group = QGroupBox("Displacement Magnitude")
-        colorbar_layout = QVBoxLayout()
-
-        self.colorbar_widget = self.colorbar_manager.create_colorbar(
-            width=80,
-            height=200,
+        # Create colorbar using base class method
+        colorbar_group = self.create_colorbar_widget(
             colormap_name='viridis',
             label="Displacement (pixels)",
             clim=(10, 0),
-            orientation='right',
-            label_color='white',
-            border_color='gray',
-            border_width=1.0,
-            padding=(0.1, 0.1),
-            axis_ratio=0.05,
-            label_offset=(-15, 0),
-            label_rotation=0,
-            tick_label_offset=(-44, -45)
+            colorbar_manager=self.colorbar_manager
         )
-
-        colorbar_group.setFixedWidth(120)
-        colorbar_layout.addWidget(self.colorbar_widget)
-        colorbar_group.setLayout(colorbar_layout)
         horizontal_layout.addWidget(colorbar_group)
 
         # Main content layout

@@ -12,8 +12,8 @@ from qtpy.QtWidgets import (
 )
 
 import force_calculation as tfm_functions
-from napariTFM.error_handling import ProcessingError
 from .base_widget import BaseAnalysisWidget
+from .colorbar import ColorbarManager
 from .data_manager import DataManager
 from .visualization_manager import VisualizationManager
 
@@ -39,8 +39,110 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.spatial_filter = "gaussian"
         self.filter_size = 6  # μm
 
+        # Initialize colorbar
+        self.colorbar_manager = ColorbarManager()
+        self.colorbar_widget = None
+
         self._setup_ui()
         self._connect_signals()
+
+    def _setup_ui(self):
+        """Set up the user interface."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        container = QWidget()
+        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+        horizontal_layout = QHBoxLayout()
+        horizontal_layout.setSpacing(8)
+        horizontal_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Create colorbar using base class method
+        colorbar_group = self.create_colorbar_widget(
+            colormap_name='inferno',
+            label="Force (Pa)",
+            clim=(1000, 0),
+            colorbar_manager=self.colorbar_manager
+        )
+        horizontal_layout.addWidget(colorbar_group)
+        # Main content layout
+        main_layout = QVBoxLayout()
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Add all component groups
+        main_layout.addWidget(self._create_material_params_group())
+        main_layout.addWidget(self._create_filter_params_group())
+        main_layout.addWidget(self._create_action_buttons())
+        main_layout.addWidget(self._create_status_frame())
+
+        main_content = QWidget()
+        main_content.setLayout(main_layout)
+        horizontal_layout.addWidget(main_content)
+
+        container.setLayout(horizontal_layout)
+        scroll.setWidget(container)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll)
+        self.setLayout(layout)
+
+        self._register_controls()
+
+    def _update_colorbar(self, vmin: float, vmax: float):
+        """Update the colorbar limits and appearance."""
+        if self.colorbar_manager is not None:
+            self.colorbar_manager.update_limits(vmin, vmax)
+
+    def _update_visualization(self, results: Dict):
+        """Update visualization of force calculation results with colorbar."""
+        try:
+            # Remove existing force layers
+            self.visualization_manager._clear_layers(['Force Magnitude', 'Force Vectors'])
+
+            # Calculate magnitude stack
+            magnitude_stack = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
+
+            # Add magnitude layer
+            with self.viewer.events.blocker_all():
+                magnitude_layer = self.viewer.add_image(
+                    magnitude_stack,
+                    name='Force Magnitude',
+                    colormap='inferno',
+                    blending='additive'
+                )
+
+            # Update colorbar
+            vmax = magnitude_stack.max()
+            self._update_colorbar(0, vmax)
+
+            # Update status with statistics
+            mean_force = np.mean(magnitude_stack)
+            max_force = np.max(magnitude_stack)
+
+            stats_text = (
+                f"Mean force magnitude: {mean_force:.2f} Pa\n"
+                f"Max force magnitude: {max_force:.2f} Pa"
+            )
+            self._update_status(stats_text, 100)
+
+        except Exception as e:
+            self._handle_error(f"Failed to update visualization: {str(e)}")
+
+    def cleanup(self):
+        """Clean up resources."""
+        try:
+            if self.colorbar_manager is not None:
+                self.colorbar_manager.cleanup()
+                self.colorbar_manager = None
+                self.colorbar_widget = None
+        except Exception:
+            pass
+
+        super().cleanup()
 
     def calculate_forces(self):
         """Calculate traction forces using FTTC method."""
@@ -136,38 +238,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
         for control in controls:
             self.register_control(control)
-
-    def _setup_ui(self):
-        """Set up the user interface."""
-        # Create scroll area and container
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        container = QWidget()
-        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-
-        # Main layout
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Add all component groups
-        main_layout.addWidget(self._create_material_params_group())
-        main_layout.addWidget(self._create_filter_params_group())
-        main_layout.addWidget(self._create_action_buttons())
-        main_layout.addWidget(self._create_status_frame())
-
-        container.setLayout(main_layout)
-        scroll.setWidget(container)
-
-        # Set the final layout
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(scroll)
-        self.setLayout(layout)
-
-        self._register_controls()
 
     def _create_material_params_group(self) -> QGroupBox:
         """Create the material parameters group."""
@@ -311,39 +381,3 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
         return True
 
-    def _update_visualization(self, results: Dict):
-        """Update visualization of force calculation results with colorbar."""
-        try:
-            # Remove existing force layers
-            for layer_name in ['Force Magnitude', 'Force Vectors']:
-                if layer_name in self.viewer.layers:
-                    self.viewer.layers.remove(layer_name)
-
-            # Calculate magnitude stack
-            magnitude_stack = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
-
-            # Add magnitude layer
-            magnitude_layer = self.viewer.add_image(
-                magnitude_stack,
-                name='Force Magnitude',
-                colormap='inferno',
-                blending='additive'
-            )
-
-            # Update colorbar with force-specific units
-            self.visualization_manager._update_colorbar(magnitude_layer, "Force (Pa)")
-
-            # Update status with statistics
-            mean_force = np.mean(magnitude_stack)
-            max_force = np.max(magnitude_stack)
-            mean_contractile = np.mean(results['contractile_force'])
-
-            stats_text = (
-                f"Mean force magnitude: {mean_force:.2f} Pa\n"
-                f"Max force magnitude: {max_force:.2f} Pa\n"
-                f"Mean contractile force: {mean_contractile:.2e} N"
-            )
-            self._update_status(stats_text)
-
-        except Exception as e:
-            self._handle_error(f"Failed to update visualization: {str(e)}")
