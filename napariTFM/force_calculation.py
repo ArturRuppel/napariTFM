@@ -1,400 +1,472 @@
-# Functions copied from pyTFM.TFM_functions module
-# Original source: https://github.com/fabrylab/pyTFM
-# License: GNU General Public License v3.0
+"""
+Force calculation module for Traction Force Microscopy (TFM).
+Includes validation for different correction methods based on experimental length scales.
 
-# The following code is derived from the pyTFM library (https://github.com/fabrylab/pyTFM)
-# and adapted for use in the napariTFM project (https://github.com/ArturRuppel/napariTFM).
-#
-# The original pyTFM library has a dependency on openpiv, which relies on an older version
-# of NumPy that is incompatible with napariTFM. However, the specific functionality required
-# by napariTFM does not depend on openpiv. Therefore, the relevant parts of the code have been
-# copied and adapted here to avoid the dependency conflict.
-#
-# Both pyTFM and napariTFM are licensed under the GNU General Public License v3.0.
-# The original code is Copyright (c) 2021 fabrylab.
+This implementation is based on and significantly refactors code from the pyTFM package
+(https://github.com/fabrylab/pyTFM), licensed under GNU General Public License v3.0.
+The code has been restructured into a class-based implementation with additional
+features including proper regularization, and validation based on experimental length scales.
 
-# basic functions for traction force microscopy
-import matplotlib.pyplot as plt
+Original paper references:
+- Butler et al. Traction fields, moments, and strain energy that cells exert on their surroundings (2002)
+- Sabass et al. High resolution traction force microscopy based on experimental and computational advances (2008)
+- Trepat et al. Physical forces during collective cell migration (2009)
+
+Code references:
+- pyTFM by Fabry Lab (https://github.com/fabrylab/pyTFM)
+"""
+
+from enum import Enum
 import numpy as np
-import scipy.fft
-
-from matplotlib.colors import LinearSegmentedColormap
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from pyTFM.utilities_TFM import suppress_warnings
-from scipy.ndimage.filters import median_filter, gaussian_filter
-from scipy.ndimage.filters import uniform_filter
 from scipy.fft import fft2, ifft2
-
-
-def calculate_traction_stresses(u, v, E, nu, pixelsize, alpha):
-    '''This function takes a displacement field u and v, a gel rigidity E, it's poisson ratio nu, the size of a pixel in '''
-    M, N = u.shape
-
-    # pad displacement map with zeros until it has a shape of 2^n by 2^n because fourier transform is faster
-    n = 2
-    while (2 ** n < M) or (2 ** n < N):
-        n = n + 1
-
-    M2 = 2 ** n
-    N2 = M2
-
-    u_padded = np.zeros((M2, N2))
-    v_padded = np.zeros((M2, N2))
-
-    u_padded[:u.shape[0], :u.shape[1]] = u
-    v_padded[:v.shape[0], :v.shape[1]] = v
-
-    u_fft = fft2(u_padded)
-    v_fft = fft2(v_padded)
-
-    # remove component related to translation
-    u_fft[0, 0] = 0
-    v_fft[0, 0] = 0
-
-    Kx1 = (2 * np.pi / pixelsize) / N2 * np.arange(int(N2 / 2))
-    Kx2 = -(2 * np.pi / pixelsize) / N2 * (N2 - np.arange(int(N2 / 2), N2))
-    Ky1 = (2 * np.pi / pixelsize) / M2 * np.arange(int(M2 / 2))
-    Ky2 = -(2 * np.pi / pixelsize) / M2 * (M2 - np.arange(int(M2 / 2), M2))
-
-    Kx = np.concatenate((Kx1, Kx2))
-    Ky = np.concatenate((Ky1, Ky2))
-
-    kx, ky = np.meshgrid(Kx, Ky)
-    k = np.sqrt(kx ** 2 + ky ** 2)
-    t_xt = np.zeros((M2, N2), dtype=complex)
-    t_yt = np.zeros((M2, N2), dtype=complex)
-
-    for i in np.arange(M2):
-        for j in np.arange(N2):
-            if i == M2 / 2 or j == N2 / 2:  # Nyquist frequency
-                Gt = np.zeros((2, 2))
-                Gt[0, 0] = 2 * (1 + nu) / (E * k[i, j] ** 3) * ((1 - nu) * k[i, j] ** 2 + nu * ky[i, j] ** 2)
-                Gt[1, 1] = 2 * (1 + nu) / (E * k[i, j] ** 3) * ((1 - nu) * k[i, j] ** 2 + nu * kx[i, j] ** 2)
-
-                a = (Gt.T * Gt + alpha * np.eye(2)) ** -1 * Gt.T
-                a[np.isnan(a)] = 0
-                b = (u_fft[i, j], v_fft[i, j])
-                Tt = np.dot(a, b)
-                t_xt[i, j] = Tt[0]
-                t_yt[i, j] = Tt[1]
-
-            elif ~((i == 1) and (j == 1)):
-                Gt = np.zeros((2, 2))
-                Gt[0, 0] = 2 * (1 + nu) / (E * k[i, j] ** 3) * ((1 - nu) * k[i, j] ** 2 + nu * ky[i, j] ** 2)
-                Gt[1, 1] = 2 * (1 + nu) / (E * k[i, j] ** 3) * ((1 - nu) * k[i, j] ** 2 + nu * kx[i, j] ** 2)
-                Gt[0, 1] = - nu * kx[i, j] * ky[i, j]
-                Gt[1, 0] = - nu * kx[i, j] * ky[i, j]
-
-                a = (Gt.T * Gt + alpha * np.eye(2)) ** -1 * Gt.T
-                a[np.isnan(a)] = 0
-                b = (u_fft[i, j], v_fft[i, j])
-                Tt = np.dot(a, b)
-                t_xt[i, j] = Tt[0]
-                t_yt[i, j] = Tt[1]
-
-    t_x = ifft2(t_xt)
-    t_y = ifft2(t_yt)
-    traction_x = np.real(t_x)
-    traction_y = np.real(t_y)
-
-    return traction_x[0:M, 0:N], traction_y[0:M, 0:N]
-
-def ffttc_traction(u, v, pixelsize1, pixelsize2, young, sigma=0.49, spatial_filter="gaussian", fs=None):
-    """
-    fourier transform based calculation of the traction force. U and v must be given  as deformations in pixel. Size of
-    these pixels must be the pixelsize (size of a pixel in the deformation field u or v). Note that thePiv deformation
-    returns deformation in pixel of the size of pixels in the images of beads before and after.
-    If bf_image is provided this script will return a traction field that is zoomed to the size
-     of the bright field image, by interpolation. It is not recommended to use this for any calculations.
-    The function can use different filters. Recommended filter is gaussian. Mean filter should yield similar results.
-
-    :param u:deformation field in x direction in pixel of the deformation image
-    :param v:deformation field in y direction in pixel of the deformation image
-    :param young: Young's modulus in Pa
-    :param pixelsize1: pixelsize in m/pixel of the original image, needed because u and v is given as
-    displacement of these pixels
-    :param pixelsize2: pixelsize of m/pixel the deformation image
-    :param sigma: poisson ratio of the gel
-    :param spatial_filter: str, values: "mean","gaussian","median". Different smoothing methods for the traction field
-    :return: tx_filter,ty_filter: traction forces in x and y direction in Pa
-    """
-
-    # 0) subtracting mean(better name for this step)
-    u_shift = (u - np.mean(u))  # shifting to zero mean  (translating to pixelsize of u-image is done later)
-    v_shift = (v - np.mean(v))
-
-    # Ben's algorithm:
-    # 1)Zero padding to get square array with even index number
-    ax1_length = np.shape(u_shift)[0]  # u and v must have same dimensions
-    ax2_length = np.shape(u_shift)[1]
-    max_ind = int(np.max((ax1_length, ax2_length)))
-    if max_ind % 2 != 0:
-        max_ind += 1
-
-    u_expand = np.zeros((max_ind, max_ind))
-    v_expand = np.zeros((max_ind, max_ind))
-    u_expand[:ax1_length, :ax2_length] = u_shift
-    v_expand[:ax1_length, :ax2_length] = v_shift
-
-    # 2) producing wave vectors
-    # form 1:max_ind/2 then -(max_ind/2:1)
-    kx1 = np.array([list(range(0, int(max_ind / 2), 1)), ] * int(max_ind))
-    kx2 = np.array([list(range(-int(max_ind / 2), 0, 1)), ] * int(max_ind))
-    kx = np.append(kx1, kx2, axis=1) * 2 * np.pi  # fourier transform in this case is defined as
-    # F(kx)=1/2pi integral(exp(i*kx*x)dk therefore kx must be expressed as a spatial frequency in distance*2*pi
-    ky = np.transpose(kx)
-    k = np.sqrt(kx ** 2 + ky ** 2) / (pixelsize2 * max_ind)
-
-    # 2.1) calculating angle between k and kx with atan2 function
-    alpha = np.arctan2(ky, kx)
-    alpha[0, 0] = np.pi / 2
-
-    # 3) calculation of K --> Tensor to calculate displacements from tractions. We calculate inverse of K
-    # K⁻¹=[[kix kid],
-    #     [kid,kiy]]  ,,, so is "diagonal, kid appears two times
-    kix = ((k * young) / (2 * (1 - sigma ** 2))) * (1 - sigma + sigma * np.cos(alpha) ** 2)
-    kiy = ((k * young) / (2 * (1 - sigma ** 2))) * (1 - sigma + sigma * np.sin(alpha) ** 2)
-    kid = ((k * young) / (2 * (1 - sigma ** 2))) * (sigma * np.sin(alpha) * np.cos(alpha))
-
-    # adding zeros in kid diagonals
-    kid[:, int(max_ind / 2)] = np.zeros(max_ind)
-    kid[int(max_ind / 2), :] = np.zeros(max_ind)
-
-    # 4) calculate Fourier transform of displacement
-    # u_ft=np.fft.fft2(u_expand*pixelsize1*2*np.pi)
-    # v_ft=np.fft.fft2(v_expand*pixelsize1*2*np.pi)
-    u_ft = scipy.fft.fft2(u_expand * pixelsize1)
-    v_ft = scipy.fft.fft2(v_expand * pixelsize1)
-
-    # 4.1) calculate tractions in Fourier space T=K⁻¹*U, U=[u,v] here with individual matrix elements..
-    tx_ft = kix * u_ft + kid * v_ft
-    ty_ft = kid * u_ft + kiy * v_ft
-
-    # 4.2) go back to real space
-    tx = scipy.fft.ifft2(tx_ft).real
-    ty = scipy.fft.ifft2(ty_ft).real
-
-    # 5.2) cut back to original shape
-    tx_cut = tx[0:ax1_length, 0:ax2_length]
-    ty_cut = ty[0:ax1_length, 0:ax2_length]
-
-    # 5.3) using filter
-    tx_filter = tx_cut
-    ty_filter = ty_cut
-
-    if spatial_filter == "mean":
-        fs = fs if isinstance(fs, (float, int)) else int(int(np.max((ax1_length, ax2_length))) / 16)
-        tx_filter = uniform_filter(tx_cut, size=fs)
-        ty_filter = uniform_filter(ty_cut, size=fs)
-    if spatial_filter == "gaussian":
-        fs = fs if isinstance(fs, (float, int)) else int(np.max((ax1_length, ax2_length))) / 50
-        tx_filter = gaussian_filter(tx_cut, sigma=fs)
-        ty_filter = gaussian_filter(ty_cut, sigma=fs)
-    if spatial_filter == "median":
-        fs = fs if isinstance(fs, (float, int)) else int(int(np.max((ax1_length, ax2_length))) / 16)
-        tx_filter = median_filter(tx_cut, size=fs)
-        ty_filter = median_filter(ty_cut, size=fs)
-
-    return tx_filter, ty_filter
-
-
-def ffttc_traction_pure_shear(u, v, pixelsize1, pixelsize2, h, young, sigma=0.49, spatial_filter="mean", fs=None):
-    """
-    limiting case for h*k==0
-    Xavier Trepat, Physical forces during collective cell migration, 2009
-
-    :param u:deformation field in x direction in pixel of the deformation image
-    :param v:deformation field in y direction in pixel of the deformation image
-    :param young: Young's modulus in Pa
-    :param pixelsize1: pixelsize of the original image, needed because u and v is given as displacement of these pixels
-    :param pixelsize2: pixelsize of the deformation image
-    :param h: height of the membrane the cells lie on, in µm
-    :param sigma: Poisson's ratio of the gel
-    :param spatial_filter: str, values: "mean","gaussian","median". Different smoothing methods for the traction field.
-    :return: tx_filter,ty_filter: traction forces in x and y direction in Pa
-    """
-
-    # 0) subtracting mean(better name for this step)
-    u_shift = (u - np.mean(u)) * pixelsize1
-    v_shift = (v - np.mean(v)) * pixelsize1
-
-    # Ben's algorithm:
-    # 1)Zero padding to get square array with even index number
-    ax1_length = np.shape(u_shift)[0]  # u and v must have same dimensions
-    ax2_length = np.shape(u_shift)[1]
-    max_ind = int(np.max((ax1_length, ax2_length)))
-    if max_ind % 2 != 0:
-        max_ind += 1
-    u_expand = np.zeros((max_ind, max_ind))
-    v_expand = np.zeros((max_ind, max_ind))
-    u_expand[max_ind - ax1_length:max_ind, max_ind - ax2_length:max_ind] = u_shift
-    v_expand[max_ind - ax1_length:max_ind, max_ind - ax2_length:max_ind] = v_shift
-
-    u_ft = scipy.fft.fft2(u_expand)
-    v_ft = scipy.fft.fft2(v_expand)
-
-    # 4.1) calculate tractions in Fourier space
-    mu = young / (2 * (1 + sigma))
-    tx_ft = mu * u_ft / h
-    tx_ft[0, 0] = 0  # zero frequency would represent force everywhere (constant)
-    ty_ft = mu * v_ft / h
-    ty_ft[0, 0] = 0
-
-    # 4.2) go back to real space
-    tx = scipy.fft.ifft2(tx_ft).real
-    ty = scipy.fft.ifft2(ty_ft).real
-
-    # 5.2) cut like in script from ben
-
-    tx_cut = tx[max_ind - ax1_length:max_ind, max_ind - ax2_length:max_ind]
-    ty_cut = ty[max_ind - ax1_length:max_ind, max_ind - ax2_length:max_ind]
-
-    # 5.3) using filter
-    tx_filter = tx_cut
-    ty_filter = ty_cut
-    if spatial_filter == "mean":
-        fs = fs if isinstance(fs, (float, int)) else int(int(np.max((ax1_length, ax2_length))) / 16)
-        tx_filter = uniform_filter(tx_cut, size=fs)
-        ty_filter = uniform_filter(ty_cut, size=fs)
-    if spatial_filter == "gaussian":
-        fs = fs if isinstance(fs, (float, int)) else int(np.max((ax1_length, ax2_length))) / 50
-        tx_filter = gaussian_filter(tx_cut, sigma=fs)
-        ty_filter = gaussian_filter(ty_cut, sigma=fs)
-    if spatial_filter == "median":
-        fs = fs if isinstance(fs, (float, int)) else int(int(np.max((ax1_length, ax2_length))) / 16)
-        tx_filter = median_filter(tx_cut, size=fs)
-        ty_filter = median_filter(ty_cut, size=fs)
-
-    return tx_filter, ty_filter
-
-
-def ffttc_traction_finite_thickness(u, v, pixelsize1, pixelsize2, h, young, sigma=0.49, spatial_filter="gaussian", fs=None):
-    """
-    FTTC with correction for finite substrate thickness according to
-    Xavier Trepat, Physical forces during collective cell migration, 2009
-
-    :param u:deformation field in x direction in pixel of the deformation image
-    :param v:deformation field in y direction in pixel of the deformation image
-    :param young: Young's modulus in Pa
-    :param pixelsize1: pixelsize of the original image, needed because u and v is given as displacement of these pixels
-    :param pixelsize2: pixelsize of the deformation image
-    :param h: height of the membrane the cells lie on, in µm
-    :param sigma: Poisson's ratio of the gel
-    :param spatial_filter: str, values: "mean","gaussian","median". Different smoothing methods for the traction field.
-    :param fs: float, size of the filter (std of gaussian or size of the filter window) in µm
-    :return: tx_filter,ty_filter: traction forces in x and y direction in Pa
-    """
-
-    # 0) subtracting mean(better name for this step)
-    u_shift = (u - np.mean(u)) * pixelsize1
-    v_shift = (v - np.mean(v)) * pixelsize1
-
-    # Ben's algortithm:
-    # 1)Zero padding to get square array with even index number
-    ax1_length = np.shape(u_shift)[0]  # u and v must have same dimensions
-    ax2_length = np.shape(u_shift)[1]
-    max_ind = int(np.max((ax1_length, ax2_length)))
-    if max_ind % 2 != 0:
-        max_ind += 1
-    u_expand = np.zeros((max_ind, max_ind))
-    v_expand = np.zeros((max_ind, max_ind))
-    u_expand[max_ind - ax1_length:max_ind, max_ind - ax2_length:max_ind] = u_shift
-    v_expand[max_ind - ax1_length:max_ind, max_ind - ax2_length:max_ind] = v_shift
-
-    # 2) producing wave vectors (FT-space)
-    # form 1:max_ind/2 then -(max_ind/2:1)
-    kx1 = np.array([list(range(0, int(max_ind / 2), 1)), ] * int(max_ind), dtype=float)
-    kx2 = np.array([list(range(-int(max_ind / 2), 0, 1)), ] * int(max_ind), dtype=float)
-    # spatial frequencies: 1/wavelength,in 1/µm in fractions of total length
-
-    kx = np.append(kx1, kx2, axis=1) * 2 * np.pi / (pixelsize2 * max_ind)
-    ky = np.transpose(kx)
-    k = np.sqrt(kx ** 2 + ky ** 2)  # matrix with "relative" distances??#
-
-    r = k * h
-    c = np.cosh(r)
-    s = np.sinh(r)
-    s_c = np.tanh(r)
-
-    # gamma = ((3 - 4 * sigma) * (c ** 2) + (1 - 2 * sigma) ** 2 + (k * h) ** 2) / (
-    #         (3 - 4 * sigma) * s * c + k * h)  ## inf values here because k goes to zero
-    gamma = ((3 - 4 * sigma) + (((1 - 2 * sigma) ** 2) / (c ** 2)) + ((r ** 2) / (c ** 2))) / (
-            (3 - 4 * sigma) * s_c + r / (c ** 2))
-
-    # 4) calculate fourier transform of displacements
-    u_ft = scipy.fft.fft2(u_expand)
-    v_ft = scipy.fft.fft2(v_expand)
-
-    """
-    #4.0*) approximation for large h according to this paper
-    factor3=young/(2*(1-sigma**2)*k)
-    factor3[0,0]=factor3[0,1]
-    tx_ft=factor3*(u_ft*((k**2)*(1-sigma)+sigma*(kx**2)) + v_ft*kx*ky*sigma)
-    ty_ft=factor3*(v_ft*((k**2)*(1-sigma)+sigma*(ky**2)) + u_ft*kx*ky*sigma)
-    """
-
-    # 4.1) calculate tractions in Fourier space
-    factor1 = (v_ft * kx - u_ft * ky)
-    factor2 = (u_ft * kx + v_ft * ky)
-    tx_ft = ((-young * ky * c) / (2 * k * s * (1 + sigma))) * factor1 + (
-            (young * kx) / (2 * k * (1 - sigma ** 2))) * gamma * factor2
-    tx_ft[0, 0] = 0  # zero frequency would represent force everywhere (constant)
-    ty_ft = ((young * kx * c) / (2 * k * s * (1 + sigma))) * factor1 + (
-            (young * ky) / (2 * k * (1 - sigma ** 2))) * gamma * factor2
-    ty_ft[0, 0] = 0
-
-    # 4.2) go back to real space
-    tx = scipy.fft.ifft2(tx_ft.astype(np.complex128)).real
-    ty = scipy.fft.ifft2(ty_ft.astype(np.complex128)).real
-
-    # 5.2) cut like in script from ben
-    tx_cut = tx[max_ind - ax1_length:max_ind, max_ind - ax2_length:max_ind]
-    ty_cut = ty[max_ind - ax1_length:max_ind, max_ind - ax2_length:max_ind]
-
-    # 5.3) using filter
-    tx_filter = tx_cut
-    ty_filter = ty_cut
-    if spatial_filter == "mean":
-        fs = fs if isinstance(fs, (float, int)) else int(int(np.max((ax1_length, ax2_length))) / 16)
-        tx_filter = uniform_filter(tx_cut, size=fs)
-        ty_filter = uniform_filter(ty_cut, size=fs)
-    if spatial_filter == "gaussian":
-        fs = fs if isinstance(fs, (float, int)) else int(np.max((ax1_length, ax2_length))) / 50
-        tx_filter = gaussian_filter(tx_cut, sigma=fs)
-        ty_filter = gaussian_filter(ty_cut, sigma=fs)
-    if spatial_filter == "median":
-        fs = fs if isinstance(fs, (float, int)) else int(int(np.max((ax1_length, ax2_length))) / 16)
-        tx_filter = median_filter(tx_cut, size=fs)
-        ty_filter = median_filter(ty_cut, size=fs)
-
-    return tx_filter, ty_filter
-
-
-def TFM_tractions(u, v, pixelsize1, pixelsize2, h, young, sigma=0.49, spatial_filter="gaussian", fs=6):
-    """
-    height correction breaks down due to numerical reasons at large gel height and small wavelengths of deformations.
-    In this case the height corrected ffttc-function returns Nans. THis function falls back
-     to the non height-corrected FTTC function if this happens
-    :return:
-    """
-    # translate the filter size to pixels of traction field
-    fs = fs / pixelsize2 if isinstance(fs, (int, float)) else None
-    if isinstance(h, (int, float)):
-        with suppress_warnings(RuntimeWarning):
-            tx, ty = ffttc_traction_finite_thickness(u, v, pixelsize1=pixelsize1, pixelsize2=pixelsize2,
-                                                     h=h, young=young, sigma=sigma,
-                                                     spatial_filter=spatial_filter, fs=fs)  # unit is N/m**2
-            if np.any(np.isnan(tx)) or np.any(np.isnan(ty)):
-                tx, ty = ffttc_traction(u, v, pixelsize1=pixelsize1, pixelsize2=pixelsize2, young=young, sigma=sigma,
-                                        spatial_filter=spatial_filter, fs=fs)
-
-    elif h == "infinite":
-        tx, ty = ffttc_traction(u, v, pixelsize1=pixelsize1, pixelsize2=pixelsize2, young=young, sigma=sigma,
-                                spatial_filter=spatial_filter, fs=fs)
-    else:
-        raise ValueError("illegal value for h")
-    return tx, ty
-
-
-
-
+from scipy.ndimage import gaussian_filter
+from typing import Tuple, Optional, Dict, Any
+import logging
+from dataclasses import dataclass
+from warnings import warn
+
+logger = logging.getLogger(__name__)
+
+
+class CorrectionMethod(Enum):
+    """Enumeration of available thickness correction methods."""
+    NONE = "none"  # Infinite thickness assumption
+    FINITE = "finite"  # Full finite thickness correction
+    PURE_SHEAR = "pure_shear"  # Pure shear approximation for thin substrates
+
+
+@dataclass
+class ValidationResult:
+    """Contains validation results for correction method selection."""
+    is_valid: bool
+    warnings: list[str]
+    errors: list[str]
+
+
+class TractionForceCalculator:
+    def __init__(
+        self,
+        young_modulus: float,
+        pixel_size: float,
+        characteristic_length: float,  # Added parameter
+        poisson_ratio: float = 0.49,
+        regularization: float = 1e-6,
+        gel_height: Optional[float] = None,
+        correction_method: CorrectionMethod = CorrectionMethod.NONE,
+        filter_sigma: Optional[float] = None
+    ):
+        """
+        Initialize the TractionForceCalculator.
+
+        Parameters
+        ----------
+        young_modulus : float
+            Young's modulus of the substrate (Pa)
+        pixel_size : float
+            Size of a pixel in physical units (meters)
+        characteristic_length : float
+            Characteristic length scale of the experiment (meters)
+            This could be cell size, typical displacement distance, etc.
+        poisson_ratio : float, optional
+            Poisson's ratio of the substrate, default 0.49
+        regularization : float, optional
+            Tikhonov regularization parameter, default 1e-6
+        gel_height : float, optional
+            Height of the gel in physical units (meters)
+        correction_method : CorrectionMethod, optional
+            Method for thickness correction
+        filter_sigma : float, optional
+            Standard deviation for Gaussian smoothing
+        """
+        self.young_modulus = young_modulus
+        self.pixel_size = pixel_size
+        self.characteristic_length = characteristic_length
+        self.poisson_ratio = poisson_ratio
+        self.regularization = regularization
+        self.gel_height = gel_height
+        self.correction_method = CorrectionMethod(correction_method)
+        self.filter_sigma = filter_sigma
+
+        # Computed properties
+        self.shear_modulus = young_modulus / (2 * (1 + poisson_ratio))
+
+        # Results storage
+        self.latest_results: Optional[Dict[str, np.ndarray]] = None
+
+        # Validate parameters and correction method
+        self._validate_parameters()
+        validation = self.validate_correction_method()
+
+        # Log warnings and raise errors if any
+        for warning in validation.warnings:
+            warn(warning)
+        if validation.errors:
+            raise ValueError("\n".join(validation.errors))
+
+    def validate_correction_method(self) -> ValidationResult:
+        """
+        Validate the selected correction method based on experimental parameters.
+
+        Returns
+        -------
+        ValidationResult
+            Contains validation status, warnings, and errors
+        """
+        warnings = []
+        errors = []
+        is_valid = True
+
+        if self.gel_height is None:
+            if self.correction_method != CorrectionMethod.NONE:
+                errors.append("Gel height must be provided for finite thickness or pure shear corrections")
+                is_valid = False
+        else:
+            # Calculate dimensionless ratios
+            height_to_length_ratio = self.gel_height / self.characteristic_length
+
+            if self.correction_method == CorrectionMethod.PURE_SHEAR:
+                if height_to_length_ratio > 0.1:
+                    warnings.append(
+                        f"Pure shear approximation may be inaccurate: gel height ({self.gel_height*1e6:.1f}µm) "
+                        f"is not much smaller than characteristic length ({self.characteristic_length*1e6:.1f}µm)"
+                    )
+
+                if self.gel_height < 0.5e-6:  # 0.5 µm threshold
+                    warnings.append(
+                        "Gel height is extremely small (<0.5µm). Bulk gel properties may not apply, "
+                        "and surface effects might dominate"
+                    )
+
+            elif self.correction_method == CorrectionMethod.FINITE:
+                if height_to_length_ratio < 0.1:
+                    warnings.append(
+                        "Consider using pure shear approximation: gel is very thin compared to "
+                        "characteristic length scale"
+                    )
+
+            elif self.correction_method == CorrectionMethod.NONE:
+                if height_to_length_ratio < 1.0:
+                    warnings.append(
+                        "Infinite thickness assumption may be inaccurate: gel height is smaller than "
+                        "characteristic length scale"
+                    )
+
+        return ValidationResult(is_valid=is_valid, warnings=warnings, errors=errors)
+
+    def _validate_parameters(self) -> None:
+        """Validate initialization parameters."""
+        if self.young_modulus <= 0:
+            raise ValueError("Young's modulus must be positive")
+        if self.pixel_size <= 0:
+            raise ValueError("Pixel size must be positive")
+        if self.characteristic_length <= 0:
+            raise ValueError("Characteristic length must be positive")
+        if not 0 <= self.poisson_ratio < 0.5:
+            raise ValueError("Poisson's ratio must be in [0, 0.5)")
+        if self.regularization < 0:
+            raise ValueError("Regularization parameter must be non-negative")
+
+    def _prepare_displacement_fields(
+            self,
+            u: np.ndarray,
+            v: np.ndarray,
+            pad_size: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Prepare displacement fields for FFT with proper padding."""
+        # Create padded arrays
+        u_pad = np.zeros((pad_size, pad_size))
+        v_pad = np.zeros((pad_size, pad_size))
+
+        # Get original dimensions
+        M, N = u.shape
+
+        # Remove mean and convert to meters (like in original code)
+        u_shift = (u - np.mean(u)) * self.pixel_size
+        v_shift = (v - np.mean(v)) * self.pixel_size
+
+        # Place the data in the corner like in original code
+        u_pad[pad_size - M:pad_size, pad_size - N:pad_size] = u_shift
+        v_pad[pad_size - M:pad_size, pad_size - N:pad_size] = v_shift
+
+        return u_pad, v_pad
+
+    def _calculate_wave_vectors(self, pad_size: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Calculate wave vectors for Fourier space operations using original method."""
+        # First half: 0 to N/2
+        kx1 = np.array([list(range(0, int(pad_size / 2), 1)), ] * int(pad_size), dtype=float)
+        # Second half: -N/2 to -1
+        kx2 = np.array([list(range(-int(pad_size / 2), 0, 1)), ] * int(pad_size), dtype=float)
+
+        # Combine and scale properly
+        kx = np.append(kx1, kx2, axis=1) * 2 * np.pi / (self.pixel_size * pad_size)
+        ky = np.transpose(kx)
+        k = np.sqrt(kx ** 2 + ky ** 2)
+
+        return kx, ky, k
+
+    def calculate_forces(
+            self,
+            u: np.ndarray,
+            v: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Calculate traction forces from displacement fields."""
+        if u.shape != v.shape:
+            raise ValueError("Displacement fields u and v must have the same shape")
+
+        # Get original dimensions
+        M, N = u.shape
+
+        # Calculate optimal padding size
+        max_size = max(M, N)
+        pad_size = 2 ** int(np.ceil(np.log2(max_size)))
+        if pad_size % 2 != 0:
+            pad_size += 1
+
+        # Prepare displacement fields
+        u_pad, v_pad = self._prepare_displacement_fields(u, v, pad_size)
+
+        # Transform to Fourier space
+        u_ft = fft2(u_pad)
+        v_ft = fft2(v_pad)
+
+        # Remove translation components
+        u_ft[0, 0] = 0
+        v_ft[0, 0] = 0
+
+        # Calculate wave vectors
+        kx, ky, k = self._calculate_wave_vectors(pad_size)
+
+        # Calculate forces based on correction method
+        if self.correction_method == CorrectionMethod.PURE_SHEAR:
+            tx_ft, ty_ft = self._calculate_pure_shear(u_ft, v_ft)
+        else:
+            try:
+                if self.correction_method == CorrectionMethod.FINITE:
+                    tx_ft, ty_ft = self._apply_finite_thickness_correction(u_ft, v_ft, kx, ky, k)
+                else:
+                    tx_ft, ty_ft = self._apply_infinite_thickness_solution(u_ft, v_ft, kx, ky, k)
+
+                # Check for NaN values and fall back to infinite thickness if needed
+                if np.any(np.isnan(tx_ft)) or np.any(np.isnan(ty_ft)):
+                    tx_ft, ty_ft = self._apply_infinite_thickness_solution(u_ft, v_ft, kx, ky, k)
+            except Exception as e:
+                # Fall back to infinite thickness solution if any calculation fails
+                logger.warning(f"Falling back to infinite thickness solution due to: {str(e)}")
+                tx_ft, ty_ft = self._apply_infinite_thickness_solution(u_ft, v_ft, kx, ky, k)
+
+        # Transform back to real space
+        tx = np.real(ifft2(tx_ft))
+        ty = np.real(ifft2(ty_ft))
+
+        # Cut back to original size (from corner like in original code)
+        tx = tx[pad_size - M:pad_size, pad_size - N:pad_size]
+        ty = ty[pad_size - M:pad_size, pad_size - N:pad_size]
+
+        # Apply smoothing if requested
+        if self.filter_sigma is not None:
+            tx = gaussian_filter(tx, sigma=self.filter_sigma)
+            ty = gaussian_filter(ty, sigma=self.filter_sigma)
+
+        # Store results
+        self.latest_results = {
+            'tx': tx,
+            'ty': ty,
+            'magnitude': self.calculate_magnitude(tx, ty)
+        }
+
+        return tx, ty
+
+
+
+    def _get_optimal_pad_size(self, M: int, N: int) -> int:
+        """Calculate optimal padding size for FFT."""
+        target_size = max(M, N)
+        return 2 ** int(np.ceil(np.log2(target_size)))
+
+
+    def _calculate_pure_shear(
+            self,
+            u_fft: np.ndarray,
+            v_fft: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Calculate forces using pure shear approximation."""
+        tx_fft = self.shear_modulus * u_fft / self.gel_height
+        ty_fft = self.shear_modulus * v_fft / self.gel_height
+
+        # Zero out DC component
+        tx_fft[0, 0] = 0
+        ty_fft[0, 0] = 0
+
+        return tx_fft, ty_fft
+
+    def _calculate_regularized_forces(
+            self,
+            u_fft: np.ndarray,
+            v_fft: np.ndarray,
+            kx: np.ndarray,
+            ky: np.ndarray,
+            k: np.ndarray,
+            pad_size: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Calculate forces using regularization and optional finite thickness correction."""
+        tx_fft = np.zeros((pad_size, pad_size), dtype=complex)
+        ty_fft = np.zeros((pad_size, pad_size), dtype=complex)
+
+        for i in range(pad_size):
+            for j in range(pad_size):
+                if i == 0 and j == 0:
+                    continue
+
+                if self.correction_method == CorrectionMethod.FINITE:
+                    tx_fft[i, j], ty_fft[i, j] = self._apply_finite_thickness_correction(
+                        u_fft[i, j], v_fft[i, j], kx[i, j], ky[i, j], k[i, j]
+                    )
+                else:
+                    tx_fft[i, j], ty_fft[i, j] = self._apply_infinite_thickness_solution(
+                        u_fft[i, j], v_fft[i, j], kx[i, j], ky[i, j], k[i, j]
+                    )
+
+        return tx_fft, ty_fft
+
+    def _apply_finite_thickness_correction(
+            self,
+            u_fft: complex,
+            v_fft: complex,
+            kx: float,
+            ky: float,
+            k: float
+    ) -> Tuple[complex, complex]:
+        """Apply finite thickness correction to force calculation."""
+        kh = k * self.gel_height
+
+        # Fall back to infinite thickness for numerical stability
+        if kh > 100:
+            return self._apply_infinite_thickness_solution(u_fft, v_fft, kx, ky, k)
+
+        c = np.cosh(kh)
+        s = np.sinh(kh)
+        s_c = np.tanh(kh)
+
+        gamma = ((3 - 4 * self.poisson_ratio) +
+                 (((1 - 2 * self.poisson_ratio) ** 2) / (c ** 2)) +
+                 ((kh ** 2) / (c ** 2))) / \
+                ((3 - 4 * self.poisson_ratio) * s_c + kh / (c ** 2))
+
+        factor1 = v_fft * kx - u_fft * ky
+        factor2 = u_fft * kx + v_fft * ky
+
+        tx = ((-self.young_modulus * ky * c) /
+              (2 * k * s * (1 + self.poisson_ratio))) * factor1 + \
+             ((self.young_modulus * kx) /
+              (2 * k * (1 - self.poisson_ratio ** 2))) * gamma * factor2
+
+        ty = ((self.young_modulus * kx * c) /
+              (2 * k * s * (1 + self.poisson_ratio))) * factor1 + \
+             ((self.young_modulus * ky) /
+              (2 * k * (1 - self.poisson_ratio ** 2))) * gamma * factor2
+
+        return tx, ty
+
+    def _apply_infinite_thickness_solution(
+            self,
+            u_fft: np.ndarray,
+            v_fft: np.ndarray,
+            kx: np.ndarray,
+            ky: np.ndarray,
+            k: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Apply infinite thickness solution using fast vectorized operations with proper regularization.
+        Based on the FFTTC method but including correct Tikhonov regularization.
+        """
+        # Calculate angle between k and kx
+        alpha = np.arctan2(ky, kx)
+        alpha[0, 0] = np.pi / 2  # Handle division by zero at origin
+
+        # Calculate Green's function components
+        denom = self.young_modulus * k ** 3
+        # Add small number to prevent division by zero
+        denom = denom + np.finfo(float).eps
+
+        Gxx = 2 * (1 + self.poisson_ratio) / denom * \
+              ((1 - self.poisson_ratio) * k ** 2 + self.poisson_ratio * ky ** 2)
+        Gyy = 2 * (1 + self.poisson_ratio) / denom * \
+              ((1 - self.poisson_ratio) * k ** 2 + self.poisson_ratio * kx ** 2)
+        Gxy = 2 * (1 + self.poisson_ratio) / denom * \
+              (self.poisson_ratio * kx * ky)
+
+        # Zero out Nyquist frequencies in coupling terms
+        M, N = u_fft.shape
+        Gxy[:, N // 2] = 0
+        Gxy[M // 2, :] = 0
+
+        # Calculate determinant for inverse
+        det = Gxx * Gyy - Gxy * Gxy + self.regularization
+
+        # Calculate inverse with regularization (derived from 2x2 matrix inversion formula)
+        # [Gxx  Gxy] ^-1     1    [ Gyy  -Gxy]
+        # [Gxy  Gyy]    = ------- [-Gxy   Gxx]
+        #                   det
+
+        Kxx = Gyy / det
+        Kyy = Gxx / det
+        Kxy = -Gxy / det
+
+        # Set zero frequency components to zero
+        Kxx[0, 0] = 0
+        Kyy[0, 0] = 0
+        Kxy[0, 0] = 0
+
+        # Calculate forces in Fourier space using vectorized operations
+        tx_fft = Kxx * u_fft + Kxy * v_fft
+        ty_fft = Kxy * u_fft + Kyy * v_fft
+
+        return tx_fft, ty_fft
+
+    @staticmethod
+    def calculate_magnitude(tx: np.ndarray, ty: np.ndarray) -> np.ndarray:
+        """Calculate magnitude of traction forces."""
+        return np.sqrt(tx ** 2 + ty ** 2)
+
+    def calculate_strain_energy(self) -> Optional[float]:
+        """
+        Calculate total strain energy density from latest results.
+
+        Returns
+        -------
+        float or None
+            Total strain energy density (Joules/m²) if results exist,
+            None otherwise
+        """
+        if self.latest_results is None:
+            return None
+
+        tx = self.latest_results['tx']
+        ty = self.latest_results['ty']
+
+        # Calculate strain energy density
+        strain_energy = 0.5 * (tx ** 2 + ty ** 2) / self.young_modulus
+
+        # Return total energy per unit area
+        return np.sum(strain_energy) * self.pixel_size ** 2
+
+    def get_statistics(self) -> Optional[Dict[str, float]]:
+        """
+        Get statistical information about the latest calculation.
+
+        Returns
+        -------
+        Dict[str, float] or None
+            Dictionary containing statistics if results exist,
+            None otherwise
+        """
+        if self.latest_results is None:
+            return None
+
+        magnitude = self.latest_results['magnitude']
+        return {
+            'mean_force': float(np.mean(magnitude)),
+            'max_force': float(np.max(magnitude)),
+            'std_force': float(np.std(magnitude)),
+            'total_strain_energy': float(self.calculate_strain_energy())
+        }

@@ -296,7 +296,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self.visualization_manager._clear_layers([
                 'Displacement Overlay',
                 'Displacement Magnitude',
-                'Flow Vectors',
+                'Displacement Vectors',
                 'Cell Overlay'
             ])
 

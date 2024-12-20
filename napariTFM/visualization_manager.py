@@ -305,20 +305,26 @@ class VisualizationManager(ErrorHandlingMixin):
             stride: int,
             d_max: Optional[float]
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Create vector data and colors for visualization"""
+        """Create vector data and colors for visualization
+
+        Note: Ensures vectors are properly aligned with the magnitude plot by:
+        1. Using consistent coordinate origins
+        2. Properly centering vectors on their grid points
+        3. Maintaining consistent array indexing throughout
+        """
         h, w = flow_scaled.shape[:2]
         stride = max(1, stride)
 
-        # Calculate grid points
-        y_points = np.arange(stride // 2, h - stride // 2, stride)
-        x_points = np.arange(stride // 2, w - stride // 2, stride)
+        # Calculate grid points with proper centering
+        y_points = np.arange(0, h, stride)
+        x_points = np.arange(0, w, stride)
         y, x = np.meshgrid(y_points, x_points, indexing='ij')
 
-        # Get flow components
+        # Get flow components at exact grid points
         u = flow_scaled[y, x, 0]
         v = flow_scaled[y, x, 1]
 
-        # Calculate magnitudes
+        # Calculate magnitudes from original flow at the same points
         orig_magnitudes = np.sqrt(
             original_flow[y, x, 0] ** 2 +
             original_flow[y, x, 1] ** 2
@@ -328,18 +334,21 @@ class VisualizationManager(ErrorHandlingMixin):
         threshold = d_max * 0.05 if d_max is not None else orig_magnitudes.max() * 0.05
         mask = orig_magnitudes > threshold
 
-        # Create vectors array
+        # Create vectors array with proper positioning
         vectors = []
         valid_magnitudes = []
 
         for i in range(len(y.flat)):
             if mask.flat[i]:
-                start_x, start_y = x.flat[i], y.flat[i]
-                end_x = start_x + u.flat[i]
+                # Use the exact grid points for vector positions
+                start_y, start_x = y.flat[i], x.flat[i]
+                # Add the flow vectors to get end points
                 end_y = start_y + v.flat[i]
+                end_x = start_x + u.flat[i]
 
                 if 0 <= end_x < w and 0 <= end_y < h:
-                    vectors.append([[start_x, start_y], [end_x, end_y]])
+                    # Store in y,x order to match array coordinates
+                    vectors.append([[start_y, start_x], [end_y, end_x]])
                     valid_magnitudes.append(orig_magnitudes.flat[i])
 
         if vectors:
@@ -351,7 +360,6 @@ class VisualizationManager(ErrorHandlingMixin):
             colors = np.zeros((0, 4))
 
         return vectors, colors
-
     def _create_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
         """Create colored overlay of two images"""
         img1_norm = img1.astype(float) / img1.max()
