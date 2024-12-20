@@ -124,6 +124,7 @@ class napariTFMWidget(QWidget):
         """Handle completion of displacement analysis"""
         logger.info("Displacement analysis completed successfully")
         self.data_manager.displacement_results = results
+        self.force_widget._update_ui_state()
 
     def _on_force_completed(self, results):
         """Handle completion of force calculation"""

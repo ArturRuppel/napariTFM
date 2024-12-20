@@ -30,7 +30,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
     ):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Initialize parameters
+        # Initialize parameters first
         self.young_modulus = 10000  # Pa
         self.poisson_ratio = 0.49
         self.gel_height = None  # μm (None means infinite)
@@ -38,22 +38,140 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.regularization = 1e-6
         self.filter_sigma = 2.0  # pixels
         self.characteristic_length = 50  # μm (typical cell size)
-
-        # Initialize correction method
         self.correction_method = CorrectionMethod.NONE
 
-        # Initialize visualization parameters
+        # Initialize other attributes
+        self.calculator = None
+        self.colorbar_manager = ColorbarManager()
         self.visualization_params = {}
 
-        # Initialize calculator
-        self.calculator = None
-
-        # Initialize colorbar
-        self.colorbar_manager = ColorbarManager()
-
+        # Setup UI and connections
         self._setup_ui()
         self._connect_signals()
         self._register_controls()
+        self._update_ui_state()
+
+    def _update_ui_state(self):
+        """Update UI elements based on current state."""
+        # Check if displacement data is available
+        has_displacement_data = (
+                hasattr(self.data_manager, 'displacement_results') and
+                self.data_manager.displacement_results is not None and
+                'flows' in self.data_manager.displacement_results
+        )
+
+        # Update button states
+        self.calculate_btn.setEnabled(has_displacement_data)
+
+        # Update status message
+        if not has_displacement_data:
+            self._update_status("Displacement analysis required before force calculation")
+        else:
+            self._update_status("Ready for force calculation")
+
+        # Update parameters based on correction method
+        is_finite = self.correction_method != CorrectionMethod.NONE
+        self.height_spin.setEnabled(is_finite)
+        self.char_length_spin.setEnabled(is_finite)
+
+        # Update visualization parameters based on current results
+        if hasattr(self.data_manager, 'force_results') and self.data_manager.force_results:
+            results = self.data_manager.force_results
+            if 'parameters' in results and 'visualization' in results['parameters']:
+                vis_params = results['parameters']['visualization']
+                self.visualization_params['vector_stride'].setValue(vis_params.get('vector_stride', 20))
+                self.visualization_params['arrow_scale'].setValue(vis_params.get('arrow_scale', 1.0))
+                self.visualization_params['f_max'].setValue(vis_params.get('f_max', 1000.0))
+
+    def calculate_forces(self):
+        """Calculate traction forces using the TractionForceCalculator."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating forces...", 0)
+
+            # Get displacement data
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            num_frames = len(flows)
+
+            # Initialize calculator with current parameters
+            self._initialize_calculator()
+
+            # Initialize result arrays
+            force_results = {
+                'tx': [],
+                'ty': []
+            }
+
+            # Process each frame
+            for i, flow in enumerate(flows):
+                progress = (i + 1) / num_frames * 100
+                self._update_status(f"Processing frame {i + 1}/{num_frames}...", progress)
+
+                # Extract u and v components
+                u = flow[..., 0]
+                v = flow[..., 1]
+
+                # Calculate forces
+                tx, ty = self.calculator.calculate_forces(u, v)
+                force_results['tx'].append(tx)
+                force_results['ty'].append(ty)
+
+            # Convert lists to arrays
+            force_results['tx'] = np.stack(force_results['tx'])
+            force_results['ty'] = np.stack(force_results['ty'])
+
+            # Get visualization parameters
+            visualization_params = {
+                'vector_stride': self.visualization_params['vector_stride'].value(),
+                'arrow_scale': self.visualization_params['arrow_scale'].value(),
+                'f_max': self.visualization_params['f_max'].value()
+            }
+
+            # Store parameters
+            force_results['parameters'] = {
+                'young_modulus': self.young_modulus,
+                'poisson_ratio': self.poisson_ratio,
+                'gel_height': self.gel_height,
+                'pixel_size': self.pixel_size,
+                'regularization': self.regularization,
+                'filter_sigma': self.filter_sigma,
+                'correction_method': self.correction_method.value,
+                'characteristic_length': self.characteristic_length,
+                'visualization': visualization_params
+            }
+
+            # Update data manager
+            self.data_manager.force_results = force_results
+
+            # Update visualization through visualization manager
+            self.visualization_manager.update_force_visualization(force_results, visualization_params)
+
+            # Update colorbar
+            f_max = visualization_params['f_max']
+            if f_max is not None:
+                self.colorbar_manager.update_limits(0, f_max)
+
+            # Get and display statistics
+            stats = self.visualization_manager.get_force_statistics(force_results)
+            if stats:
+                stats_text = (
+                    f"Mean force: {stats['mean_force']:.2f} Pa\n"
+                    f"Max force: {stats['max_force']:.2f} Pa\n"
+                    f"Median force: {stats['median_force']:.2f} Pa"
+                )
+                self._update_status(stats_text, 100)
+
+            # Emit results
+            self.force_calculated.emit(force_results)
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self._set_controls_enabled(True)
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -303,93 +421,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
         frame.setLayout(layout)
         return frame
-
-    def calculate_forces(self):
-        """Calculate traction forces using the TractionForceCalculator."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating forces...", 0)
-
-            # Get displacement data
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            num_frames = len(flows)
-
-            # Initialize calculator with current parameters
-            self._initialize_calculator()
-
-            # Initialize result arrays
-            force_results = {
-                'tx': [],
-                'ty': []
-            }
-
-            # Get visualization parameters
-            vector_stride = self.visualization_params['vector_stride'].value()
-            arrow_scale = self.visualization_params['arrow_scale'].value()
-            f_max = self.visualization_params['f_max'].value()
-
-            # Process each frame
-            for i, flow in enumerate(flows):
-                progress = (i + 1) / num_frames * 100
-                self._update_status(f"Processing frame {i + 1}/{num_frames}...", progress)
-
-                # Extract u and v components
-                u = flow[..., 0]
-                v = flow[..., 1]
-
-                # Calculate forces
-                tx, ty = self.calculator.calculate_forces(u, v)
-
-                # Store results
-                force_results['tx'].append(tx)
-                force_results['ty'].append(ty)
-
-            # Convert lists to arrays
-            force_results['tx'] = np.stack(force_results['tx'])
-            force_results['ty'] = np.stack(force_results['ty'])
-
-            # Store parameters
-            force_results['parameters'] = {
-                'young_modulus': self.young_modulus,
-                'poisson_ratio': self.poisson_ratio,
-                'gel_height': self.gel_height,
-                'pixel_size': self.pixel_size,
-                'regularization': self.regularization,
-                'filter_sigma': self.filter_sigma,
-                'correction_method': self.correction_method.value,
-                'characteristic_length': self.characteristic_length,
-                'visualization': {
-                    'vector_stride': vector_stride,
-                    'arrow_scale': arrow_scale,
-                    'f_max': f_max
-                }
-            }
-
-            # Update data manager and visualization
-            self.data_manager.force_results = force_results
-            self._update_visualization(force_results)
-
-            # Get and display statistics
-            stats = self.calculator.get_statistics()
-            if stats:
-                stats_text = (
-                    f"Mean force: {stats['mean_force']:.2f} Pa\n"
-                    f"Max force: {stats['max_force']:.2f} Pa\n"
-                    f"Strain energy: {stats['total_strain_energy']:.2e} J/m²"
-                )
-                self._update_status(stats_text, 100)
-
-            # Emit results
-            self.force_calculated.emit(force_results)
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self._set_controls_enabled(True)
 
     def _initialize_calculator(self):
         """Initialize the TractionForceCalculator with current parameters."""

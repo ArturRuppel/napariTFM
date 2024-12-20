@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Any
 
 import napari
 import numpy as np
@@ -22,16 +22,161 @@ class PreviewConfig:
 
 
 class VisualizationManager(ErrorHandlingMixin):
-
     def __init__(self, viewer: "napari.Viewer", data_manager: "DataManager"):
         super().__init__()
         self.viewer = viewer
         self.data_manager = data_manager
-        self._layers: Dict[str, Layer] = {}
+        self._layers: Dict[str, Any] = {}
+        self._preview_config = PreviewConfig()
 
         # Connect to viewer events
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
+
+    def update_force_visualization(self, results: Dict[str, Any], visualization_params: Dict[str, Any]) -> None:
+        """Update force visualization with current results and parameters."""
+        try:
+            # Clear existing force layers
+            self._clear_layers(['Force Magnitude', 'Force Vectors'])
+
+            # Calculate magnitude stack
+            magnitude_stack = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
+
+            # Get visualization parameters
+            f_max = visualization_params['f_max']
+            vector_stride = visualization_params['vector_stride']
+            arrow_scale = visualization_params['arrow_scale']
+
+            # Create vector cache for all frames
+            vector_cache = {
+                'data': [],
+                'colors': [],
+                'parameters': visualization_params.copy()
+            }
+
+            # Process each frame
+            for frame_idx in range(len(results['tx'])):
+                force_vectors = np.stack([
+                    results['tx'][frame_idx],
+                    results['ty'][frame_idx]
+                ], axis=-1)
+
+                vectors, colors = self._create_vector_visualization(
+                    force_vectors * arrow_scale,
+                    force_vectors,
+                    vector_stride,
+                    f_max
+                )
+                vector_cache['data'].append(vectors)
+                vector_cache['colors'].append(colors)
+
+            # Store vector cache in data manager
+            self.data_manager.force_vector_cache = vector_cache
+
+            # Add visualization layers
+            with self.viewer.events.blocker_all():
+                # Add magnitude layer with clipping
+                if f_max is not None:
+                    magnitude_stack = np.clip(magnitude_stack, 0, f_max)
+
+                magnitude_layer = self.viewer.add_image(
+                    magnitude_stack,
+                    name='Force Magnitude',
+                    colormap='inferno',
+                    blending='additive'
+                )
+                self._layers['force_magnitude'] = magnitude_layer
+
+                # Add initial vector layer
+                current_frame = self.viewer.dims.current_step[0]
+                if len(vector_cache['data'][current_frame]) > 0:
+                    vector_layer = self.viewer.add_vectors(
+                        vector_cache['data'][current_frame],
+                        edge_color=vector_cache['colors'][current_frame],
+                        edge_width=2,
+                        name='Force Vectors',
+                        blending='additive'
+                    )
+                    self._layers['force_vectors'] = vector_layer
+
+        except Exception as e:
+            self.handle_error(f"Failed to update force visualization: {str(e)}")
+            raise
+
+    def _on_frame_changed(self, event=None) -> None:
+        """Handle frame change events for both displacement and force visualizations."""
+        try:
+            current_frame = self.viewer.dims.current_step[0]
+
+            # Handle displacement vectors
+            if hasattr(self.data_manager, 'displacement_results'):
+                results = self.data_manager.displacement_results
+                if results and 'vector_cache' in results:
+                    cache = results['vector_cache']
+                    if current_frame < len(cache['data']):
+                        vector_layer = self._layers.get('displacement_vectors')
+                        if vector_layer is not None:
+                            with self.viewer.events.blocker_all():
+                                vector_layer.data = cache['data'][current_frame]
+                                vector_layer.edge_color = cache['colors'][current_frame]
+
+            # Handle force vectors
+            if hasattr(self.data_manager, 'force_vector_cache'):
+                cache = self.data_manager.force_vector_cache
+                if current_frame < len(cache['data']):
+                    vector_layer = self._layers.get('force_vectors')
+                    if vector_layer is not None:
+                        with self.viewer.events.blocker_all():
+                            vector_layer.data = cache['data'][current_frame]
+                            vector_layer.edge_color = cache['colors'][current_frame]
+
+        except Exception as e:
+            self.handle_error(f"Failed to update frame visualization: {str(e)}")
+
+    def get_force_statistics(self, results: Dict[str, Any]) -> Dict[str, float]:
+        """Calculate force statistics."""
+        try:
+            # Calculate magnitudes
+            tx = results['tx']
+            ty = results['ty']
+            magnitudes = np.sqrt(tx ** 2 + ty ** 2)
+
+            # Calculate statistics
+            stats = {
+                'mean_force': float(np.mean(magnitudes)),
+                'max_force': float(np.max(magnitudes)),
+                'median_force': float(np.median(magnitudes)),
+                'std_force': float(np.std(magnitudes))
+            }
+
+            return stats
+
+        except Exception as e:
+            self.handle_error(f"Failed to calculate force statistics: {str(e)}")
+            return {}
+
+    def _on_layer_removed(self, event) -> None:
+        """Handle layer removal events."""
+        layer = event.value
+        # Remove from tracked layers if present
+        self._layers = {name: layer_obj for name, layer_obj in self._layers.items()
+                        if layer_obj != layer}
+
+    def cleanup(self) -> None:
+        """Clean up resources."""
+        try:
+            # Disconnect events
+            if self.viewer is not None:
+                self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
+                self.viewer.layers.events.removed.disconnect(self._on_layer_removed)
+
+            # Clear layers
+            self._clear_layers([name for name in self._layers])
+            self._layers.clear()
+            self.viewer = None
+
+        except Exception as e:
+            self.handle_error(f"Failed to cleanup visualization manager: {str(e)}")
 
     def visualize_displacement_results(self, results: Dict) -> None:
         """Visualize displacement results for all frames."""
@@ -136,13 +281,6 @@ class VisualizationManager(ErrorHandlingMixin):
                 # Update vectors and colors for current frame
                 self._layers['vectors'].data = cache['data'][frame_index]
                 self._layers['vectors'].edge_color = cache['colors'][frame_index]
-    def _on_layer_removed(self, event) -> None:
-        """Handle layer removal events"""
-        layer = event.value
-        # Remove from layers dict if present
-        for key, stored_layer in list(self._layers.items()):
-            if stored_layer == layer:
-                del self._layers[key]
 
     def _clear_layers(self, layer_names: List[str]) -> None:
         """Remove specified layers from viewer"""
@@ -154,12 +292,6 @@ class VisualizationManager(ErrorHandlingMixin):
                     for key, stored_layer in list(self._layers.items()):
                         if stored_layer == layer:
                             del self._layers[key]
-
-    def cleanup(self) -> None:
-        """Clean up resources"""
-        self._clear_layers([name for name in self._layers])
-        self._layers.clear()
-        self.viewer = None
 
     def _create_vector_visualization(
             self,
@@ -235,7 +367,7 @@ class VisualizationManager(ErrorHandlingMixin):
             self._clear_layers([
                 'Displacement Overlay',
                 'Displacement Magnitude',
-                'Flow Vectors'
+                'Displacement Vectors'
             ])
 
             # Create overlay
@@ -287,28 +419,6 @@ class VisualizationManager(ErrorHandlingMixin):
         except Exception as e:
             logger.error(f"Failed to visualize displacement preview: {str(e)}")
             raise
-    def _on_frame_changed(self, event=None) -> None:
-        """Handle frame change events for both displacement and force visualizations"""
-        current_frame = self.viewer.dims.current_step[0]
-
-        # Handle displacement vectors
-        if hasattr(self.data_manager, 'displacement_results'):
-            results = self.data_manager.displacement_results
-            if results and 'vector_cache' in results:
-                if current_frame < len(results['vector_cache']['data']):
-                    if 'vectors' in self._layers:
-                        vector_layer = self._layers['vectors']
-                        vector_layer.data = results['vector_cache']['data'][current_frame]
-                        vector_layer.edge_color = results['vector_cache']['colors'][current_frame]
-
-        # Handle force vectors
-        if hasattr(self.data_manager, 'force_vector_cache'):
-            cache = self.data_manager.force_vector_cache
-            if current_frame < len(cache['data']):
-                if 'force_vectors' in self._layers:
-                    vector_layer = self._layers['force_vectors']
-                    vector_layer.data = cache['data'][current_frame]
-                    vector_layer.edge_color = cache['colors'][current_frame]
 
     def update_preprocessing_visualization(self, results: Dict[str, Tuple[np.ndarray, List[Dict]]]) -> None:
         """Update preprocessing visualization"""
