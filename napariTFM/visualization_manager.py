@@ -42,169 +42,54 @@ class VisualizationManager(ErrorHandlingMixin):
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
 
-    def update_displacement_visualization(
+    def _create_vector_visualization(
             self,
-            flow: np.ndarray,
-            reference: Optional[np.ndarray] = None,
-            moving: Optional[np.ndarray] = None,
-            cells: Optional[np.ndarray] = None,
-            vector_stride: int = 20,
-            arrow_scale: float = 1.0,
-            d_max: Optional[float] = None
-    ) -> None:
-        """Update displacement visualization with all components"""
-        try:
-            logger.debug("Starting displacement visualization update")
-            self._d_max = d_max
-            self._clear_layers(['Displacement Overlay', 'Displacement Magnitude', 'Flow Vectors', 'Cell Overlay'])
+            flow_scaled: np.ndarray,
+            original_flow: np.ndarray,
+            stride: int,
+            d_max: Optional[float]
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Create vector data and colors for visualization using napari's vector layer format.
 
-            with self.viewer.events.blocker_all():
-                # Create overlay if reference and moving images are provided
-                if reference is not None and moving is not None:
-                    overlay = self._create_overlay(reference, moving)
-                    self._layers['overlay'] = self.viewer.add_image(
-                        overlay,
-                        name='Displacement Overlay',
-                        rgb=True,
-                        blending='additive'
-                    )
+        Returns [N, 2, 2] array containing N vectors with start and end points in 2D,
+        and corresponding colors."""
+        h, w = flow_scaled.shape[:2]
+        stride = max(1, stride)
 
-                # Create magnitude layer with colorbar
-                magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
-                if d_max is not None:
-                    magnitude = np.clip(magnitude, 0, d_max)
+        # Create regular grid of positions
+        y_points = np.arange(stride // 2, h - stride // 2, stride)
+        x_points = np.arange(stride // 2, w - stride // 2, stride)
+        Y, X = np.meshgrid(y_points, x_points, indexing='ij')
 
-                magnitude_layer = self.viewer.add_image(
-                    magnitude,
-                    name='Displacement Magnitude',
-                    colormap='viridis',
-                    blending='additive',
-                    colorbar=True,  # Enable colorbar
-                    colorbar_label='Displacement (pixels)'  # Add label
-                )
-                self._layers['magnitude'] = magnitude_layer
+        # Get flow components at these positions
+        U = flow_scaled[Y, X, 0]  # x-component
+        V = flow_scaled[Y, X, 1]  # y-component
 
-                # Create vector visualization
-                flow_scaled = flow * arrow_scale
-                vector_data, colors = self._create_vector_visualization(
-                    flow_scaled,
-                    flow,
-                    vector_stride,
-                    d_max
-                )
+        # Calculate original magnitudes for coloring
+        orig_u = original_flow[Y, X, 0]
+        orig_v = original_flow[Y, X, 1]
+        magnitudes = np.sqrt(orig_u ** 2 + orig_v ** 2)
 
-                if len(vector_data) > 0:
-                    self._layers['vectors'] = self.viewer.add_shapes(
-                        vector_data,
-                        shape_type='line',
-                        name='Flow Vectors',
-                        edge_color=colors,
-                        edge_width=2,
-                        blending='additive'
-                    )
+        # Create vectors array with start and end points
+        n_vectors = len(Y.flatten())
+        vectors = np.zeros((n_vectors, 2, 2))  # [N, 2, 2] array
 
-                # Add cell overlay if provided
-                if cells is not None:
-                    self._layers['cells'] = self.viewer.add_image(
-                        cells,
-                        name='Cell Overlay',
-                        colormap='gray',
-                        opacity=0.5,
-                        blending='additive'
-                    )
+        # Start points
+        vectors[:, 0, 0] = Y.flatten()  # y coordinates
+        vectors[:, 0, 1] = X.flatten()  # x coordinates
 
-        except Exception as e:
-            logger.error(f"Failed to update displacement visualization: {str(e)}")
-            self.handle_error(self.create_error(
-                message="Visualization update failed",
-                details=str(e),
-                severity=ErrorSeverity.ERROR
-            ))
+        # End points
+        vectors[:, 1, 0] = V.flatten()  # y + dy
+        vectors[:, 1, 1] = U.flatten()  # x + dx
 
-    def update_force_visualization(self, results: Dict) -> Dict[str, float]:
-        """Update force calculation visualization with both magnitude and vector representation"""
-        try:
-            self._clear_layers(['Force Magnitude', 'Force Vectors'])
+        # Create colors
+        max_mag = d_max if d_max is not None else magnitudes.max()
+        if max_mag > 0:
+            colors = plt.cm.viridis(magnitudes.flatten() / max_mag)
+        else:
+            colors = plt.cm.viridis(np.zeros(n_vectors))
 
-            # Calculate magnitude stack
-            magnitude_stack = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
-
-            # Add magnitude layer
-            magnitude_layer = self.viewer.add_image(
-                magnitude_stack,
-                name='Force Magnitude',
-                colormap='inferno',
-                blending='additive'
-            )
-            self._layers['force_magnitude'] = magnitude_layer
-
-            # Create vector visualization
-            vector_stride = 20  # Can be made configurable if needed
-            arrow_scale = 1.0  # Can be made configurable if needed
-            d_max = magnitude_stack.max()  # Use maximum force for scaling
-
-            num_frames = len(results['tx'])
-            vector_data_cache = []
-            vector_colors_cache = []
-
-            for frame in range(num_frames):
-                # Combine force components into flow-like array
-                force_field = np.stack(
-                    (results['tx'][frame], results['ty'][frame]),
-                    axis=-1
-                )
-
-                # Scale the forces for visualization
-                force_field_scaled = force_field * arrow_scale
-
-                # Create vector visualization
-                vectors, colors = self._create_vector_visualization(
-                    force_field_scaled,
-                    force_field,
-                    vector_stride,
-                    d_max
-                )
-
-                vector_data_cache.append(vectors)
-                vector_colors_cache.append(colors)
-
-            # Add initial vector layer
-            if len(vector_data_cache[0]) > 0:
-                vector_layer = self.viewer.add_shapes(
-                    vector_data_cache[0],
-                    shape_type='line',
-                    name='Force Vectors',
-                    edge_color=vector_colors_cache[0],
-                    edge_width=2,
-                    blending='additive'
-                )
-                self._layers['force_vectors'] = vector_layer
-
-            # Store vector cache for frame changes
-            if not hasattr(self.data_manager, 'force_vector_cache'):
-                self.data_manager.force_vector_cache = {}
-
-            self.data_manager.force_vector_cache = {
-                'data': vector_data_cache,
-                'colors': vector_colors_cache,
-                'parameters': {
-                    'stride': vector_stride,
-                    'arrow_scale': arrow_scale,
-                    'd_max': d_max
-                }
-            }
-
-            # Return basic statistics
-            stats = {
-                'mean_force': float(np.mean(magnitude_stack)),
-                'max_force': float(np.max(magnitude_stack))
-            }
-
-            return stats
-
-        except Exception as e:
-            logger.error(f"Failed to update force visualization: {str(e)}")
-            raise
+        return vectors, colors
 
     def _on_frame_changed(self, event=None) -> None:
         """Handle frame change events for both displacement and force visualizations"""
@@ -298,68 +183,7 @@ class VisualizationManager(ErrorHandlingMixin):
             logger.error(f"Preview handling failed: {str(e)}")
             raise
 
-    def _create_vector_visualization(
-            self,
-            flow_scaled: np.ndarray,
-            original_flow: np.ndarray,
-            stride: int,
-            d_max: Optional[float]
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Create vector data and colors for visualization
 
-        Note: Ensures vectors are properly aligned with the magnitude plot by:
-        1. Using consistent coordinate origins
-        2. Properly centering vectors on their grid points
-        3. Maintaining consistent array indexing throughout
-        """
-        h, w = flow_scaled.shape[:2]
-        stride = max(1, stride)
-
-        # Calculate grid points with proper centering
-        y_points = np.arange(0, h, stride)
-        x_points = np.arange(0, w, stride)
-        y, x = np.meshgrid(y_points, x_points, indexing='ij')
-
-        # Get flow components at exact grid points
-        u = flow_scaled[y, x, 0]
-        v = flow_scaled[y, x, 1]
-
-        # Calculate magnitudes from original flow at the same points
-        orig_magnitudes = np.sqrt(
-            original_flow[y, x, 0] ** 2 +
-            original_flow[y, x, 1] ** 2
-        )
-
-        # Create mask for significant displacements
-        threshold = d_max * 0.05 if d_max is not None else orig_magnitudes.max() * 0.05
-        mask = orig_magnitudes > threshold
-
-        # Create vectors array with proper positioning
-        vectors = []
-        valid_magnitudes = []
-
-        for i in range(len(y.flat)):
-            if mask.flat[i]:
-                # Use the exact grid points for vector positions
-                start_y, start_x = y.flat[i], x.flat[i]
-                # Add the flow vectors to get end points
-                end_y = start_y + v.flat[i]
-                end_x = start_x + u.flat[i]
-
-                if 0 <= end_x < w and 0 <= end_y < h:
-                    # Store in y,x order to match array coordinates
-                    vectors.append([[start_y, start_x], [end_y, end_x]])
-                    valid_magnitudes.append(orig_magnitudes.flat[i])
-
-        if vectors:
-            vectors = np.array(vectors)
-            max_mag = d_max if d_max is not None else max(valid_magnitudes)
-            colors = plt.cm.viridis(np.array(valid_magnitudes) / max_mag)
-        else:
-            vectors = np.zeros((0, 2, 2))
-            colors = np.zeros((0, 4))
-
-        return vectors, colors
     def _create_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
         """Create colored overlay of two images"""
         img1_norm = img1.astype(float) / img1.max()

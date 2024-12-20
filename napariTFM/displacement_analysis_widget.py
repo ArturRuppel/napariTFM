@@ -180,28 +180,15 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
                 # Add vectors
                 if len(vectors) > 0:
-                    self.viewer.add_shapes(
+                    self.viewer.add_vectors(
                         vectors,
-                        shape_type='line',
-                        name='Flow Vectors',
                         edge_color=colors,
                         edge_width=2,
+                        name='Displacement Vectors',
+                        vector_style='arrow',
                         blending='additive'
                     )
 
-                # Add cell overlay if available
-                if cells is not None:
-                    self.viewer.add_image(
-                        cells,
-                        name='Cell Overlay',
-                        colormap='gray',
-                        opacity=0.5,
-                        blending='additive'
-                    )
-
-            # Update colorbar with same approach as UI setup
-            vmax = d_max if d_max is not None else magnitude.max()
-            self.colorbar_manager.update_limits(0, vmax)
 
             # Update status with displacement statistics
             stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
@@ -242,7 +229,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             vector_stride = self.visualization_params['vector_stride'].value()
             arrow_scale = self.visualization_params['arrow_scale'].value()
 
-            # Pre-calculate vector data for all frames
+            # Initialize vector cache
             vector_data_cache = []
             vector_colors_cache = []
 
@@ -292,11 +279,14 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 }
             }
 
+            # Store results in data manager
+            self.data_manager.displacement_results = results
+
             # Clear existing layers
             self.visualization_manager._clear_layers([
                 'Displacement Overlay',
                 'Displacement Magnitude',
-                'Displacement Vectors',
+                'Flow Vectors',
                 'Cell Overlay'
             ])
 
@@ -322,12 +312,11 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
                 # Add initial vector layer
                 if len(vector_data_cache[0]) > 0:
-                    self.viewer.add_shapes(
+                    self.viewer.add_vectors(
                         vector_data_cache[0],
-                        shape_type='line',
-                        name='Flow Vectors',
                         edge_color=vector_colors_cache[0],
                         edge_width=2,
+                        name='Flow Vectors',
                         blending='additive'
                     )
 
@@ -341,13 +330,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                         blending='additive'
                     )
 
-                # Update colorbar with same approach as UI setup
-                vmax = d_max if d_max is not None else magnitudes.max()
-                self.colorbar_manager.update_limits(0, vmax)
-
-            # Store results in data manager
-            self.data_manager.displacement_results = results
-
             # Emit results
             self.displacement_calculated.emit(results)
             self._update_status("Analysis complete", 100)
@@ -356,6 +338,25 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
+
+    def _on_frame_changed(self, event=None):
+        """Handle frame change events."""
+        if hasattr(self.data_manager, 'displacement_results'):
+            results = self.data_manager.displacement_results
+            if results and 'vector_cache' in results:
+                current_frame = self.viewer.dims.current_step[0]
+                cache = results['vector_cache']
+                if current_frame < len(cache['data']):
+                    vector_layer = None
+                    for layer in self.viewer.layers:
+                        if layer.name == 'Flow Vectors':
+                            vector_layer = layer
+                            break
+
+                    if vector_layer is not None:
+                        with self.viewer.events.blocker_all():
+                            vector_layer.data = cache['data'][current_frame]
+                            vector_layer.edge_color = cache['colors'][current_frame]
 
     def _update_visualization_params(self):
         """Update visualization when parameters change."""
@@ -474,24 +475,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         """Update the colorbar limits and appearance."""
         if self.colorbar_manager is not None:
             self.colorbar_manager.update_limits(vmin, vmax)
-
-    def _on_frame_changed(self, event=None):
-        """Handle frame change events."""
-        if hasattr(self.data_manager, 'displacement_results'):
-            results = self.data_manager.displacement_results
-            if results and 'vector_cache' in results:
-                current_frame = self.viewer.dims.current_step[0]
-                if current_frame < len(results['vector_cache']['data']):
-                    with self.viewer.events.blocker_all():
-                        vector_layer = None
-                        for layer in self.viewer.layers:
-                            if layer.name == 'Flow Vectors':
-                                vector_layer = layer
-                                break
-
-                        if vector_layer is not None:
-                            vector_layer.data = results['vector_cache']['data'][current_frame]
-                            vector_layer.edge_color = results['vector_cache']['colors'][current_frame]
 
     def cleanup(self):
         """Clean up resources."""
