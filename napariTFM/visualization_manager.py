@@ -27,10 +27,36 @@ class VisualizationManager(ErrorHandlingMixin):
         self.viewer = viewer
         self.data_manager = data_manager
         self._layers: Dict[str, Any] = {}
+        # Properly initialize the preview config
+        self._preview_config = PreviewConfig()
 
         # Connect to viewer events
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
+
+    def handle_preview(self, frame: Optional[np.ndarray], enable: bool = True, layer_name: str = 'Preview') -> None:
+        """Handle preview visualization"""
+        try:
+            if enable:
+                if self._preview_config.preview_layer is None:
+                    self._preview_config.preview_layer = self.viewer.add_image(
+                        frame,
+                        name=layer_name,
+                        visible=True
+                    )
+                else:
+                    self._preview_config.preview_layer.data = frame
+            else:
+                if self._preview_config.preview_layer is not None:
+                    self.viewer.layers.remove(self._preview_config.preview_layer)
+                    self._preview_config.preview_layer = None
+
+            # Update preview config state
+            self._preview_config.enabled = enable
+
+        except Exception as e:
+            logger.error(f"Preview handling failed: {str(e)}")
+            raise
 
     def visualize_displacement_preview(
             self,
@@ -462,27 +488,6 @@ class VisualizationManager(ErrorHandlingMixin):
 
         except Exception as e:
             logger.error(f"Failed to update preprocessing visualization: {str(e)}")
-            raise
-
-    def handle_preview(self, frame: np.ndarray, enable: bool = True, layer_name: str = 'Preview') -> None:
-        """Handle preview visualization"""
-        try:
-            if enable:
-                if self._preview_config.preview_layer is None:
-                    self._preview_config.preview_layer = self.viewer.add_image(
-                        frame,
-                        name=layer_name,
-                        visible=True
-                    )
-                else:
-                    self._preview_config.preview_layer.data = frame
-            else:
-                if self._preview_config.preview_layer is not None:
-                    self.viewer.layers.remove(self._preview_config.preview_layer)
-                    self._preview_config.preview_layer = None
-
-        except Exception as e:
-            logger.error(f"Preview handling failed: {str(e)}")
             raise
 
     def _create_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:

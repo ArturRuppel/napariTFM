@@ -1,10 +1,11 @@
 from typing import Optional
-
+import os
+import tifffile
 import numpy as np
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QInputDialog, QScrollArea, QWidget, QSizePolicy,
-    QRadioButton, QLabel, QFrame, QProgressBar, QSpinBox,
+    QRadioButton, QLabel, QFrame, QProgressBar, QSpinBox, QFileDialog,
     QDoubleSpinBox, QCheckBox, QPushButton,
     QComboBox, QMessageBox
 )
@@ -140,6 +141,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.bead_radio.toggled.connect(self._on_data_type_changed)
         self.reference_radio.toggled.connect(self._on_data_type_changed)
         self.cell_radio.toggled.connect(self._on_data_type_changed)
+
+        # Add save button connection
+        self.save_btn.clicked.connect(self._save_preprocessed_data)
+
 
     def _clear_data(self):
         """Clear all preprocessing data"""
@@ -345,6 +350,14 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.data_manager.preprocessing_cell_stack is not None
         ])
         self.preprocess_btn.setEnabled(has_data)
+
+        # Update save button state
+        has_preprocessed_data = any([
+            self.data_manager.preprocessed_bead_stack is not None,
+            self.data_manager.preprocessed_reference is not None,
+            self.data_manager.preprocessed_cell_stack is not None
+        ])
+        self.save_btn.setEnabled(has_preprocessed_data)
 
     def cleanup(self):
         """Clean up resources and event connections."""
@@ -695,8 +708,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         registration_layout.addLayout(mode_layout)
 
         self.registration_note = QLabel(
-            "Note: Registration requires both reference image and bead stack.\n"
-            "Registration will be performed relative to the reference image."
+            "Note: Registration will be performed relative to the reference image."
         )
         self.registration_note.setWordWrap(True)
         registration_layout.addWidget(self.registration_note)
@@ -720,10 +732,18 @@ class PreprocessingWidget(BaseAnalysisWidget):
         button_frame = QFrame()
         button_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         button_layout = QHBoxLayout()
+
+        # Create buttons
         self.preprocess_btn = QPushButton("Run Preprocessing")
         self.reset_btn = QPushButton("Reset Parameters")
+        self.save_btn = QPushButton("Save Preprocessed Data")
+        self.save_btn.setEnabled(False)  # Initially disabled
+
+        # Add buttons to layout
         button_layout.addWidget(self.preprocess_btn)
         button_layout.addWidget(self.reset_btn)
+        button_layout.addWidget(self.save_btn)
+
         button_frame.setLayout(button_layout)
         return button_frame
 
@@ -758,8 +778,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Check if we have required data for registration
         if enabled and (
-                self.data_manager.bead_stack is None or
-                self.data_manager.reference_image is None
+                self.data_manager.preprocessing_bead_stack is None or
+                self.data_manager.preprocessing_reference_image is None
         ):
             self.registration_check.setChecked(False)
             self._show_warning(
@@ -795,6 +815,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.cell_max_spinbox,
             self.cell_gaussian_check,
             self.cell_gaussian_sigma_spin,
+            self.save_btn,
         ]
 
         for control in controls:
@@ -826,11 +847,64 @@ class PreprocessingWidget(BaseAnalysisWidget):
     def _get_current_data(self) -> Optional[np.ndarray]:
         """Get data for current type"""
         if self.current_data_type == 'beads':
-            return self.data_manager.bead_stack
+            return self.data_manager.preprocessing_bead_stack
         elif self.current_data_type == 'reference':
-            return self.data_manager.reference_image
+            return self.data_manager.preprocessing_reference_image
         else:
-            return self.data_manager.cell_stack
+            return self.data_manager.preprocessing_cell_stack
 
+    def _save_preprocessed_data(self):
+        """Save preprocessed data to user-selected directory"""
+        try:
+            # Get directory from user
+            save_dir = QFileDialog.getExistingDirectory(
+                self,
+                "Select Directory to Save Preprocessed Data",
+                os.path.expanduser("~"),
+                QFileDialog.ShowDirsOnly
+            )
 
+            if not save_dir:  # User cancelled
+                return
+
+            files_saved = []
+
+            # Function to save a single stack/image
+            def save_tiff(data: np.ndarray, filename: str):
+                if data is None:
+                    return False
+
+                # Convert to 16-bit
+                data_normalized = data.astype(float)
+                data_normalized = (data_normalized - data_normalized.min()) / (data_normalized.max() - data_normalized.min())
+                data_16bit = (data_normalized * 65535).astype(np.uint16)
+
+                filepath = os.path.join(save_dir, filename)
+                tifffile.imwrite(filepath, data_16bit)
+                return True
+
+            # Save bead stack if available
+            if self.data_manager.preprocessed_bead_stack is not None:
+                if save_tiff(self.data_manager.preprocessed_bead_stack, "preprocessed_beads.tif"):
+                    files_saved.append("preprocessed_beads.tif")
+
+            # Save reference image if available
+            if self.data_manager.preprocessed_reference is not None:
+                if save_tiff(self.data_manager.preprocessed_reference, "preprocessed_reference.tif"):
+                    files_saved.append("preprocessed_reference.tif")
+
+            # Save cell stack if available
+            if self.data_manager.preprocessed_cell_stack is not None:
+                if save_tiff(self.data_manager.preprocessed_cell_stack, "preprocessed_cells.tif"):
+                    files_saved.append("preprocessed_cells.tif")
+
+            if files_saved:
+                self._update_status("Saved files:\n" + "\n".join(files_saved))
+            else:
+                self._update_status("No preprocessed data available to save")
+
+        except Exception as e:
+            error_msg = f"Error saving preprocessed data: {str(e)}"
+            self._handle_error(error_msg)
+            self.processing_failed.emit(error_msg)
 
