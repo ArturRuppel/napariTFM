@@ -190,6 +190,81 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 str(e)
             ))
 
+    def _create_load_group(self):
+        """Create the data loading group."""
+        load_group = QGroupBox("Data")
+        load_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        load_layout = QVBoxLayout()
+        load_layout.setSpacing(4)
+
+        # Initialize buttons and status labels
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_reference_btn = QPushButton("Load Reference Image")
+        self.load_cells_btn = QPushButton("Load Cell Stack")
+
+        self.bead_status = QLabel("Not loaded")
+        self.reference_status = QLabel("Not loaded")
+        self.cell_status = QLabel("Not loaded")
+
+        # Add widgets with their status labels
+        for btn, label in [
+            (self.load_beads_btn, self.bead_status),
+            (self.load_reference_btn, self.reference_status),
+            (self.load_cells_btn, self.cell_status)
+        ]:
+            btn_layout = QHBoxLayout()
+            btn_layout.addWidget(btn)
+            btn_layout.addWidget(label)
+            load_layout.addLayout(btn_layout)
+
+        load_group.setLayout(load_layout)
+        return load_group
+
+    def _update_ui_state(self):
+        """Update UI elements based on available data and current state"""
+        # Update data status indicators with shape information
+        bead_shape = self.data_manager.bead_stack.shape if self.data_manager.bead_stack is not None else None
+        ref_shape = self.data_manager.reference_image.shape if self.data_manager.reference_image is not None else None
+        cell_shape = self.data_manager.cell_stack.shape if self.data_manager.cell_stack is not None else None
+
+        self.bead_status.setText(f"Loaded: {bead_shape}" if bead_shape else "Not loaded")
+        self.reference_status.setText(f"Loaded: {ref_shape}" if ref_shape else "Not loaded")
+        self.cell_status.setText(f"Loaded: {cell_shape}" if cell_shape else "Not loaded")
+
+        # Rest of the method remains the same...
+        can_register = (
+                self.data_manager.bead_stack is not None and
+                self.data_manager.reference_image is not None
+        )
+        self.registration_check.setEnabled(can_register)
+        self.registration_mode_combo.setEnabled(can_register and self.registration_check.isChecked())
+
+        # Show/hide registration note based on data availability
+        self.registration_note.setVisible(not can_register)
+
+        # Update preview radio buttons
+        self.bead_radio.setEnabled(self.data_manager.bead_stack is not None)
+        self.reference_radio.setEnabled(self.data_manager.reference_image is not None)
+        self.cell_radio.setEnabled(self.data_manager.cell_stack is not None)
+
+        # Update cell-specific controls
+        cell_data_loaded = self.data_manager.cell_stack is not None
+        self.cell_intensity_slider.setEnabled(cell_data_loaded)
+        self.cell_min_spinbox.setEnabled(cell_data_loaded)
+        self.cell_max_spinbox.setEnabled(cell_data_loaded)
+        self.cell_gaussian_check.setEnabled(cell_data_loaded)
+        self.cell_gaussian_sigma_spin.setEnabled(
+            cell_data_loaded and self.cell_gaussian_check.isChecked()
+        )
+
+        # Enable preprocessing button if we have any data
+        has_data = any([
+            self.data_manager.bead_stack is not None,
+            self.data_manager.reference_image is not None,
+            self.data_manager.cell_stack is not None
+        ])
+        self.preprocess_btn.setEnabled(has_data)
+
     def cleanup(self):
         """Clean up resources and event connections."""
         # Ensure preview is disabled
@@ -493,38 +568,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         main_layout.setContentsMargins(6, 6, 6, 6)
         return main_layout
 
-    def _create_load_group(self):
-        """Create the data loading group."""
-        load_group = QGroupBox("Load Data")
-        load_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        load_layout = QVBoxLayout()
-        load_layout.setSpacing(4)
-
-        # Initialize buttons and status labels
-        self.load_beads_btn = QPushButton("Load Active Layer as Bead Stack")
-        self.load_reference_btn = QPushButton("Load Active Layer as Reference")
-        self.load_cells_btn = QPushButton("Load Active Layer as Cell Stack")
-
-        self.bead_status = QLabel("Bead Stack: Not loaded")
-        self.reference_status = QLabel("Reference Image: Not loaded")
-        self.cell_status = QLabel("Cell Stack: Not loaded")
-
-        # Add widgets with their status labels
-        buttons_and_labels = [
-            (self.load_beads_btn, self.bead_status),
-            (self.load_reference_btn, self.reference_status),
-            (self.load_cells_btn, self.cell_status)
-        ]
-
-        for btn, label in buttons_and_labels:
-            btn_layout = QHBoxLayout()
-            btn_layout.addWidget(btn)
-            btn_layout.addWidget(label)
-            load_layout.addLayout(btn_layout)
-
-        load_group.setLayout(load_layout)
-        return load_group
-
     def _create_preview_selection_group(self):
         """Create the preview selection group."""
         preview_select_group = QGroupBox("Preview Data Type")
@@ -637,51 +680,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         status_layout.addWidget(self.status_label)
         status_frame.setLayout(status_layout)
         return status_frame
-
-    def _update_ui_state(self):
-        """Update UI elements based on available data and current state"""
-        # Update data status indicators
-        bead_status = "Loaded" if self.data_manager.bead_stack is not None else "Not loaded"
-        ref_status = "Loaded" if self.data_manager.reference_image is not None else "Not loaded"
-        cell_status = "Loaded" if self.data_manager.cell_stack is not None else "Not loaded"
-
-        self.bead_status.setText(f"Bead Stack: {bead_status}")
-        self.reference_status.setText(f"Reference Image: {ref_status}")
-        self.cell_status.setText(f"Cell Stack: {cell_status}")
-
-        # Update registration controls
-        can_register = (
-                self.data_manager.bead_stack is not None and
-                self.data_manager.reference_image is not None
-        )
-        self.registration_check.setEnabled(can_register)
-        self.registration_mode_combo.setEnabled(can_register and self.registration_check.isChecked())
-
-        # Show/hide registration note based on data availability
-        self.registration_note.setVisible(not can_register)
-
-        # Update preview radio buttons
-        self.bead_radio.setEnabled(self.data_manager.bead_stack is not None)
-        self.reference_radio.setEnabled(self.data_manager.reference_image is not None)
-        self.cell_radio.setEnabled(self.data_manager.cell_stack is not None)
-
-        # Update cell-specific controls
-        cell_data_loaded = self.data_manager.cell_stack is not None
-        self.cell_intensity_slider.setEnabled(cell_data_loaded)
-        self.cell_min_spinbox.setEnabled(cell_data_loaded)
-        self.cell_max_spinbox.setEnabled(cell_data_loaded)
-        self.cell_gaussian_check.setEnabled(cell_data_loaded)
-        self.cell_gaussian_sigma_spin.setEnabled(
-            cell_data_loaded and self.cell_gaussian_check.isChecked()
-        )
-
-        # Enable preprocessing button if we have any data
-        has_data = any([
-            self.data_manager.bead_stack is not None,
-            self.data_manager.reference_image is not None,
-            self.data_manager.cell_stack is not None
-        ])
-        self.preprocess_btn.setEnabled(has_data)
 
     def _connect_signals(self):
         """Connect widget signals"""
