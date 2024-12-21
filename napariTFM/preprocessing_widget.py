@@ -43,17 +43,128 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
+    def _create_load_group(self):
+        """Create the data loading group."""
+        load_group = QGroupBox("Data")
+        load_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        load_layout = QVBoxLayout()
+        load_layout.setSpacing(4)
+
+        # Initialize buttons and status labels
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_reference_btn = QPushButton("Load Reference Image")
+        self.load_cells_btn = QPushButton("Load Cell Stack")
+        self.clear_data_btn = QPushButton("Clear All Data")
+        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
+
+        self.bead_status = QLabel("Not loaded")
+        self.reference_status = QLabel("Not loaded")
+        self.cell_status = QLabel("Not loaded")
+
+        # Add widgets with their status labels
+        for btn, label in [
+            (self.load_beads_btn, self.bead_status),
+            (self.load_reference_btn, self.reference_status),
+            (self.load_cells_btn, self.cell_status)
+        ]:
+            btn_layout = QHBoxLayout()
+            btn_layout.addWidget(btn)
+            btn_layout.addWidget(label)
+            load_layout.addLayout(btn_layout)
+
+        # Add clear button at the bottom
+        load_layout.addWidget(self.clear_data_btn)
+
+        load_group.setLayout(load_layout)
+        return load_group
+
+    def _load_active_layer(self, data_type: str):
+        """Load the currently active layer as the specified data type"""
+        active_layer = self._get_active_image_layer()
+        if active_layer is None:
+            self._show_warning("No active image layer found")
+            return
+
+        try:
+            if data_type == 'beads':
+                self.data_manager.set_preprocessing_bead_stack(active_layer.data)
+            elif data_type == 'reference':
+                self.data_manager.set_preprocessing_reference_image(active_layer.data)
+            elif data_type == 'cells':
+                self.data_manager.set_preprocessing_cell_stack(active_layer.data)
+            else:
+                raise ValueError(f"Invalid data type: {data_type}")
+
+            self._update_ui_state()
+            self._update_status(f"Loaded {data_type} data: {active_layer.data.shape}")
+
+        except Exception as e:
+            self._show_warning(str(e))
+
+    def _connect_signals(self):
+        """Connect widget signals"""
+        # Existing connections
+        self.load_beads_btn.clicked.connect(lambda: self._load_active_layer('beads'))
+        self.load_reference_btn.clicked.connect(lambda: self._load_active_layer('reference'))
+        self.load_cells_btn.clicked.connect(lambda: self._load_active_layer('cells'))
+        self.clear_data_btn.clicked.connect(self._clear_data)
+
+        # Add missing connections
+        self.preview_check.toggled.connect(self.toggle_preview)
+        self.preprocess_btn.clicked.connect(self.run_preprocessing)
+        self.reset_btn.clicked.connect(self.reset_parameters)
+
+        # Parameter change connections
+        self.intensity_slider.valueChanged.connect(self._update_intensity_labels)
+        self.min_spinbox.valueChanged.connect(self._update_slider_from_spinbox)
+        self.max_spinbox.valueChanged.connect(self._update_slider_from_spinbox)
+
+        self.cell_intensity_slider.valueChanged.connect(self._update_cell_intensity_labels)
+        self.cell_min_spinbox.valueChanged.connect(self._update_cell_slider_from_spinbox)
+        self.cell_max_spinbox.valueChanged.connect(self._update_cell_slider_from_spinbox)
+
+        # Gaussian filter connections
+        self.gaussian_check.toggled.connect(lambda checked: self.gaussian_sigma_spin.setEnabled(checked))
+        self.gaussian_check.toggled.connect(self.update_parameters)
+        self.gaussian_sigma_spin.valueChanged.connect(self.update_parameters)
+
+        self.cell_gaussian_check.toggled.connect(lambda checked: self.cell_gaussian_sigma_spin.setEnabled(checked))
+        self.cell_gaussian_check.toggled.connect(self.update_parameters)
+        self.cell_gaussian_sigma_spin.valueChanged.connect(self.update_parameters)
+
+        # Registration connections
+        self.registration_check.toggled.connect(self._update_registration_controls)
+        self.registration_mode_combo.currentTextChanged.connect(self.update_parameters)
+
+        # Data type selection connections
+        self.bead_radio.toggled.connect(self._on_data_type_changed)
+        self.reference_radio.toggled.connect(self._on_data_type_changed)
+        self.cell_radio.toggled.connect(self._on_data_type_changed)
+
+    def _clear_data(self):
+        """Clear all preprocessing data"""
+        try:
+            # Clear data from manager
+            self.data_manager.clear_preprocessing_data()
+
+            # Update UI
+            self._update_ui_state()
+            self._update_status("All preprocessing data cleared")
+
+        except Exception as e:
+            self._handle_error(str(e))
+
     def toggle_preview(self, enabled: bool):
         """Toggle preview mode"""
         try:
             if enabled:
                 # Get current data type
                 if self.bead_radio.isChecked():
-                    data = self.data_manager.bead_stack
+                    data = self.data_manager.preprocessing_bead_stack
                 elif self.reference_radio.isChecked():
-                    data = self.data_manager.reference_image
+                    data = self.data_manager.preprocessing_reference_image
                 else:
-                    data = self.data_manager.cell_stack
+                    data = self.data_manager.preprocessing_cell_stack
 
                 if data is None:
                     raise ProcessingError(f"No {self.current_data_type} data available")
@@ -151,9 +262,9 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
             # Process all data with progress updates
             results = self.preprocessor.preprocess_all(
-                bead_stack=self.data_manager.bead_stack,
-                reference_image=self.data_manager.reference_image,
-                cell_stack=self.data_manager.cell_stack,
+                bead_stack=self.data_manager.preprocessing_bead_stack,
+                reference_image=self.data_manager.preprocessing_reference_image,
+                cell_stack=self.data_manager.preprocessing_cell_stack,
                 progress_callback=lambda progress, message: self._update_status(message, int(progress))
             )
 
@@ -190,51 +301,21 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 str(e)
             ))
 
-    def _create_load_group(self):
-        """Create the data loading group."""
-        load_group = QGroupBox("Data")
-        load_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        load_layout = QVBoxLayout()
-        load_layout.setSpacing(4)
-
-        # Initialize buttons and status labels
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.load_reference_btn = QPushButton("Load Reference Image")
-        self.load_cells_btn = QPushButton("Load Cell Stack")
-
-        self.bead_status = QLabel("Not loaded")
-        self.reference_status = QLabel("Not loaded")
-        self.cell_status = QLabel("Not loaded")
-
-        # Add widgets with their status labels
-        for btn, label in [
-            (self.load_beads_btn, self.bead_status),
-            (self.load_reference_btn, self.reference_status),
-            (self.load_cells_btn, self.cell_status)
-        ]:
-            btn_layout = QHBoxLayout()
-            btn_layout.addWidget(btn)
-            btn_layout.addWidget(label)
-            load_layout.addLayout(btn_layout)
-
-        load_group.setLayout(load_layout)
-        return load_group
-
     def _update_ui_state(self):
         """Update UI elements based on available data and current state"""
         # Update data status indicators with shape information
-        bead_shape = self.data_manager.bead_stack.shape if self.data_manager.bead_stack is not None else None
-        ref_shape = self.data_manager.reference_image.shape if self.data_manager.reference_image is not None else None
-        cell_shape = self.data_manager.cell_stack.shape if self.data_manager.cell_stack is not None else None
+        bead_shape = self.data_manager.preprocessing_bead_stack.shape if self.data_manager.preprocessing_bead_stack is not None else None
+        ref_shape = self.data_manager.preprocessing_reference_image.shape if self.data_manager.preprocessing_reference_image is not None else None
+        cell_shape = self.data_manager.preprocessing_cell_stack.shape if self.data_manager.preprocessing_cell_stack is not None else None
 
         self.bead_status.setText(f"Loaded: {bead_shape}" if bead_shape else "Not loaded")
         self.reference_status.setText(f"Loaded: {ref_shape}" if ref_shape else "Not loaded")
         self.cell_status.setText(f"Loaded: {cell_shape}" if cell_shape else "Not loaded")
 
-        # Rest of the method remains the same...
+        # Update registration controls
         can_register = (
-                self.data_manager.bead_stack is not None and
-                self.data_manager.reference_image is not None
+                self.data_manager.preprocessing_bead_stack is not None and
+                self.data_manager.preprocessing_reference_image is not None
         )
         self.registration_check.setEnabled(can_register)
         self.registration_mode_combo.setEnabled(can_register and self.registration_check.isChecked())
@@ -243,12 +324,12 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.registration_note.setVisible(not can_register)
 
         # Update preview radio buttons
-        self.bead_radio.setEnabled(self.data_manager.bead_stack is not None)
-        self.reference_radio.setEnabled(self.data_manager.reference_image is not None)
-        self.cell_radio.setEnabled(self.data_manager.cell_stack is not None)
+        self.bead_radio.setEnabled(self.data_manager.preprocessing_bead_stack is not None)
+        self.reference_radio.setEnabled(self.data_manager.preprocessing_reference_image is not None)
+        self.cell_radio.setEnabled(self.data_manager.preprocessing_cell_stack is not None)
 
         # Update cell-specific controls
-        cell_data_loaded = self.data_manager.cell_stack is not None
+        cell_data_loaded = self.data_manager.preprocessing_cell_stack is not None
         self.cell_intensity_slider.setEnabled(cell_data_loaded)
         self.cell_min_spinbox.setEnabled(cell_data_loaded)
         self.cell_max_spinbox.setEnabled(cell_data_loaded)
@@ -259,9 +340,9 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Enable preprocessing button if we have any data
         has_data = any([
-            self.data_manager.bead_stack is not None,
-            self.data_manager.reference_image is not None,
-            self.data_manager.cell_stack is not None
+            self.data_manager.preprocessing_bead_stack is not None,
+            self.data_manager.preprocessing_reference_image is not None,
+            self.data_manager.preprocessing_cell_stack is not None
         ])
         self.preprocess_btn.setEnabled(has_data)
 
@@ -443,29 +524,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         cell_params_group.setLayout(cell_params_layout)
         return cell_params_group
-
-    def _load_active_layer(self, data_type: str):
-        """Load the currently active layer as the specified data type"""
-        active_layer = self._get_active_image_layer()
-        if active_layer is None:
-            self._show_warning("No active image layer found")
-            return
-
-        try:
-            if data_type == 'beads':
-                self.data_manager.set_bead_stack(active_layer.data)
-            elif data_type == 'reference':
-                self.data_manager.set_reference_image(active_layer.data)
-            elif data_type == 'cells':
-                self.data_manager.set_cell_stack(active_layer.data)
-            else:
-                raise ValueError(f"Invalid data type: {data_type}")
-
-            self._update_ui_state()
-            self._update_status(f"Loaded {data_type} data: {active_layer.data.shape}")
-
-        except Exception as e:
-            self._show_warning(str(e))
 
     def _update_cell_intensity_labels(self, values):
         """Update cell intensity range spinboxes with slider values"""
@@ -680,49 +738,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         status_layout.addWidget(self.status_label)
         status_frame.setLayout(status_layout)
         return status_frame
-
-    def _connect_signals(self):
-        """Connect widget signals"""
-        # Connect load buttons
-        self.load_beads_btn.clicked.connect(lambda: self._load_active_layer('beads'))
-        self.load_reference_btn.clicked.connect(lambda: self._load_active_layer('reference'))
-        self.load_cells_btn.clicked.connect(lambda: self._load_active_layer('cells'))
-
-        # Preview data type selection
-        self.bead_radio.toggled.connect(self._on_preview_type_changed)
-        self.reference_radio.toggled.connect(self._on_preview_type_changed)
-        self.cell_radio.toggled.connect(self._on_preview_type_changed)
-
-        # Parameter controls - Bead/Reference
-        self.intensity_slider.valueChanged.connect(self._update_intensity_labels)
-        self.min_spinbox.valueChanged.connect(self._update_slider_from_spinbox)
-        self.max_spinbox.valueChanged.connect(self._update_slider_from_spinbox)
-
-        # Gaussian filter - Bead/Reference
-        self.gaussian_check.toggled.connect(self.gaussian_sigma_spin.setEnabled)
-        self.gaussian_check.toggled.connect(self.update_parameters)
-        self.gaussian_sigma_spin.valueChanged.connect(self.update_parameters)
-
-        # Parameter controls - Cell
-        self.cell_intensity_slider.valueChanged.connect(self._update_cell_intensity_labels)
-        self.cell_min_spinbox.valueChanged.connect(self._update_cell_slider_from_spinbox)
-        self.cell_max_spinbox.valueChanged.connect(self._update_cell_slider_from_spinbox)
-
-        # Gaussian filter - Cell
-        self.cell_gaussian_check.toggled.connect(self.cell_gaussian_sigma_spin.setEnabled)
-        self.cell_gaussian_check.toggled.connect(self.update_parameters)
-        self.cell_gaussian_sigma_spin.valueChanged.connect(self.update_parameters)
-
-        # Registration
-        self.registration_check.toggled.connect(self._update_registration_controls)
-        self.registration_mode_combo.currentTextChanged.connect(self.update_parameters)
-
-        # Preview
-        self.preview_check.toggled.connect(self.toggle_preview)
-
-        # Action buttons
-        self.preprocess_btn.clicked.connect(self.run_preprocessing)
-        self.reset_btn.clicked.connect(self.reset_parameters)
 
     def _update_cell_slider_from_spinbox(self):
         """Update the cell slider values when spinboxes change"""

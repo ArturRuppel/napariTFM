@@ -33,6 +33,225 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
+    def _connect_signals(self):
+        """Connect all widget signals."""
+        # Data loading connections
+        self.load_beads_btn.clicked.connect(lambda: self._load_data('beads'))
+        self.load_reference_btn.clicked.connect(lambda: self._load_data('reference'))
+        self.clear_data_btn.clicked.connect(self._clear_data)
+
+        # Analysis buttons
+        self.preview_btn.clicked.connect(self.preview_displacement)
+        self.analyze_btn.clicked.connect(self.analyze_all_frames)
+
+        # Parameter change connections
+        for spin in self.parameter_spins.values():
+            spin.valueChanged.connect(self.update_parameters)
+
+    def preview_displacement(self):
+        """Preview displacement calculation on current frame."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating displacement...", 0)
+
+            current_frame = self.viewer.dims.current_step[0]
+            reference = self.data_manager.displacement_reference_image
+            bead_stack = self.data_manager.displacement_bead_stack
+            moving = bead_stack[current_frame]
+
+            self.current_flow = self.analyzer.calculate_flow(reference, moving)
+
+            # Delegate visualization to visualization manager
+            self.visualization_manager.visualize_displacement_preview(
+                self.current_flow,
+                reference,
+                moving,
+                self.visualization_params['d_max'].value(),
+                self.visualization_params['vector_stride'].value(),
+                self.visualization_params['arrow_scale'].value()
+            )
+
+            # Update colorbar
+            self.colorbar_manager.update_limits(0, self.visualization_params['d_max'].value())
+
+            # Update status with displacement statistics
+            stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
+            self._update_status(
+                f"Max displacement: {stats['max']:.2f} pixels\n"
+                f"Mean displacement: {stats['mean']:.2f} pixels",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self._set_controls_enabled(True)
+
+    def analyze_all_frames(self):
+        """Analyze displacement for all frames."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Starting analysis...", 0)
+
+            reference = self.data_manager.displacement_reference_image
+            bead_stack = self.data_manager.displacement_bead_stack
+
+            # Process all frames
+            flows = []
+            for i in range(len(bead_stack)):
+                progress = (i + 1) / len(bead_stack) * 100
+                self._update_status(f"Processing frame {i + 1}/{len(bead_stack)}...", progress)
+
+                flow = self.analyzer.calculate_flow(reference, bead_stack[i])
+                flows.append(flow)
+
+            # Package results
+            results = {
+                'flows': flows,
+                'parameters': self.analyzer.params,
+                'visualization_params': {
+                    'd_max': self.visualization_params['d_max'].value(),
+                    'vector_stride': self.visualization_params['vector_stride'].value(),
+                    'arrow_scale': self.visualization_params['arrow_scale'].value()
+                }
+            }
+
+            # Store results and delegate visualization
+            self.data_manager.displacement_results = results
+            self.visualization_manager.visualize_displacement_results(results)
+
+            # Emit results and update status
+            self.displacement_calculated.emit(results)
+            self._update_status("Analysis complete", 100)
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self._set_controls_enabled(True)
+
+    def _update_ui_state(self):
+        """Update UI elements based on current state."""
+        # Only look at displacement input data, ignore preprocessing
+        reference = self.data_manager.displacement_reference_image
+        bead_stack = self.data_manager.displacement_bead_stack
+
+        has_reference = reference is not None
+        has_beads = bead_stack is not None
+
+        # Update status labels with shape information if data exists
+        if has_reference:
+            self.reference_status.setText(f"Loaded: {reference.shape}")
+        else:
+            self.reference_status.setText("Not loaded")
+
+        if has_beads:
+            self.bead_status.setText(f"Loaded: {bead_stack.shape}")
+        else:
+            self.bead_status.setText("Not loaded")
+
+        can_analyze = has_beads and has_reference
+        self.analyze_btn.setEnabled(can_analyze)
+        self.preview_btn.setEnabled(can_analyze)
+
+        if not can_analyze:
+            missing = []
+            if not has_beads:
+                missing.append("bead stack")
+            if not has_reference:
+                missing.append("reference image")
+            self.status_label.setText(f"Missing required data: {', '.join(missing)}")
+        else:
+            self.status_label.setText("Ready for analysis")
+
+    def _validate_input_data(self) -> bool:
+        """Validate required input data is available."""
+        reference = self.data_manager.displacement_reference_image
+        bead_stack = self.data_manager.displacement_bead_stack
+
+        if reference is None:
+            QMessageBox.warning(self, "Error", "Reference image required")
+            return False
+
+        if bead_stack is None:
+            QMessageBox.warning(self, "Error", "Bead stack required")
+            return False
+
+        return True
+    def _create_data_loading_group(self) -> QGroupBox:
+        """Create the data loading group."""
+        group = QGroupBox("Data")
+        layout = QVBoxLayout()
+
+        # Load buttons and status labels
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_reference_btn = QPushButton("Load Reference Image")
+        self.clear_data_btn = QPushButton("Clear All Data")
+        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
+
+        self.bead_status = QLabel("Not loaded")
+        self.reference_status = QLabel("Not loaded")
+
+        # Add with status labels
+        for btn, status in [
+            (self.load_beads_btn, self.bead_status),
+            (self.load_reference_btn, self.reference_status),
+        ]:
+            row = QHBoxLayout()
+            row.addWidget(btn)
+            row.addWidget(status)
+            layout.addLayout(row)
+
+        # Add clear button
+        layout.addWidget(self.clear_data_btn)
+
+        group.setLayout(layout)
+        return group
+
+    def _load_data(self, data_type: str):
+        """Load data from active layer."""
+        active_layer = self._get_active_image_layer()
+        if active_layer is None:
+            QMessageBox.warning(self, "Warning", "No active image layer")
+            return
+
+        try:
+            data = active_layer.data
+
+            if data_type == 'beads':
+                if data.ndim == 2:
+                    data = data[np.newaxis, ...]
+                if data.ndim != 3:
+                    raise ValueError("Bead stack must be 3D (frames, height, width)")
+                self.data_manager.set_displacement_bead_stack(data)
+            else:  # reference
+                if data.ndim != 2:
+                    raise ValueError("Reference image must be 2D (height, width)")
+                self.data_manager.set_displacement_reference_image(data)
+
+            self._update_ui_state()
+
+        except ValueError as e:
+            QMessageBox.warning(self, "Error", str(e))
+
+    def _clear_data(self):
+        """Clear all displacement analysis data"""
+        try:
+            # Clear data from manager
+            self.data_manager.clear_displacement_data()
+
+            # Update UI
+            self._update_ui_state()
+            self._update_status("All displacement analysis data cleared")
+
+        except Exception as e:
+            self._handle_error(str(e))
+
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
@@ -81,30 +300,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         self.setLayout(main_layout)
         self._register_controls()
-
-    def _create_data_loading_group(self) -> QGroupBox:
-        """Create the data loading group."""
-        group = QGroupBox("Data")
-        layout = QVBoxLayout()
-
-        # Load buttons and status labels
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.load_reference_btn = QPushButton("Load Reference Image")
-        self.bead_status = QLabel("Not loaded")
-        self.reference_status = QLabel("Not loaded")
-
-        # Add with status labels
-        for btn, status in [
-            (self.load_beads_btn, self.bead_status),
-            (self.load_reference_btn, self.reference_status),
-        ]:
-            row = QHBoxLayout()
-            row.addWidget(btn)
-            row.addWidget(status)
-            layout.addLayout(row)
-
-        group.setLayout(layout)
-        return group
 
     def _create_parameters_group(self) -> QGroupBox:
         """Create the analysis parameters group."""
@@ -208,178 +403,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         frame.setLayout(layout)
         return frame
 
-    def _connect_signals(self):
-        """Connect all widget signals."""
-        self.load_beads_btn.clicked.connect(lambda: self._load_data('beads'))
-        self.load_reference_btn.clicked.connect(lambda: self._load_data('reference'))
-
-        for spin in self.parameter_spins.values():
-            spin.valueChanged.connect(self.update_parameters)
-
-        self.preview_btn.clicked.connect(self.preview_displacement)
-        self.analyze_btn.clicked.connect(self.analyze_all_frames)
-        self.viewer.dims.events.current_step.connect(self._on_frame_changed)
-
-    def _load_data(self, data_type: str):
-        """Load data from active layer."""
-        active_layer = self._get_active_image_layer()
-        if active_layer is None:
-            QMessageBox.warning(self, "Warning", "No active image layer")
-            return
-
-        try:
-            data = active_layer.data
-
-            if data_type == 'beads':
-                if data.ndim == 2:
-                    data = data[np.newaxis, ...]
-                if data.ndim != 3:
-                    raise ValueError("Bead stack must be 3D (frames, height, width)")
-                self.data_manager.bead_stack = data
-            else:  # reference
-                if data.ndim != 2:
-                    raise ValueError("Reference image must be 2D (height, width)")
-                self.data_manager.reference_image = data
-
-            self._update_ui_state()
-
-        except ValueError as e:
-            QMessageBox.warning(self, "Error", str(e))
-
-    def _update_ui_state(self):
-        """Update UI elements based on current state."""
-        reference = (self.data_manager.preprocessed_reference or
-                     self.data_manager.reference_image)
-        bead_stack = (self.data_manager.preprocessed_bead_stack or
-                      self.data_manager.bead_stack)
-
-        has_reference = reference is not None
-        has_beads = bead_stack is not None
-
-        self.reference_status.setText("Loaded: " + str(reference.shape) if has_reference else "Not loaded")
-        self.bead_status.setText("Loaded: " + str(bead_stack.shape) if has_beads else "Not loaded")
-
-        can_analyze = has_beads and has_reference
-        self.analyze_btn.setEnabled(can_analyze)
-        self.preview_btn.setEnabled(can_analyze)
-
-        if not can_analyze:
-            missing = []
-            if not has_beads:
-                missing.append("bead stack")
-            if not has_reference:
-                missing.append("reference image")
-            self.status_label.setText(f"Missing required data: {', '.join(missing)}")
-        else:
-            self.status_label.setText("Ready for analysis")
-
-    def preview_displacement(self):
-        """Preview displacement calculation on current frame."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating displacement...", 0)
-
-            current_frame = self.viewer.dims.current_step[0]
-            reference = (self.data_manager.preprocessed_reference or
-                         self.data_manager.reference_image)
-            bead_stack = (self.data_manager.preprocessed_bead_stack or
-                          self.data_manager.bead_stack)
-            moving = bead_stack[current_frame]
-
-            self.current_flow = self.analyzer.calculate_flow(reference, moving)
-
-            # Delegate visualization to visualization manager
-            self.visualization_manager.visualize_displacement_preview(
-                self.current_flow,
-                reference,
-                moving,
-                self.visualization_params['d_max'].value(),
-                self.visualization_params['vector_stride'].value(),
-                self.visualization_params['arrow_scale'].value()
-            )
-
-            # Update colorbar
-            self.colorbar_manager.update_limits(0, self.visualization_params['d_max'].value())
-
-            # Update status with displacement statistics
-            stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
-            self._update_status(
-                f"Max displacement: {stats['max']:.2f} pixels\n"
-                f"Mean displacement: {stats['mean']:.2f} pixels",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self._set_controls_enabled(True)
-
-    def analyze_all_frames(self):
-        """Analyze displacement for all frames."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Starting analysis...", 0)
-
-            reference = (self.data_manager.preprocessed_reference or
-                         self.data_manager.reference_image)
-            bead_stack = (self.data_manager.preprocessed_bead_stack or
-                          self.data_manager.bead_stack)
-
-            # Process all frames
-            flows = []
-            for i in range(len(bead_stack)):
-                progress = (i + 1) / len(bead_stack) * 100
-                self._update_status(f"Processing frame {i + 1}/{len(bead_stack)}...", progress)
-
-                flow = self.analyzer.calculate_flow(reference, bead_stack[i])
-                flows.append(flow)
-
-            # Package results
-            results = {
-                'flows': flows,
-                'parameters': self.analyzer.params,
-                'visualization_params': {
-                    'd_max': self.visualization_params['d_max'].value(),
-                    'vector_stride': self.visualization_params['vector_stride'].value(),
-                    'arrow_scale': self.visualization_params['arrow_scale'].value()
-                }
-            }
-
-            # Store results and update visualization
-            self.data_manager.displacement_results = results
-            self.visualization_manager.visualize_displacement_results(results)
-
-            # Emit results and update status
-            self.displacement_calculated.emit(results)
-            self._update_status("Analysis complete", 100)
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self._set_controls_enabled(True)
-
-    def _validate_input_data(self) -> bool:
-        """Validate required input data is available."""
-        reference = (self.data_manager.preprocessed_reference or
-                     self.data_manager.reference_image)
-        bead_stack = (self.data_manager.preprocessed_bead_stack or
-                      self.data_manager.bead_stack)
-
-        if reference is None:
-            QMessageBox.warning(self, "Error", "Reference image required")
-            return False
-
-        if bead_stack is None:
-            QMessageBox.warning(self, "Error", "Bead stack required")
-            return False
-
-        return True
 
     def update_parameters(self):
         """Update analysis parameters."""

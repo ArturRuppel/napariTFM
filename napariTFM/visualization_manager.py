@@ -114,7 +114,7 @@ class VisualizationManager(ErrorHandlingMixin):
                 if results and 'vector_cache' in results:
                     cache = results['vector_cache']
                     if current_frame < len(cache['data']):
-                        vector_layer = self._layers.get('displacement_vectors')
+                        vector_layer = self._layers.get('vectors')
                         if vector_layer is not None:
                             with self.viewer.events.blocker_all():
                                 vector_layer.data = cache['data'][current_frame]
@@ -190,10 +190,8 @@ class VisualizationManager(ErrorHandlingMixin):
 
             flows = results['flows']
             vis_params = results['visualization_params']
-            reference = (self.data_manager.preprocessed_reference or
-                         self.data_manager.reference_image)
-            bead_stack = (self.data_manager.preprocessed_bead_stack or
-                          self.data_manager.bead_stack)
+            reference = self.data_manager.displacement_reference_image
+            bead_stack = self.data_manager.displacement_bead_stack
 
             # Create visualization stacks
             num_frames = len(flows)
