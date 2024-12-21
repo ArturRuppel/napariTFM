@@ -34,6 +34,129 @@ class VisualizationManager(ErrorHandlingMixin):
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
 
+    def update_preprocessing_visualization(self, results: Dict) -> None:
+        """
+        Update visualization after preprocessing.
+
+        Parameters
+        ----------
+        results : dict
+            Dictionary containing preprocessing results
+        """
+        if 'beads' in results and 'reference' in results:
+            processed_beads, _ = results['beads']
+            processed_reference, _ = results['reference']
+            if processed_beads is not None and processed_reference is not None:
+                # Create the bead-reference overlay
+                self.create_bead_overlay(processed_beads, processed_reference)
+
+        # Keep all existing visualization code exactly the same
+        if 'beads' in results:
+            processed_beads, _ = results['beads']
+            if processed_beads is not None:
+                if 'Preprocessed Beads' in self.viewer.layers:
+                    self.viewer.layers.remove('Preprocessed Beads')
+                self.viewer.add_image(
+                    processed_beads,
+                    name='Preprocessed Beads',
+                    colormap='green',
+                    visible=True
+                )
+
+        if 'reference' in results:
+            processed_reference, _ = results['reference']
+            if processed_reference is not None:
+                if 'Preprocessed Reference' in self.viewer.layers:
+                    self.viewer.layers.remove('Preprocessed Reference')
+                self.viewer.add_image(
+                    processed_reference,
+                    name='Preprocessed Reference',
+                    colormap='magenta',
+                    visible=True
+                )
+
+        if 'cells' in results:
+            processed_cells, _ = results['cells']
+            if processed_cells is not None:
+                if 'Preprocessed Cells' in self.viewer.layers:
+                    self.viewer.layers.remove('Preprocessed Cells')
+                self.viewer.add_image(
+                    processed_cells,
+                    name='Preprocessed Cells',
+                    colormap='gray',
+                    visible=True
+                )
+
+    def create_bead_overlay(self, bead_stack: np.ndarray, reference_image: np.ndarray) -> None:
+        """Create combined bead-reference overlay layer.
+
+        Parameters
+        ----------
+        bead_stack : np.ndarray
+            Preprocessed bead stack
+        reference_image : np.ndarray
+            Preprocessed reference image
+        """
+        # Remove existing overlay if present
+        if 'Bead Overlay' in self.viewer.layers:
+            self.viewer.layers.remove('Bead Overlay')
+
+        # Create RGB overlay stack
+        overlay_stack = self._create_overlay_stack(bead_stack, reference_image)
+
+        # Add overlay layer
+        self.viewer.add_image(
+            overlay_stack,
+            name='Bead Overlay',
+            visible=True,
+            rgb=True
+        )
+
+    def _create_overlay_stack(self, bead_stack: np.ndarray, reference_image: np.ndarray) -> np.ndarray:
+        """Create RGB overlay stack combining beads (green) and reference (magenta).
+
+        Parameters
+        ----------
+        bead_stack : np.ndarray
+            Bead image stack
+        reference_image : np.ndarray
+            Reference image
+
+        Returns
+        -------
+        np.ndarray
+            RGB overlay stack
+        """
+        # Get dimensions
+        num_frames = len(bead_stack)
+        height, width = bead_stack.shape[1:]
+
+        # Create RGB stack
+        overlay_stack = np.zeros((num_frames, height, width, 3), dtype=float)
+
+        # Normalize reference image
+        reference = reference_image.astype(float)
+        ref_min = reference.min()
+        ref_max = reference.max()
+        if ref_max > ref_min:
+            reference = (reference - ref_min) / (ref_max - ref_min)
+
+        # Process each frame
+        for i in range(num_frames):
+            # Normalize bead frame
+            bead_frame = bead_stack[i].astype(float)
+            bead_min = bead_frame.min()
+            bead_max = bead_frame.max()
+            if bead_max > bead_min:
+                bead_frame = (bead_frame - bead_min) / (bead_max - bead_min)
+
+            # Combine into RGB (magenta reference, green beads)
+            overlay_stack[i, :, :, 0] = reference  # Red channel (for magenta)
+            overlay_stack[i, :, :, 1] = bead_frame  # Green channel
+            overlay_stack[i, :, :, 2] = reference  # Blue channel (for magenta)
+
+        return overlay_stack
+
     def handle_preview(self, frame: Optional[np.ndarray], enable: bool = True, layer_name: str = 'Preview') -> None:
         """Handle preview visualization"""
         try:
@@ -453,42 +576,6 @@ class VisualizationManager(ErrorHandlingMixin):
             colors = plt.cm.viridis(np.zeros(N))
 
         return vectors, colors
-
-
-    def update_preprocessing_visualization(self, results: Dict[str, Tuple[np.ndarray, List[Dict]]]) -> None:
-        """Update preprocessing visualization"""
-        try:
-            # Remove existing preprocessed layers
-            self._clear_layers(['Preprocessed Beads', 'Preprocessed Reference', 'Preprocessed Cells'])
-
-            # Add new layers
-            if 'beads' in results:
-                processed_beads, _ = results['beads']
-                self._layers['preprocessed_beads'] = self.viewer.add_image(
-                    processed_beads,
-                    name='Preprocessed Beads',
-                    visible=True
-                )
-
-            if 'reference' in results:
-                processed_ref, _ = results['reference']
-                self._layers['preprocessed_ref'] = self.viewer.add_image(
-                    processed_ref,
-                    name='Preprocessed Reference',
-                    visible=True
-                )
-
-            if 'cells' in results:
-                processed_cells, _ = results['cells']
-                self._layers['preprocessed_cells'] = self.viewer.add_image(
-                    processed_cells,
-                    name='Preprocessed Cells',
-                    visible=True
-                )
-
-        except Exception as e:
-            logger.error(f"Failed to update preprocessing visualization: {str(e)}")
-            raise
 
     def _create_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
         """Create colored overlay of two images"""
