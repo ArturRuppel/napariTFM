@@ -192,9 +192,6 @@ class VisualizationManager(ErrorHandlingMixin):
     ) -> None:
         """Visualize displacement preview for a single frame."""
         try:
-            # Create overlay
-            overlay = self._create_overlay(reference, moving)
-
             # Scale flow for visualization
             flow_scaled = flow * arrow_scale
 
@@ -208,17 +205,6 @@ class VisualizationManager(ErrorHandlingMixin):
 
             # Add or update visualization layers
             with self.viewer.events.blocker_all():
-                # Update or create overlay layer
-                if 'overlay' in self._layers and self._layers['overlay'] is not None:
-                    self._layers['overlay'].data = overlay
-                else:
-                    self._layers['overlay'] = self.viewer.add_image(
-                        overlay,
-                        name='Displacement Overlay',
-                        rgb=True,
-                        blending='additive'
-                    )
-
                 # Add magnitude
                 magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
                 if d_max is not None:
@@ -259,13 +245,10 @@ class VisualizationManager(ErrorHandlingMixin):
         try:
             flows = results['flows']
             vis_params = results['visualization_params']
-            reference = self.data_manager.displacement_reference_image
-            bead_stack = self.data_manager.displacement_bead_stack
 
             # Create visualization stacks
             num_frames = len(flows)
             magnitudes = np.zeros((num_frames, *flows[0].shape[:2]))
-            overlay_stack = np.zeros((num_frames, *flows[0].shape[:2], 3))
             vector_data_cache = []
             vector_colors_cache = []
 
@@ -276,9 +259,6 @@ class VisualizationManager(ErrorHandlingMixin):
                 if vis_params['d_max'] is not None:
                     magnitude = np.clip(magnitude, 0, vis_params['d_max'])
                 magnitudes[i] = magnitude
-
-                # Create overlay
-                overlay_stack[i] = self._create_overlay(reference, bead_stack[i])
 
                 # Calculate vector data
                 flow_scaled = flows[i] * vis_params['arrow_scale']
@@ -299,17 +279,6 @@ class VisualizationManager(ErrorHandlingMixin):
 
             # Add or update visualization layers
             with self.viewer.events.blocker_all():
-                # Update or create overlay layer
-                if 'overlay' in self._layers and self._layers['overlay'] is not None:
-                    self._layers['overlay'].data = overlay_stack
-                else:
-                    self._layers['overlay'] = self.viewer.add_image(
-                        overlay_stack,
-                        name='Displacement Overlay',
-                        rgb=True,
-                        blending='additive'
-                    )
-
                 # Update or create magnitude layer
                 if 'magnitude' in self._layers and self._layers['magnitude'] is not None:
                     self._layers['magnitude'].data = magnitudes
@@ -576,18 +545,6 @@ class VisualizationManager(ErrorHandlingMixin):
             colors = plt.cm.viridis(np.zeros(N))
 
         return vectors, colors
-
-    def _create_overlay(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
-        """Create colored overlay of two images"""
-        img1_norm = img1.astype(float) / img1.max()
-        img2_norm = img2.astype(float) / img2.max()
-
-        overlay = np.zeros((*img1.shape, 3))
-        overlay[..., 0] = img1_norm * 0.7  # Red channel
-        overlay[..., 1] = img2_norm * 0.7  # Green channel
-        overlay[..., 2] = (img1_norm + img2_norm) * 0.3  # Blue channel
-
-        return np.clip(overlay, 0, 1)
 
     def get_displacement_statistics(self, flow: np.ndarray) -> dict:
         """Calculate displacement statistics."""
