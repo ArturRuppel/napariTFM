@@ -27,11 +27,171 @@ class VisualizationManager(ErrorHandlingMixin):
         self.viewer = viewer
         self.data_manager = data_manager
         self._layers: Dict[str, Any] = {}
-        self._preview_config = PreviewConfig()
 
         # Connect to viewer events
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
+
+    def visualize_displacement_preview(
+            self,
+            flow: np.ndarray,
+            reference: np.ndarray,
+            moving: np.ndarray,
+            d_max: float,
+            vector_stride: int,
+            arrow_scale: float
+    ) -> None:
+        """Visualize displacement preview for a single frame."""
+        try:
+            # Create overlay
+            overlay = self._create_overlay(reference, moving)
+
+            # Scale flow for visualization
+            flow_scaled = flow * arrow_scale
+
+            # Create vector data
+            vectors, colors = self._create_vector_visualization(
+                flow_scaled,
+                flow,
+                vector_stride,
+                d_max
+            )
+
+            # Add or update visualization layers
+            with self.viewer.events.blocker_all():
+                # Update or create overlay layer
+                if 'overlay' in self._layers and self._layers['overlay'] is not None:
+                    self._layers['overlay'].data = overlay
+                else:
+                    self._layers['overlay'] = self.viewer.add_image(
+                        overlay,
+                        name='Displacement Overlay',
+                        rgb=True,
+                        blending='additive'
+                    )
+
+                # Add magnitude
+                magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
+                if d_max is not None:
+                    magnitude = np.clip(magnitude, 0, d_max)
+
+                if 'magnitude' in self._layers and self._layers['magnitude'] is not None:
+                    self._layers['magnitude'].data = magnitude
+                else:
+                    self._layers['magnitude'] = self.viewer.add_image(
+                        magnitude,
+                        name='Displacement Magnitude',
+                        colormap='viridis',
+                        blending='additive'
+                    )
+
+                # Update or create vector layer
+                if len(vectors) > 0:
+                    if 'vectors' in self._layers and self._layers['vectors'] is not None:
+                        self._layers['vectors'].data = vectors
+                        self._layers['vectors'].edge_color = colors
+                    else:
+                        self._layers['vectors'] = self.viewer.add_vectors(
+                            vectors,
+                            name='Displacement Vectors',  # Fixed name
+                            edge_color=colors,
+                            edge_width=2,
+                            vector_style='arrow',
+                            blending='additive',
+                            length=1
+                        )
+
+        except Exception as e:
+            logger.error(f"Failed to visualize displacement preview: {str(e)}")
+            raise
+
+    def visualize_displacement_results(self, results: Dict) -> None:
+        """Visualize displacement results for all frames."""
+        try:
+            flows = results['flows']
+            vis_params = results['visualization_params']
+            reference = self.data_manager.displacement_reference_image
+            bead_stack = self.data_manager.displacement_bead_stack
+
+            # Create visualization stacks
+            num_frames = len(flows)
+            magnitudes = np.zeros((num_frames, *flows[0].shape[:2]))
+            overlay_stack = np.zeros((num_frames, *flows[0].shape[:2], 3))
+            vector_data_cache = []
+            vector_colors_cache = []
+
+            # Process each frame
+            for i in range(num_frames):
+                # Calculate magnitude
+                magnitude = np.sqrt(np.sum(flows[i] ** 2, axis=-1))
+                if vis_params['d_max'] is not None:
+                    magnitude = np.clip(magnitude, 0, vis_params['d_max'])
+                magnitudes[i] = magnitude
+
+                # Create overlay
+                overlay_stack[i] = self._create_overlay(reference, bead_stack[i])
+
+                # Calculate vector data
+                flow_scaled = flows[i] * vis_params['arrow_scale']
+                vectors, colors = self._create_vector_visualization(
+                    flow_scaled,
+                    flows[i],
+                    vis_params['vector_stride'],
+                    vis_params['d_max']
+                )
+                vector_data_cache.append(vectors)
+                vector_colors_cache.append(colors)
+
+            # Store vector cache in results
+            results['vector_cache'] = {
+                'data': vector_data_cache,
+                'colors': vector_colors_cache
+            }
+
+            # Add or update visualization layers
+            with self.viewer.events.blocker_all():
+                # Update or create overlay layer
+                if 'overlay' in self._layers and self._layers['overlay'] is not None:
+                    self._layers['overlay'].data = overlay_stack
+                else:
+                    self._layers['overlay'] = self.viewer.add_image(
+                        overlay_stack,
+                        name='Displacement Overlay',
+                        rgb=True,
+                        blending='additive'
+                    )
+
+                # Update or create magnitude layer
+                if 'magnitude' in self._layers and self._layers['magnitude'] is not None:
+                    self._layers['magnitude'].data = magnitudes
+                else:
+                    self._layers['magnitude'] = self.viewer.add_image(
+                        magnitudes,
+                        name='Displacement Magnitude',
+                        colormap='viridis',
+                        blending='additive'
+                    )
+
+                # Update or create vector layer
+                current_frame = self.viewer.dims.current_step[0]
+                if len(vector_data_cache[current_frame]) > 0:
+                    if 'vectors' in self._layers and self._layers['vectors'] is not None:
+                        self._layers['vectors'].data = vector_data_cache[current_frame]
+                        self._layers['vectors'].edge_color = vector_colors_cache[current_frame]
+                    else:
+                        self._layers['vectors'] = self.viewer.add_vectors(
+                            vector_data_cache[current_frame],
+                            name='Displacement Vectors',  # Fixed name
+                            edge_color=vector_colors_cache[current_frame],
+                            edge_width=2,
+                            vector_style='arrow',
+                            blending='additive',
+                            length=1
+                        )
+
+        except Exception as e:
+            logger.error(f"Failed to visualize displacement results: {str(e)}")
+            raise
 
     def update_force_visualization(self, results: Dict[str, Any], visualization_params: Dict[str, Any]) -> None:
         """Update force visualization with current results and parameters."""
@@ -178,88 +338,6 @@ class VisualizationManager(ErrorHandlingMixin):
         except Exception as e:
             self.handle_error(f"Failed to cleanup visualization manager: {str(e)}")
 
-    def visualize_displacement_results(self, results: Dict) -> None:
-        """Visualize displacement results for all frames."""
-        try:
-            # Clear existing layers
-            self._clear_layers([
-                'Displacement Overlay',
-                'Displacement Magnitude',
-                'Flow Vectors'
-            ])
-
-            flows = results['flows']
-            vis_params = results['visualization_params']
-            reference = self.data_manager.displacement_reference_image
-            bead_stack = self.data_manager.displacement_bead_stack
-
-            # Create visualization stacks
-            num_frames = len(flows)
-            magnitudes = np.zeros((num_frames, *flows[0].shape[:2]))
-            overlay_stack = np.zeros((num_frames, *flows[0].shape[:2], 3))
-            vector_data_cache = []
-            vector_colors_cache = []
-
-            # Process each frame
-            for i in range(num_frames):
-                # Calculate magnitude
-                magnitude = np.sqrt(np.sum(flows[i] ** 2, axis=-1))
-                if vis_params['d_max'] is not None:
-                    magnitude = np.clip(magnitude, 0, vis_params['d_max'])
-                magnitudes[i] = magnitude
-
-                # Create overlay
-                overlay_stack[i] = self._create_overlay(reference, bead_stack[i])
-
-                # Calculate vector data
-                flow_scaled = flows[i] * vis_params['arrow_scale']
-                vectors, colors = self._create_vector_visualization(
-                    flow_scaled,
-                    flows[i],
-                    vis_params['vector_stride'],
-                    vis_params['d_max']
-                )
-                vector_data_cache.append(vectors)
-                vector_colors_cache.append(colors)
-
-            # Store vector cache in results
-            results['vector_cache'] = {
-                'data': vector_data_cache,
-                'colors': vector_colors_cache
-            }
-
-            # Add visualization layers
-            with self.viewer.events.blocker_all():
-                self._layers['overlay'] = self.viewer.add_image(
-                    overlay_stack,
-                    name='Displacement Overlay',
-                    rgb=True,
-                    blending='additive'
-                )
-
-                self._layers['magnitude'] = self.viewer.add_image(
-                    magnitudes,
-                    name='Displacement Magnitude',
-                    colormap='viridis',
-                    blending='additive'
-                )
-
-                if len(vector_data_cache[0]) > 0:
-                    # Apply same fixes as in preview visualization
-                    self._layers['vectors'] = self.viewer.add_vectors(
-                        vector_data_cache[0],  # Initial frame
-                        name='Flow Vectors',
-                        edge_color=vector_colors_cache[0],
-                        edge_width=2,
-                        vector_style='arrow',
-                        blending='additive',
-                        length=1  # Use actual vector lengths
-                    )
-
-        except Exception as e:
-            logger.error(f"Failed to visualize displacement results: {str(e)}")
-            raise
-
     def update_displacement_frame(self, frame_index: int) -> None:
         """Update vector visualization for the current frame."""
         if not hasattr(self.data_manager, 'displacement_results'):
@@ -350,73 +428,6 @@ class VisualizationManager(ErrorHandlingMixin):
 
         return vectors, colors
 
-    def visualize_displacement_preview(
-            self,
-            flow: np.ndarray,
-            reference: np.ndarray,
-            moving: np.ndarray,
-            d_max: float,
-            vector_stride: int,
-            arrow_scale: float
-    ) -> None:
-        """Visualize displacement preview for a single frame."""
-        try:
-            # Clear existing layers
-            self._clear_layers([
-                'Displacement Overlay',
-                'Displacement Magnitude',
-                'Displacement Vectors'
-            ])
-
-            # Create overlay
-            overlay = self._create_overlay(reference, moving)
-
-            # Scale flow for visualization
-            flow_scaled = flow * arrow_scale
-
-            # Create vector data
-            vectors, colors = self._create_vector_visualization(
-                flow_scaled,
-                flow,
-                vector_stride,
-                d_max
-            )
-
-            # Add visualization layers
-            with self.viewer.events.blocker_all():
-                self._layers['overlay'] = self.viewer.add_image(
-                    overlay,
-                    name='Displacement Overlay',
-                    rgb=True,
-                    blending='additive'
-                )
-
-                # Add magnitude
-                magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
-                if d_max is not None:
-                    magnitude = np.clip(magnitude, 0, d_max)
-
-                self._layers['magnitude'] = self.viewer.add_image(
-                    magnitude,
-                    name='Displacement Magnitude',
-                    colormap='viridis',
-                    blending='additive'
-                )
-
-                if len(vectors) > 0:
-                    self._layers['vectors'] = self.viewer.add_vectors(
-                        vectors,
-                        name='Flow Vectors',
-                        edge_color=colors,
-                        edge_width=2,
-                        vector_style='arrow',
-                        blending='additive',
-                        length=1  # Use actual vector lengths
-                    )
-
-        except Exception as e:
-            logger.error(f"Failed to visualize displacement preview: {str(e)}")
-            raise
 
     def update_preprocessing_visualization(self, results: Dict[str, Tuple[np.ndarray, List[Dict]]]) -> None:
         """Update preprocessing visualization"""
