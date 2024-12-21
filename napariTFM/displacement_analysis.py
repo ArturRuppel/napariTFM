@@ -42,8 +42,9 @@ class DisplacementAnalyzer:
     def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
         """Calculate optical flow between reference and moving image."""
         # Ensure images are float32 and normalized
-        ref_float = reference.astype(np.float32) / 255.0 if reference.max() > 1 else reference.astype(np.float32)
-        mov_float = moving.astype(np.float32) / 255.0 if moving.max() > 1 else moving.astype(np.float32)
+        ref_float = (reference.astype(np.float32) - reference.min()) / (reference.max() - reference.min())
+        mov_float = (moving.astype(np.float32) - moving.min()) / (moving.max() - moving.min())
+
         return self.flow_algorithm.calc(ref_float, mov_float, None)
 
 
