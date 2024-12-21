@@ -35,18 +35,17 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _connect_signals(self):
         """Connect all widget signals."""
-        # Data loading connections
+        # Existing connections...
         self.load_beads_btn.clicked.connect(lambda: self._load_data('beads'))
         self.load_reference_btn.clicked.connect(lambda: self._load_data('reference'))
         self.clear_data_btn.clicked.connect(self._clear_data)
-
-        # Analysis buttons
         self.preview_btn.clicked.connect(self.preview_displacement)
         self.analyze_btn.clicked.connect(self.analyze_all_frames)
 
         # Parameter change connections
         for spin in self.parameter_spins.values():
             spin.valueChanged.connect(self.update_parameters)
+
 
     def preview_displacement(self):
         """Preview displacement calculation on current frame."""
@@ -64,18 +63,23 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
             self.current_flow = self.analyzer.calculate_flow(reference, moving)
 
-            # Delegate visualization to visualization manager
+            # Get visualization parameters
+            vis_params = {
+                'd_max': self.visualization_params['d_max'].value(),
+                'vector_stride': self.visualization_params['vector_stride'].value(),
+                'arrow_scale': self.visualization_params['arrow_scale'].value()
+            }
+
+            # Update visualization through visualization manager
             self.visualization_manager.visualize_displacement_preview(
                 self.current_flow,
-                reference,
-                moving,
-                self.visualization_params['d_max'].value(),
-                self.visualization_params['vector_stride'].value(),
-                self.visualization_params['arrow_scale'].value()
+                vis_params['d_max'],
+                vis_params['vector_stride'],
+                vis_params['arrow_scale']
             )
 
-            # Update colorbar
-            self.colorbar_manager.update_limits(0, self.visualization_params['d_max'].value())
+            # Update colorbar with current d_max
+            self.colorbar_manager.update_limits(0, vis_params['d_max'])
 
             # Update status with displacement statistics
             stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
@@ -99,6 +103,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._set_controls_enabled(False)
             self._update_status("Starting analysis...", 0)
 
+            # Get current visualization parameters
+            vis_params = {
+                'd_max': self.visualization_params['d_max'].value(),
+                'vector_stride': self.visualization_params['vector_stride'].value(),
+                'arrow_scale': self.visualization_params['arrow_scale'].value()
+            }
+
             reference = self.data_manager.displacement_reference_image
             bead_stack = self.data_manager.displacement_bead_stack
 
@@ -115,16 +126,15 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             results = {
                 'flows': flows,
                 'parameters': self.analyzer.params,
-                'visualization_params': {
-                    'd_max': self.visualization_params['d_max'].value(),
-                    'vector_stride': self.visualization_params['vector_stride'].value(),
-                    'arrow_scale': self.visualization_params['arrow_scale'].value()
-                }
+                'visualization_params': vis_params
             }
 
-            # Store results and delegate visualization
+            # Store results and update visualization
             self.data_manager.displacement_results = results
             self.visualization_manager.visualize_displacement_results(results)
+
+            # Update colorbar
+            self.colorbar_manager.update_limits(0, vis_params['d_max'])
 
             # Emit results and update status
             self.displacement_calculated.emit(results)
@@ -134,7 +144,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
-
     def _update_ui_state(self):
         """Update UI elements based on current state."""
         # Only look at displacement input data, ignore preprocessing

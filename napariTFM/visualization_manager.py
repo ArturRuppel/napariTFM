@@ -184,8 +184,6 @@ class VisualizationManager(ErrorHandlingMixin):
     def visualize_displacement_preview(
             self,
             flow: np.ndarray,
-            reference: np.ndarray,
-            moving: np.ndarray,
             d_max: float,
             vector_stride: int,
             arrow_scale: float
@@ -207,17 +205,17 @@ class VisualizationManager(ErrorHandlingMixin):
             with self.viewer.events.blocker_all():
                 # Add magnitude
                 magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
-                if d_max is not None:
-                    magnitude = np.clip(magnitude, 0, d_max)
 
                 if 'magnitude' in self._layers and self._layers['magnitude'] is not None:
                     self._layers['magnitude'].data = magnitude
+                    self._layers['magnitude'].contrast_limits = (0, d_max)
                 else:
                     self._layers['magnitude'] = self.viewer.add_image(
                         magnitude,
                         name='Displacement Magnitude',
                         colormap='viridis',
-                        blending='additive'
+                        blending='additive',
+                        contrast_limits=(0, d_max)
                     )
 
                 # Update or create vector layer
@@ -256,8 +254,7 @@ class VisualizationManager(ErrorHandlingMixin):
             for i in range(num_frames):
                 # Calculate magnitude
                 magnitude = np.sqrt(np.sum(flows[i] ** 2, axis=-1))
-                if vis_params['d_max'] is not None:
-                    magnitude = np.clip(magnitude, 0, vis_params['d_max'])
+
                 magnitudes[i] = magnitude
 
                 # Calculate vector data
@@ -272,22 +269,25 @@ class VisualizationManager(ErrorHandlingMixin):
                 vector_colors_cache.append(colors)
 
             # Store vector cache in results
-            results['vector_cache'] = {
+            vector_cache = {
                 'data': vector_data_cache,
                 'colors': vector_colors_cache
             }
+            results['vector_cache'] = vector_cache
 
             # Add or update visualization layers
             with self.viewer.events.blocker_all():
                 # Update or create magnitude layer
                 if 'magnitude' in self._layers and self._layers['magnitude'] is not None:
                     self._layers['magnitude'].data = magnitudes
+                    self._layers['magnitude'].contrast_limits = (0, vis_params['d_max'])
                 else:
                     self._layers['magnitude'] = self.viewer.add_image(
                         magnitudes,
                         name='Displacement Magnitude',
                         colormap='viridis',
-                        blending='additive'
+                        blending='additive',
+                        contrast_limits=(0, vis_params['d_max'])
                     )
 
                 # Update or create vector layer
@@ -299,7 +299,7 @@ class VisualizationManager(ErrorHandlingMixin):
                     else:
                         self._layers['vectors'] = self.viewer.add_vectors(
                             vector_data_cache[current_frame],
-                            name='Displacement Vectors',  # Fixed name
+                            name='Displacement Vectors',
                             edge_color=vector_colors_cache[current_frame],
                             edge_width=2,
                             vector_style='arrow',
