@@ -30,15 +30,20 @@ class ForceCalculationWidget(BaseAnalysisWidget):
     ):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Initialize parameters first
+        # Initialize parameters
         self.young_modulus = 10000  # Pa
         self.poisson_ratio = 0.49
         self.gel_height = None  # μm (None means infinite)
-        self.pixel_size = 0.1  # μm/pixel
+        self._pixel_size = 0.1  # μm/pixel
         self.regularization = 1e-6
         self.filter_sigma = 2.0  # pixels
-        self.characteristic_length = 50  # μm (typical cell size)
         self.calculation_method = CalculationMethod.FFTC
+
+        # Track inherited parameters
+        self.inherited_parameters = {}
+
+        # Track parameter inheritance state
+        self._using_inherited_pixel_size = False
 
         # Initialize other attributes
         self.calculator = None
@@ -50,6 +55,69 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._register_controls()
         self._update_ui_state()
+
+    @property
+    def pixel_size(self):
+        """Get the current pixel size in microns."""
+        return self._pixel_size
+
+    @pixel_size.setter
+    def pixel_size(self, value):
+        """Set the pixel size in microns."""
+        self._pixel_size = value
+        if hasattr(self, 'pixel_spin'):  # Check if UI is initialized
+            self.pixel_spin.setValue(value)
+
+    def _create_material_params_group(self) -> QGroupBox:
+        """Create the material parameters group."""
+        group = QGroupBox("Material Parameters")
+        layout = QVBoxLayout()
+
+        # Create spinboxes
+        self.young_spin = QDoubleSpinBox()
+        self.poisson_spin = QDoubleSpinBox()
+        self.height_spin = QDoubleSpinBox()
+        self.pixel_spin = QDoubleSpinBox()
+
+        params = [
+            ("Young's Modulus (Pa):", self.young_spin, 100, 1000000, 100, self.young_modulus),
+            ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, self.poisson_ratio),
+            ("Gel Height (μm):", self.height_spin, 0, 1000, 10, 0),
+            ("Pixel Size (μm):", self.pixel_spin, 0.001, 10, 0.1, self._pixel_size)
+        ]
+
+        for label_text, spin, min_val, max_val, step, default in params:
+            row = QHBoxLayout()
+            label = QLabel(label_text)
+            label.setFixedWidth(120)
+            row.addWidget(label)
+
+            spin.setRange(min_val, max_val)
+            spin.setSingleStep(step)
+            spin.setValue(default)
+            if label_text.startswith("Gel Height"):
+                spin.setSpecialValueText("∞")
+            row.addWidget(spin)
+            layout.addLayout(row)
+
+        group.setLayout(layout)
+        return group
+
+    def _initialize_calculator(self):
+        """Initialize the TractionForceCalculator with current parameters."""
+        # Update parameters from UI
+        self._update_parameters()
+
+        # Create calculator instance with pixel size in meters
+        self.calculator = TractionForceCalculator(
+            young_modulus=self.young_modulus,
+            pixel_size=self._pixel_size * 1e-6,  # Convert microns to meters
+            poisson_ratio=self.poisson_ratio,
+            regularization=self.regularization,
+            gel_height=None if self.gel_height is None else self.gel_height * 1e-6,  # Convert microns to meters
+            calculation_method=self.calculation_method,
+            filter_sigma=self.filter_sigma
+        )
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -106,7 +174,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.young_spin.valueChanged.connect(self._update_parameters)
         self.poisson_spin.valueChanged.connect(self._update_parameters)
         self.height_spin.valueChanged.connect(self._update_parameters)
-        self.pixel_spin.valueChanged.connect(self._update_parameters)
+        self.pixel_spin.valueChanged.connect(self._on_pixel_size_changed)  # New dedicated handler
         self.regularization_spin.valueChanged.connect(self._update_parameters)
         self.filter_sigma_spin.valueChanged.connect(self._update_parameters)
         self.calculation_method_combo.currentTextChanged.connect(self._update_parameters)
@@ -115,6 +183,78 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.calculate_btn.clicked.connect(self.calculate_forces)
         self.reset_btn.clicked.connect(self.reset_parameters)
 
+    def _on_pixel_size_changed(self, value):
+        """Handle manual changes to pixel size."""
+        if not self._using_inherited_pixel_size:
+            self._pixel_size = value
+            self._update_parameters()
+
+    def _update_parameters(self):
+        """Update parameters from UI controls and handle parameter inheritance."""
+        # Update basic parameters
+        self.young_modulus = self.young_spin.value()
+        self.poisson_ratio = self.poisson_spin.value()
+        self.regularization = self.regularization_spin.value() * 1e-21
+        self.filter_sigma = self.filter_sigma_spin.value()
+
+        # Handle pixel size inheritance
+        if self.data_manager.displacement_results:
+            disp_params = self.data_manager.displacement_results.get('parameters', {})
+            base_pixel_size = disp_params.get('pixel_size')
+            downscale_factor = disp_params.get('downscale_factor', 1)
+
+            if base_pixel_size is not None:
+                # Calculate effective pixel size considering downscaling
+                inherited_pixel_size = base_pixel_size * downscale_factor
+
+                # Only update if using inheritance
+                if self._using_inherited_pixel_size:
+                    self._pixel_size = inherited_pixel_size
+                    self.pixel_spin.setValue(inherited_pixel_size)
+
+                # Update UI state
+                self.pixel_spin.setStyleSheet("color: gray;")
+                self._using_inherited_pixel_size = True
+            else:
+                # Switch to manual mode if no inheritance available
+                self._using_inherited_pixel_size = False
+                self.pixel_spin.setStyleSheet("")
+        else:
+            # Switch to manual mode if no displacement results
+            self._using_inherited_pixel_size = False
+            self.pixel_spin.setStyleSheet("")
+
+        # Update calculation method
+        method_text = self.calculation_method_combo.currentText()
+        self.calculation_method = (
+            CalculationMethod.PURE_SHEAR if method_text == "Pure Shear"
+            else CalculationMethod.FFTC
+        )
+
+        # Handle gel height
+        height_value = self.height_spin.value()
+        self.gel_height = None if height_value == 0 else height_value
+
+        # Update UI state based on method
+        self._update_ui_state()
+
+    def reset_parameters(self):
+        """Reset all parameters to defaults."""
+        self._using_inherited_pixel_size = False  # Reset inheritance state
+        self.young_spin.setValue(10000)
+        self.poisson_spin.setValue(0.49)
+        self.height_spin.setValue(0)
+        self.pixel_spin.setValue(0.1)
+        self.regularization_spin.setValue(1000)
+        self.filter_sigma_spin.setValue(2.0)
+        self.calculation_method_combo.setCurrentText("FFTC")
+
+        self.visualization_params['vector_stride'].setValue(20)
+        self.visualization_params['arrow_scale'].setValue(1.0)
+        self.visualization_params['f_max'].setValue(1000.0)
+
+        self.pixel_spin.setStyleSheet("")  # Reset styling
+        self._update_status("Parameters reset to defaults")
     def _register_controls(self):
         """Register all controls with the base widget."""
         controls = [
@@ -194,11 +334,41 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         # Update button states
         self.calculate_btn.setEnabled(has_required_data)
 
-        # Update status message
-        if not has_required_data:
-            self._update_status("Required displacement data not available")
+        # Handle pixel size inheritance if displacement results are available
+        if self.data_manager.displacement_results:
+            disp_params = self.data_manager.displacement_results.get('parameters', {})
+            base_pixel_size = disp_params.get('pixel_size')
+            downscale_factor = disp_params.get('downscale_factor', 1)
+
+            if base_pixel_size is not None:
+                # Calculate effective pixel size considering downscaling
+                inherited_pixel_size = base_pixel_size * downscale_factor
+
+                # Update pixel size and UI
+                self._pixel_size = inherited_pixel_size
+                self.pixel_spin.setValue(inherited_pixel_size)
+                self.pixel_spin.setStyleSheet("color: gray;")
+                self._using_inherited_pixel_size = True
+
+                # Add inheritance indicator to the tooltip
+                self.pixel_spin.setToolTip(
+                    f"Inherited from displacement analysis\n"
+                    f"Base pixel size: {base_pixel_size} μm\n"
+                    f"Downscale factor: {downscale_factor}"
+                )
+            else:
+                self._using_inherited_pixel_size = False
+                self.pixel_spin.setStyleSheet("")
+                self.pixel_spin.setToolTip("")
         else:
-            self._update_status("Ready for force calculation")
+            # No displacement results available, use manual mode
+            self._using_inherited_pixel_size = False
+            self.pixel_spin.setStyleSheet("")
+            self.pixel_spin.setToolTip("")
+            if not has_required_data:
+                self._update_status("Required displacement data not available")
+            else:
+                self._update_status("Ready for force calculation")
 
         # Update gel height field based on method
         is_pure_shear = self.calculation_method == CalculationMethod.PURE_SHEAR
@@ -209,14 +379,14 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         else:
             self.height_spin.setSpecialValueText("∞")  # Show infinity symbol for FFTC
 
-        # Update tooltip
+        # Update height spin tooltip
         self.height_spin.setToolTip(
             "Required for Pure Shear calculation\n"
             "Optional for FFTC (enables finite thickness correction)" if not is_pure_shear
             else "Required gel height for Pure Shear calculation"
         )
 
-        # Update parameters based on current results
+        # Update visualization parameters based on current results
         if hasattr(self.data_manager, 'force_results') and self.data_manager.force_results:
             results = self.data_manager.force_results
             if 'parameters' in results and 'visualization' in results['parameters']:
@@ -224,6 +394,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 self.visualization_params['vector_stride'].setValue(vis_params.get('vector_stride', 20))
                 self.visualization_params['arrow_scale'].setValue(vis_params.get('arrow_scale', 1.0))
                 self.visualization_params['f_max'].setValue(vis_params.get('f_max', 1000.0))
+
     def calculate_forces(self):
         """Calculate traction forces using the TractionForceCalculator."""
         try:
@@ -272,7 +443,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 'f_max': self.visualization_params['f_max'].value()
             }
 
-            # Store parameters
+            # Store parameters (removed characteristic_length)
             force_results['parameters'] = {
                 'young_modulus': self.young_modulus,
                 'poisson_ratio': self.poisson_ratio,
@@ -281,7 +452,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 'regularization': self.regularization,
                 'filter_sigma': self.filter_sigma,
                 'calculation_method': self.calculation_method.value,
-                'characteristic_length': self.characteristic_length,
                 'visualization': visualization_params
             }
 
@@ -313,43 +483,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
-
-
-    def _create_material_params_group(self) -> QGroupBox:
-        """Create the material parameters group."""
-        group = QGroupBox("Material Parameters")
-        layout = QVBoxLayout()
-
-        # Create spinboxes
-        self.young_spin = QDoubleSpinBox()
-        self.poisson_spin = QDoubleSpinBox()
-        self.height_spin = QDoubleSpinBox()
-        self.pixel_spin = QDoubleSpinBox()
-
-        params = [
-            ("Young's Modulus (Pa):", self.young_spin, 100, 1000000, 100, self.young_modulus),
-            ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, self.poisson_ratio),
-            ("Gel Height (μm):", self.height_spin, 0, 1000, 10, 0),
-            ("Pixel Size (μm):", self.pixel_spin, 0.001, 10, 0.1, self.pixel_size)
-        ]
-
-        for label_text, spin, min_val, max_val, step, default in params:
-            row = QHBoxLayout()
-            label = QLabel(label_text)
-            label.setFixedWidth(120)
-            row.addWidget(label)
-
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
-            if label_text.startswith("Gel Height"):
-                spin.setSpecialValueText("∞")
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        group.setLayout(layout)
-        return group
-
     def _create_correction_params_group(self) -> QGroupBox:
         """Create the correction method parameters group."""
         group = QGroupBox("Correction Method")
@@ -379,22 +512,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
-
-    def reset_parameters(self):
-        """Reset all parameters to defaults."""
-        self.young_spin.setValue(10000)
-        self.poisson_spin.setValue(0.49)
-        self.height_spin.setValue(0)
-        self.pixel_spin.setValue(0.1)
-        self.regularization_spin.setValue(1000)
-        self.filter_sigma_spin.setValue(2.0)
-        self.calculation_method_combo.setCurrentText("FFTC")
-
-        self.visualization_params['vector_stride'].setValue(20)
-        self.visualization_params['arrow_scale'].setValue(1.0)
-        self.visualization_params['f_max'].setValue(1000.0)
-
-        self._update_status("Parameters reset to defaults")
 
     def _create_visualization_parameters_group(self) -> QGroupBox:
         """Create the visualization parameters group."""
@@ -476,45 +593,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             return False
 
         return True
-
-    def _initialize_calculator(self):
-        """Initialize the TractionForceCalculator with current parameters."""
-        # Update parameters from UI
-        self._update_parameters()
-
-        # Create calculator instance
-        self.calculator = TractionForceCalculator(
-            young_modulus=self.young_modulus,
-            pixel_size=self.pixel_size * 1e-6,  # Convert to meters
-            poisson_ratio=self.poisson_ratio,
-            regularization=self.regularization,
-            gel_height=None if self.gel_height is None else self.gel_height * 1e-6,  # Convert to meters
-            calculation_method=self.calculation_method,
-            filter_sigma=self.filter_sigma
-        )
-
-    def _update_parameters(self):
-        """Update parameters from UI controls."""
-        # Update basic parameters
-        self.young_modulus = self.young_spin.value()
-        self.poisson_ratio = self.poisson_spin.value()
-        self.pixel_size = self.pixel_spin.value()
-        self.regularization = self.regularization_spin.value() * 1e-21
-        self.filter_sigma = self.filter_sigma_spin.value()
-
-        # Update calculation method
-        method_text = self.calculation_method_combo.currentText()
-        self.calculation_method = (
-            CalculationMethod.PURE_SHEAR if method_text == "Pure Shear"
-            else CalculationMethod.FFTC
-        )
-
-        # Handle gel height
-        height_value = self.height_spin.value()
-        self.gel_height = None if height_value == 0 else height_value
-
-        # Update UI state based on method
-        self._update_ui_state()
 
     def cleanup(self):
         """Clean up resources."""
