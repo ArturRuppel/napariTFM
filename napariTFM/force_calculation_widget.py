@@ -12,7 +12,7 @@ from qtpy.QtWidgets import (
 
 from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
-from .force_calculation import TractionForceCalculator, CorrectionMethod
+from .force_calculation import TractionForceCalculator, CalculationMethod
 from .data_manager import DataManager
 from .visualization_manager import VisualizationManager
 
@@ -38,7 +38,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.regularization = 1e-6
         self.filter_sigma = 2.0  # pixels
         self.characteristic_length = 50  # μm (typical cell size)
-        self.correction_method = CorrectionMethod.NONE
+        self.calculation_method = CalculationMethod.FFTC
 
         # Initialize other attributes
         self.calculator = None
@@ -50,6 +50,141 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._register_controls()
         self._update_ui_state()
+
+    def _setup_ui(self):
+        """Set up the user interface."""
+        main_layout = QHBoxLayout()
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create colorbar container
+        colorbar_container = QWidget()
+        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        colorbar_layout = QVBoxLayout()
+        colorbar_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Create colorbar
+        colorbar_group = self.create_colorbar_widget(
+            colormap_name='inferno',
+            label="Force (Pa)",
+            clim=(1000, 0),
+            colorbar_manager=self.colorbar_manager
+        )
+        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        colorbar_layout.addStretch()
+        colorbar_container.setLayout(colorbar_layout)
+        main_layout.addWidget(colorbar_container)
+
+        # Right side container
+        right_container = QWidget()
+        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Add parameter groups - remove correction_params_group
+        right_layout.addWidget(self._create_material_params_group())
+        right_layout.addWidget(self._create_calculation_params_group())
+        right_layout.addWidget(self._create_visualization_parameters_group())
+        right_layout.addWidget(self._create_action_buttons())
+        right_layout.addWidget(self._create_status_frame())
+        right_layout.addStretch()
+
+        right_container.setLayout(right_layout)
+        right_container.setFixedWidth(350)
+
+        main_layout.addWidget(right_container)
+        main_layout.addStretch(1)
+
+        self.setLayout(main_layout)
+
+    def _connect_signals(self):
+        """Connect widget signals."""
+        # Parameter updates
+        self.young_spin.valueChanged.connect(self._update_parameters)
+        self.poisson_spin.valueChanged.connect(self._update_parameters)
+        self.height_spin.valueChanged.connect(self._update_parameters)
+        self.pixel_spin.valueChanged.connect(self._update_parameters)
+        self.regularization_spin.valueChanged.connect(self._update_parameters)
+        self.filter_sigma_spin.valueChanged.connect(self._update_parameters)
+        self.calculation_method_combo.currentTextChanged.connect(self._update_parameters)
+
+        # Action buttons
+        self.calculate_btn.clicked.connect(self.calculate_forces)
+        self.reset_btn.clicked.connect(self.reset_parameters)
+
+    def _register_controls(self):
+        """Register all controls with the base widget."""
+        controls = [
+                       self.young_spin,
+                       self.poisson_spin,
+                       self.height_spin,
+                       self.pixel_spin,
+                       self.regularization_spin,
+                       self.filter_sigma_spin,
+                       self.calculation_method_combo,
+                       self.calculate_btn,
+                       self.reset_btn,
+                       self.progress_bar,
+                       self.status_label
+                   ] + list(self.visualization_params.values())
+
+        for control in controls:
+            self.register_control(control)
+
+    def _create_calculation_params_group(self) -> QGroupBox:
+        """Create the calculation parameters group."""
+        group = QGroupBox("Calculation Parameters")
+        layout = QVBoxLayout()
+
+        # Method selector
+        method_layout = QHBoxLayout()
+        method_layout.addWidget(QLabel("Method:"))
+        self.calculation_method_combo = QComboBox()
+        self.calculation_method_combo.addItems([
+            "FFTC",
+            "Pure Shear"
+        ])
+        method_layout.addWidget(self.calculation_method_combo)
+        layout.addLayout(method_layout)
+
+        # Gel height (optional for FFTC, required for Pure Shear)
+        height_layout = QHBoxLayout()
+        height_layout.addWidget(QLabel("Gel Height (μm):"))
+        self.height_spin = QDoubleSpinBox()
+        self.height_spin.setRange(0, 1000)
+        self.height_spin.setSpecialValueText("∞")  # Only meaningful for FFTC
+        self.height_spin.setValue(0)
+        height_layout.addWidget(self.height_spin)
+        layout.addLayout(height_layout)
+
+        # Regularization parameter
+        reg_layout = QHBoxLayout()
+        reg_layout.addWidget(QLabel("Regularization:"))
+        self.regularization_spin = QSpinBox()
+        self.regularization_spin.setRange(1, 100000)
+        self.regularization_spin.setValue(1000)
+        self.regularization_spin.setToolTip(
+            "Regularization parameter (will be multiplied by 10⁻²¹)\n"
+            "Typical values: 1000-10000"
+        )
+        reg_layout.addWidget(self.regularization_spin)
+        layout.addLayout(reg_layout)
+
+        # Filter sigma
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Filter Sigma:"))
+        self.filter_sigma_spin = QDoubleSpinBox()
+        self.filter_sigma_spin.setRange(0, 10)
+        self.filter_sigma_spin.setValue(2.0)
+        self.filter_sigma_spin.setSingleStep(0.1)
+        filter_layout.addWidget(self.filter_sigma_spin)
+        layout.addLayout(filter_layout)
+
+        group.setLayout(layout)
+        return group
 
     def _update_ui_state(self):
         """Update UI elements based on current state."""
@@ -65,12 +200,23 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         else:
             self._update_status("Ready for force calculation")
 
-        # Update parameters based on correction method
-        is_finite = self.correction_method != CorrectionMethod.NONE
-        self.height_spin.setEnabled(is_finite)
-        self.char_length_spin.setEnabled(is_finite)
+        # Update gel height field based on method
+        is_pure_shear = self.calculation_method == CalculationMethod.PURE_SHEAR
+        if is_pure_shear:
+            self.height_spin.setSpecialValueText("")  # Remove infinity symbol
+            if self.height_spin.value() == 0:
+                self.height_spin.setValue(100)  # Set default height for pure shear
+        else:
+            self.height_spin.setSpecialValueText("∞")  # Show infinity symbol for FFTC
 
-        # Update visualization parameters based on current results
+        # Update tooltip
+        self.height_spin.setToolTip(
+            "Required for Pure Shear calculation\n"
+            "Optional for FFTC (enables finite thickness correction)" if not is_pure_shear
+            else "Required gel height for Pure Shear calculation"
+        )
+
+        # Update parameters based on current results
         if hasattr(self.data_manager, 'force_results') and self.data_manager.force_results:
             results = self.data_manager.force_results
             if 'parameters' in results and 'visualization' in results['parameters']:
@@ -134,7 +280,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 'pixel_size': self.pixel_size,
                 'regularization': self.regularization,
                 'filter_sigma': self.filter_sigma,
-                'correction_method': self.correction_method.value,
+                'calculation_method': self.calculation_method.value,
                 'characteristic_length': self.characteristic_length,
                 'visualization': visualization_params
             }
@@ -168,55 +314,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         finally:
             self._set_controls_enabled(True)
 
-    def _setup_ui(self):
-        """Set up the user interface."""
-        main_layout = QHBoxLayout()
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Create colorbar container
-        colorbar_container = QWidget()
-        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Create colorbar
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='inferno',
-            label="Force (Pa)",
-            clim=(1000, 0),
-            colorbar_manager=self.colorbar_manager
-        )
-        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        colorbar_layout.addStretch()
-        colorbar_container.setLayout(colorbar_layout)
-        main_layout.addWidget(colorbar_container)
-
-        # Right side container
-        right_container = QWidget()
-        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        right_layout = QVBoxLayout()
-        right_layout.setSpacing(8)
-        right_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Add parameter groups
-        right_layout.addWidget(self._create_material_params_group())
-        right_layout.addWidget(self._create_correction_params_group())
-        right_layout.addWidget(self._create_calculation_params_group())
-        right_layout.addWidget(self._create_visualization_parameters_group())
-        right_layout.addWidget(self._create_action_buttons())
-        right_layout.addWidget(self._create_status_frame())
-        right_layout.addStretch()
-
-        right_container.setLayout(right_layout)
-        right_container.setFixedWidth(350)
-
-        main_layout.addWidget(right_container)
-        main_layout.addStretch(1)
-
-        self.setLayout(main_layout)
 
     def _create_material_params_group(self) -> QGroupBox:
         """Create the material parameters group."""
@@ -283,69 +380,15 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
-    def _create_calculation_params_group(self) -> QGroupBox:
-        """Create the calculation parameters group with adjusted regularization scale."""
-        group = QGroupBox("Calculation Parameters")
-        layout = QVBoxLayout()
-
-        # Regularization parameter (now scaled)
-        reg_layout = QHBoxLayout()
-        reg_layout.addWidget(QLabel("Regularization:"))
-        self.regularization_spin = QSpinBox()  # Changed to SpinBox for integer values
-        self.regularization_spin.setRange(1, 100000)
-        self.regularization_spin.setValue(1000)  # Default value
-        reg_layout.addWidget(self.regularization_spin)
-        layout.addLayout(reg_layout)
-
-        # Add tooltip explaining the scaling
-        self.regularization_spin.setToolTip(
-            "Regularization parameter (will be multiplied by 10⁻²¹)\n"
-            "Typical values: 1000-10000"
-        )
-
-        # Filter sigma
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("Filter Sigma:"))
-        self.filter_sigma_spin = QDoubleSpinBox()
-        self.filter_sigma_spin.setRange(0, 10)
-        self.filter_sigma_spin.setValue(self.filter_sigma)
-        self.filter_sigma_spin.setSingleStep(0.1)
-        filter_layout.addWidget(self.filter_sigma_spin)
-        layout.addLayout(filter_layout)
-
-        group.setLayout(layout)
-        return group
-
-    def _update_parameters(self):
-        """Update parameters from UI controls with proper regularization scaling."""
-        self.young_modulus = self.young_spin.value()
-        self.poisson_ratio = self.poisson_spin.value()
-        self.gel_height = None if self.height_spin.value() == 0 else self.height_spin.value()
-        self.pixel_size = self.pixel_spin.value()
-        # Scale regularization parameter
-        self.regularization = self.regularization_spin.value() * 1e-21
-        self.filter_sigma = self.filter_sigma_spin.value()
-        self.characteristic_length = self.char_length_spin.value()
-
-        # Update correction method
-        method_text = self.correction_method_combo.currentText()
-        if method_text == "None (Infinite)":
-            self.correction_method = CorrectionMethod.NONE
-        elif method_text == "Finite Thickness":
-            self.correction_method = CorrectionMethod.FINITE
-        else:  # Pure Shear
-            self.correction_method = CorrectionMethod.PURE_SHEAR
-
     def reset_parameters(self):
-        """Reset all parameters to defaults with new regularization scale."""
+        """Reset all parameters to defaults."""
         self.young_spin.setValue(10000)
         self.poisson_spin.setValue(0.49)
         self.height_spin.setValue(0)
         self.pixel_spin.setValue(0.1)
-        self.regularization_spin.setValue(1000)  # New default value
+        self.regularization_spin.setValue(1000)
         self.filter_sigma_spin.setValue(2.0)
-        self.char_length_spin.setValue(50)
-        self.correction_method_combo.setCurrentText("None (Infinite)")
+        self.calculation_method_combo.setCurrentText("FFTC")
 
         self.visualization_params['vector_stride'].setValue(20)
         self.visualization_params['arrow_scale'].setValue(1.0)
@@ -417,59 +460,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         frame.setLayout(layout)
         return frame
 
-    def _initialize_calculator(self):
-        """Initialize the TractionForceCalculator with current parameters."""
-        # Update parameters from UI
-        self._update_parameters()
-
-        # Create calculator instance
-        self.calculator = TractionForceCalculator(
-            young_modulus=self.young_modulus,
-            pixel_size=self.pixel_size * 1e-6,  # Convert to meters
-            characteristic_length=self.characteristic_length * 1e-6,  # Convert to meters
-            poisson_ratio=self.poisson_ratio,
-            regularization=self.regularization,
-            gel_height=None if self.gel_height is None else self.gel_height * 1e-6,  # Convert to meters
-            correction_method=self.correction_method,
-            filter_sigma=self.filter_sigma
-        )
-
-    def _connect_signals(self):
-        """Connect widget signals."""
-        # Parameter updates
-        self.young_spin.valueChanged.connect(self._update_parameters)
-        self.poisson_spin.valueChanged.connect(self._update_parameters)
-        self.height_spin.valueChanged.connect(self._update_parameters)
-        self.pixel_spin.valueChanged.connect(self._update_parameters)
-        self.regularization_spin.valueChanged.connect(self._update_parameters)
-        self.filter_sigma_spin.valueChanged.connect(self._update_parameters)
-        self.char_length_spin.valueChanged.connect(self._update_parameters)
-        self.correction_method_combo.currentTextChanged.connect(self._update_parameters)
-
-        # Action buttons
-        self.calculate_btn.clicked.connect(self.calculate_forces)
-        self.reset_btn.clicked.connect(self.reset_parameters)
-
-    def _register_controls(self):
-        """Register all controls with the base widget."""
-        controls = [
-                       self.young_spin,
-                       self.poisson_spin,
-                       self.height_spin,
-                       self.pixel_spin,
-                       self.regularization_spin,
-                       self.filter_sigma_spin,
-                       self.char_length_spin,
-                       self.correction_method_combo,
-                       self.calculate_btn,
-                       self.reset_btn,
-                       self.progress_bar,
-                       self.status_label
-                   ] + list(self.visualization_params.values())
-
-        for control in controls:
-            self.register_control(control)
-
     def _validate_input_data(self) -> bool:
         """Validate required input data is available."""
         if not self.data_manager.displacement_results:
@@ -480,12 +470,51 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             QMessageBox.warning(self, "Error", "Invalid displacement data format")
             return False
 
-        # Validate gel height for finite thickness methods
-        if self.correction_method != CorrectionMethod.NONE and self.gel_height is None:
-            QMessageBox.warning(self, "Error", "Gel height must be specified for finite thickness corrections")
+        # Validate gel height for pure shear method
+        if self.calculation_method == CalculationMethod.PURE_SHEAR and (self.gel_height is None or self.gel_height == 0):
+            QMessageBox.warning(self, "Error", "Gel height must be specified for pure shear calculation")
             return False
 
         return True
+
+    def _initialize_calculator(self):
+        """Initialize the TractionForceCalculator with current parameters."""
+        # Update parameters from UI
+        self._update_parameters()
+
+        # Create calculator instance
+        self.calculator = TractionForceCalculator(
+            young_modulus=self.young_modulus,
+            pixel_size=self.pixel_size * 1e-6,  # Convert to meters
+            poisson_ratio=self.poisson_ratio,
+            regularization=self.regularization,
+            gel_height=None if self.gel_height is None else self.gel_height * 1e-6,  # Convert to meters
+            calculation_method=self.calculation_method,
+            filter_sigma=self.filter_sigma
+        )
+
+    def _update_parameters(self):
+        """Update parameters from UI controls."""
+        # Update basic parameters
+        self.young_modulus = self.young_spin.value()
+        self.poisson_ratio = self.poisson_spin.value()
+        self.pixel_size = self.pixel_spin.value()
+        self.regularization = self.regularization_spin.value() * 1e-21
+        self.filter_sigma = self.filter_sigma_spin.value()
+
+        # Update calculation method
+        method_text = self.calculation_method_combo.currentText()
+        self.calculation_method = (
+            CalculationMethod.PURE_SHEAR if method_text == "Pure Shear"
+            else CalculationMethod.FFTC
+        )
+
+        # Handle gel height
+        height_value = self.height_spin.value()
+        self.gel_height = None if height_value == 0 else height_value
+
+        # Update UI state based on method
+        self._update_ui_state()
 
     def cleanup(self):
         """Clean up resources."""

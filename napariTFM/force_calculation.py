@@ -28,11 +28,6 @@ from warnings import warn
 logger = logging.getLogger(__name__)
 
 
-class CorrectionMethod(Enum):
-    """Enumeration of available thickness correction methods."""
-    NONE = "none"  # Infinite thickness assumption
-    FINITE = "finite"  # Full finite thickness correction
-    PURE_SHEAR = "pure_shear"  # Pure shear approximation for thin substrates
 
 
 @dataclass
@@ -43,17 +38,22 @@ class ValidationResult:
     errors: list[str]
 
 
+class CalculationMethod(Enum):
+    """Available force calculation methods."""
+    FFTC = "fftc"  # Fourier Transform Traction Cytometry
+    PURE_SHEAR = "pure_shear"  # Pure shear approximation
+
+
 class TractionForceCalculator:
     def __init__(
-        self,
-        young_modulus: float,
-        pixel_size: float,
-        characteristic_length: float,  # Added parameter
-        poisson_ratio: float = 0.49,
-        regularization: float = 1e-6,
-        gel_height: Optional[float] = None,
-        correction_method: CorrectionMethod = CorrectionMethod.NONE,
-        filter_sigma: Optional[float] = None
+            self,
+            young_modulus: float,
+            pixel_size: float,
+            poisson_ratio: float = 0.49,
+            regularization: float = 1e-6,
+            gel_height: Optional[float] = None,
+            calculation_method: CalculationMethod = CalculationMethod.FFTC,
+            filter_sigma: Optional[float] = None
     ):
         """
         Initialize the TractionForceCalculator.
@@ -63,92 +63,207 @@ class TractionForceCalculator:
         young_modulus : float
             Young's modulus of the substrate (Pa)
         pixel_size : float
-            Size of a pixel in physical units (meters)
-        characteristic_length : float
-            Characteristic length scale of the experiment (meters)
-            This could be cell size, typical displacement distance, etc.
-        poisson_ratio : float, optional
-            Poisson's ratio of the substrate, default 0.49
-        regularization : float, optional
-            Tikhonov regularization parameter, default 1e-6
+            Size of a pixel in meters
+        poisson_ratio : float
+            Poisson's ratio of the substrate (default: 0.49)
+        regularization : float
+            Tikhonov regularization parameter (default: 1e-6)
         gel_height : float, optional
-            Height of the gel in physical units (meters)
-        correction_method : CorrectionMethod, optional
-            Method for thickness correction
+            Height of the gel in meters (required for pure_shear, optional for FFTC)
+        calculation_method : CalculationMethod
+            Force calculation method to use
         filter_sigma : float, optional
             Standard deviation for Gaussian smoothing
         """
         self.young_modulus = young_modulus
         self.pixel_size = pixel_size
-        self.characteristic_length = characteristic_length
         self.poisson_ratio = poisson_ratio
         self.regularization = regularization
         self.gel_height = gel_height
-        self.correction_method = CorrectionMethod(correction_method)
+        self.calculation_method = calculation_method
         self.filter_sigma = filter_sigma
 
         # Computed properties
         self.shear_modulus = young_modulus / (2 * (1 + poisson_ratio))
 
-        # Results storage
-        self.latest_results: Optional[Dict[str, np.ndarray]] = None
-
-        # Validate parameters and correction method
+        # Validate configuration
         self._validate_parameters()
-        validation = self.validate_correction_method()
 
-        # Log warnings and raise errors if any
-        for warning in validation.warnings:
-            warn(warning)
-        if validation.errors:
-            raise ValueError("\n".join(validation.errors))
-
-    def validate_correction_method(self) -> ValidationResult:
+    def calculate_forces(
+            self,
+            u: np.ndarray,
+            v: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Validate the selected correction method based on experimental parameters.
+        Calculate traction forces from displacement fields.
+
+        Parameters
+        ----------
+        u : np.ndarray
+            x-component of displacement field
+        v : np.ndarray
+            y-component of displacement field
 
         Returns
         -------
-        ValidationResult
-            Contains validation status, warnings, and errors
+        Tuple[np.ndarray, np.ndarray]
+            Traction forces in x and y directions
         """
+        if u.shape != v.shape:
+            raise ValueError("Displacement fields u and v must have the same shape")
+
+        # Get dimensions and prepare padded arrays
+        M, N = u.shape
+        pad_size = self._get_optimal_pad_size(M, N)
+        u_pad, v_pad = self._prepare_displacement_fields(u, v, pad_size)
+
+        # Transform to Fourier space
+        u_ft = fft2(u_pad)
+        v_ft = fft2(v_pad)
+
+        # Calculate forces based on method
+        if self.calculation_method == CalculationMethod.PURE_SHEAR:
+            tx_ft, ty_ft = self._calculate_pure_shear(u_ft, v_ft)
+        else:  # FFTC
+            tx_ft, ty_ft = self._calculate_fftc(u_ft, v_ft, pad_size)
+
+        # Transform back to real space
+        tx = np.real(ifft2(tx_ft))
+        ty = np.real(ifft2(ty_ft))
+
+        # Cut back to original size
+        tx = tx[pad_size - M:pad_size, pad_size - N:pad_size]
+        ty = ty[pad_size - M:pad_size, pad_size - N:pad_size]
+
+        # Apply smoothing if requested
+        if self.filter_sigma is not None:
+            tx = gaussian_filter(tx, sigma=self.filter_sigma)
+            ty = gaussian_filter(ty, sigma=self.filter_sigma)
+
+        return tx, ty
+
+    def _calculate_pure_shear(
+            self,
+            u_ft: np.ndarray,
+            v_ft: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Calculate forces using pure shear approximation."""
+        if self.gel_height is None:
+            raise ValueError("Gel height must be specified for pure shear calculation")
+
+        # Calculate forces directly from displacements
+        tx_ft = self.shear_modulus * u_ft / self.gel_height
+        ty_ft = self.shear_modulus * v_ft / self.gel_height
+
+        # Zero out DC component
+        tx_ft[0, 0] = 0
+        ty_ft[0, 0] = 0
+
+        return tx_ft, ty_ft
+
+    def _calculate_fftc(
+            self,
+            u_ft: np.ndarray,
+            v_ft: np.ndarray,
+            pad_size: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Calculate forces using FFTC with optional finite thickness correction."""
+        # Calculate wave vectors
+        kx, ky, k = self._calculate_wave_vectors(pad_size)
+
+        # Get Green's functions (with finite thickness correction if gel_height is provided)
+        if self.gel_height is not None:
+            Gxx, Gyy, Gxy = self._get_corrected_greens_functions(kx, ky, k)
+        else:
+            Gxx, Gyy, Gxy = self._get_greens_functions(kx, ky, k)
+
+        # Calculate forces using Green's functions
+        det = Gxx * Gyy - Gxy * Gxy + self.regularization
+
+        # Calculate inverse with regularization
+        Kxx = Gyy / det
+        Kyy = Gxx / det
+        Kxy = -Gxy / det
+
+        # Set zero frequency components to zero
+        Kxx[0, 0] = 0
+        Kyy[0, 0] = 0
+        Kxy[0, 0] = 0
+
+        # Calculate forces in Fourier space
+        tx_ft = Kxx * u_ft + Kxy * v_ft
+        ty_ft = Kxy * u_ft + Kyy * v_ft
+
+        return tx_ft, ty_ft
+
+    def _get_greens_functions(
+            self,
+            kx: np.ndarray,
+            ky: np.ndarray,
+            k: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Get Green's functions for standard FFTC."""
+        denom = self.young_modulus * k ** 3 + np.finfo(float).eps
+
+        Gxx = 2 * (1 + self.poisson_ratio) / denom * \
+              ((1 - self.poisson_ratio) * k ** 2 + self.poisson_ratio * ky ** 2)
+        Gyy = 2 * (1 + self.poisson_ratio) / denom * \
+              ((1 - self.poisson_ratio) * k ** 2 + self.poisson_ratio * kx ** 2)
+        Gxy = 2 * (1 + self.poisson_ratio) / denom * \
+              (self.poisson_ratio * kx * ky)
+
+        return Gxx, Gyy, Gxy
+
+    def _get_corrected_greens_functions(
+            self,
+            kx: np.ndarray,
+            ky: np.ndarray,
+            k: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Get Green's functions with finite thickness correction."""
+        kh = k * self.gel_height
+
+        # Use standard Green's functions for large kh to avoid numerical issues
+        mask_standard = kh > 100
+
+        # Calculate finite thickness components
+        c = np.cosh(kh)
+        s = np.sinh(kh)
+
+        # Correction factor
+        gamma = ((3 - 4 * self.poisson_ratio) +
+                 (((1 - 2 * self.poisson_ratio) ** 2) / (c ** 2)) +
+                 ((kh ** 2) / (c ** 2))) / \
+                ((3 - 4 * self.poisson_ratio) * np.tanh(kh) + kh / (c ** 2))
+
+        # Get standard functions
+        Gxx_std, Gyy_std, Gxy_std = self._get_greens_functions(kx, ky, k)
+
+        # Apply correction
+        Gxx = np.where(mask_standard, Gxx_std, Gxx_std * gamma)
+        Gyy = np.where(mask_standard, Gyy_std, Gyy_std * gamma)
+        Gxy = np.where(mask_standard, Gxy_std, Gxy_std * gamma)
+
+        return Gxx, Gyy, Gxy
+
+    def validate_correction_method(self) -> ValidationResult:
+        """Validate the selected correction method based on experimental parameters."""
         warnings = []
         errors = []
         is_valid = True
 
-        if self.gel_height is None:
-            if self.correction_method != CorrectionMethod.NONE:
-                errors.append("Gel height must be provided for finite thickness or pure shear corrections")
+        if self.calculation_method == CalculationMethod.PURE_SHEAR:
+            if self.gel_height is None or self.gel_height == 0:
+                errors.append("Gel height must be specified for pure shear calculation")
                 is_valid = False
-        else:
-            # Calculate dimensionless ratios
-            height_to_length_ratio = self.gel_height / self.characteristic_length
-
-            if self.correction_method == CorrectionMethod.PURE_SHEAR:
-                if height_to_length_ratio > 0.1:
+            else:
+                # Convert gel height to meters for comparison
+                height_m = self.gel_height * 1e-6
+                if height_m > 0.1 * self.characteristic_length:
                     warnings.append(
-                        f"Pure shear approximation may be inaccurate: gel height ({self.gel_height*1e6:.1f}µm) "
-                        f"is not much smaller than characteristic length ({self.characteristic_length*1e6:.1f}µm)"
-                    )
-
-                if self.gel_height < 0.5e-6:  # 0.5 µm threshold
-                    warnings.append(
-                        "Gel height is extremely small (<0.5µm). Bulk gel properties may not apply, "
-                        "and surface effects might dominate"
-                    )
-
-            elif self.correction_method == CorrectionMethod.FINITE:
-                if height_to_length_ratio < 0.1:
-                    warnings.append(
-                        "Consider using pure shear approximation: gel is very thin compared to "
-                        "characteristic length scale"
-                    )
-
-            elif self.correction_method == CorrectionMethod.NONE:
-                if height_to_length_ratio < 1.0:
-                    warnings.append(
-                        "Infinite thickness assumption may be inaccurate: gel height is smaller than "
-                        "characteristic length scale"
+                        f"Pure shear approximation may be inaccurate: "
+                        f"gel height ({self.gel_height:.1f}µm) is not much smaller "
+                        f"than characteristic length ({self.characteristic_length * 1e6:.1f}µm)"
                     )
 
         return ValidationResult(is_valid=is_valid, warnings=warnings, errors=errors)
@@ -159,12 +274,15 @@ class TractionForceCalculator:
             raise ValueError("Young's modulus must be positive")
         if self.pixel_size <= 0:
             raise ValueError("Pixel size must be positive")
-        if self.characteristic_length <= 0:
-            raise ValueError("Characteristic length must be positive")
         if not 0 <= self.poisson_ratio < 0.5:
             raise ValueError("Poisson's ratio must be in [0, 0.5)")
         if self.regularization < 0:
             raise ValueError("Regularization parameter must be non-negative")
+
+        # Check gel height requirements for pure shear
+        if self.calculation_method == CalculationMethod.PURE_SHEAR:
+            if self.gel_height is None or self.gel_height <= 0:
+                raise ValueError("Positive gel height required for pure shear calculation")
 
     def _prepare_displacement_fields(
             self,
@@ -204,100 +322,12 @@ class TractionForceCalculator:
 
         return kx, ky, k
 
-    def calculate_forces(
-            self,
-            u: np.ndarray,
-            v: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Calculate traction forces from displacement fields."""
-        if u.shape != v.shape:
-            raise ValueError("Displacement fields u and v must have the same shape")
-
-        # Get original dimensions
-        M, N = u.shape
-
-        # Calculate optimal padding size
-        max_size = max(M, N)
-        pad_size = 2 ** int(np.ceil(np.log2(max_size)))
-        if pad_size % 2 != 0:
-            pad_size += 1
-
-        # Prepare displacement fields
-        u_pad, v_pad = self._prepare_displacement_fields(u, v, pad_size)
-
-        # Transform to Fourier space
-        u_ft = fft2(u_pad)
-        v_ft = fft2(v_pad)
-
-        # Remove translation components
-        u_ft[0, 0] = 0
-        v_ft[0, 0] = 0
-
-        # Calculate wave vectors
-        kx, ky, k = self._calculate_wave_vectors(pad_size)
-
-        # Calculate forces based on correction method
-        if self.correction_method == CorrectionMethod.PURE_SHEAR:
-            tx_ft, ty_ft = self._calculate_pure_shear(u_ft, v_ft)
-        else:
-            try:
-                if self.correction_method == CorrectionMethod.FINITE:
-                    tx_ft, ty_ft = self._apply_finite_thickness_correction(u_ft, v_ft, kx, ky, k)
-                else:
-                    tx_ft, ty_ft = self._apply_infinite_thickness_solution(u_ft, v_ft, kx, ky, k)
-
-                # Check for NaN values and fall back to infinite thickness if needed
-                if np.any(np.isnan(tx_ft)) or np.any(np.isnan(ty_ft)):
-                    tx_ft, ty_ft = self._apply_infinite_thickness_solution(u_ft, v_ft, kx, ky, k)
-            except Exception as e:
-                # Fall back to infinite thickness solution if any calculation fails
-                logger.warning(f"Falling back to infinite thickness solution due to: {str(e)}")
-                tx_ft, ty_ft = self._apply_infinite_thickness_solution(u_ft, v_ft, kx, ky, k)
-
-        # Transform back to real space
-        tx = np.real(ifft2(tx_ft))
-        ty = np.real(ifft2(ty_ft))
-
-        # Cut back to original size (from corner like in original code)
-        tx = tx[pad_size - M:pad_size, pad_size - N:pad_size]
-        ty = ty[pad_size - M:pad_size, pad_size - N:pad_size]
-
-        # Apply smoothing if requested
-        if self.filter_sigma is not None:
-            tx = gaussian_filter(tx, sigma=self.filter_sigma)
-            ty = gaussian_filter(ty, sigma=self.filter_sigma)
-
-        # Store results
-        self.latest_results = {
-            'tx': tx,
-            'ty': ty,
-            'magnitude': self.calculate_magnitude(tx, ty)
-        }
-
-        return tx, ty
-
-
 
     def _get_optimal_pad_size(self, M: int, N: int) -> int:
         """Calculate optimal padding size for FFT."""
         target_size = max(M, N)
         return 2 ** int(np.ceil(np.log2(target_size)))
 
-
-    def _calculate_pure_shear(
-            self,
-            u_fft: np.ndarray,
-            v_fft: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Calculate forces using pure shear approximation."""
-        tx_fft = self.shear_modulus * u_fft / self.gel_height
-        ty_fft = self.shear_modulus * v_fft / self.gel_height
-
-        # Zero out DC component
-        tx_fft[0, 0] = 0
-        ty_fft[0, 0] = 0
-
-        return tx_fft, ty_fft
 
     def _calculate_regularized_forces(
             self,
@@ -317,7 +347,7 @@ class TractionForceCalculator:
                 if i == 0 and j == 0:
                     continue
 
-                if self.correction_method == CorrectionMethod.FINITE:
+                if self.calculation_method == CalculationMethod.FINITE:
                     tx_fft[i, j], ty_fft[i, j] = self._apply_finite_thickness_correction(
                         u_fft[i, j], v_fft[i, j], kx[i, j], ky[i, j], k[i, j]
                     )
