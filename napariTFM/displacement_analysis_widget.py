@@ -46,63 +46,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         for spin in self.parameter_spins.values():
             spin.valueChanged.connect(self.update_parameters)
 
-    def preview_displacement(self):
-        """Preview displacement calculation on current frame."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating displacement...", 0)
-
-            current_frame = self.viewer.dims.current_step[0]
-            reference = self.data_manager.displacement_reference_image
-            bead_stack = self.data_manager.displacement_bead_stack
-            moving = bead_stack[current_frame]
-
-            # Calculate initial flow
-            self.current_flow = self.analyzer.calculate_flow(reference, moving)
-
-            # Apply downscaling if factor > 1
-            downscale_factor = self.parameter_spins['downscale_factor'].value()
-            if downscale_factor > 1:
-                self.current_flow = self.analyzer.downscale_flow(self.current_flow, downscale_factor)
-
-            # Get visualization parameters
-            vis_params = {
-                'd_max': self.visualization_params['d_max'].value(),
-                'vector_stride': self.visualization_params['vector_stride'].value(),
-                'arrow_scale': self.visualization_params['arrow_scale'].value()
-            }
-
-            # Update visualization through visualization manager
-            self.visualization_manager.visualize_displacement_preview(
-                self.current_flow,
-                vis_params['d_max'],
-                vis_params['vector_stride'],
-                vis_params['arrow_scale'],
-                downscale_factor=downscale_factor
-            )
-
-            # Update colorbar with current d_max
-            self.colorbar_manager.update_limits(0, vis_params['d_max'])
-
-            # Update status with displacement statistics
-            stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
-            original_shape = reference.shape
-            downscaled_shape = self.current_flow.shape[:2]
-            self._update_status(
-                f"Max displacement: {stats['max']:.2f} pixels\n"
-                f"Mean displacement: {stats['mean']:.2f} pixels\n"
-                f"Flow field resolution: {downscaled_shape} \n(from {original_shape})",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self._set_controls_enabled(True)
-
     def update_parameters(self):
         """Update analysis parameters."""
         try:
@@ -133,8 +76,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         flow_params_group = QGroupBox("Optical Flow Parameters")
         flow_params_layout = QVBoxLayout()
 
-        downscaling_group = QGroupBox("Spatial Averaging")
-        downscaling_layout = QVBoxLayout()
+        scaling_group = QGroupBox("Scaling Parameters")
+        scaling_layout = QVBoxLayout()
 
         # Define core optical flow parameters
         flow_params = [
@@ -164,31 +107,101 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             row.addWidget(spin)
             flow_params_layout.addLayout(row)
 
-        # Add downscaling parameter in its own section
+        # Add scaling parameters
+        # Downscale factor
         downscale_row = QHBoxLayout()
         downscale_row.addWidget(QLabel("Local Averaging Factor:"))
-
         downscale_spin = QSpinBox()
         downscale_spin.setRange(1, 10)
         downscale_spin.setSingleStep(1)
         downscale_spin.setValue(1)
         downscale_spin.setToolTip("Factor for spatial averaging of displacement field (1 = no averaging)")
-
         self.parameter_spins['downscale_factor'] = downscale_spin
         downscale_row.addWidget(downscale_spin)
-        downscaling_layout.addLayout(downscale_row)
+        scaling_layout.addLayout(downscale_row)
+
+        # Pixel size
+        pixel_size_row = QHBoxLayout()
+        pixel_size_row.addWidget(QLabel("Pixel Size (µm):"))
+        pixel_size_spin = QDoubleSpinBox()
+        pixel_size_spin.setRange(0.01, 100.0)
+        pixel_size_spin.setSingleStep(0.01)
+        pixel_size_spin.setValue(1.0)
+        pixel_size_spin.setDecimals(3)
+        pixel_size_spin.setToolTip("Size of one pixel in micrometers")
+        self.parameter_spins['pixel_size'] = pixel_size_spin
+        pixel_size_row.addWidget(pixel_size_spin)
+        scaling_layout.addLayout(pixel_size_row)
 
         # Set layouts for groups
         flow_params_group.setLayout(flow_params_layout)
-        downscaling_group.setLayout(downscaling_layout)
+        scaling_group.setLayout(scaling_layout)
 
         # Add groups to main layout
         layout.addWidget(flow_params_group)
-        layout.addWidget(downscaling_group)
+        layout.addWidget(scaling_group)
         layout.addStretch()
 
         group.setLayout(layout)
         return group
+
+    def preview_displacement(self):
+        """Preview displacement calculation on current frame."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating displacement...", 0)
+
+            current_frame = self.viewer.dims.current_step[0]
+            reference = self.data_manager.displacement_reference_image
+            bead_stack = self.data_manager.displacement_bead_stack
+            moving = bead_stack[current_frame]
+
+            # Calculate initial flow in pixels
+            flow_pixels = self.analyzer.calculate_flow(reference, moving)
+
+            # Apply downscaling if factor > 1
+            downscale_factor = self.parameter_spins['downscale_factor'].value()
+            if downscale_factor > 1:
+                flow_pixels = self.analyzer.downscale_flow(flow_pixels, downscale_factor)
+
+            # Convert flow to micrometers
+            pixel_size = self.parameter_spins['pixel_size'].value()
+            self.current_flow = flow_pixels * pixel_size
+
+            # Get visualization parameters (d_max already in µm)
+            vis_params = {
+                'd_max': self.visualization_params['d_max'].value(),
+                'vector_stride': self.visualization_params['vector_stride'].value(),
+                'arrow_scale': self.visualization_params['arrow_scale'].value()
+            }
+
+            # Update visualization through visualization manager
+            self.visualization_manager.visualize_displacement_preview(
+                self.current_flow,  # Already in µm
+                vis_params['d_max'],
+                vis_params['vector_stride'],
+                vis_params['arrow_scale'],
+                downscale_factor=downscale_factor
+            )
+
+            # Update status with displacement statistics (already in µm)
+            stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
+            original_shape = reference.shape
+            downscaled_shape = self.current_flow.shape[:2]
+            self._update_status(
+                f"Max displacement: {stats['max']:.2f} µm\n"
+                f"Mean displacement: {stats['mean']:.2f} µm\n"
+                f"Flow field resolution: {downscaled_shape} \n(from {original_shape})",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self._set_controls_enabled(True)
 
     def analyze_all_frames(self):
         """Analyze displacement for all frames."""
@@ -206,6 +219,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 'arrow_scale': self.visualization_params['arrow_scale'].value()
             }
             downscale_factor = self.parameter_spins['downscale_factor'].value()
+            pixel_size = self.parameter_spins['pixel_size'].value()
 
             reference = self.data_manager.displacement_reference_image
             bead_stack = self.data_manager.displacement_bead_stack
@@ -221,8 +235,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                     frame_progress * 0.4
                 )
 
-                # Calculate flow at full resolution
-                flow = self.analyzer.calculate_flow(reference, bead_stack[i])
+                # Calculate flow in pixels
+                flow_pixels = self.analyzer.calculate_flow(reference, bead_stack[i])
 
                 # Downscale if requested
                 if downscale_factor > 1:
@@ -231,29 +245,32 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                         f"Downscaling flow field...",
                         frame_progress * 0.8
                     )
-                    flow = self.analyzer.downscale_flow(flow, downscale_factor)
+                    flow_pixels = self.analyzer.downscale_flow(flow_pixels, downscale_factor)
 
-                flows.append(flow)
+                # Convert to micrometers and store
+                flow_microns = flow_pixels * pixel_size
+                flows.append(flow_microns)
 
-            # Package results with downscale factor included
+            # Package results
             results = {
                 'flows': flows,
                 'parameters': {
                     'tvl1_params': self.analyzer.params,
-                    'downscale_factor': downscale_factor  # Include downscale factor in results
+                    'downscale_factor': downscale_factor,
+                    'pixel_size': pixel_size  # Store pixel size in results
                 },
                 'visualization_params': vis_params,
                 'original_shape': reference.shape,
-                'flow_shape': flows[0].shape[:2]
+                'flow_shape': flows[0].shape[:2],
+                'units': 'micrometers'  # Add units information
             }
 
-            # Update visualization with downscale factor
+            # Update visualization
             self.data_manager.displacement_results = results
             self.visualization_manager.visualize_displacement_results(
                 results,
-                downscale_factor=downscale_factor  # Pass downscale factor to visualization
+                downscale_factor=downscale_factor
             )
-            self.colorbar_manager.update_limits(0, vis_params['d_max'])
 
             # Emit results and update status
             self.displacement_calculated.emit(results)
@@ -267,6 +284,46 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
+
+    def _create_visualization_parameters_group(self) -> QGroupBox:
+        """Create the visualization parameters group."""
+        group = QGroupBox("Visualization Parameters")
+        layout = QVBoxLayout()
+
+        # Vector stride
+        stride_layout = QHBoxLayout()
+        stride_layout.addWidget(QLabel("Vector Stride:"))
+        self.visualization_params['vector_stride'] = QSpinBox()
+        self.visualization_params['vector_stride'].setRange(1, 100)
+        self.visualization_params['vector_stride'].setValue(20)
+        self.visualization_params['vector_stride'].setToolTip("Display every nth vector")
+        stride_layout.addWidget(self.visualization_params['vector_stride'])
+        layout.addLayout(stride_layout)
+
+        # Arrow scale
+        arrow_layout = QHBoxLayout()
+        arrow_layout.addWidget(QLabel("Arrow Scale:"))
+        self.visualization_params['arrow_scale'] = QDoubleSpinBox()
+        self.visualization_params['arrow_scale'].setRange(0.1, 50.0)
+        self.visualization_params['arrow_scale'].setSingleStep(0.5)
+        self.visualization_params['arrow_scale'].setValue(1.0)
+        self.visualization_params['arrow_scale'].setToolTip("Scale factor for arrow length")
+        arrow_layout.addWidget(self.visualization_params['arrow_scale'])
+        layout.addLayout(arrow_layout)
+
+        # Maximum displacement (now in µm)
+        dmax_layout = QHBoxLayout()
+        dmax_layout.addWidget(QLabel("Max Displacement (µm):"))
+        self.visualization_params['d_max'] = QDoubleSpinBox()
+        self.visualization_params['d_max'].setRange(0.1, 200.0)
+        self.visualization_params['d_max'].setSingleStep(1.0)
+        self.visualization_params['d_max'].setValue(10.0)
+        self.visualization_params['d_max'].setToolTip("Maximum displacement for color scaling (in µm)")
+        dmax_layout.addWidget(self.visualization_params['d_max'])
+        layout.addLayout(dmax_layout)
+
+        group.setLayout(layout)
+        return group
     def _update_ui_state(self):
         """Update UI elements based on current state."""
         # Only look at displacement input data, ignore preprocessing
@@ -432,46 +489,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         self.setLayout(main_layout)
         self._register_controls()
-
-    def _create_visualization_parameters_group(self) -> QGroupBox:
-        """Create the visualization parameters group."""
-        group = QGroupBox("Visualization Parameters")
-        layout = QVBoxLayout()
-
-        # Vector stride
-        stride_layout = QHBoxLayout()
-        stride_layout.addWidget(QLabel("Vector Stride:"))
-        self.visualization_params['vector_stride'] = QSpinBox()
-        self.visualization_params['vector_stride'].setRange(1, 100)
-        self.visualization_params['vector_stride'].setValue(20)
-        self.visualization_params['vector_stride'].setToolTip("Display every nth vector")
-        stride_layout.addWidget(self.visualization_params['vector_stride'])
-        layout.addLayout(stride_layout)
-
-        # Arrow scale
-        arrow_layout = QHBoxLayout()
-        arrow_layout.addWidget(QLabel("Arrow Scale:"))
-        self.visualization_params['arrow_scale'] = QDoubleSpinBox()
-        self.visualization_params['arrow_scale'].setRange(0.1, 50.0)
-        self.visualization_params['arrow_scale'].setSingleStep(0.5)
-        self.visualization_params['arrow_scale'].setValue(1.0)
-        self.visualization_params['arrow_scale'].setToolTip("Scale factor for arrow length")
-        arrow_layout.addWidget(self.visualization_params['arrow_scale'])
-        layout.addLayout(arrow_layout)
-
-        # Maximum displacement
-        dmax_layout = QHBoxLayout()
-        dmax_layout.addWidget(QLabel("Max Displacement:"))
-        self.visualization_params['d_max'] = QDoubleSpinBox()
-        self.visualization_params['d_max'].setRange(0.1, 200.0)
-        self.visualization_params['d_max'].setSingleStep(1.0)
-        self.visualization_params['d_max'].setValue(10.0)
-        self.visualization_params['d_max'].setToolTip("Maximum displacement for color scaling")
-        dmax_layout.addWidget(self.visualization_params['d_max'])
-        layout.addLayout(dmax_layout)
-
-        group.setLayout(layout)
-        return group
 
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame."""

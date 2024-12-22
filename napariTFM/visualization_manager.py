@@ -193,16 +193,12 @@ class VisualizationManager(ErrorHandlingMixin):
         """Visualize displacement preview for a single frame."""
         try:
             # If downscaled, upscale flow for visualization only
-            if downscale_factor > 1:
-                display_flow = cv2.resize(
-                    flow,
-                    (flow.shape[1] * downscale_factor, flow.shape[0] * downscale_factor),
-                    interpolation=cv2.INTER_LINEAR
-                )
-                # Scale the vectors to account for resolution change
-                display_flow *= downscale_factor
-            else:
-                display_flow = flow
+            display_flow = cv2.resize(
+                flow,
+                (flow.shape[1] * downscale_factor, flow.shape[0] * downscale_factor),
+                interpolation=cv2.INTER_LINEAR
+            )
+
 
             # Scale flow for visualization
             flow_scaled = display_flow * arrow_scale
