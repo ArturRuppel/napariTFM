@@ -53,19 +53,15 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self):
         """Update UI elements based on current state."""
-        # Check if displacement data is available
-        has_displacement_data = (
-                hasattr(self.data_manager, 'displacement_results') and
-                self.data_manager.displacement_results is not None and
-                'flows' in self.data_manager.displacement_results
-        )
+        # Check if required data is available using DataManager method
+        has_required_data = self.data_manager.has_required_force_data()
 
         # Update button states
-        self.calculate_btn.setEnabled(has_displacement_data)
+        self.calculate_btn.setEnabled(has_required_data)
 
         # Update status message
-        if not has_displacement_data:
-            self._update_status("Displacement analysis required before force calculation")
+        if not has_required_data:
+            self._update_status("Required displacement data not available")
         else:
             self._update_status("Ready for force calculation")
 
@@ -82,7 +78,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 self.visualization_params['vector_stride'].setValue(vis_params.get('vector_stride', 20))
                 self.visualization_params['arrow_scale'].setValue(vis_params.get('arrow_scale', 1.0))
                 self.visualization_params['f_max'].setValue(vis_params.get('f_max', 1000.0))
-
     def calculate_forces(self):
         """Calculate traction forces using the TractionForceCalculator."""
         try:
@@ -216,7 +211,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         right_layout.addStretch()
 
         right_container.setLayout(right_layout)
-        right_container.setFixedWidth(300)
+        right_container.setFixedWidth(350)
 
         main_layout.addWidget(right_container)
         main_layout.addStretch(1)
