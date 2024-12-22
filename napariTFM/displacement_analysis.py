@@ -20,6 +20,8 @@ class TVL1Parameters:
     gamma: float = 0.0
     median_filtering: int = 5
     use_initial_flow: bool = False
+    downscale_factor: int = 1
+
 class DisplacementAnalyzer:
     """Analyzes displacements using TV-L1 optical flow."""
 
@@ -40,13 +42,37 @@ class DisplacementAnalyzer:
         )
 
     def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
-        """Calculate optical flow between reference and moving image."""
+        """Calculate optical flow between reference and moving image at full resolution."""
         # Ensure images are float32 and normalized
         ref_float = (reference.astype(np.float32) - reference.min()) / (reference.max() - reference.min())
         mov_float = (moving.astype(np.float32) - moving.min()) / (moving.max() - moving.min())
 
         return self.flow_algorithm.calc(ref_float, mov_float, None)
 
+    def downscale_flow(self, flow: np.ndarray, factor: int) -> np.ndarray:
+        """Downscale flow field using local averaging."""
+        if factor <= 1:
+            return flow
+
+        h, w = flow.shape[:2]
+        new_h, new_w = h // factor, w // factor
+
+        # Handle each component separately to preserve vector information
+        downscaled = np.zeros((new_h, new_w, 2))
+
+        for i in range(new_h):
+            for j in range(new_w):
+                # Extract block
+                y_start = i * factor
+                y_end = min((i + 1) * factor, h)
+                x_start = j * factor
+                x_end = min((j + 1) * factor, w)
+
+                block = flow[y_start:y_end, x_start:x_end]
+                # Average the x and y components separately
+                downscaled[i, j] = np.mean(block, axis=(0, 1))
+
+        return downscaled
 
     def apply_flow(self, image: np.ndarray, flow: np.ndarray) -> np.ndarray:
         """Apply flow field to an image using interpolation."""

@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple, Any
 
+import cv2
 import napari
 import numpy as np
 from matplotlib import pyplot as plt
@@ -186,17 +187,30 @@ class VisualizationManager(ErrorHandlingMixin):
             flow: np.ndarray,
             d_max: float,
             vector_stride: int,
-            arrow_scale: float
+            arrow_scale: float,
+            downscale_factor: int = 1
     ) -> None:
         """Visualize displacement preview for a single frame."""
         try:
+            # If downscaled, upscale flow for visualization only
+            if downscale_factor > 1:
+                display_flow = cv2.resize(
+                    flow,
+                    (flow.shape[1] * downscale_factor, flow.shape[0] * downscale_factor),
+                    interpolation=cv2.INTER_LINEAR
+                )
+                # Scale the vectors to account for resolution change
+                display_flow *= downscale_factor
+            else:
+                display_flow = flow
+
             # Scale flow for visualization
-            flow_scaled = flow * arrow_scale
+            flow_scaled = display_flow * arrow_scale
 
             # Create vector data
             vectors, colors = self._create_vector_visualization(
                 flow_scaled,
-                flow,
+                display_flow,
                 vector_stride,
                 d_max
             )
@@ -204,7 +218,7 @@ class VisualizationManager(ErrorHandlingMixin):
             # Add or update visualization layers
             with self.viewer.events.blocker_all():
                 # Add magnitude
-                magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
+                magnitude = np.sqrt(np.sum(display_flow ** 2, axis=-1))
 
                 if 'magnitude' in self._layers and self._layers['magnitude'] is not None:
                     self._layers['magnitude'].data = magnitude
@@ -226,7 +240,7 @@ class VisualizationManager(ErrorHandlingMixin):
                     else:
                         self._layers['vectors'] = self.viewer.add_vectors(
                             vectors,
-                            name='Displacement Vectors',  # Fixed name
+                            name='Displacement Vectors',
                             edge_color=colors,
                             edge_width=2,
                             vector_style='arrow',
@@ -238,30 +252,49 @@ class VisualizationManager(ErrorHandlingMixin):
             logger.error(f"Failed to visualize displacement preview: {str(e)}")
             raise
 
-    def visualize_displacement_results(self, results: Dict) -> None:
+    def visualize_displacement_results(self, results: Dict, downscale_factor: int = 1) -> None:
         """Visualize displacement results for all frames."""
         try:
             flows = results['flows']
             vis_params = results['visualization_params']
 
-            # Create visualization stacks
+            # Create visualization stacks - use original flow shape before upscaling
             num_frames = len(flows)
-            magnitudes = np.zeros((num_frames, *flows[0].shape[:2]))
+            # Initialize magnitudes with the upscaled shape
+            if downscale_factor > 1:
+                upscaled_shape = (
+                    flows[0].shape[0] * downscale_factor,
+                    flows[0].shape[1] * downscale_factor
+                )
+                magnitudes = np.zeros((num_frames, *upscaled_shape))
+            else:
+                magnitudes = np.zeros((num_frames, *flows[0].shape[:2]))
+
             vector_data_cache = []
             vector_colors_cache = []
 
-            # Process each frame
             for i in range(num_frames):
-                # Calculate magnitude
-                magnitude = np.sqrt(np.sum(flows[i] ** 2, axis=-1))
+                # If downscaled, upscale flow for visualization
+                if downscale_factor > 1:
+                    display_flow = cv2.resize(
+                        flows[i],
+                        (flows[i].shape[1] * downscale_factor, flows[i].shape[0] * downscale_factor),
+                        interpolation=cv2.INTER_LINEAR
+                    )
+                    # Scale the vectors to account for resolution change
+                    display_flow *= downscale_factor
+                else:
+                    display_flow = flows[i]
 
-                magnitudes[i] = magnitude
+                # Calculate magnitude from display flow - now matches the upscaled size
+                magnitude = np.sqrt(np.sum(display_flow ** 2, axis=-1))
+                magnitudes[i] = magnitude  # This should now match in size
 
-                # Calculate vector data
-                flow_scaled = flows[i] * vis_params['arrow_scale']
+                # Calculate vector data using display flow
+                flow_scaled = display_flow * vis_params['arrow_scale']
                 vectors, colors = self._create_vector_visualization(
                     flow_scaled,
-                    flows[i],
+                    display_flow,
                     vis_params['vector_stride'],
                     vis_params['d_max']
                 )
@@ -310,7 +343,6 @@ class VisualizationManager(ErrorHandlingMixin):
         except Exception as e:
             logger.error(f"Failed to visualize displacement results: {str(e)}")
             raise
-
     def update_force_visualization(self, results: Dict[str, Any], visualization_params: Dict[str, Any]) -> None:
         """Update force visualization with current results and parameters."""
         try:

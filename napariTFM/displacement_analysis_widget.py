@@ -46,7 +46,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         for spin in self.parameter_spins.values():
             spin.valueChanged.connect(self.update_parameters)
 
-
     def preview_displacement(self):
         """Preview displacement calculation on current frame."""
         try:
@@ -61,7 +60,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             bead_stack = self.data_manager.displacement_bead_stack
             moving = bead_stack[current_frame]
 
+            # Calculate initial flow
             self.current_flow = self.analyzer.calculate_flow(reference, moving)
+
+            # Apply downscaling if factor > 1
+            downscale_factor = self.parameter_spins['downscale_factor'].value()
+            if downscale_factor > 1:
+                self.current_flow = self.analyzer.downscale_flow(self.current_flow, downscale_factor)
 
             # Get visualization parameters
             vis_params = {
@@ -75,7 +80,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 self.current_flow,
                 vis_params['d_max'],
                 vis_params['vector_stride'],
-                vis_params['arrow_scale']
+                vis_params['arrow_scale'],
+                downscale_factor=downscale_factor
             )
 
             # Update colorbar with current d_max
@@ -83,9 +89,12 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
             # Update status with displacement statistics
             stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
+            original_shape = reference.shape
+            downscaled_shape = self.current_flow.shape[:2]
             self._update_status(
                 f"Max displacement: {stats['max']:.2f} pixels\n"
-                f"Mean displacement: {stats['mean']:.2f} pixels",
+                f"Mean displacement: {stats['mean']:.2f} pixels\n"
+                f"Flow field resolution: {downscaled_shape} \n(from {original_shape})",
                 100
             )
 
@@ -93,6 +102,93 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
+
+    def update_parameters(self):
+        """Update analysis parameters."""
+        try:
+            params = TVL1Parameters(
+                tau=self.parameter_spins['tau'].value(),
+                lambda_=self.parameter_spins['lambda_'].value(),
+                theta=self.parameter_spins['theta'].value(),
+                nscales=self.parameter_spins['nscales'].value(),
+                warps=self.parameter_spins['warps'].value(),
+                epsilon=self.parameter_spins['epsilon'].value(),
+                inner_iterations=self.parameter_spins['inner_iterations'].value(),
+                outer_iterations=self.parameter_spins['outer_iterations'].value(),
+                scale_step=self.parameter_spins['scale_step'].value(),
+                median_filtering=self.parameter_spins['median_filtering'].value(),
+                downscale_factor=self.parameter_spins['downscale_factor'].value()  # Added to params update
+            )
+            self.analyzer = DisplacementAnalyzer(params)
+
+        except ValueError as e:
+            self._handle_error(str(e))
+
+    def _create_parameters_group(self) -> QGroupBox:
+        """Create the analysis parameters group."""
+        group = QGroupBox("Analysis Parameters")
+        layout = QVBoxLayout()
+
+        # Create sections for better organization
+        flow_params_group = QGroupBox("Optical Flow Parameters")
+        flow_params_layout = QVBoxLayout()
+
+        downscaling_group = QGroupBox("Spatial Averaging")
+        downscaling_layout = QVBoxLayout()
+
+        # Define core optical flow parameters
+        flow_params = [
+            ("tau", "Tau:", 0.01, 1.0, 0.01, 0.25),
+            ("lambda_", "Lambda:", 0.01, 1.0, 0.01, 0.4),
+            ("theta", "Theta:", 0.1, 1.0, 0.1, 0.3),
+            ("nscales", "Pyramid Scales:", 1, 10, 1, 3),
+            ("warps", "Warps:", 1, 10, 1, 3),
+            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001, 0.01),
+            ("inner_iterations", "Inner Iterations:", 1, 50, 1, 15),
+            ("outer_iterations", "Outer Iterations:", 1, 20, 1, 5),
+            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01, 0.5),
+            ("median_filtering", "Median Filter Size:", 1, 9, 2, 5),
+        ]
+
+        # Add optical flow parameters
+        for param_name, label, min_val, max_val, step, default in flow_params:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+
+            spin = QDoubleSpinBox() if isinstance(default, float) else QSpinBox()
+            spin.setRange(min_val, max_val)
+            spin.setSingleStep(step)
+            spin.setValue(default)
+
+            self.parameter_spins[param_name] = spin
+            row.addWidget(spin)
+            flow_params_layout.addLayout(row)
+
+        # Add downscaling parameter in its own section
+        downscale_row = QHBoxLayout()
+        downscale_row.addWidget(QLabel("Local Averaging Factor:"))
+
+        downscale_spin = QSpinBox()
+        downscale_spin.setRange(1, 10)
+        downscale_spin.setSingleStep(1)
+        downscale_spin.setValue(1)
+        downscale_spin.setToolTip("Factor for spatial averaging of displacement field (1 = no averaging)")
+
+        self.parameter_spins['downscale_factor'] = downscale_spin
+        downscale_row.addWidget(downscale_spin)
+        downscaling_layout.addLayout(downscale_row)
+
+        # Set layouts for groups
+        flow_params_group.setLayout(flow_params_layout)
+        downscaling_group.setLayout(downscaling_layout)
+
+        # Add groups to main layout
+        layout.addWidget(flow_params_group)
+        layout.addWidget(downscaling_group)
+        layout.addStretch()
+
+        group.setLayout(layout)
+        return group
 
     def analyze_all_frames(self):
         """Analyze displacement for all frames."""
@@ -103,42 +199,69 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._set_controls_enabled(False)
             self._update_status("Starting analysis...", 0)
 
-            # Get current visualization parameters
+            # Get parameters
             vis_params = {
                 'd_max': self.visualization_params['d_max'].value(),
                 'vector_stride': self.visualization_params['vector_stride'].value(),
                 'arrow_scale': self.visualization_params['arrow_scale'].value()
             }
+            downscale_factor = self.parameter_spins['downscale_factor'].value()
 
             reference = self.data_manager.displacement_reference_image
             bead_stack = self.data_manager.displacement_bead_stack
+            total_frames = len(bead_stack)
 
             # Process all frames
             flows = []
-            for i in range(len(bead_stack)):
-                progress = (i + 1) / len(bead_stack) * 100
-                self._update_status(f"Processing frame {i + 1}/{len(bead_stack)}...", progress)
+            for i in range(total_frames):
+                frame_progress = (i + 1) / total_frames * 100
+                self._update_status(
+                    f"Processing frame {i + 1}/{total_frames}...\n"
+                    f"Computing optical flow...",
+                    frame_progress * 0.4
+                )
 
+                # Calculate flow at full resolution
                 flow = self.analyzer.calculate_flow(reference, bead_stack[i])
+
+                # Downscale if requested
+                if downscale_factor > 1:
+                    self._update_status(
+                        f"Processing frame {i + 1}/{total_frames}...\n"
+                        f"Downscaling flow field...",
+                        frame_progress * 0.8
+                    )
+                    flow = self.analyzer.downscale_flow(flow, downscale_factor)
+
                 flows.append(flow)
 
-            # Package results
+            # Package results with downscale factor included
             results = {
                 'flows': flows,
-                'parameters': self.analyzer.params,
-                'visualization_params': vis_params
+                'parameters': {
+                    'tvl1_params': self.analyzer.params,
+                    'downscale_factor': downscale_factor  # Include downscale factor in results
+                },
+                'visualization_params': vis_params,
+                'original_shape': reference.shape,
+                'flow_shape': flows[0].shape[:2]
             }
 
-            # Store results and update visualization
+            # Update visualization with downscale factor
             self.data_manager.displacement_results = results
-            self.visualization_manager.visualize_displacement_results(results)
-
-            # Update colorbar
+            self.visualization_manager.visualize_displacement_results(
+                results,
+                downscale_factor=downscale_factor  # Pass downscale factor to visualization
+            )
             self.colorbar_manager.update_limits(0, vis_params['d_max'])
 
             # Emit results and update status
             self.displacement_calculated.emit(results)
-            self._update_status("Analysis complete", 100)
+            self._update_status(
+                f"Analysis complete\n"
+                f"Flow field resolution: {flows[0].shape[:2]} \n(from {reference.shape})",
+                100
+            )
 
         except Exception as e:
             self._handle_error(str(e))
@@ -310,40 +433,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.setLayout(main_layout)
         self._register_controls()
 
-    def _create_parameters_group(self) -> QGroupBox:
-        """Create the analysis parameters group."""
-        group = QGroupBox("Analysis Parameters")
-        layout = QVBoxLayout()
-
-        params = [
-            ("tau", "Tau:", 0.01, 1.0, 0.01, 0.25),
-            ("lambda_", "Lambda:", 0.01, 1.0, 0.01, 0.4),
-            ("theta", "Theta:", 0.1, 1.0, 0.1, 0.3),
-            ("nscales", "Pyramid Scales:", 1, 10, 1, 3),
-            ("warps", "Warps:", 1, 10, 1, 3),
-            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001, 0.01),
-            ("inner_iterations", "Inner Iterations:", 1, 50, 1, 15),
-            ("outer_iterations", "Outer Iterations:", 1, 20, 1, 5),
-            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01, 0.5),
-            ("median_filtering", "Median Filter Size:", 1, 9, 2, 5)
-        ]
-
-        for param_name, label, min_val, max_val, step, default in params:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-
-            spin = QDoubleSpinBox() if isinstance(default, float) else QSpinBox()
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
-
-            self.parameter_spins[param_name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        group.setLayout(layout)
-        return group
-
     def _create_visualization_parameters_group(self) -> QGroupBox:
         """Create the visualization parameters group."""
         group = QGroupBox("Visualization Parameters")
@@ -411,27 +500,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         frame.setLayout(layout)
         return frame
-
-
-    def update_parameters(self):
-        """Update analysis parameters."""
-        try:
-            params = TVL1Parameters(
-                tau=self.parameter_spins['tau'].value(),
-                lambda_=self.parameter_spins['lambda_'].value(),
-                theta=self.parameter_spins['theta'].value(),
-                nscales=self.parameter_spins['nscales'].value(),
-                warps=self.parameter_spins['warps'].value(),
-                epsilon=self.parameter_spins['epsilon'].value(),
-                inner_iterations=self.parameter_spins['inner_iterations'].value(),
-                outer_iterations=self.parameter_spins['outer_iterations'].value(),
-                scale_step=self.parameter_spins['scale_step'].value(),
-                median_filtering=self.parameter_spins['median_filtering'].value()
-            )
-            self.analyzer = DisplacementAnalyzer(params)
-
-        except ValueError as e:
-            self._handle_error(str(e))
 
     def _on_frame_changed(self, event=None):
         """Handle frame change events."""
