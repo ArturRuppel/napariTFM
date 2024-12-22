@@ -187,6 +187,10 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 downscale_factor=downscale_factor
             )
 
+            # Update colorbar with current d_max
+            d_max = self.visualization_params['d_max'].value()
+            self.colorbar_manager.update_limits(0, d_max)
+
             # Update status with displacement statistics (already in µm)
             stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
             original_shape = reference.shape
@@ -271,6 +275,10 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 results,
                 downscale_factor=downscale_factor
             )
+
+            # Update colorbar with current d_max
+            d_max = self.visualization_params['d_max'].value()
+            self.colorbar_manager.update_limits(0, d_max)
 
             # Emit results and update status
             self.displacement_calculated.emit(results)
@@ -455,7 +463,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         colorbar_group = self.create_colorbar_widget(
             colormap_name='viridis',
-            label="Displacement (pixels)",
+            label="Displacement (µm)",
             clim=(10, 0),
             colorbar_manager=self.colorbar_manager
         )
