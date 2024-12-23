@@ -432,7 +432,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         # Update basic parameters
         self.young_modulus = self.young_spin.value()
         self.poisson_ratio = self.poisson_spin.value()
-        self.regularization = self.regularization_spin.value() * 1e-21
+        self.regularization = 10 ** self.regularization_spin.value()
         self.filter_sigma = self.filter_sigma_spin.value()
 
         # Handle pixel size inheritance
@@ -476,6 +476,8 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         # Update UI state based on method
         self._update_ui_state()
 
+
+
     def reset_parameters(self):
         """Reset all parameters to defaults."""
         self._using_inherited_pixel_size = False  # Reset inheritance state
@@ -515,6 +517,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
         for control in controls:
             self.register_control(control)
+
     def _create_calculation_params_group(self) -> QGroupBox:
         """Create the calculation parameters group."""
         group = QGroupBox("Calculation Parameters")
@@ -541,18 +544,33 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         height_layout.addWidget(self.height_spin)
         layout.addLayout(height_layout)
 
-        # Regularization parameter
+        # Regularization controls container
+        reg_container = QGroupBox("Regularization")
+        reg_container_layout = QVBoxLayout()
+
+        # Regularization parameter with log scale
         reg_layout = QHBoxLayout()
-        reg_layout.addWidget(QLabel("Regularization:"))
-        self.regularization_spin = QSpinBox()
-        self.regularization_spin.setRange(1, 100000)
-        self.regularization_spin.setValue(1000)
+        reg_layout.addWidget(QLabel("Parameter (10^x):"))
+        self.regularization_spin = QDoubleSpinBox()
+        self.regularization_spin.setRange(-21, 0)  # 10^-12 to 10^0
+        self.regularization_spin.setValue(-17)  # Default to 10^-6
+        self.regularization_spin.setSingleStep(0.5)
+        self.regularization_spin.setDecimals(1)
         self.regularization_spin.setToolTip(
-            "Regularization parameter (will be multiplied by 10⁻²¹)\n"
-            "Typical values: 1000-10000"
+            "Regularization parameter in scientific notation (10^x)\n"
+            "Typical values: 10^-20 to 10^-12"
         )
         reg_layout.addWidget(self.regularization_spin)
-        layout.addLayout(reg_layout)
+        reg_container_layout.addLayout(reg_layout)
+
+        # Add GCV button
+        self.gcv_button = QPushButton("Auto-select (GCV)")
+        self.gcv_button.setToolTip("Set regularization parameter using Generalized Cross-Validation")
+        self.gcv_button.clicked.connect(self._set_regularization_with_gcv)
+        reg_container_layout.addWidget(self.gcv_button)
+
+        reg_container.setLayout(reg_container_layout)
+        layout.addWidget(reg_container)
 
         # Filter sigma
         filter_layout = QHBoxLayout()
@@ -566,7 +584,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
-
     def _update_ui_state(self):
         """Update UI elements based on current state."""
         # Check if required data is available using DataManager method
@@ -807,3 +824,59 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             self._handle_error(f"Cleanup failed: {str(e)}")
 
         super().cleanup()
+
+    def _set_regularization_with_gcv(self):
+        """Handle GCV-based regularization parameter selection."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Optimizing regularization parameter...", 0)
+
+            # Get displacement data for current frame
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            current_frame = self.viewer.dims.current_step[0]
+            flow = flows[current_frame]
+
+            # Extract u and v components
+            u = flow[..., 0]
+            v = flow[..., 1]
+
+            # Initialize calculator if needed
+            if self.calculator is None:
+                self._initialize_calculator()
+
+            # Get optimal regularization parameter
+            reg_param = self.calculator.set_regularization_with_gcv(
+                u, v,
+                progress_callback=lambda p: self._update_status(
+                    f"Optimizing regularization parameter... {p:.0f}%", p
+                )
+            )
+
+            # Convert to log scale and update UI
+            log_reg = np.log10(reg_param)
+            self.regularization_spin.setValue(log_reg)
+
+            self._update_status(
+                f"Regularization parameter set to {reg_param:.2e}",
+                100
+            )
+
+        except NotImplementedError:
+            self._update_status("GCV optimization not yet implemented", 0)
+            QMessageBox.information(
+                self,
+                "Not Available",
+                "GCV optimization will be implemented in a future update."
+            )
+        except Exception as e:
+            self._handle_error(self.create_error(
+                message="Failed to optimize regularization parameter",
+                details=str(e),
+                recovery_hint="Check input data and parameters"
+            ))
+        finally:
+            self._set_controls_enabled(True)

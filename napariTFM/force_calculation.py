@@ -500,3 +500,37 @@ class TractionForceCalculator:
             'std_force': float(np.std(magnitude)),
             'total_strain_energy': float(self.calculate_strain_energy())
         }
+
+    def set_regularization_with_gcv(
+            self,
+            u: np.ndarray,
+            v: np.ndarray,
+            progress_callback: Optional[callable] = None
+    ) -> float:
+        """
+        Set regularization parameter using Generalized Cross-Validation.
+
+        Parameters
+        ----------
+        u : np.ndarray
+            x-component of displacement field
+        v : np.ndarray
+            y-component of displacement field
+        progress_callback : callable, optional
+            Callback function to report progress (0-100)
+
+        Returns
+        -------
+        float
+            Selected regularization parameter
+
+        Raises
+        ------
+        ValueError
+            If displacement fields are invalid
+        RuntimeError
+            If GCV optimization fails
+        """
+        # TODO: Implement GCV optimization
+        # This will be implemented in a future update
+        raise NotImplementedError("GCV optimization not yet implemented")
