@@ -844,9 +844,8 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             u = flow[..., 0]
             v = flow[..., 1]
 
-            # Initialize calculator if needed
-            if self.calculator is None:
-                self._initialize_calculator()
+            # Always initialize calculator with current parameters
+            self._initialize_calculator()
 
             # Get optimal regularization parameter
             reg_param = self.calculator.set_regularization_with_gcv(
@@ -865,13 +864,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 100
             )
 
-        except NotImplementedError:
-            self._update_status("GCV optimization not yet implemented", 0)
-            QMessageBox.information(
-                self,
-                "Not Available",
-                "GCV optimization will be implemented in a future update."
-            )
         except Exception as e:
             self._handle_error(self.create_error(
                 message="Failed to optimize regularization parameter",
