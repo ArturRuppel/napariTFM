@@ -339,7 +339,68 @@ class VisualizationManager(ErrorHandlingMixin):
         except Exception as e:
             logger.error(f"Failed to visualize displacement results: {str(e)}")
             raise
-    def update_force_visualization(self, results: Dict[str, Any], visualization_params: Dict[str, Any]) -> None:
+
+    def visualize_force_preview(
+            self,
+            force_x: np.ndarray,
+            force_y: np.ndarray,
+            f_max: float,
+            vector_stride: int,
+            arrow_scale: float
+    ) -> None:
+        """Visualize force preview for a single frame."""
+        try:
+            # Create combined force field
+            force_field = np.stack([force_x, force_y], axis=-1)
+
+            # Create vector data and colors
+            vectors, colors = self._create_vector_visualization(
+                force_field * arrow_scale,
+                force_field,
+                vector_stride,
+                f_max,
+                colormap='inferno'
+            )
+
+            # Add or update visualization layers
+            with self.viewer.events.blocker_all():
+                # Add magnitude
+                magnitude = np.sqrt(np.sum(force_field ** 2, axis=-1))
+                magnitude = np.clip(magnitude, 0, f_max)
+
+                if 'force_magnitude' in self._layers:
+                    self._layers['force_magnitude'].data = magnitude
+                    self._layers['force_magnitude'].contrast_limits = (0, f_max)
+                else:
+                    self._layers['force_magnitude'] = self.viewer.add_image(
+                        magnitude,
+                        name='Force Magnitude',
+                        colormap='inferno',
+                        blending='additive',
+                        contrast_limits=(0, f_max)
+                    )
+
+                # Update or create vector layer
+                if len(vectors) > 0:
+                    if 'force_vectors' in self._layers:
+                        self._layers['force_vectors'].data = vectors
+                        self._layers['force_vectors'].edge_color = colors
+                    else:
+                        self._layers['force_vectors'] = self.viewer.add_vectors(
+                            vectors,
+                            name='Force Vectors',
+                            edge_color=colors,
+                            edge_width=2,
+                            vector_style='arrow',
+                            blending='additive',
+                            length=1
+                        )
+
+        except Exception as e:
+            logger.error(f"Failed to visualize force preview: {str(e)}")
+            raise
+
+    def visualize_force_results(self, results: Dict[str, Any], visualization_params: Dict[str, Any]) -> None:
         """Update force visualization with current results and parameters."""
         try:
             # Clear existing force layers
@@ -371,13 +432,17 @@ class VisualizationManager(ErrorHandlingMixin):
                     force_vectors * arrow_scale,
                     force_vectors,
                     vector_stride,
-                    f_max
+                    f_max,
+                    colormap='inferno'
                 )
                 vector_cache['data'].append(vectors)
                 vector_cache['colors'].append(colors)
 
-            # Store vector cache in data manager
-            self.data_manager.force_vector_cache = vector_cache
+            # Store vector cache in results instead of data manager for preview case
+            if 'parameters' in results:  # Full analysis case
+                self.data_manager.force_vector_cache = vector_cache
+            else:  # Preview case
+                results['vector_cache'] = vector_cache
 
             # Add visualization layers
             with self.viewer.events.blocker_all():
@@ -401,6 +466,7 @@ class VisualizationManager(ErrorHandlingMixin):
                         edge_color=vector_cache['colors'][current_frame],
                         edge_width=2,
                         name='Force Vectors',
+                        vector_style='arrow',
                         blending='additive'
                     )
                     self._layers['force_vectors'] = vector_layer
@@ -520,9 +586,29 @@ class VisualizationManager(ErrorHandlingMixin):
             flow_scaled: np.ndarray,
             original_flow: np.ndarray,
             stride: int,
-            d_max: Optional[float]
+            d_max: Optional[float],
+            colormap: str = 'viridis'
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Create vector data and colors for visualization."""
+        """Create vector data and colors for visualization.
+
+        Parameters
+        ----------
+        flow_scaled : np.ndarray
+            Scaled flow field for vector display
+        original_flow : np.ndarray
+            Original flow field for magnitude calculation
+        stride : int
+            Spacing between vectors
+        d_max : Optional[float]
+            Maximum value for color normalization
+        colormap : str
+            Name of the matplotlib colormap to use (default: 'viridis')
+
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            Vector data and colors arrays
+        """
         h, w = flow_scaled.shape[:2]
         stride = max(1, stride)
 
@@ -565,12 +651,12 @@ class VisualizationManager(ErrorHandlingMixin):
         vectors[:, 1, 1] = U_flat  # x + dx
         vectors[:, 1, 0] = V_flat  # y + dy
 
-        # Create colors for filtered vectors
+        # Create colors for filtered vectors using specified colormap
         max_mag = d_max if d_max is not None else magnitudes.max()
         if max_mag > 0:
-            colors = plt.cm.viridis(magnitudes[mask] / max_mag)
+            colors = plt.cm.get_cmap(colormap)(magnitudes[mask] / max_mag)
         else:
-            colors = plt.cm.viridis(np.zeros(N))
+            colors = plt.cm.get_cmap(colormap)(np.zeros(N))
 
         return vectors, colors
 
