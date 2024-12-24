@@ -15,13 +15,14 @@ from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
 from .force_calculation import TractionForceCalculator, CalculationMethod
 from .data_manager import DataManager
+from .gcv_analysis import GCVAnalysis
 from .visualization_manager import VisualizationManager
 
 
 class ForceCalculationWidget(BaseAnalysisWidget):
     """Widget for calculating traction forces using FTTC method with finite thickness corrections."""
 
-    force_calculated = Signal(dict)  # Emits force calculation results
+    force_calculated = Signal(dict)
 
     def __init__(
             self,
@@ -40,23 +41,86 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.filter_sigma = 2.0  # pixels
         self.calculation_method = CalculationMethod.FFTC
 
-        # Track inherited parameters
-        self.inherited_parameters = {}
-
-        # Track parameter inheritance state
-        self._using_inherited_pixel_size = False
-
-        # Initialize other attributes
+        # Initialize calculator
         self.calculator = None
         self.colorbar_manager = ColorbarManager()
         self.visualization_params = {}
 
-        # Setup UI and connections
         self._setup_ui()
         self._connect_signals()
         self._register_controls()
         self._update_ui_state()
 
+    def _set_regularization_with_gcv(self):
+        """Handle GCV-based regularization parameter selection."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Optimizing regularization parameter...", 0)
+
+            # Initialize calculator if not already done
+            if self.calculator is None:
+                self._initialize_calculator()
+
+            # Get displacement data for current frame
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            current_frame = self.viewer.dims.current_step[0]
+            flow = flows[current_frame]
+
+            # Create GCVAnalysis instance
+            gcv = GCVAnalysis(
+                E=self.young_modulus,
+                nu=self.poisson_ratio,
+                mesh_size=4
+            )
+
+            # Calculate optimal regularization parameter
+            reg_param = gcv.calculate_gcv(
+                u_data=flow[..., 0],
+                v_data=flow[..., 1],
+                plot=True
+            )
+
+            # Scale the regularization parameter using calculator's methods
+            M, N = flow[..., 0].shape
+            pad_size = self.calculator._get_optimal_pad_size(M, N)
+            kx, ky, _ = self.calculator._calculate_wave_vectors(pad_size)
+            kmax = np.sqrt(kx.max() ** 2 + ky.max() ** 2)
+            scaled_reg = reg_param / (kmax ** 2)
+
+            # Update UI and calculator
+            log_reg = np.log10(scaled_reg)
+            self.regularization_spin.setValue(log_reg)
+            self.calculator.regularization = scaled_reg
+
+            self._update_status(
+                f"Regularization parameter set to {scaled_reg:.2e}",
+                100
+            )
+
+        except Exception as e:
+            self._update_status(
+                f"Error: Failed to optimize regularization parameter - {str(e)}",
+                0
+            )
+        finally:
+            self._set_controls_enabled(True)
+    def _initialize_calculator(self):
+        """Initialize the TractionForceCalculator with current parameters."""
+        self._update_parameters()
+
+        self.calculator = TractionForceCalculator(
+            E=self.young_modulus,
+            pixel_size=self._pixel_size * 1e-6,  # Convert microns to meters
+            nu=self.poisson_ratio,
+            regularization=self.regularization,
+            gel_height=None if self.gel_height is None else self.gel_height * 1e-6,
+            calculation_method=self.calculation_method,
+            filter_sigma=self.filter_sigma
+        )
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame."""
         frame = QFrame()
@@ -356,22 +420,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
-    def _initialize_calculator(self):
-        """Initialize the TractionForceCalculator with current parameters."""
-        # Update parameters from UI
-        self._update_parameters()
-
-        # Create calculator instance with pixel size in meters
-        self.calculator = TractionForceCalculator(
-            young_modulus=self.young_modulus,
-            pixel_size=self._pixel_size * 1e-6,  # Convert microns to meters
-            poisson_ratio=self.poisson_ratio,
-            regularization=self.regularization,
-            gel_height=None if self.gel_height is None else self.gel_height * 1e-6,  # Convert microns to meters
-            calculation_method=self.calculation_method,
-            filter_sigma=self.filter_sigma
-        )
-
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
@@ -475,8 +523,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
         # Update UI state based on method
         self._update_ui_state()
-
-
 
     def reset_parameters(self):
         """Reset all parameters to defaults."""
@@ -824,51 +870,3 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             self._handle_error(f"Cleanup failed: {str(e)}")
 
         super().cleanup()
-
-    def _set_regularization_with_gcv(self):
-        """Handle GCV-based regularization parameter selection."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Optimizing regularization parameter...", 0)
-
-            # Get displacement data for current frame
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            current_frame = self.viewer.dims.current_step[0]
-            flow = flows[current_frame]
-
-            # Extract u and v components
-            u = flow[..., 0]
-            v = flow[..., 1]
-
-            # Always initialize calculator with current parameters
-            self._initialize_calculator()
-
-            # Get optimal regularization parameter
-            reg_param = self.calculator.set_regularization_with_gcv(
-                u, v,
-                progress_callback=lambda p: self._update_status(
-                    f"Optimizing regularization parameter... {p:.0f}%", p
-                )
-            )
-
-            # Convert to log scale and update UI
-            log_reg = np.log10(reg_param)
-            self.regularization_spin.setValue(log_reg)
-
-            self._update_status(
-                f"Regularization parameter set to {reg_param:.2e}",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Failed to optimize regularization parameter",
-                details=str(e),
-                recovery_hint="Check input data and parameters"
-            ))
-        finally:
-            self._set_controls_enabled(True)

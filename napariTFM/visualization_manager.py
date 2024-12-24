@@ -277,8 +277,6 @@ class VisualizationManager(ErrorHandlingMixin):
                         (flows[i].shape[1] * downscale_factor, flows[i].shape[0] * downscale_factor),
                         interpolation=cv2.INTER_LINEAR
                     )
-                    # Scale the vectors to account for resolution change
-                    display_flow *= downscale_factor
                 else:
                     display_flow = flows[i]
 
