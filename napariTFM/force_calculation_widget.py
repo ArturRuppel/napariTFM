@@ -1,26 +1,24 @@
 import os
-from typing import Dict
-
-import napari
+from enum import Enum
+from typing import Dict, Optional
 import numpy as np
+
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QFileDialog,
-    QDoubleSpinBox, QPushButton, QFrame,
-    QProgressBar, QMessageBox, QWidget,
-    QSizePolicy, QSpinBox, QComboBox
+    QDoubleSpinBox, QPushButton, QFrame, QProgressBar, QMessageBox,
+    QWidget, QSizePolicy, QSpinBox
 )
 
 from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
-from .force_calculation import TractionForceCalculator, CalculationMethod
 from .data_manager import DataManager
-from .gcv_analysis import GCVAnalysis
 from .visualization_manager import VisualizationManager
+from .fttc import FTTC  # Import the new FTTC class
 
 
 class ForceCalculationWidget(BaseAnalysisWidget):
-    """Widget for calculating traction forces using FTTC method with finite thickness corrections."""
+    """Widget for calculating traction forces using FTTC method."""
 
     force_calculated = Signal(dict)
 
@@ -39,7 +37,9 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self._pixel_size = 0.1  # μm/pixel
         self.regularization = 1e-6
         self.filter_sigma = 2.0  # pixels
-        self.calculation_method = CalculationMethod.FFTC
+        self.mesh_size = 4  # pixels per mesh point
+        self.lanczos_exp = 1
+        self._using_inherited_pixel_size = False
 
         # Initialize calculator
         self.calculator = None
@@ -50,336 +50,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._register_controls()
         self._update_ui_state()
-
-    def _set_regularization_with_gcv(self):
-        """Handle GCV-based regularization parameter selection."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Optimizing regularization parameter...", 0)
-
-            # Initialize calculator if not already done
-            if self.calculator is None:
-                self._initialize_calculator()
-
-            # Get displacement data for current frame
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            current_frame = self.viewer.dims.current_step[0]
-            flow = flows[current_frame]
-
-            # Create GCVAnalysis instance
-            gcv = GCVAnalysis(
-                E=self.young_modulus,
-                nu=self.poisson_ratio,
-                mesh_size=4
-            )
-
-            # Calculate optimal regularization parameter
-            reg_param = gcv.calculate_gcv(
-                u_data=flow[..., 0],
-                v_data=flow[..., 1],
-                plot=True
-            )
-
-            # Scale the regularization parameter using calculator's methods
-            M, N = flow[..., 0].shape
-            pad_size = self.calculator._get_optimal_pad_size(M, N)
-            kx, ky, _ = self.calculator._calculate_wave_vectors(pad_size)
-            kmax = np.sqrt(kx.max() ** 2 + ky.max() ** 2)
-            scaled_reg = reg_param / (kmax ** 2)
-
-            # Update UI and calculator
-            log_reg = np.log10(scaled_reg)
-            self.regularization_spin.setValue(log_reg)
-            self.calculator.regularization = scaled_reg
-
-            self._update_status(
-                f"Regularization parameter set to {scaled_reg:.2e}",
-                100
-            )
-
-        except Exception as e:
-            self._update_status(
-                f"Error: Failed to optimize regularization parameter - {str(e)}",
-                0
-            )
-        finally:
-            self._set_controls_enabled(True)
-    def _initialize_calculator(self):
-        """Initialize the TractionForceCalculator with current parameters."""
-        self._update_parameters()
-
-        self.calculator = TractionForceCalculator(
-            E=self.young_modulus,
-            pixel_size=self._pixel_size * 1e-6,  # Convert microns to meters
-            nu=self.poisson_ratio,
-            regularization=self.regularization,
-            gel_height=None if self.gel_height is None else self.gel_height * 1e-6,
-            calculation_method=self.calculation_method,
-            filter_sigma=self.filter_sigma
-        )
-    def _create_action_buttons(self) -> QFrame:
-        """Create the action buttons frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        # Create 2x2 grid for buttons
-        button_grid = QHBoxLayout()
-
-        # Create left column (Preview and Save)
-        left_column = QVBoxLayout()
-        self.preview_btn = QPushButton("Preview Current Frame")
-        self.save_force_btn = QPushButton("Save Force Data")
-        self.save_force_btn.setEnabled(False)
-        left_column.addWidget(self.preview_btn)
-        left_column.addWidget(self.save_force_btn)
-
-        # Create right column (Calculate and Load)
-        right_column = QVBoxLayout()
-        self.calculate_btn = QPushButton("Calculate Forces")
-        self.load_force_btn = QPushButton("Load Force Data")
-        right_column.addWidget(self.calculate_btn)
-        right_column.addWidget(self.load_force_btn)
-
-        # Add columns to grid
-        button_grid.addLayout(left_column)
-        button_grid.addLayout(right_column)
-
-        layout.addLayout(button_grid)
-        frame.setLayout(layout)
-        return frame
-
-    def _connect_signals(self):
-        """Connect all widget signals."""
-        # Parameter updates
-        self.young_spin.valueChanged.connect(self._update_parameters)
-        self.poisson_spin.valueChanged.connect(self._update_parameters)
-        self.height_spin.valueChanged.connect(self._update_parameters)
-        self.pixel_spin.valueChanged.connect(self._on_pixel_size_changed)
-        self.regularization_spin.valueChanged.connect(self._update_parameters)
-        self.filter_sigma_spin.valueChanged.connect(self._update_parameters)
-        self.calculation_method_combo.currentTextChanged.connect(self._update_parameters)
-
-        # Action buttons
-        self.calculate_btn.clicked.connect(self.calculate_forces)
-        self.preview_btn.clicked.connect(self.preview_force)
-        self.save_force_btn.clicked.connect(self._save_force_data)
-        self.load_force_btn.clicked.connect(self._load_force_data)
-        self.reset_params_btn.clicked.connect(self.reset_parameters)
-
-    def calculate_forces(self):
-        """Calculate traction forces using the TractionForceCalculator."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating forces...", 0)
-
-            # Get displacement data
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            num_frames = len(flows)
-
-            # Initialize calculator with current parameters
-            self._initialize_calculator()
-
-            # Initialize result arrays
-            force_results = {
-                'tx': [],
-                'ty': []
-            }
-
-            # Process each frame
-            for i, flow in enumerate(flows):
-                progress = (i + 1) / num_frames * 100
-                self._update_status(f"Processing frame {i + 1}/{num_frames}...", progress)
-
-                # Extract u and v components
-                u = flow[..., 0]
-                v = flow[..., 1]
-
-                # Calculate forces
-                tx, ty = self.calculator.calculate_forces(u, v)
-                force_results['tx'].append(tx)
-                force_results['ty'].append(ty)
-
-            # Convert lists to arrays
-            force_results['tx'] = np.stack(force_results['tx'])
-            force_results['ty'] = np.stack(force_results['ty'])
-
-            # Always get current visualization parameters from UI
-            visualization_params = {
-                'vector_stride': self.visualization_params['vector_stride'].value(),
-                'arrow_scale': self.visualization_params['arrow_scale'].value(),
-                'f_max': self.visualization_params['f_max'].value()
-            }
-
-            # Store parameters
-            force_results['parameters'] = {
-                'young_modulus': self.young_modulus,
-                'poisson_ratio': self.poisson_ratio,
-                'gel_height': self.gel_height,
-                'pixel_size': self.pixel_size,
-                'regularization': self.regularization,
-                'filter_sigma': self.filter_sigma,
-                'calculation_method': self.calculation_method.value,
-                'visualization': visualization_params
-            }
-
-            # Update data manager
-            self.data_manager.force_results = force_results
-
-            # Always use current visualization parameters
-            self.visualization_manager.visualize_force_results(force_results, visualization_params)
-
-            # Update colorbar
-            f_max = visualization_params['f_max']
-            if f_max is not None:
-                self.colorbar_manager.update_limits(0, f_max)
-
-            # Get and display statistics
-            stats = self.visualization_manager.get_force_statistics(force_results)
-            if stats:
-                stats_text = (
-                    f"Mean force: {stats['mean_force']:.2f} Pa\n"
-                    f"Max force: {stats['max_force']:.2f} Pa\n"
-                    f"Median force: {stats['median_force']:.2f} Pa"
-                )
-                self._update_status(stats_text, 100)
-
-            # Emit results
-            self.force_calculated.emit(force_results)
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Force calculation failed",
-                details=str(e),
-                recovery_hint="Check input data and parameters"
-            ))
-        finally:
-            self._set_controls_enabled(True)
-
-    def preview_force(self):
-        """Preview force calculation on current frame."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating forces...", 0)
-
-            # Get displacement data for current frame
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-
-            # Get current frame index
-            current_frame = self.viewer.dims.current_step[0]
-            if current_frame >= len(flows):
-                current_frame = 0
-
-            # Get flow for current frame
-            flow = flows[current_frame]
-
-            # Initialize calculator with current parameters
-            self._initialize_calculator()
-
-            # Calculate forces for current frame
-            u = flow[..., 0]
-            v = flow[..., 1]
-            tx, ty = self.calculator.calculate_forces(u, v)
-
-            # Always get current visualization parameters from UI
-            vector_stride = self.visualization_params['vector_stride'].value()
-            arrow_scale = self.visualization_params['arrow_scale'].value()
-            f_max = self.visualization_params['f_max'].value()
-
-            # Update visualization using preview method with current parameters
-            self.visualization_manager.visualize_force_preview(
-                tx, ty,
-                f_max=f_max,
-                vector_stride=vector_stride,
-                arrow_scale=arrow_scale
-            )
-
-            # Update colorbar with current f_max
-            self.colorbar_manager.update_limits(0, f_max)
-
-            # Calculate and show statistics
-            magnitude = np.sqrt(tx ** 2 + ty ** 2)
-            stats = {
-                'max_force': np.max(magnitude),
-                'mean_force': np.mean(magnitude),
-                'median_force': np.median(magnitude)
-            }
-
-            self._update_status(
-                f"Preview statistics:\n"
-                f"Max force: {stats['max_force']:.2f} Pa\n"
-                f"Mean force: {stats['mean_force']:.2f} Pa\n"
-                f"Median force: {stats['median_force']:.2f} Pa\n"
-                f"Force field shape: {tx.shape}",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Force preview failed",
-                details=str(e),
-                recovery_hint="Check input data and parameters"
-            ))
-        finally:
-            self._set_controls_enabled(True)
-
-    def _save_force_data(self):
-        """Save force data to files."""
-        if not hasattr(self.data_manager, 'force_results') or not self.data_manager.force_results:
-            QMessageBox.warning(self, "Warning", "No force data to save.")
-            return
-
-        try:
-            # Get directory to save files
-            save_dir = QFileDialog.getExistingDirectory(
-                self,
-                "Select Directory to Save Force Data",
-                os.path.expanduser("~")
-            )
-
-            if save_dir:
-                results = self.data_manager.force_results
-
-                # Save force components
-                np.save(os.path.join(save_dir, 't_x.npy'), results['tx'])
-                np.save(os.path.join(save_dir, 't_y.npy'), results['ty'])
-
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Force data saved to:\n{save_dir}"
-                )
-
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Failed to save force data",
-                details=str(e),
-                recovery_hint="Check file permissions and disk space"
-            ))
-
-    @property
-    def pixel_size(self):
-        """Get the current pixel size in microns."""
-        return self._pixel_size
-
-    @pixel_size.setter
-    def pixel_size(self, value):
-        """Set the pixel size in microns."""
-        self._pixel_size = value
-        if hasattr(self, 'pixel_spin'):  # Check if UI is initialized
-            self.pixel_spin.setValue(value)
 
     def _create_material_params_group(self) -> QGroupBox:
         """Create the material parameters group."""
@@ -395,12 +65,16 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.poisson_spin = QDoubleSpinBox()
         self.height_spin = QDoubleSpinBox()
         self.pixel_spin = QDoubleSpinBox()
+        self.mesh_size_spin = QSpinBox()
+        self.lanczos_exp_spin = QSpinBox()
 
         params = [
             ("Young's Modulus (Pa):", self.young_spin, 100, 1000000, 100, self.young_modulus),
             ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, self.poisson_ratio),
             ("Gel Height (μm):", self.height_spin, 0, 1000, 10, 0),
-            ("Pixel Size (μm):", self.pixel_spin, 0.001, 10, 0.1, self._pixel_size)
+            ("Pixel Size (μm):", self.pixel_spin, 0.001, 10, 0.1, self._pixel_size),
+            ("Mesh Size (pixels):", self.mesh_size_spin, 1, 16, 1, self.mesh_size),
+            ("Lanczos Exponent:", self.lanczos_exp_spin, 0, 5, 1, self.lanczos_exp)
         ]
 
         for label_text, spin, min_val, max_val, step, default in params:
@@ -420,175 +94,10 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
-    def _setup_ui(self):
-        """Set up the user interface."""
-        main_layout = QHBoxLayout()
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Create colorbar container
-        colorbar_container = QWidget()
-        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Create colorbar
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='inferno',
-            label="Force (Pa)",
-            clim=(1000, 0),
-            colorbar_manager=self.colorbar_manager
-        )
-        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        colorbar_layout.addStretch()
-        colorbar_container.setLayout(colorbar_layout)
-        main_layout.addWidget(colorbar_container)
-
-        # Right side container
-        right_container = QWidget()
-        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        right_layout = QVBoxLayout()
-        right_layout.setSpacing(8)
-        right_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Add parameter groups - remove correction_params_group
-        right_layout.addWidget(self._create_material_params_group())
-        right_layout.addWidget(self._create_calculation_params_group())
-        right_layout.addWidget(self._create_visualization_parameters_group())
-        right_layout.addWidget(self._create_action_buttons())
-        right_layout.addWidget(self._create_status_frame())
-        right_layout.addStretch()
-
-        right_container.setLayout(right_layout)
-        right_container.setFixedWidth(350)
-
-        main_layout.addWidget(right_container)
-        main_layout.addStretch(1)
-
-        self.setLayout(main_layout)
-
-    def _on_pixel_size_changed(self, value):
-        """Handle manual changes to pixel size."""
-        if not self._using_inherited_pixel_size:
-            self._pixel_size = value
-            self._update_parameters()
-
-    def _update_parameters(self):
-        """Update parameters from UI controls and handle parameter inheritance."""
-        # Update basic parameters
-        self.young_modulus = self.young_spin.value()
-        self.poisson_ratio = self.poisson_spin.value()
-        self.regularization = 10 ** self.regularization_spin.value()
-        self.filter_sigma = self.filter_sigma_spin.value()
-
-        # Handle pixel size inheritance
-        if self.data_manager.displacement_results:
-            disp_params = self.data_manager.displacement_results.get('parameters', {})
-            base_pixel_size = disp_params.get('pixel_size')
-            downscale_factor = disp_params.get('downscale_factor', 1)
-
-            if base_pixel_size is not None:
-                # Calculate effective pixel size considering downscaling
-                inherited_pixel_size = base_pixel_size * downscale_factor
-
-                # Only update if using inheritance
-                if self._using_inherited_pixel_size:
-                    self._pixel_size = inherited_pixel_size
-                    self.pixel_spin.setValue(inherited_pixel_size)
-
-                # Update UI state
-                self.pixel_spin.setStyleSheet("color: gray;")
-                self._using_inherited_pixel_size = True
-            else:
-                # Switch to manual mode if no inheritance available
-                self._using_inherited_pixel_size = False
-                self.pixel_spin.setStyleSheet("")
-        else:
-            # Switch to manual mode if no displacement results
-            self._using_inherited_pixel_size = False
-            self.pixel_spin.setStyleSheet("")
-
-        # Update calculation method
-        method_text = self.calculation_method_combo.currentText()
-        self.calculation_method = (
-            CalculationMethod.PURE_SHEAR if method_text == "Pure Shear"
-            else CalculationMethod.FFTC
-        )
-
-        # Handle gel height
-        height_value = self.height_spin.value()
-        self.gel_height = None if height_value == 0 else height_value
-
-        # Update UI state based on method
-        self._update_ui_state()
-
-    def reset_parameters(self):
-        """Reset all parameters to defaults."""
-        self._using_inherited_pixel_size = False  # Reset inheritance state
-        self.young_spin.setValue(10000)
-        self.poisson_spin.setValue(0.49)
-        self.height_spin.setValue(0)
-        self.pixel_spin.setValue(0.1)
-        self.regularization_spin.setValue(1000)
-        self.filter_sigma_spin.setValue(2.0)
-        self.calculation_method_combo.setCurrentText("FFTC")
-
-        self.visualization_params['vector_stride'].setValue(20)
-        self.visualization_params['arrow_scale'].setValue(1.0)
-        self.visualization_params['f_max'].setValue(1000.0)
-
-        self.pixel_spin.setStyleSheet("")  # Reset styling
-        self._update_status("Parameters reset to defaults")
-
-    def _register_controls(self):
-        """Register all controls with the base widget."""
-        controls = [
-                       self.young_spin,
-                       self.poisson_spin,
-                       self.height_spin,
-                       self.pixel_spin,
-                       self.regularization_spin,
-                       self.filter_sigma_spin,
-                       self.calculation_method_combo,
-                       self.calculate_btn,
-                       self.preview_btn,
-                       self.reset_params_btn,
-                       self.save_force_btn,
-                       self.load_force_btn,
-                       self.progress_bar,
-                       self.status_label
-                   ] + list(self.visualization_params.values())
-
-        for control in controls:
-            self.register_control(control)
-
     def _create_calculation_params_group(self) -> QGroupBox:
         """Create the calculation parameters group."""
         group = QGroupBox("Calculation Parameters")
         layout = QVBoxLayout()
-
-        # Method selector
-        method_layout = QHBoxLayout()
-        method_layout.addWidget(QLabel("Method:"))
-        self.calculation_method_combo = QComboBox()
-        self.calculation_method_combo.addItems([
-            "FFTC",
-            "Pure Shear"
-        ])
-        method_layout.addWidget(self.calculation_method_combo)
-        layout.addLayout(method_layout)
-
-        # Gel height (optional for FFTC, required for Pure Shear)
-        height_layout = QHBoxLayout()
-        height_layout.addWidget(QLabel("Gel Height (μm):"))
-        self.height_spin = QDoubleSpinBox()
-        self.height_spin.setRange(0, 1000)
-        self.height_spin.setSpecialValueText("∞")  # Only meaningful for FFTC
-        self.height_spin.setValue(0)
-        height_layout.addWidget(self.height_spin)
-        layout.addLayout(height_layout)
 
         # Regularization controls container
         reg_container = QGroupBox("Regularization")
@@ -602,16 +111,11 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.regularization_spin.setValue(-17)  # Default to 10^-6
         self.regularization_spin.setSingleStep(0.5)
         self.regularization_spin.setDecimals(1)
-        self.regularization_spin.setToolTip(
-            "Regularization parameter in scientific notation (10^x)\n"
-            "Typical values: 10^-20 to 10^-12"
-        )
         reg_layout.addWidget(self.regularization_spin)
         reg_container_layout.addLayout(reg_layout)
 
         # Add GCV button
         self.gcv_button = QPushButton("Auto-select (GCV)")
-        self.gcv_button.setToolTip("Set regularization parameter using Generalized Cross-Validation")
         self.gcv_button.clicked.connect(self._set_regularization_with_gcv)
         reg_container_layout.addWidget(self.gcv_button)
 
@@ -627,165 +131,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.filter_sigma_spin.setSingleStep(0.1)
         filter_layout.addWidget(self.filter_sigma_spin)
         layout.addLayout(filter_layout)
-
-        group.setLayout(layout)
-        return group
-    def _update_ui_state(self):
-        """Update UI elements based on current state."""
-        # Check if required data is available using DataManager method
-        has_required_data = self.data_manager.has_required_force_data()
-
-        # Update button states
-        self.calculate_btn.setEnabled(has_required_data)
-
-        # Handle pixel size inheritance if displacement results are available
-        if self.data_manager.displacement_results:
-            disp_params = self.data_manager.displacement_results.get('parameters', {})
-            base_pixel_size = disp_params.get('pixel_size')
-            downscale_factor = disp_params.get('downscale_factor', 1)
-
-            if base_pixel_size is not None:
-                # Calculate effective pixel size considering downscaling
-                inherited_pixel_size = base_pixel_size * downscale_factor
-
-                # Update pixel size and UI
-                self._pixel_size = inherited_pixel_size
-                self.pixel_spin.setValue(inherited_pixel_size)
-                self.pixel_spin.setStyleSheet("color: gray;")
-                self._using_inherited_pixel_size = True
-
-                # Add inheritance indicator to the tooltip
-                self.pixel_spin.setToolTip(
-                    f"Inherited from displacement analysis\n"
-                    f"Base pixel size: {base_pixel_size} μm\n"
-                    f"Downscale factor: {downscale_factor}"
-                )
-            else:
-                self._using_inherited_pixel_size = False
-                self.pixel_spin.setStyleSheet("")
-                self.pixel_spin.setToolTip("")
-        else:
-            # No displacement results available, use manual mode
-            self._using_inherited_pixel_size = False
-            self.pixel_spin.setStyleSheet("")
-            self.pixel_spin.setToolTip("")
-            if not has_required_data:
-                self._update_status("Required displacement data not available")
-            else:
-                self._update_status("Ready for force calculation")
-
-        # Update gel height field based on method
-        is_pure_shear = self.calculation_method == CalculationMethod.PURE_SHEAR
-        if is_pure_shear:
-            self.height_spin.setSpecialValueText("")  # Remove infinity symbol
-            if self.height_spin.value() == 0:
-                self.height_spin.setValue(100)  # Set default height for pure shear
-        else:
-            self.height_spin.setSpecialValueText("∞")  # Show infinity symbol for FFTC
-
-        # Update height spin tooltip
-        self.height_spin.setToolTip(
-            "Required for Pure Shear calculation\n"
-            "Optional for FFTC (enables finite thickness correction)" if not is_pure_shear
-            else "Required gel height for Pure Shear calculation"
-        )
-
-    def _load_force_data(self):
-        """Load force data from files."""
-        try:
-            # Get directory containing the files
-            load_dir = QFileDialog.getExistingDirectory(
-                self,
-                "Select Directory Containing Force Data",
-                os.path.expanduser("~")
-            )
-
-            if load_dir:
-                # Check if both files exist
-                t_x_path = os.path.join(load_dir, 't_x.npy')
-                t_y_path = os.path.join(load_dir, 't_y.npy')
-
-                if not (os.path.exists(t_x_path) and os.path.exists(t_y_path)):
-                    raise FileNotFoundError("Could not find t_x.npy and t_y.npy in selected directory")
-
-                # Load the force components
-                tx = np.load(t_x_path)
-                ty = np.load(t_y_path)
-
-                # Get current visualization parameters from UI
-                visualization_params = {
-                    'vector_stride': self.visualization_params['vector_stride'].value(),
-                    'arrow_scale': self.visualization_params['arrow_scale'].value(),
-                    'f_max': self.visualization_params['f_max'].value()
-                }
-
-                # Create results dictionary
-                results = {
-                    'tx': tx,
-                    'ty': ty,
-                    'parameters': {
-                        'young_modulus': self.young_modulus,
-                        'poisson_ratio': self.poisson_ratio,
-                        'gel_height': self.gel_height,
-                        'pixel_size': self.pixel_size,
-                        'regularization': self.regularization,
-                        'filter_sigma': self.filter_sigma,
-                        'calculation_method': self.calculation_method.value,
-                        'visualization': visualization_params
-                    }
-                }
-
-                # Update data manager and visualization
-                self.data_manager.force_results = results
-                self.visualization_manager.visualize_force_results(
-                    results,
-                    visualization_params  # Use current visualization parameters
-                )
-
-                # Enable save button
-                self.save_force_btn.setEnabled(True)
-
-                # Emit results
-                self.force_calculated.emit(results)
-
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Force data loaded from:\n{load_dir}"
-                )
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Failed to load force data",
-                details=str(e),
-                recovery_hint="Verify file format and contents"
-            ))
-    def _create_correction_params_group(self) -> QGroupBox:
-        """Create the correction method parameters group."""
-        group = QGroupBox("Correction Method")
-        layout = QVBoxLayout()
-
-        # Correction method selector
-        method_layout = QHBoxLayout()
-        method_layout.addWidget(QLabel("Method:"))
-        self.correction_method_combo = QComboBox()
-        self.correction_method_combo.addItems([
-            "None (Infinite)",
-            "Finite Thickness",
-            "Pure Shear"
-        ])
-        method_layout.addWidget(self.correction_method_combo)
-        layout.addLayout(method_layout)
-
-        # Characteristic length
-        length_layout = QHBoxLayout()
-        length_layout.addWidget(QLabel("Char. Length (μm):"))
-        self.char_length_spin = QDoubleSpinBox()
-        self.char_length_spin.setRange(1, 1000)
-        self.char_length_spin.setValue(self.characteristic_length)
-        self.char_length_spin.setSingleStep(5)
-        length_layout.addWidget(self.char_length_spin)
-        layout.addLayout(length_layout)
 
         group.setLayout(layout)
         return group
@@ -825,6 +170,35 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
+    def _create_action_buttons(self) -> QFrame:
+        """Create the action buttons frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
+
+        button_grid = QHBoxLayout()
+
+        # Create left column (Preview and Save)
+        left_column = QVBoxLayout()
+        self.preview_btn = QPushButton("Preview Current Frame")
+        self.save_force_btn = QPushButton("Save Force Data")
+        self.save_force_btn.setEnabled(False)
+        left_column.addWidget(self.preview_btn)
+        left_column.addWidget(self.save_force_btn)
+
+        # Create right column (Calculate and Load)
+        right_column = QVBoxLayout()
+        self.calculate_btn = QPushButton("Calculate Forces")
+        self.load_force_btn = QPushButton("Load Force Data")
+        right_column.addWidget(self.calculate_btn)
+        right_column.addWidget(self.load_force_btn)
+
+        button_grid.addLayout(left_column)
+        button_grid.addLayout(right_column)
+
+        layout.addLayout(button_grid)
+        frame.setLayout(layout)
+        return frame
+
     def _create_status_frame(self) -> QFrame:
         """Create the status and progress frame."""
         frame = QFrame()
@@ -840,22 +214,115 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         frame.setLayout(layout)
         return frame
 
-    def _validate_input_data(self) -> bool:
-        """Validate required input data is available."""
-        if not self.data_manager.displacement_results:
-            QMessageBox.warning(self, "Error", "Displacement analysis required before force calculation")
-            return False
+    def _connect_signals(self):
+        """Connect all widget signals."""
+        # Parameter updates
+        self.young_spin.valueChanged.connect(self._update_parameters)
+        self.poisson_spin.valueChanged.connect(self._update_parameters)
+        self.height_spin.valueChanged.connect(self._update_parameters)
+        self.pixel_spin.valueChanged.connect(self._on_pixel_size_changed)
+        self.mesh_size_spin.valueChanged.connect(self._update_parameters)
+        self.lanczos_exp_spin.valueChanged.connect(self._update_parameters)
+        self.regularization_spin.valueChanged.connect(self._update_parameters)
+        self.filter_sigma_spin.valueChanged.connect(self._update_parameters)
 
-        if 'flows' not in self.data_manager.displacement_results:
-            QMessageBox.warning(self, "Error", "Invalid displacement data format")
-            return False
+        # Action buttons
+        self.calculate_btn.clicked.connect(self.calculate_forces)
+        self.preview_btn.clicked.connect(self.preview_force)
+        self.save_force_btn.clicked.connect(self._save_force_data)
+        self.load_force_btn.clicked.connect(self._load_force_data)
+        self.reset_params_btn.clicked.connect(self.reset_parameters)
 
-        # Validate gel height for pure shear method
-        if self.calculation_method == CalculationMethod.PURE_SHEAR and (self.gel_height is None or self.gel_height == 0):
-            QMessageBox.warning(self, "Error", "Gel height must be specified for pure shear calculation")
-            return False
+    def _setup_ui(self):
+        """Set up the user interface."""
+        main_layout = QHBoxLayout()
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        return True
+        # Create colorbar container
+        colorbar_container = QWidget()
+        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        colorbar_layout = QVBoxLayout()
+        colorbar_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Create colorbar
+        colorbar_group = self.create_colorbar_widget(
+            colormap_name='inferno',
+            label="Force (Pa)",
+            clim=(1000, 0),
+            colorbar_manager=self.colorbar_manager
+        )
+        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        colorbar_layout.addStretch()
+        colorbar_container.setLayout(colorbar_layout)
+        main_layout.addWidget(colorbar_container)
+
+        # Right side container
+        right_container = QWidget()
+        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Add parameter groups
+        right_layout.addWidget(self._create_material_params_group())
+        right_layout.addWidget(self._create_calculation_params_group())
+        right_layout.addWidget(self._create_visualization_parameters_group())
+        right_layout.addWidget(self._create_action_buttons())
+        right_layout.addWidget(self._create_status_frame())
+        right_layout.addStretch()
+
+        right_container.setLayout(right_layout)
+        right_container.setFixedWidth(350)
+
+        main_layout.addWidget(right_container)
+        main_layout.addStretch(1)
+
+        self.setLayout(main_layout)
+
+    def _register_controls(self):
+        """Register all controls with the base widget."""
+        controls = [
+                       self.young_spin,
+                       self.poisson_spin,
+                       self.height_spin,
+                       self.pixel_spin,
+                       self.mesh_size_spin,
+                       self.lanczos_exp_spin,
+                       self.regularization_spin,
+                       self.filter_sigma_spin,
+                       self.calculate_btn,
+                       self.preview_btn,
+                       self.reset_params_btn,
+                       self.save_force_btn,
+                       self.load_force_btn,
+                       self.progress_bar,
+                       self.status_label
+                   ] + list(self.visualization_params.values())
+
+        for control in controls:
+            self.register_control(control)
+
+    def reset_parameters(self):
+        """Reset all parameters to defaults."""
+        self._using_inherited_pixel_size = False
+        self.young_spin.setValue(10000)
+        self.poisson_spin.setValue(0.49)
+        self.height_spin.setValue(0)
+        self.pixel_spin.setValue(0.1)
+        self.mesh_size_spin.setValue(4)
+        self.lanczos_exp_spin.setValue(1)
+        self.regularization_spin.setValue(-17)  # 10^-17
+        self.filter_sigma_spin.setValue(2.0)
+
+        self.visualization_params['vector_stride'].setValue(20)
+        self.visualization_params['arrow_scale'].setValue(1.0)
+        self.visualization_params['f_max'].setValue(1000.0)
+
+        self.pixel_spin.setStyleSheet("")
+        self._update_status("Parameters reset to defaults")
 
     def cleanup(self):
         """Clean up resources."""
@@ -864,9 +331,531 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 self.colorbar_manager.cleanup()
                 self.colorbar_manager = None
 
-            self._clear_force_layers()
             self.calculator = None
         except Exception as e:
             self._handle_error(f"Cleanup failed: {str(e)}")
 
         super().cleanup()
+    def _initialize_calculator(self):
+        """Initialize the FTTC calculator with current parameters."""
+        self._update_parameters()
+
+        # Convert gel height from μm to m if specified
+        gel_height_m = None if self.gel_height is None else self.gel_height * 1e-6
+
+        self.calculator = FTTC(
+            E=self.young_modulus,
+            nu=self.poisson_ratio,
+            mesh_size=self.mesh_size,
+            lanczos_exp=self.lanczos_exp,
+            gel_height=gel_height_m
+        )
+
+    def calculate_forces(self):
+        """Calculate traction forces using the FTTC calculator."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating forces...", 0)
+
+            # Get displacement data
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            num_frames = len(flows)
+
+            # Initialize calculator with current parameters
+            self._initialize_calculator()
+
+            # Initialize result arrays
+            force_results = {
+                'tx': [],
+                'ty': []
+            }
+
+            # Get spatial coordinates
+            shape = flows[0].shape[:-1]  # Exclude channel dimension
+            x = np.arange(shape[1])  # Width
+            y = np.arange(shape[0])  # Height
+
+            # Process each frame
+            for i, flow in enumerate(flows):
+                progress = (i + 1) / num_frames * 100
+                self._update_status(f"Processing frame {i + 1}/{num_frames}...", progress)
+
+                # Extract u and v components and scale by pixel size
+                u_data = flow[..., 0]  # x displacement
+                v_data = flow[..., 1]  # y displacement
+
+                # Calculate forces using FTTC
+                (_, _), _, f, _, _, energy, force, _, _ = self.calculator.calculate_traction(
+                    x=x,
+                    y=y,
+                    u_data=u_data,
+                    v_data=v_data,
+                    dx=self._pixel_size,
+                    set_lam=self.regularization
+                )
+
+                # Store force components
+                force_results['tx'].append(f[0])
+                force_results['ty'].append(f[1])
+
+                # Log energy and total force for debugging
+                self._update_status(
+                    f"Frame {i + 1} - Energy: {energy:.2e} J, Total Force: {force:.2e} N",
+                    progress
+                )
+
+            # Convert lists to arrays
+            force_results['tx'] = np.stack(force_results['tx'])
+            force_results['ty'] = np.stack(force_results['ty'])
+
+            # Store calculation parameters
+            visualization_params = {
+                'vector_stride': self.visualization_params['vector_stride'].value(),
+                'arrow_scale': self.visualization_params['arrow_scale'].value(),
+                'f_max': self.visualization_params['f_max'].value()
+            }
+
+            force_results['parameters'] = {
+                'young_modulus': self.young_modulus,
+                'poisson_ratio': self.poisson_ratio,
+                'gel_height': self.gel_height,
+                'pixel_size': self._pixel_size,
+                'regularization': self.regularization,
+                'mesh_size': self.mesh_size,
+                'lanczos_exp': self.lanczos_exp,
+                'filter_sigma': self.filter_sigma,
+                'visualization': visualization_params
+            }
+
+            # Update data manager and visualization
+            self.data_manager.force_results = force_results
+            self.visualization_manager.visualize_force_results(
+                force_results,
+                visualization_params
+            )
+
+            # Update colorbar
+            f_max = visualization_params['f_max']
+            if f_max is not None:
+                self.colorbar_manager.update_limits(0, f_max)
+
+            # Get and display statistics from last frame
+            magnitude = np.sqrt(force_results['tx'][-1] ** 2 + force_results['ty'][-1] ** 2)
+            stats = {
+                'mean_force': np.mean(magnitude),
+                'max_force': np.max(magnitude),
+                'median_force': np.median(magnitude)
+            }
+
+            stats_text = (
+                f"Mean force: {stats['mean_force']:.2f} Pa\n"
+                f"Max force: {stats['max_force']:.2f} Pa\n"
+                f"Median force: {stats['median_force']:.2f} Pa"
+            )
+            self._update_status(stats_text, 100)
+
+            # Enable save button and emit results
+            self.save_force_btn.setEnabled(True)
+            self.force_calculated.emit(force_results)
+
+        except Exception as e:
+            self._handle_error(self.create_error(
+                message="Force calculation failed",
+                details=str(e),
+                recovery_hint="Check input data and parameters"
+            ))
+        finally:
+            self._set_controls_enabled(True)
+
+    def preview_force(self):
+        """Preview force calculation on current frame."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating forces...", 0)
+
+            # Get displacement data for current frame
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+
+            # Get current frame index
+            current_frame = self.viewer.dims.current_step[0]
+            if current_frame >= len(flows):
+                current_frame = 0
+
+            # Get flow for current frame
+            flow = flows[current_frame]
+
+            # Extract displacement components exactly as in working example
+            u_data = flow[..., 0]  # x displacement
+            v_data = flow[..., 1]  # y displacement
+
+            x = np.arange(u_data.shape[1])
+            y = np.arange(u_data.shape[0])
+            dx = self._pixel_size
+
+            # Initialize calculator with current parameters
+            self._initialize_calculator()
+
+            # Calculate forces for current frame - use exact same call pattern as working example
+            xy, fnorm, f, urec, u, energy, force, Ftf, Fturec = self.calculator.calculate_traction(
+                x=x,
+                y=y,
+                u_data=u_data,
+                v_data=v_data,
+                dx=dx,
+                set_lam=self.regularization
+            )
+
+            # Get current visualization parameters
+            vector_stride = self.visualization_params['vector_stride'].value()
+            arrow_scale = self.visualization_params['arrow_scale'].value()
+            f_max = self.visualization_params['f_max'].value()
+
+            # Update visualization
+            self.visualization_manager.visualize_force_preview(
+                f[0], f[1],
+                f_max=f_max,
+                vector_stride=vector_stride,
+                arrow_scale=arrow_scale
+            )
+
+            # Update colorbar
+            self.colorbar_manager.update_limits(0, f_max)
+
+            # Show statistics and calculation results
+            self._update_status(
+                f"Preview statistics:\n"
+                f"Max force: {np.max(fnorm):.2f} Pa\n"
+                f"Mean force: {np.mean(fnorm):.2f} Pa\n"
+                f"Median force: {np.median(fnorm):.2f} Pa\n"
+                f"Energy: {energy:.2e} J\n"
+                f"Total force: {force:.2e} N",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(self.create_error(
+                message="Force preview failed",
+                details=str(e),
+                recovery_hint="Check input data and parameters"
+            ))
+        finally:
+            self._set_controls_enabled(True)
+    def _set_regularization_with_gcv(self):
+        """Handle GCV-based regularization parameter selection."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Optimizing regularization parameter...", 0)
+
+            # Initialize calculator if not already done
+            self._initialize_calculator()
+
+            # Get displacement data for current frame
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            current_frame = self.viewer.dims.current_step[0]
+            flow = flows[current_frame]
+
+            # Get spatial coordinates
+            shape = flow.shape[:-1]  # This needs to match displacement field shape
+            x = np.arange(shape[1])  # Width
+            y = np.arange(shape[0])  # Height
+
+            # Create proper position and displacement arrays for GCV
+            xx, yy = np.meshgrid(x, y, indexing='ij')
+            pos0 = np.array([xx.flatten(), yy.flatten()])
+            vec0 = np.array([
+                flow[..., 0].flatten() * self._pixel_size,  # Scale by pixel size
+                flow[..., 1].flatten() * self._pixel_size
+            ])
+
+            # Calculate optimal regularization using the calculator's built-in GCV
+            reg_param = self.calculator._find_regularization(pos0, vec0)
+
+            # Update UI and calculator
+            log_reg = np.log10(reg_param)
+            self.regularization_spin.setValue(log_reg)
+            self.regularization = reg_param
+
+            self._update_status(
+                f"Regularization parameter set to {reg_param:.2e}",
+                100
+            )
+
+        except Exception as e:
+            self._update_status(
+                f"Error: Failed to optimize regularization parameter - {str(e)}",
+                0
+            )
+        finally:
+            self._set_controls_enabled(True)
+    def _update_parameters(self):
+        """Update parameters from UI controls."""
+        # Update basic parameters
+        self.young_modulus = self.young_spin.value()
+        self.poisson_ratio = self.poisson_spin.value()
+        self.regularization = 10 ** self.regularization_spin.value()
+        self.filter_sigma = self.filter_sigma_spin.value()
+        self.mesh_size = self.mesh_size_spin.value()
+        self.lanczos_exp = self.lanczos_exp_spin.value()
+
+        # Handle gel height
+        height_value = self.height_spin.value()
+        self.gel_height = None if height_value == 0 else height_value
+
+        # Handle pixel size inheritance
+        if not self._using_inherited_pixel_size:
+            self._pixel_size = self.pixel_spin.value()
+
+        # Update UI state
+        self._update_ui_state()
+
+    def _on_pixel_size_changed(self, value):
+        """Handle manual changes to pixel size."""
+        if not self._using_inherited_pixel_size:
+            self._pixel_size = value
+            self._update_parameters()
+
+    def _update_ui_state(self):
+        """Update UI elements based on current state."""
+        # Check if required data is available
+        has_required_data = self._validate_input_data()
+
+        # Update button states
+        self.calculate_btn.setEnabled(has_required_data)
+        self.preview_btn.setEnabled(has_required_data)
+
+        # Handle pixel size inheritance if displacement results are available
+        if self.data_manager.displacement_results:
+            disp_params = self.data_manager.displacement_results.get('parameters', {})
+            base_pixel_size = disp_params.get('pixel_size')
+            downscale_factor = disp_params.get('downscale_factor', 1)
+
+            if base_pixel_size is not None:
+                # Calculate effective pixel size considering downscaling
+                inherited_pixel_size = base_pixel_size * downscale_factor
+
+                if self._using_inherited_pixel_size:
+                    self._pixel_size = inherited_pixel_size
+                    self.pixel_spin.setValue(inherited_pixel_size)
+                    self.pixel_spin.setStyleSheet("color: gray;")
+
+                    # Update tooltip
+                    self.pixel_spin.setToolTip(
+                        f"Inherited from displacement analysis\n"
+                        f"Base pixel size: {base_pixel_size} μm\n"
+                        f"Downscale factor: {downscale_factor}"
+                    )
+            else:
+                self._using_inherited_pixel_size = False
+                self.pixel_spin.setStyleSheet("")
+                self.pixel_spin.setToolTip("")
+        else:
+            # No displacement results available
+            self._using_inherited_pixel_size = False
+            self.pixel_spin.setStyleSheet("")
+            self.pixel_spin.setToolTip("")
+
+            if not has_required_data:
+                self._update_status("Required displacement data not available")
+
+    def _validate_input_data(self) -> bool:
+        """Validate required input data is available."""
+        if not self.data_manager.displacement_results:
+            return False
+
+        if 'flows' not in self.data_manager.displacement_results:
+            return False
+
+        # Get flows data
+        flows = self.data_manager.displacement_results['flows']
+
+        # Check if flows is None
+        if flows is None:
+            return False
+
+        # Check if flows array is empty using size property
+        if not isinstance(flows, np.ndarray) or flows.size == 0:
+            return False
+
+        return True
+    def _update_status(self, message: str, progress: Optional[int] = None):
+        """Update status message and progress bar."""
+        self.status_label.setText(message)
+        if progress is not None:
+            self.progress_bar.setValue(progress)
+
+    def _set_controls_enabled(self, enabled: bool):
+        """Enable or disable all registered controls."""
+        for control in self._controls:
+            control.setEnabled(enabled)
+
+    def _save_force_data(self):
+        """Save force data to files."""
+        if not hasattr(self.data_manager, 'force_results') or not self.data_manager.force_results:
+            QMessageBox.warning(self, "Warning", "No force data to save.")
+            return
+
+        try:
+            # Get directory to save files
+            save_dir = QFileDialog.getExistingDirectory(
+                self,
+                "Select Directory to Save Force Data",
+                os.path.expanduser("~")
+            )
+
+            if save_dir:
+                results = self.data_manager.force_results
+
+                # Save force components
+                np.save(os.path.join(save_dir, 't_x.npy'), results['tx'])
+                np.save(os.path.join(save_dir, 't_y.npy'), results['ty'])
+
+                # Save parameters
+                params = results.get('parameters', {})
+                if params:
+                    np.save(os.path.join(save_dir, 'parameters.npy'), params)
+
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Force data saved to:\n{save_dir}"
+                )
+
+        except Exception as e:
+            self._handle_error(self.create_error(
+                message="Failed to save force data",
+                details=str(e),
+                recovery_hint="Check file permissions and disk space"
+            ))
+
+    def _load_force_data(self):
+        """Load force data from files."""
+        try:
+            # Get directory containing the files
+            load_dir = QFileDialog.getExistingDirectory(
+                self,
+                "Select Directory Containing Force Data",
+                os.path.expanduser("~")
+            )
+
+            if load_dir:
+                # Check required files exist
+                t_x_path = os.path.join(load_dir, 't_x.npy')
+                t_y_path = os.path.join(load_dir, 't_y.npy')
+
+                if not (os.path.exists(t_x_path) and os.path.exists(t_y_path)):
+                    raise FileNotFoundError("Could not find t_x.npy and t_y.npy in selected directory")
+
+                # Load the force components
+                tx = np.load(t_x_path)
+                ty = np.load(t_y_path)
+
+                # Try to load parameters, use current if not available
+                try:
+                    params_path = os.path.join(load_dir, 'parameters.npy')
+                    params = np.load(params_path, allow_pickle=True).item() if os.path.exists(params_path) else {}
+                except:
+                    params = {}
+
+                # Get current visualization parameters from UI
+                visualization_params = {
+                    'vector_stride': self.visualization_params['vector_stride'].value(),
+                    'arrow_scale': self.visualization_params['arrow_scale'].value(),
+                    'f_max': self.visualization_params['f_max'].value()
+                }
+
+                # Create results dictionary
+                results = {
+                    'tx': tx,
+                    'ty': ty,
+                    'parameters': {
+                        'young_modulus': params.get('young_modulus', self.young_modulus),
+                        'poisson_ratio': params.get('poisson_ratio', self.poisson_ratio),
+                        'gel_height': params.get('gel_height', self.gel_height),
+                        'pixel_size': params.get('pixel_size', self._pixel_size),
+                        'regularization': params.get('regularization', self.regularization),
+                        'mesh_size': params.get('mesh_size', self.mesh_size),
+                        'lanczos_exp': params.get('lanczos_exp', self.lanczos_exp),
+                        'filter_sigma': params.get('filter_sigma', self.filter_sigma),
+                        'visualization': visualization_params
+                    }
+                }
+
+                # Update data manager and visualization
+                self.data_manager.force_results = results
+                self.visualization_manager.visualize_force_results(
+                    results,
+                    visualization_params
+                )
+
+                # Update UI with loaded parameters
+                if params:
+                    self._load_parameters_to_ui(params)
+
+                # Enable save button and emit results
+                self.save_force_btn.setEnabled(True)
+                self.force_calculated.emit(results)
+
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Force data loaded from:\n{load_dir}"
+                )
+
+        except Exception as e:
+            self._handle_error(self.create_error(
+                message="Failed to load force data",
+                details=str(e),
+                recovery_hint="Verify file format and contents"
+            ))
+
+    def _load_parameters_to_ui(self, params: dict):
+        """Load parameters from dictionary to UI controls."""
+        try:
+            # Update spinboxes with loaded values
+            if 'young_modulus' in params:
+                self.young_spin.setValue(params['young_modulus'])
+            if 'poisson_ratio' in params:
+                self.poisson_spin.setValue(params['poisson_ratio'])
+            if 'gel_height' in params:
+                self.height_spin.setValue(0 if params['gel_height'] is None else params['gel_height'])
+            if 'pixel_size' in params:
+                self.pixel_spin.setValue(params['pixel_size'])
+            if 'mesh_size' in params:
+                self.mesh_size_spin.setValue(params['mesh_size'])
+            if 'lanczos_exp' in params:
+                self.lanczos_exp_spin.setValue(params['lanczos_exp'])
+            if 'regularization' in params:
+                self.regularization_spin.setValue(np.log10(params['regularization']))
+            if 'filter_sigma' in params:
+                self.filter_sigma_spin.setValue(params['filter_sigma'])
+
+            # Update visualization parameters if available
+            vis_params = params.get('visualization', {})
+            if vis_params:
+                if 'vector_stride' in vis_params:
+                    self.visualization_params['vector_stride'].setValue(vis_params['vector_stride'])
+                if 'arrow_scale' in vis_params:
+                    self.visualization_params['arrow_scale'].setValue(vis_params['arrow_scale'])
+                if 'f_max' in vis_params:
+                    self.visualization_params['f_max'].setValue(vis_params['f_max'])
+
+            self._update_parameters()
+
+        except Exception as e:
+            self._handle_error(self.create_error(
+                message="Failed to load parameters to UI",
+                details=str(e),
+                recovery_hint="Check parameter values and ranges"
+            ))
