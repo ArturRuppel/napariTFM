@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
-from typing import Optional, Dict, List, Tuple, Any
+from typing import Dict, Any, Tuple, List
+from typing import Optional
 
 import cv2
 import napari
@@ -8,7 +9,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from napari.layers import Layer
 
-from .error_handling import ErrorHandlingMixin
+from .error_handling import ErrorHandlingMixin, ErrorSeverity
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,21 @@ class VisualizationManager(ErrorHandlingMixin):
         self.viewer = viewer
         self.data_manager = data_manager
         self._layers: Dict[str, Any] = {}
-        # Properly initialize the preview config
         self._preview_config = PreviewConfig()
+        self._displacement_dims_callback = None  # Store callback reference
 
         # Connect to viewer events
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
+
+    def _clear_displacement_callback(self):
+        """Clear the existing displacement dims callback if it exists"""
+        if self._displacement_dims_callback is not None:
+            try:
+                self.viewer.dims.events.current_step.disconnect(self._displacement_dims_callback)
+            except Exception:
+                pass
+            self._displacement_dims_callback = None
 
     def update_preprocessing_visualization(self, results: Dict) -> None:
         """
@@ -182,6 +192,27 @@ class VisualizationManager(ErrorHandlingMixin):
             logger.error(f"Preview handling failed: {str(e)}")
             raise
 
+    def _clear_layers(self, display_names: List[str]) -> None:
+        """Clear specified layers from the viewer."""
+        for name in display_names:
+            for layer in list(self.viewer.layers):
+                if layer.name == name:
+                    self.viewer.layers.remove(layer)
+                    # Also clear from tracking dict if present
+                    if name in self._layers:
+                        self._layers[name] = None
+
+    def _upscale_field(self, field: np.ndarray, downscale_factor: int) -> np.ndarray:
+        """Upscale a vector field for visualization."""
+        if downscale_factor <= 1:
+            return field
+
+        return cv2.resize(
+            field,
+            (field.shape[1] * downscale_factor, field.shape[0] * downscale_factor),
+            interpolation=cv2.INTER_LINEAR
+        )
+
     def visualize_displacement_preview(
             self,
             flow: np.ndarray,
@@ -192,99 +223,96 @@ class VisualizationManager(ErrorHandlingMixin):
     ) -> None:
         """Visualize displacement preview for a single frame."""
         try:
-            # If downscaled, upscale flow for visualization only
-            display_flow = cv2.resize(
-                flow,
-                (flow.shape[1] * downscale_factor, flow.shape[0] * downscale_factor),
-                interpolation=cv2.INTER_LINEAR
-            )
+            # Clear existing layers
+            self._clear_layers(['Displacement Magnitude', 'Displacement Vectors'])
 
+            # Upscale flow for visualization
+            display_flow = self._upscale_field(flow, downscale_factor)
 
             # Scale flow for visualization
             flow_scaled = display_flow * arrow_scale
 
-            # Create vector data
-            vectors, colors = self._create_vector_visualization(
-                flow_scaled,
-                display_flow,
-                vector_stride,
-                d_max
-            )
-
-            # Add or update visualization layers
+            # Add visualization layers
             with self.viewer.events.blocker_all():
                 # Add magnitude
                 magnitude = np.sqrt(np.sum(display_flow ** 2, axis=-1))
+                self._layers['displacement_magnitude'] = self.viewer.add_image(
+                    magnitude,
+                    name='Displacement Magnitude',
+                    colormap='viridis',
+                    blending='additive',
+                    contrast_limits=(0, d_max)
+                )
 
-                if 'magnitude' in self._layers and self._layers['magnitude'] is not None:
-                    self._layers['magnitude'].data = magnitude
-                    self._layers['magnitude'].contrast_limits = (0, d_max)
-                else:
-                    self._layers['magnitude'] = self.viewer.add_image(
-                        magnitude,
-                        name='Displacement Magnitude',
-                        colormap='viridis',
+                # Create vector data and add layer
+                vectors, colors = self._create_vector_visualization(
+                    flow_scaled,
+                    display_flow,
+                    vector_stride,
+                    d_max
+                )
+
+                if len(vectors) > 0:
+                    self._layers['displacement_vectors'] = self.viewer.add_vectors(
+                        vectors,
+                        name='Displacement Vectors',
+                        edge_color=colors,
+                        edge_width=2,
+                        vector_style='arrow',
                         blending='additive',
-                        contrast_limits=(0, d_max)
+                        length=1
                     )
 
-                # Update or create vector layer
-                if len(vectors) > 0:
-                    if 'vectors' in self._layers and self._layers['vectors'] is not None:
-                        self._layers['vectors'].data = vectors
-                        self._layers['vectors'].edge_color = colors
-                    else:
-                        self._layers['vectors'] = self.viewer.add_vectors(
-                            vectors,
-                            name='Displacement Vectors',
-                            edge_color=colors,
-                            edge_width=2,
-                            vector_style='arrow',
-                            blending='additive',
-                            length=1
-                        )
-
         except Exception as e:
-            logger.error(f"Failed to visualize displacement preview: {str(e)}")
+            error = self.create_error(
+                message="Failed to visualize displacement preview",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Try adjusting visualization parameters or check input data",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
             raise
 
-    def visualize_displacement_results(self, results: Dict, downscale_factor: int = 1) -> None:
+    def visualize_displacement_results(
+            self,
+            results: Dict[str, Any],
+            downscale_factor: int = 1
+    ) -> None:
         """Visualize displacement results for all frames."""
         try:
             flows = results['flows']
             vis_params = results['visualization_params']
 
-            # Create visualization stacks - use original flow shape before upscaling
+            # Clear existing layers
+            self._clear_layers(['Displacement Magnitude', 'Displacement Vectors'])
+
+            # Create visualization stacks
             num_frames = len(flows)
-            # Initialize magnitudes with the upscaled shape
-            if downscale_factor > 1:
-                upscaled_shape = (
-                    flows[0].shape[0] * downscale_factor,
-                    flows[0].shape[1] * downscale_factor
-                )
-                magnitudes = np.zeros((num_frames, *upscaled_shape))
-            else:
-                magnitudes = np.zeros((num_frames, *flows[0].shape[:2]))
+            upscaled_shape = (
+                flows[0].shape[0] * downscale_factor,
+                flows[0].shape[1] * downscale_factor
+            )
+            magnitudes = np.zeros((num_frames, *upscaled_shape))
 
-            vector_data_cache = []
-            vector_colors_cache = []
+            # Create vector cache
+            vector_cache = {
+                'data': [],
+                'colors': [],
+                'parameters': vis_params.copy(),
+                'original_resolution': flows[0].shape[:2]
+            }
 
+            # Process each frame
             for i in range(num_frames):
-                # If downscaled, upscale flow for visualization
-                if downscale_factor > 1:
-                    display_flow = cv2.resize(
-                        flows[i],
-                        (flows[i].shape[1] * downscale_factor, flows[i].shape[0] * downscale_factor),
-                        interpolation=cv2.INTER_LINEAR
-                    )
-                else:
-                    display_flow = flows[i]
+                display_flow = self._upscale_field(flows[i], downscale_factor)
 
-                # Calculate magnitude from display flow - now matches the upscaled size
+                # Calculate magnitude
                 magnitude = np.sqrt(np.sum(display_flow ** 2, axis=-1))
-                magnitudes[i] = magnitude  # This should now match in size
+                magnitudes[i] = magnitude
 
-                # Calculate vector data using display flow
+                # Calculate vector data
                 flow_scaled = display_flow * vis_params['arrow_scale']
                 vectors, colors = self._create_vector_visualization(
                     flow_scaled,
@@ -292,50 +320,58 @@ class VisualizationManager(ErrorHandlingMixin):
                     vis_params['vector_stride'],
                     vis_params['d_max']
                 )
-                vector_data_cache.append(vectors)
-                vector_colors_cache.append(colors)
+                vector_cache['data'].append(vectors)
+                vector_cache['colors'].append(colors)
 
             # Store vector cache in results
-            vector_cache = {
-                'data': vector_data_cache,
-                'colors': vector_colors_cache
-            }
-            results['vector_cache'] = vector_cache
+            results['displacement_vector_cache'] = vector_cache
 
-            # Add or update visualization layers
+            # Add visualization layers
             with self.viewer.events.blocker_all():
-                # Update or create magnitude layer
-                if 'magnitude' in self._layers and self._layers['magnitude'] is not None:
-                    self._layers['magnitude'].data = magnitudes
-                    self._layers['magnitude'].contrast_limits = (0, vis_params['d_max'])
-                else:
-                    self._layers['magnitude'] = self.viewer.add_image(
-                        magnitudes,
-                        name='Displacement Magnitude',
-                        colormap='viridis',
+                self._layers['displacement_magnitude'] = self.viewer.add_image(
+                    magnitudes,
+                    name='Displacement Magnitude',
+                    colormap='viridis',
+                    blending='additive',
+                    contrast_limits=(0, vis_params['d_max'])
+                )
+
+                # Add initial vector layer
+                current_frame = self.viewer.dims.current_step[0]
+                if len(vector_cache['data'][current_frame]) > 0:
+                    self._layers['displacement_vectors'] = self.viewer.add_vectors(
+                        vector_cache['data'][current_frame],
+                        name='Displacement Vectors',
+                        edge_color=vector_cache['colors'][current_frame],
+                        edge_width=2,
+                        vector_style='arrow',
                         blending='additive',
-                        contrast_limits=(0, vis_params['d_max'])
+                        length=1
                     )
 
-                # Update or create vector layer
-                current_frame = self.viewer.dims.current_step[0]
-                if len(vector_data_cache[current_frame]) > 0:
-                    if 'vectors' in self._layers and self._layers['vectors'] is not None:
-                        self._layers['vectors'].data = vector_data_cache[current_frame]
-                        self._layers['vectors'].edge_color = vector_colors_cache[current_frame]
-                    else:
-                        self._layers['vectors'] = self.viewer.add_vectors(
-                            vector_data_cache[current_frame],
-                            name='Displacement Vectors',
-                            edge_color=vector_colors_cache[current_frame],
-                            edge_width=2,
-                            vector_style='arrow',
-                            blending='additive',
-                            length=1
-                        )
+                    # Setup frame change callback
+                    def _on_displacement_dims_change(event=None):
+                        current_frame = self.viewer.dims.current_step[0]
+                        if (current_frame < len(vector_cache['data']) and
+                                'displacement_vectors' in self._layers and
+                                self._layers['displacement_vectors'] is not None):
+                            self._layers['displacement_vectors'].data = vector_cache['data'][current_frame]
+                            self._layers['displacement_vectors'].edge_color = vector_cache['colors'][current_frame]
+
+                    # Store and register the callback
+                    self._displacement_dims_callback = _on_displacement_dims_change
+                    self.viewer.dims.events.current_step.connect(self._displacement_dims_callback)
 
         except Exception as e:
-            logger.error(f"Failed to visualize displacement results: {str(e)}")
+            error = self.create_error(
+                message="Failed to visualize displacement results",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Try adjusting visualization parameters or check data consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
             raise
 
     def visualize_force_preview(
@@ -344,91 +380,114 @@ class VisualizationManager(ErrorHandlingMixin):
             force_y: np.ndarray,
             f_max: float,
             vector_stride: int,
-            arrow_scale: float
+            arrow_scale: float,
+            downscale_factor: int = 1
     ) -> None:
         """Visualize force preview for a single frame."""
         try:
-            # Create combined force field
-            force_field = np.stack([force_x, force_y], axis=-1)
-
-            # Create vector data and colors
-            vectors, colors = self._create_vector_visualization(
-                force_field * arrow_scale,
-                force_field,
-                vector_stride,
-                f_max,
-                colormap='inferno'
-            )
-
-            # Add or update visualization layers
-            with self.viewer.events.blocker_all():
-                # Add magnitude
-                magnitude = np.sqrt(np.sum(force_field ** 2, axis=-1))
-                magnitude = np.clip(magnitude, 0, f_max)
-
-                if 'force_magnitude' in self._layers:
-                    self._layers['force_magnitude'].data = magnitude
-                    self._layers['force_magnitude'].contrast_limits = (0, f_max)
-                else:
-                    self._layers['force_magnitude'] = self.viewer.add_image(
-                        magnitude,
-                        name='Force Magnitude',
-                        colormap='inferno',
-                        blending='additive',
-                        contrast_limits=(0, f_max)
-                    )
-
-                # Update or create vector layer
-                if len(vectors) > 0:
-                    if 'force_vectors' in self._layers:
-                        self._layers['force_vectors'].data = vectors
-                        self._layers['force_vectors'].edge_color = colors
-                    else:
-                        self._layers['force_vectors'] = self.viewer.add_vectors(
-                            vectors,
-                            name='Force Vectors',
-                            edge_color=colors,
-                            edge_width=2,
-                            vector_style='arrow',
-                            blending='additive',
-                            length=1
-                        )
-
-        except Exception as e:
-            logger.error(f"Failed to visualize force preview: {str(e)}")
-            raise
-
-    def visualize_force_results(self, results: Dict[str, Any], visualization_params: Dict[str, Any]) -> None:
-        """Update force visualization with current results and parameters."""
-        try:
-            # Clear existing force layers
+            # Clear existing layers
             self._clear_layers(['Force Magnitude', 'Force Vectors'])
 
-            # Calculate magnitude stack
-            magnitude_stack = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
+            # Create and upscale force field
+            force_field = np.stack([force_x, force_y], axis=-1)
+            display_force = self._upscale_field(force_field, downscale_factor)
+
+            # Add visualization layers
+            with self.viewer.events.blocker_all():
+                # Add magnitude
+                magnitude = np.sqrt(np.sum(display_force ** 2, axis=-1))
+                magnitude = np.clip(magnitude, 0, f_max)
+
+                self._layers['force_magnitude'] = self.viewer.add_image(
+                    magnitude,
+                    name='Force Magnitude',
+                    colormap='inferno',
+                    blending='additive',
+                    contrast_limits=(0, f_max)
+                )
+
+                # Create vector data and add layer
+                force_scaled = display_force * arrow_scale
+                vectors, colors = self._create_vector_visualization(
+                    force_scaled,
+                    display_force,
+                    vector_stride,
+                    f_max,
+                    colormap='inferno'
+                )
+
+                if len(vectors) > 0:
+                    self._layers['force_vectors'] = self.viewer.add_vectors(
+                        vectors,
+                        name='Force Vectors',
+                        edge_color=colors,
+                        edge_width=2,
+                        vector_style='arrow',
+                        blending='additive',
+                        length=1
+                    )
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to visualize force preview",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Try adjusting visualization parameters or check input data",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+            raise
+
+    def visualize_force_results(
+            self,
+            results: Dict[str, Any],
+            downscale_factor: int = 1
+    ) -> None:
+        """Visualize force results for all frames."""
+        try:
+            # Clear existing layers
+            self._clear_layers(['Force Magnitude', 'Force Vectors'])
 
             # Get visualization parameters
-            f_max = visualization_params['f_max']
-            vector_stride = visualization_params['vector_stride']
-            arrow_scale = visualization_params['arrow_scale']
+            vis_params = results.get('visualization_params', {})
+            f_max = vis_params.get('f_max')
+            vector_stride = vis_params.get('vector_stride')
+            arrow_scale = vis_params.get('arrow_scale')
 
-            # Create vector cache for all frames
+            # Create vector cache
             vector_cache = {
                 'data': [],
                 'colors': [],
-                'parameters': visualization_params.copy()
+                'parameters': vis_params.copy(),
+                'original_resolution': (results['tx'].shape[1], results['tx'].shape[2])
             }
 
-            # Process each frame
-            for frame_idx in range(len(results['tx'])):
-                force_vectors = np.stack([
+            # Calculate and upscale force fields
+            num_frames = len(results['tx'])
+            upscaled_shape = (
+                results['tx'].shape[1] * downscale_factor,
+                results['tx'].shape[2] * downscale_factor
+            )
+            magnitude_stack = np.zeros((num_frames, *upscaled_shape))
+
+            for frame_idx in range(num_frames):
+                force_field = np.stack([
                     results['tx'][frame_idx],
                     results['ty'][frame_idx]
                 ], axis=-1)
 
+                display_force = self._upscale_field(force_field, downscale_factor)
+
+                # Calculate magnitude
+                magnitude = np.sqrt(np.sum(display_force ** 2, axis=-1))
+                magnitude_stack[frame_idx] = np.clip(magnitude, 0, f_max)
+
+                # Calculate vectors
+                force_scaled = display_force * arrow_scale
                 vectors, colors = self._create_vector_visualization(
-                    force_vectors * arrow_scale,
-                    force_vectors,
+                    force_scaled,
+                    display_force,
                     vector_stride,
                     f_max,
                     colormap='inferno'
@@ -436,41 +495,52 @@ class VisualizationManager(ErrorHandlingMixin):
                 vector_cache['data'].append(vectors)
                 vector_cache['colors'].append(colors)
 
-            # Store vector cache in results instead of data manager for preview case
-            if 'parameters' in results:  # Full analysis case
-                self.data_manager.force_vector_cache = vector_cache
-            else:  # Preview case
-                results['vector_cache'] = vector_cache
+            # Store vector cache in results
+            results['force_vector_cache'] = vector_cache
 
             # Add visualization layers
             with self.viewer.events.blocker_all():
-                # Add magnitude layer with clipping
-                if f_max is not None:
-                    magnitude_stack = np.clip(magnitude_stack, 0, f_max)
-
-                magnitude_layer = self.viewer.add_image(
+                self._layers['force_magnitude'] = self.viewer.add_image(
                     magnitude_stack,
                     name='Force Magnitude',
                     colormap='inferno',
-                    blending='additive'
+                    blending='additive',
+                    contrast_limits=(0, f_max)
                 )
-                self._layers['force_magnitude'] = magnitude_layer
 
                 # Add initial vector layer
                 current_frame = self.viewer.dims.current_step[0]
                 if len(vector_cache['data'][current_frame]) > 0:
-                    vector_layer = self.viewer.add_vectors(
+                    self._layers['force_vectors'] = self.viewer.add_vectors(
                         vector_cache['data'][current_frame],
+                        name='Force Vectors',
                         edge_color=vector_cache['colors'][current_frame],
                         edge_width=2,
-                        name='Force Vectors',
                         vector_style='arrow',
-                        blending='additive'
+                        blending='additive',
+                        length=1
                     )
-                    self._layers['force_vectors'] = vector_layer
+
+                    # Setup frame change callback
+                    def _on_force_dims_change(event=None):
+                        current_frame = self.viewer.dims.current_step[0]
+                        if self._layers['force_vectors'] is not None:
+                            self._layers['force_vectors'].data = vector_cache['data'][current_frame]
+                            self._layers['force_vectors'].edge_color = vector_cache['colors'][current_frame]
+
+                    # Register the callback
+                    self.viewer.dims.events.current_step.connect(_on_force_dims_change)
 
         except Exception as e:
-            self.handle_error(f"Failed to update force visualization: {str(e)}")
+            error = self.create_error(
+                message="Failed to visualize force results",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Try adjusting visualization parameters or check data consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
             raise
 
     def _on_frame_changed(self, event=None) -> None:
@@ -535,7 +605,10 @@ class VisualizationManager(ErrorHandlingMixin):
     def cleanup(self) -> None:
         """Clean up resources."""
         try:
-            # Disconnect events
+            # Clear displacement callback
+            self._clear_displacement_callback()
+
+            # Disconnect other events
             if self.viewer is not None:
                 self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
                 self.viewer.layers.events.removed.disconnect(self._on_layer_removed)
@@ -547,7 +620,6 @@ class VisualizationManager(ErrorHandlingMixin):
 
         except Exception as e:
             self.handle_error(f"Failed to cleanup visualization manager: {str(e)}")
-
     def update_displacement_frame(self, frame_index: int) -> None:
         """Update vector visualization for the current frame."""
         if not hasattr(self.data_manager, 'displacement_results'):
@@ -567,17 +639,6 @@ class VisualizationManager(ErrorHandlingMixin):
                 # Update vectors and colors for current frame
                 self._layers['vectors'].data = cache['data'][frame_index]
                 self._layers['vectors'].edge_color = cache['colors'][frame_index]
-
-    def _clear_layers(self, layer_names: List[str]) -> None:
-        """Remove specified layers from viewer"""
-        for name in layer_names:
-            for layer in list(self.viewer.layers):
-                if layer.name == name:
-                    self.viewer.layers.remove(layer)
-                    # Also remove from our layer dictionary if present
-                    for key, stored_layer in list(self._layers.items()):
-                        if stored_layer == layer:
-                            del self._layers[key]
 
     def _create_vector_visualization(
             self,

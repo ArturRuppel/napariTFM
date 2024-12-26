@@ -1,8 +1,7 @@
 import os
-from enum import Enum
-from typing import Dict, Optional
-import numpy as np
+from typing import Optional
 
+import numpy as np
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QFileDialog,
@@ -13,8 +12,8 @@ from qtpy.QtWidgets import (
 from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
 from .data_manager import DataManager
+from .fttc import FTTC
 from .visualization_manager import VisualizationManager
-from .fttc import FTTC  # Import the new FTTC class
 
 
 class ForceCalculationWidget(BaseAnalysisWidget):
@@ -336,6 +335,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             self._handle_error(f"Cleanup failed: {str(e)}")
 
         super().cleanup()
+
     def _initialize_calculator(self):
         """Initialize the FTTC calculator with current parameters."""
         self._update_parameters()
@@ -548,6 +548,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             ))
         finally:
             self._set_controls_enabled(True)
+
     def _set_regularization_with_gcv(self):
         """Handle GCV-based regularization parameter selection."""
         try:
@@ -599,6 +600,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             )
         finally:
             self._set_controls_enabled(True)
+
     def _update_parameters(self):
         """Update parameters from UI controls."""
         # Update basic parameters
@@ -649,8 +651,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                     self._pixel_size = inherited_pixel_size
                     self.pixel_spin.setValue(inherited_pixel_size)
                     self.pixel_spin.setStyleSheet("color: gray;")
-
-                    # Update tooltip
                     self.pixel_spin.setToolTip(
                         f"Inherited from displacement analysis\n"
                         f"Base pixel size: {base_pixel_size} μm\n"
@@ -680,15 +680,19 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         # Get flows data
         flows = self.data_manager.displacement_results['flows']
 
-        # Check if flows is None
-        if flows is None:
+        # Check if flows is None or empty
+        if flows is None or not isinstance(flows, (list, np.ndarray)) or len(flows) == 0:
             return False
 
-        # Check if flows array is empty using size property
-        if not isinstance(flows, np.ndarray) or flows.size == 0:
+        # Ensure proper shape
+        if not isinstance(flows, np.ndarray):
+            flows = np.array(flows)
+
+        if flows.ndim < 4:  # Should be (frames, height, width, 2)
             return False
 
         return True
+
     def _update_status(self, message: str, progress: Optional[int] = None):
         """Update status message and progress bar."""
         self.status_label.setText(message)

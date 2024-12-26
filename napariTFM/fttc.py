@@ -532,6 +532,10 @@ class FTTC:
             energy = self._calculate_energy(u, f, pix_per_mu)
             force = self._calculate_total_force(fnorm, pix_per_mu)
 
+        # # Swap both position and force components before returning
+        # pos = np.array([pos[1], pos[0]])  # Swap position components
+        # f = np.array([f[1], f[0]])  # Swap force components
+
         return pos, vec, fnorm, f, energy, force
 
     def _calculate_energy(self, u: np.ndarray, f: np.ndarray, pix_per_mu: float) -> float:
