@@ -363,6 +363,8 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             # Get displacement data
             displacement_results = self.data_manager.displacement_results
             flows = displacement_results['flows']
+            # Get downscale factor from displacement results
+            downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
             num_frames = len(flows)
 
             # Initialize calculator with current parameters
@@ -428,6 +430,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 'mesh_size': self.mesh_size,
                 'lanczos_exp': self.lanczos_exp,
                 'filter_sigma': self.filter_sigma,
+                'downscale_factor': downscale_factor,  # Store downscale factor in parameters
                 'visualization': visualization_params
             }
 
@@ -435,7 +438,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             self.data_manager.force_results = force_results
             self.visualization_manager.visualize_force_results(
                 force_results,
-                visualization_params
+                downscale_factor=downscale_factor
             )
 
             # Update colorbar
@@ -480,9 +483,11 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             self._set_controls_enabled(False)
             self._update_status("Calculating forces...", 0)
 
-            # Get displacement data for current frame
+            # Get displacement data and parameters
             displacement_results = self.data_manager.displacement_results
             flows = displacement_results['flows']
+            # Get downscale factor from displacement results
+            downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
 
             # Get current frame index
             current_frame = self.viewer.dims.current_step[0]
@@ -492,7 +497,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             # Get flow for current frame
             flow = flows[current_frame]
 
-            # Extract displacement components exactly as in working example
+            # Extract displacement components
             u_data = flow[..., 0]  # x displacement
             v_data = flow[..., 1]  # y displacement
 
@@ -503,7 +508,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             # Initialize calculator with current parameters
             self._initialize_calculator()
 
-            # Calculate forces for current frame - use exact same call pattern as working example
+            # Calculate forces for current frame
             xy, fnorm, f, urec, u, energy, force, Ftf, Fturec = self.calculator.calculate_traction(
                 x=x,
                 y=y,
@@ -523,7 +528,8 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 f[0], f[1],
                 f_max=f_max,
                 vector_stride=vector_stride,
-                arrow_scale=arrow_scale
+                arrow_scale=arrow_scale,
+                downscale_factor=downscale_factor
             )
 
             # Update colorbar

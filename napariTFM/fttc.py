@@ -141,7 +141,7 @@ class FTTC:
             - Fourier transform of reconstructed displacement
         """
         # Create grid using original coordinates
-        xpix, ypix = np.meshgrid(x, y, indexing='ij')
+        xpix, ypix = np.meshgrid(x, y, indexing='xy')
         pos0 = np.array([xpix.flatten(), ypix.flatten()])
 
         # Scale only the displacement vectors, not the coordinates
