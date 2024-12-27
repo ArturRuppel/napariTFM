@@ -36,7 +36,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self._pixel_size = 0.1  # μm/pixel
         self.regularization = 1e-6
         self.filter_sigma = 2.0  # pixels
-        self.mesh_size = 4  # pixels per mesh point
+        self.mesh_size = 1  # hardcoded to 1, removed from UI
         self.lanczos_exp = 1
         self._using_inherited_pixel_size = False
 
@@ -64,7 +64,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.poisson_spin = QDoubleSpinBox()
         self.height_spin = QDoubleSpinBox()
         self.pixel_spin = QDoubleSpinBox()
-        self.mesh_size_spin = QSpinBox()
         self.lanczos_exp_spin = QSpinBox()
 
         params = [
@@ -72,7 +71,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, self.poisson_ratio),
             ("Gel Height (μm):", self.height_spin, 0, 1000, 10, 0),
             ("Pixel Size (μm):", self.pixel_spin, 0.001, 10, 0.1, self._pixel_size),
-            ("Mesh Size (pixels):", self.mesh_size_spin, 1, 16, 1, self.mesh_size),
             ("Lanczos Exponent:", self.lanczos_exp_spin, 0, 5, 1, self.lanczos_exp)
         ]
 
@@ -92,6 +90,124 @@ class ForceCalculationWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
+
+    def _connect_signals(self):
+        """Connect all widget signals."""
+        # Parameter updates
+        self.young_spin.valueChanged.connect(self._update_parameters)
+        self.poisson_spin.valueChanged.connect(self._update_parameters)
+        self.height_spin.valueChanged.connect(self._update_parameters)
+        self.pixel_spin.valueChanged.connect(self._on_pixel_size_changed)
+        self.lanczos_exp_spin.valueChanged.connect(self._update_parameters)
+        self.regularization_spin.valueChanged.connect(self._update_parameters)
+        self.filter_sigma_spin.valueChanged.connect(self._update_parameters)
+
+        # Action buttons
+        self.calculate_btn.clicked.connect(self.calculate_forces)
+        self.preview_btn.clicked.connect(self.preview_force)
+        self.save_force_btn.clicked.connect(self._save_force_data)
+        self.load_force_btn.clicked.connect(self._load_force_data)
+        self.reset_params_btn.clicked.connect(self.reset_parameters)
+
+    def reset_parameters(self):
+        """Reset all parameters to defaults."""
+        self._using_inherited_pixel_size = False
+        self.young_spin.setValue(10000)
+        self.poisson_spin.setValue(0.49)
+        self.height_spin.setValue(0)
+        self.pixel_spin.setValue(0.1)
+        self.mesh_size = 1  # hardcoded to 1
+        self.lanczos_exp_spin.setValue(1)
+        self.regularization_spin.setValue(-17)  # 10^-17
+        self.filter_sigma_spin.setValue(2.0)
+
+        self.visualization_params['vector_stride'].setValue(20)
+        self.visualization_params['arrow_scale'].setValue(1.0)
+        self.visualization_params['f_max'].setValue(1000.0)
+
+        self.pixel_spin.setStyleSheet("")
+        self._update_status("Parameters reset to defaults")
+
+    def _register_controls(self):
+        """Register all controls with the base widget."""
+        controls = [
+                       self.young_spin,
+                       self.poisson_spin,
+                       self.height_spin,
+                       self.pixel_spin,
+                       self.lanczos_exp_spin,
+                       self.regularization_spin,
+                       self.filter_sigma_spin,
+                       self.calculate_btn,
+                       self.preview_btn,
+                       self.reset_params_btn,
+                       self.save_force_btn,
+                       self.load_force_btn,
+                       self.progress_bar,
+                       self.status_label
+                   ] + list(self.visualization_params.values())
+
+        for control in controls:
+            self.register_control(control)
+
+    def _update_parameters(self):
+        """Update parameters from UI controls."""
+        # Update basic parameters
+        self.young_modulus = self.young_spin.value()
+        self.poisson_ratio = self.poisson_spin.value()
+        self.regularization = 10 ** self.regularization_spin.value()
+        self.filter_sigma = self.filter_sigma_spin.value()
+        self.mesh_size = 1  # hardcoded to 1, removed from UI
+        self.lanczos_exp = self.lanczos_exp_spin.value()
+
+        # Handle gel height
+        height_value = self.height_spin.value()
+        self.gel_height = None if height_value == 0 else height_value
+
+        # Handle pixel size inheritance
+        if not self._using_inherited_pixel_size:
+            self._pixel_size = self.pixel_spin.value()
+
+        # Update UI state
+        self._update_ui_state()
+
+    def _load_parameters_to_ui(self, params: dict):
+        """Load parameters from dictionary to UI controls."""
+        try:
+            # Update spinboxes with loaded values
+            if 'young_modulus' in params:
+                self.young_spin.setValue(params['young_modulus'])
+            if 'poisson_ratio' in params:
+                self.poisson_spin.setValue(params['poisson_ratio'])
+            if 'gel_height' in params:
+                self.height_spin.setValue(0 if params['gel_height'] is None else params['gel_height'])
+            if 'pixel_size' in params:
+                self.pixel_spin.setValue(params['pixel_size'])
+            if 'lanczos_exp' in params:
+                self.lanczos_exp_spin.setValue(params['lanczos_exp'])
+            if 'regularization' in params:
+                self.regularization_spin.setValue(np.log10(params['regularization']))
+            if 'filter_sigma' in params:
+                self.filter_sigma_spin.setValue(params['filter_sigma'])
+
+            # Update visualization parameters if available
+            vis_params = params.get('visualization', {})
+            if vis_params:
+                if 'vector_stride' in vis_params:
+                    self.visualization_params['vector_stride'].setValue(vis_params['vector_stride'])
+                if 'arrow_scale' in vis_params:
+                    self.visualization_params['arrow_scale'].setValue(vis_params['arrow_scale'])
+                if 'f_max' in vis_params:
+                    self.visualization_params['f_max'].setValue(vis_params['f_max'])
+
+            self._update_parameters()
+
+        except Exception as e:
+            self._handle_error(self.create_error(
+                message="Failed to load parameters to UI",
+                details=str(e),
+                recovery_hint="Check parameter values and ranges"
+            ))
 
     def _create_calculation_params_group(self) -> QGroupBox:
         """Create the calculation parameters group."""
@@ -213,25 +329,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         frame.setLayout(layout)
         return frame
 
-    def _connect_signals(self):
-        """Connect all widget signals."""
-        # Parameter updates
-        self.young_spin.valueChanged.connect(self._update_parameters)
-        self.poisson_spin.valueChanged.connect(self._update_parameters)
-        self.height_spin.valueChanged.connect(self._update_parameters)
-        self.pixel_spin.valueChanged.connect(self._on_pixel_size_changed)
-        self.mesh_size_spin.valueChanged.connect(self._update_parameters)
-        self.lanczos_exp_spin.valueChanged.connect(self._update_parameters)
-        self.regularization_spin.valueChanged.connect(self._update_parameters)
-        self.filter_sigma_spin.valueChanged.connect(self._update_parameters)
-
-        # Action buttons
-        self.calculate_btn.clicked.connect(self.calculate_forces)
-        self.preview_btn.clicked.connect(self.preview_force)
-        self.save_force_btn.clicked.connect(self._save_force_data)
-        self.load_force_btn.clicked.connect(self._load_force_data)
-        self.reset_params_btn.clicked.connect(self.reset_parameters)
-
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
@@ -280,48 +377,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         main_layout.addStretch(1)
 
         self.setLayout(main_layout)
-
-    def _register_controls(self):
-        """Register all controls with the base widget."""
-        controls = [
-                       self.young_spin,
-                       self.poisson_spin,
-                       self.height_spin,
-                       self.pixel_spin,
-                       self.mesh_size_spin,
-                       self.lanczos_exp_spin,
-                       self.regularization_spin,
-                       self.filter_sigma_spin,
-                       self.calculate_btn,
-                       self.preview_btn,
-                       self.reset_params_btn,
-                       self.save_force_btn,
-                       self.load_force_btn,
-                       self.progress_bar,
-                       self.status_label
-                   ] + list(self.visualization_params.values())
-
-        for control in controls:
-            self.register_control(control)
-
-    def reset_parameters(self):
-        """Reset all parameters to defaults."""
-        self._using_inherited_pixel_size = False
-        self.young_spin.setValue(10000)
-        self.poisson_spin.setValue(0.49)
-        self.height_spin.setValue(0)
-        self.pixel_spin.setValue(0.1)
-        self.mesh_size_spin.setValue(4)
-        self.lanczos_exp_spin.setValue(1)
-        self.regularization_spin.setValue(-17)  # 10^-17
-        self.filter_sigma_spin.setValue(2.0)
-
-        self.visualization_params['vector_stride'].setValue(20)
-        self.visualization_params['arrow_scale'].setValue(1.0)
-        self.visualization_params['f_max'].setValue(1000.0)
-
-        self.pixel_spin.setStyleSheet("")
-        self._update_status("Parameters reset to defaults")
 
     def cleanup(self):
         """Clean up resources."""
@@ -607,27 +662,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         finally:
             self._set_controls_enabled(True)
 
-    def _update_parameters(self):
-        """Update parameters from UI controls."""
-        # Update basic parameters
-        self.young_modulus = self.young_spin.value()
-        self.poisson_ratio = self.poisson_spin.value()
-        self.regularization = 10 ** self.regularization_spin.value()
-        self.filter_sigma = self.filter_sigma_spin.value()
-        self.mesh_size = self.mesh_size_spin.value()
-        self.lanczos_exp = self.lanczos_exp_spin.value()
-
-        # Handle gel height
-        height_value = self.height_spin.value()
-        self.gel_height = None if height_value == 0 else height_value
-
-        # Handle pixel size inheritance
-        if not self._using_inherited_pixel_size:
-            self._pixel_size = self.pixel_spin.value()
-
-        # Update UI state
-        self._update_ui_state()
-
     def _on_pixel_size_changed(self, value):
         """Handle manual changes to pixel size."""
         if not self._using_inherited_pixel_size:
@@ -828,44 +862,4 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 message="Failed to load force data",
                 details=str(e),
                 recovery_hint="Verify file format and contents"
-            ))
-
-    def _load_parameters_to_ui(self, params: dict):
-        """Load parameters from dictionary to UI controls."""
-        try:
-            # Update spinboxes with loaded values
-            if 'young_modulus' in params:
-                self.young_spin.setValue(params['young_modulus'])
-            if 'poisson_ratio' in params:
-                self.poisson_spin.setValue(params['poisson_ratio'])
-            if 'gel_height' in params:
-                self.height_spin.setValue(0 if params['gel_height'] is None else params['gel_height'])
-            if 'pixel_size' in params:
-                self.pixel_spin.setValue(params['pixel_size'])
-            if 'mesh_size' in params:
-                self.mesh_size_spin.setValue(params['mesh_size'])
-            if 'lanczos_exp' in params:
-                self.lanczos_exp_spin.setValue(params['lanczos_exp'])
-            if 'regularization' in params:
-                self.regularization_spin.setValue(np.log10(params['regularization']))
-            if 'filter_sigma' in params:
-                self.filter_sigma_spin.setValue(params['filter_sigma'])
-
-            # Update visualization parameters if available
-            vis_params = params.get('visualization', {})
-            if vis_params:
-                if 'vector_stride' in vis_params:
-                    self.visualization_params['vector_stride'].setValue(vis_params['vector_stride'])
-                if 'arrow_scale' in vis_params:
-                    self.visualization_params['arrow_scale'].setValue(vis_params['arrow_scale'])
-                if 'f_max' in vis_params:
-                    self.visualization_params['f_max'].setValue(vis_params['f_max'])
-
-            self._update_parameters()
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Failed to load parameters to UI",
-                details=str(e),
-                recovery_hint="Check parameter values and ranges"
             ))
