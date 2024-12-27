@@ -16,7 +16,7 @@ from .fttc import FTTC
 from .visualization_manager import VisualizationManager
 
 
-class ForceCalculationWidget(BaseAnalysisWidget):
+class FTTCWidget(BaseAnalysisWidget):
     """Widget for calculating traction forces using FTTC method."""
 
     force_calculated = Signal(dict)
@@ -34,7 +34,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.gel_height = None  # μm (None means infinite)
         self._pixel_size = 0.1  # μm/pixel
         self.regularization = 1e-6
-        self.filter_sigma = 2.0  # pixels
         self.mesh_size = 1  # hardcoded to 1
         self.lanczos_exp = 1
         self._using_inherited_pixel_size = False
@@ -83,16 +82,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         reg_container.setLayout(reg_container_layout)
         layout.addWidget(reg_container)
 
-        # Filter sigma
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("Filter Sigma:"))
-        self.filter_sigma_spin = QDoubleSpinBox()
-        self.filter_sigma_spin.setRange(0, 10)
-        self.filter_sigma_spin.setValue(2.0)
-        self.filter_sigma_spin.setSingleStep(0.1)
-        filter_layout.addWidget(self.filter_sigma_spin)
-        layout.addLayout(filter_layout)
-
         group.setLayout(layout)
         return group
 
@@ -105,7 +94,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                        self.pixel_spin,
                        self.lanczos_exp_spin,
                        self.regularization_spin,
-                       self.filter_sigma_spin,
                        self.calculate_btn,
                        self.preview_btn,
                        self.reset_params_btn,
@@ -136,7 +124,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.mesh_size = 1  # hardcoded to 1
         self.lanczos_exp_spin.setValue(1)
         self.regularization_spin.setValue(-17)  # 10^-17
-        self.filter_sigma_spin.setValue(2.0)
         self.auto_gcv_checkbox.setChecked(False)
 
         self.visualization_params['vector_stride'].setValue(20)
@@ -196,7 +183,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.pixel_spin.valueChanged.connect(self._on_pixel_size_changed)
         self.lanczos_exp_spin.valueChanged.connect(self._update_parameters)
         self.regularization_spin.valueChanged.connect(self._update_parameters)
-        self.filter_sigma_spin.valueChanged.connect(self._update_parameters)
 
         # Action buttons
         self.calculate_btn.clicked.connect(self.calculate_forces)
@@ -211,7 +197,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.young_modulus = self.young_spin.value()
         self.poisson_ratio = self.poisson_spin.value()
         self.regularization = 10 ** self.regularization_spin.value()
-        self.filter_sigma = self.filter_sigma_spin.value()
         self.mesh_size = 1  # hardcoded to 1, removed from UI
         self.lanczos_exp = self.lanczos_exp_spin.value()
 
@@ -242,8 +227,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 self.lanczos_exp_spin.setValue(params['lanczos_exp'])
             if 'regularization' in params:
                 self.regularization_spin.setValue(np.log10(params['regularization']))
-            if 'filter_sigma' in params:
-                self.filter_sigma_spin.setValue(params['filter_sigma'])
+
 
             # Update visualization parameters if available
             vis_params = params.get('visualization', {})
@@ -511,7 +495,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 'regularization': self.regularization,
                 'mesh_size': self.mesh_size,
                 'lanczos_exp': self.lanczos_exp,
-                'filter_sigma': self.filter_sigma,
                 'downscale_factor': downscale_factor,  # Store downscale factor in parameters
                 'visualization': visualization_params
             }
@@ -856,7 +839,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                         'regularization': params.get('regularization', self.regularization),
                         'mesh_size': params.get('mesh_size', self.mesh_size),
                         'lanczos_exp': params.get('lanczos_exp', self.lanczos_exp),
-                        'filter_sigma': params.get('filter_sigma', self.filter_sigma),
                         'visualization': visualization_params
                     }
                 }

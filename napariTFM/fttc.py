@@ -1,12 +1,3 @@
-import time
-from functools import wraps
-from typing import Tuple, Optional
-
-import numpy as np
-from matplotlib import pyplot as plt
-from numba import njit
-from scipy import optimize
-
 """
 Traction Force Microscopy (TFM) force calculation module implementing the FTTC method 
 with Generalized Cross-Validation (GCV) for regularization parameter optimization.
@@ -29,9 +20,18 @@ Paper references:
 - P. C. Hansen, Regularization Tools Version 4.0 for Matlab 7.3 (gcv.m and gcvfun.m)
 - Golub, G. H., Heath, M., & Wahba, G. Generalized Cross-Validation as a Method for 
   Choosing a Good Ridge Parameter (2012)
-
-
 """
+
+import time
+from functools import wraps
+from typing import Tuple, Optional
+
+import numpy as np
+from matplotlib import pyplot as plt
+from numba import njit
+from scipy import optimize
+
+
 def timer_decorator(func):
     @wraps(func)
     def wrapper(*args, **kwargs):

@@ -502,8 +502,9 @@ class VisualizationManager(ErrorHandlingMixin):
                 vector_cache['data'].append(vectors)
                 vector_cache['colors'].append(colors)
 
-            # Store vector cache in results
+            # Store vector cache in results and data manager
             results['force_vector_cache'] = vector_cache
+            self.data_manager.force_vector_cache = vector_cache  # Add this line to store in data manager
 
             # Add visualization layers
             with self.viewer.events.blocker_all():
@@ -531,7 +532,7 @@ class VisualizationManager(ErrorHandlingMixin):
                 # Clear existing callback
                 self._clear_displacement_callback()
 
-                # Setup frame change callback
+                # Update _on_frame_changed to handle force vectors correctly
                 def _on_force_dims_change(event=None):
                     current_frame = self.viewer.dims.current_step[0]
                     if (current_frame < len(vector_cache['data']) and

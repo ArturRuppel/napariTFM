@@ -6,7 +6,7 @@ from qtpy.QtWidgets import (
 )
 
 from .displacement_analysis_widget import DisplacementAnalysisWidget
-from .force_calculation_widget import ForceCalculationWidget
+from .fttc_widget import FTTCWidget
 from .preprocessing_widget import PreprocessingWidget
 from .data_manager import DataManager
 from .visualization_manager import VisualizationManager
@@ -59,7 +59,7 @@ class napariTFMWidget(QWidget):
         )
 
         # Initialize force calculation widget
-        self.force_widget = ForceCalculationWidget(
+        self.force_widget = FTTCWidget(
             self.viewer,
             self.data_manager,
             self.visualization_manager
