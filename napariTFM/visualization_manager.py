@@ -525,17 +525,21 @@ class VisualizationManager(ErrorHandlingMixin):
                         length=1
                     )
 
-                    # Setup frame change callback
-                    def _on_force_dims_change(event=None):
-                        current_frame = self.viewer.dims.current_step[0]
-                        if (current_frame < len(vector_cache['data']) and
-                                'Force Vectors' in self._layers and
-                                self._layers['Force Vectors'] is not None):
-                            self._layers['Force Vectors'].data = vector_cache['data'][current_frame]
-                            self._layers['Force Vectors'].edge_color = vector_cache['colors'][current_frame]
+                # Clear existing callback
+                self._clear_displacement_callback()
 
-                    # Register the callback
-                    self.viewer.dims.events.current_step.connect(_on_force_dims_change)
+                # Setup frame change callback
+                def _on_force_dims_change(event=None):
+                    current_frame = self.viewer.dims.current_step[0]
+                    if (current_frame < len(vector_cache['data']) and
+                            'force_vectors' in self._layers and
+                            self._layers['force_vectors'] is not None):
+                        self._layers['force_vectors'].data = vector_cache['data'][current_frame]
+                        self._layers['force_vectors'].edge_color = vector_cache['colors'][current_frame]
+
+                # Store and register the callback
+                self._displacement_dims_callback = _on_force_dims_change
+                self.viewer.dims.events.current_step.connect(self._displacement_dims_callback)
 
         except Exception as e:
             error = self.create_error(
