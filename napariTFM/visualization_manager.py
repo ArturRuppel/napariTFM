@@ -446,6 +446,9 @@ class VisualizationManager(ErrorHandlingMixin):
     ) -> None:
         """Visualize force results for all frames."""
         try:
+            # Clear existing layers
+            self._clear_layers(['Force Magnitude', 'Force Vectors'])
+
             # First get the traction force components
             tx = np.array(results['tx'])  # Ensure numpy array
             ty = np.array(results['ty'])

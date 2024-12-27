@@ -798,11 +798,8 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 if params:
                     np.save(os.path.join(save_dir, 'parameters.npy'), params)
 
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Force data saved to:\n{save_dir}"
-                )
+                self._update_status(f"Force data successfully saved to:\n{save_dir}", 100)
+
 
         except Exception as e:
             self._handle_error(self.create_error(
@@ -880,11 +877,8 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 self.save_force_btn.setEnabled(True)
                 self.force_calculated.emit(results)
 
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Force data loaded from:\n{load_dir}"
-                )
+                self._update_status(f"Force data successfully loaded from:\n{load_dir}", 100)
+
 
         except Exception as e:
             self._handle_error(self.create_error(

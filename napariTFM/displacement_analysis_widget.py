@@ -400,11 +400,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 np.save(os.path.join(save_dir, 'd_x.npy'), d_x)
                 np.save(os.path.join(save_dir, 'd_y.npy'), d_y)
 
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Displacement data saved to:\n{save_dir}"
-                )
+                self._update_status(f"Displacement data successfully saved to:\n{save_dir}", 100)
 
         except Exception as e:
             QMessageBox.critical(
@@ -469,11 +465,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 # Emit the displacement_calculated signal with the results
                 self.displacement_calculated.emit(results)
 
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Displacement data loaded from:\n{load_dir}"
-                )
+                self._update_status(f"Displacement data successfully loaded from:\n{load_dir}", 100)
+
 
         except Exception as e:
             QMessageBox.critical(
