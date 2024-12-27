@@ -4,7 +4,7 @@ from typing import Optional
 import numpy as np
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QFileDialog,
+    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QFileDialog, QCheckBox,
     QDoubleSpinBox, QPushButton, QFrame, QProgressBar, QMessageBox,
     QWidget, QSizePolicy, QSpinBox
 )
@@ -20,7 +20,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
     """Widget for calculating traction forces using FTTC method."""
 
     force_calculated = Signal(dict)
-
     def __init__(
             self,
             viewer: "napari.Viewer",
@@ -36,7 +35,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self._pixel_size = 0.1  # μm/pixel
         self.regularization = 1e-6
         self.filter_sigma = 2.0  # pixels
-        self.mesh_size = 1  # hardcoded to 1, removed from UI
+        self.mesh_size = 1  # hardcoded to 1
         self.lanczos_exp = 1
         self._using_inherited_pixel_size = False
 
@@ -49,6 +48,103 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._register_controls()
         self._update_ui_state()
+
+    def _create_calculation_params_group(self) -> QGroupBox:
+        """Create the calculation parameters group."""
+        group = QGroupBox("Calculation Parameters")
+        layout = QVBoxLayout()
+
+        # Regularization controls container
+        reg_container = QGroupBox("Regularization")
+        reg_container_layout = QVBoxLayout()
+
+        # Regularization parameter with log scale
+        reg_layout = QHBoxLayout()
+        reg_layout.addWidget(QLabel("Parameter (10^x):"))
+        self.regularization_spin = QDoubleSpinBox()
+        self.regularization_spin.setRange(-21, 0)  # 10^-12 to 10^0
+        self.regularization_spin.setValue(-17)  # Default to 10^-6
+        self.regularization_spin.setSingleStep(0.5)
+        self.regularization_spin.setDecimals(1)
+        reg_layout.addWidget(self.regularization_spin)
+        reg_container_layout.addLayout(reg_layout)
+
+        # Add checkbox and GCV button
+        gcv_layout = QHBoxLayout()
+        self.auto_gcv_checkbox = QCheckBox("Auto-GCV per frame")
+        self.auto_gcv_checkbox.stateChanged.connect(self._on_auto_gcv_changed)
+        gcv_layout.addWidget(self.auto_gcv_checkbox)
+
+        self.gcv_button = QPushButton("Auto-select (GCV)")
+        self.gcv_button.clicked.connect(self._set_regularization_with_gcv)
+        gcv_layout.addWidget(self.gcv_button)
+
+        reg_container_layout.addLayout(gcv_layout)
+        reg_container.setLayout(reg_container_layout)
+        layout.addWidget(reg_container)
+
+        # Filter sigma
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Filter Sigma:"))
+        self.filter_sigma_spin = QDoubleSpinBox()
+        self.filter_sigma_spin.setRange(0, 10)
+        self.filter_sigma_spin.setValue(2.0)
+        self.filter_sigma_spin.setSingleStep(0.1)
+        filter_layout.addWidget(self.filter_sigma_spin)
+        layout.addLayout(filter_layout)
+
+        group.setLayout(layout)
+        return group
+
+    def _register_controls(self):
+        """Register all controls with the base widget."""
+        controls = [
+                       self.young_spin,
+                       self.poisson_spin,
+                       self.height_spin,
+                       self.pixel_spin,
+                       self.lanczos_exp_spin,
+                       self.regularization_spin,
+                       self.filter_sigma_spin,
+                       self.calculate_btn,
+                       self.preview_btn,
+                       self.reset_params_btn,
+                       self.save_force_btn,
+                       self.load_force_btn,
+                       self.progress_bar,
+                       self.status_label,
+                       self.gcv_button,
+                       self.auto_gcv_checkbox
+                   ] + list(self.visualization_params.values())
+
+        for control in controls:
+            self.register_control(control)
+
+    def _on_auto_gcv_changed(self, state):
+        """Handle changes to the auto-GCV checkbox state."""
+        is_checked = state == Qt.Checked
+        self.gcv_button.setEnabled(not is_checked)
+        self.regularization_spin.setEnabled(not is_checked)
+
+    def reset_parameters(self):
+        """Reset all parameters to defaults."""
+        self._using_inherited_pixel_size = False
+        self.young_spin.setValue(10000)
+        self.poisson_spin.setValue(0.49)
+        self.height_spin.setValue(0)
+        self.pixel_spin.setValue(0.1)
+        self.mesh_size = 1  # hardcoded to 1
+        self.lanczos_exp_spin.setValue(1)
+        self.regularization_spin.setValue(-17)  # 10^-17
+        self.filter_sigma_spin.setValue(2.0)
+        self.auto_gcv_checkbox.setChecked(False)
+
+        self.visualization_params['vector_stride'].setValue(20)
+        self.visualization_params['arrow_scale'].setValue(1.0)
+        self.visualization_params['f_max'].setValue(1000.0)
+
+        self.pixel_spin.setStyleSheet("")
+        self._update_status("Parameters reset to defaults")
 
     def _create_material_params_group(self) -> QGroupBox:
         """Create the material parameters group."""
@@ -109,47 +205,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
         self.load_force_btn.clicked.connect(self._load_force_data)
         self.reset_params_btn.clicked.connect(self.reset_parameters)
 
-    def reset_parameters(self):
-        """Reset all parameters to defaults."""
-        self._using_inherited_pixel_size = False
-        self.young_spin.setValue(10000)
-        self.poisson_spin.setValue(0.49)
-        self.height_spin.setValue(0)
-        self.pixel_spin.setValue(0.1)
-        self.mesh_size = 1  # hardcoded to 1
-        self.lanczos_exp_spin.setValue(1)
-        self.regularization_spin.setValue(-17)  # 10^-17
-        self.filter_sigma_spin.setValue(2.0)
-
-        self.visualization_params['vector_stride'].setValue(20)
-        self.visualization_params['arrow_scale'].setValue(1.0)
-        self.visualization_params['f_max'].setValue(1000.0)
-
-        self.pixel_spin.setStyleSheet("")
-        self._update_status("Parameters reset to defaults")
-
-    def _register_controls(self):
-        """Register all controls with the base widget."""
-        controls = [
-                       self.young_spin,
-                       self.poisson_spin,
-                       self.height_spin,
-                       self.pixel_spin,
-                       self.lanczos_exp_spin,
-                       self.regularization_spin,
-                       self.filter_sigma_spin,
-                       self.calculate_btn,
-                       self.preview_btn,
-                       self.reset_params_btn,
-                       self.save_force_btn,
-                       self.load_force_btn,
-                       self.progress_bar,
-                       self.status_label
-                   ] + list(self.visualization_params.values())
-
-        for control in controls:
-            self.register_control(control)
-
     def _update_parameters(self):
         """Update parameters from UI controls."""
         # Update basic parameters
@@ -208,47 +263,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 details=str(e),
                 recovery_hint="Check parameter values and ranges"
             ))
-
-    def _create_calculation_params_group(self) -> QGroupBox:
-        """Create the calculation parameters group."""
-        group = QGroupBox("Calculation Parameters")
-        layout = QVBoxLayout()
-
-        # Regularization controls container
-        reg_container = QGroupBox("Regularization")
-        reg_container_layout = QVBoxLayout()
-
-        # Regularization parameter with log scale
-        reg_layout = QHBoxLayout()
-        reg_layout.addWidget(QLabel("Parameter (10^x):"))
-        self.regularization_spin = QDoubleSpinBox()
-        self.regularization_spin.setRange(-21, 0)  # 10^-12 to 10^0
-        self.regularization_spin.setValue(-17)  # Default to 10^-6
-        self.regularization_spin.setSingleStep(0.5)
-        self.regularization_spin.setDecimals(1)
-        reg_layout.addWidget(self.regularization_spin)
-        reg_container_layout.addLayout(reg_layout)
-
-        # Add GCV button
-        self.gcv_button = QPushButton("Auto-select (GCV)")
-        self.gcv_button.clicked.connect(self._set_regularization_with_gcv)
-        reg_container_layout.addWidget(self.gcv_button)
-
-        reg_container.setLayout(reg_container_layout)
-        layout.addWidget(reg_container)
-
-        # Filter sigma
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("Filter Sigma:"))
-        self.filter_sigma_spin = QDoubleSpinBox()
-        self.filter_sigma_spin.setRange(0, 10)
-        self.filter_sigma_spin.setValue(2.0)
-        self.filter_sigma_spin.setSingleStep(0.1)
-        filter_layout.addWidget(self.filter_sigma_spin)
-        layout.addLayout(filter_layout)
-
-        group.setLayout(layout)
-        return group
 
     def _create_visualization_parameters_group(self) -> QGroupBox:
         """Create the visualization parameters group."""
@@ -418,7 +432,6 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             # Get displacement data
             displacement_results = self.data_manager.displacement_results
             flows = displacement_results['flows']
-            # Get downscale factor from displacement results
             downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
             num_frames = len(flows)
 
@@ -441,9 +454,23 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 progress = (i + 1) / num_frames * 100
                 self._update_status(f"Processing frame {i + 1}/{num_frames}...", progress)
 
-                # Extract u and v components and scale by pixel size
+                # Extract u and v components
                 u_data = flow[..., 0]  # x displacement
                 v_data = flow[..., 1]  # y displacement
+
+                # If auto-GCV is enabled, calculate optimal regularization for this frame
+                if self.auto_gcv_checkbox.isChecked():
+                    xx, yy = np.meshgrid(x, y, indexing='ij')
+                    pos0 = np.array([xx.flatten(), yy.flatten()])
+                    vec0 = np.array([
+                        u_data.flatten() * self._pixel_size,
+                        v_data.flatten() * self._pixel_size
+                    ])
+                    self.regularization = self.calculator._find_regularization(pos0, vec0)
+                    self._update_status(
+                        f"Frame {i + 1}: Using GCV-optimized regularization {self.regularization:.2e}",
+                        progress
+                    )
 
                 # Calculate forces using FTTC
                 (_, _), _, f, _, _, energy, force, _, _ = self.calculator.calculate_traction(
@@ -493,6 +520,7 @@ class ForceCalculationWidget(BaseAnalysisWidget):
             self.data_manager.force_results = force_results
             self.visualization_manager.visualize_force_results(
                 force_results,
+                # visualization_params,
                 downscale_factor=downscale_factor
             )
 
@@ -840,7 +868,8 @@ class ForceCalculationWidget(BaseAnalysisWidget):
                 self.data_manager.force_results = results
                 self.visualization_manager.visualize_force_results(
                     results,
-                    visualization_params
+                    # visualization_params,
+                    downscale_factor=1
                 )
 
                 # Update UI with loaded parameters
