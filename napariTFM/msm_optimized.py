@@ -1,16 +1,18 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-
+import os
+import matplotlib.pyplot as plt
+import tifffile
+import numpy as np
 import solidspy.assemutil as ass
 import solidspy.postprocesor as pos
 import solidspy.solutil as sol
 from numba import jit
-from numpy import vstack
 from scipy.optimize import least_squares
-from scipy.sparse import csr_matrix, vstack
+from scipy.sparse import csr_matrix, vstack, diags
 from scipy.sparse.linalg import lsqr
 from skimage.measure import regionprops
-
 
 
 @jit(nopython=True)
@@ -203,8 +205,6 @@ def csr_matvec(data, indices, indptr, x, out):
         for j in range(indptr[i], indptr[i + 1]):
             sum_val += data[j] * x[indices[j]]
         out[i] = sum_val
-
-
 
 
 @jit(nopython=True)
@@ -782,53 +782,156 @@ class MonolayerStressMicroscopy:
 
     @timer_decorator
     def _fem_simulation(self, nodes, elements, loads, mats, mask):
-        """Main FEM simulation with improved stress calculation"""
-        DME, IBC, neq = ass.DME(nodes[:, 3:], elements)
+        """Main FEM simulation with accurate stress calculation"""
 
-        # System assembly
+
+        # Get mask dimensions
+        if isinstance(mask, np.ndarray):
+            mask_shape = mask.shape
+        else:
+            raise ValueError("Mask must be a numpy array")
+
+        # System assembly (keeping the optimized version)
+        start_dme = time.time()
+        DME, IBC, neq = ass.DME(nodes[:, 3:], elements)
+        self.timing_stats['dme_setup'] = time.time() - start_dme
+
+        start_assembly = time.time()
         KG, MG = self._custom_assembler(elements, mats, nodes, neq, DME)
+        self.timing_stats['system_assembly'] = time.time() - start_assembly
+
+        start_load = time.time()
         RHSG = ass.loadasem(loads, IBC, neq)
+        self.timing_stats['load_assembly'] = time.time() - start_load
 
         # Solve system
+        start_solve = time.time()
         if np.sum(IBC == -1) < 3:
             UG_sol = self._custom_solver(KG, RHSG, mask, nodes, IBC)
         else:
             UG_sol = sol.static_sol(KG, RHSG)
+        self.timing_stats['system_solve'] = time.time() - start_solve
 
-        # Complete displacement field
+        # Complete displacement calculation
         UC = pos.complete_disp(IBC, nodes, UG_sol)
 
-        # Initialize stress arrays
-        stress_tensor = np.zeros((*mask.shape, 2, 2))
-        stress_counts = np.zeros(mask.shape, dtype=np.int32)
+        def process_element_batch(element_batch):
+            """Process a batch of elements for stress calculation"""
+            batch_results = []
 
-        # Calculate stresses for each element
-        for el in range(len(elements)):
-            # Get stresses at Gauss points
-            gauss_stresses, natural_coords, el_coords = calculate_element_stresses(
-                el, elements, nodes, UC, mats
-            )
+            for el in element_batch:
+                # Get element nodes and coordinates
+                el_nodes = elements[el, 3:]
+                el_coords = nodes[el_nodes, 1:3].astype(np.float64)
+                el_disps = UC[el_nodes]
+                mat_id = elements[el, 2]
+                params = mats[mat_id]
 
-            # Extrapolate to nodes
-            nodal_stresses = extrapolate_to_nodes(gauss_stresses, natural_coords)
+                # Get element material properties
+                E = params[0]
+                nu = params[1]
+                fact = E / (1 - nu * nu)
+                D = np.array([
+                    [1, nu, 0],
+                    [nu, 1, 0],
+                    [0, 0, (1 - nu) / 2]
+                ]) * fact
 
-            # Map element nodes to global coordinates
-            el_nodes = elements[el, 3:]
-            for i, node_id in enumerate(el_nodes):
-                y, x = int(nodes[node_id, 2]), int(nodes[node_id, 1])
-                if 0 <= y < mask.shape[0] and 0 <= x < mask.shape[1]:
-                    # Accumulate stress components
-                    stress_tensor[y, x, 0, 0] += nodal_stresses[i, 0]  # σxx
-                    stress_tensor[y, x, 1, 1] += nodal_stresses[i, 1]  # σyy
-                    stress_tensor[y, x, 0, 1] += nodal_stresses[i, 2]  # σxy
-                    stress_tensor[y, x, 1, 0] += nodal_stresses[i, 2]  # σyx = σxy
-                    stress_counts[y, x] += 1
+                # 2x2 Gauss quadrature points and weights
+                gpts = np.array([
+                    [-0.577350269189626, -0.577350269189626],
+                    [0.577350269189626, -0.577350269189626],
+                    [0.577350269189626, 0.577350269189626],
+                    [-0.577350269189626, 0.577350269189626]
+                ])
 
-        # Average stresses where multiple elements contribute
-        valid_points = stress_counts > 0
-        for i in range(2):
-            for j in range(2):
-                stress_tensor[valid_points, i, j] /= stress_counts[valid_points]
+                # Calculate stresses at Gauss points
+                gauss_stresses = np.zeros((4, 3))  # 4 Gauss points, 3 stress components
+                natural_coords = np.zeros((4, 2))
+
+                for i, (r, s) in enumerate(gpts):
+                    # Calculate shape functions and derivatives
+                    N, dN = shape_quad4_numba(r, s)
+
+                    # Calculate Jacobian
+                    J = np.zeros((2, 2))
+                    J[0, 0] = np.sum(dN[0] * el_coords[:, 0])
+                    J[0, 1] = np.sum(dN[0] * el_coords[:, 1])
+                    J[1, 0] = np.sum(dN[1] * el_coords[:, 0])
+                    J[1, 1] = np.sum(dN[1] * el_coords[:, 1])
+
+                    det = J[0, 0] * J[1, 1] - J[0, 1] * J[1, 0]
+
+                    # Calculate B matrix
+                    Jinv = np.array([
+                        [J[1, 1], -J[0, 1]],
+                        [-J[1, 0], J[0, 0]]
+                    ]) / det
+
+                    B = np.zeros((3, 8))
+                    dNx = Jinv[0, 0] * dN[0] + Jinv[0, 1] * dN[1]
+                    dNy = Jinv[1, 0] * dN[0] + Jinv[1, 1] * dN[1]
+
+                    for j in range(4):
+                        B[0, 2 * j] = dNx[j]
+                        B[1, 2 * j + 1] = dNy[j]
+                        B[2, 2 * j] = dNy[j]
+                        B[2, 2 * j + 1] = dNx[j]
+
+                    # Calculate strains and stresses
+                    strain = np.dot(B, el_disps.flatten())
+                    stress = np.dot(D, strain)
+
+                    gauss_stresses[i] = stress
+                    natural_coords[i] = [r, s]
+
+                # Extrapolate stresses to nodes using the original method
+                nodal_stresses = extrapolate_to_nodes(gauss_stresses, natural_coords)
+
+                batch_results.append((el_nodes, nodal_stresses))
+
+            return batch_results
+
+        # Process elements in parallel with batching
+        n_cores = os.cpu_count()
+        batch_size = max(1, len(elements) // (4 * n_cores))  # Adjust batch size based on number of cores
+        element_batches = np.array_split(np.arange(len(elements)), batch_size)
+
+        # Initialize arrays for accumulating nodal stresses
+        num_nodes = len(nodes)
+        stress_accum = np.zeros((num_nodes, 3))
+        weight_accum = np.zeros(num_nodes)
+
+        # Process batches in parallel
+        with ThreadPoolExecutor(max_workers=n_cores) as executor:
+            futures = [executor.submit(process_element_batch, batch) for batch in element_batches]
+
+            # Accumulate results
+            for future in futures:
+                batch_results = future.result()
+                for el_nodes, nodal_stresses in batch_results:
+                    for node_idx, node_stress in zip(el_nodes, nodal_stresses):
+                        stress_accum[node_idx] += node_stress
+                        weight_accum[node_idx] += 1
+
+        # Average the accumulated stresses
+        valid_nodes = weight_accum > 0
+        stress_accum[valid_nodes] /= weight_accum[valid_nodes, np.newaxis]
+
+        # Create final stress tensor
+        stress_tensor = np.zeros((*mask_shape, 2, 2))
+
+        # Map nodal stresses to the grid
+        y_coords = nodes[:, 2].astype(int)
+        x_coords = nodes[:, 1].astype(int)
+        valid_indices = (y_coords >= 0) & (y_coords < mask_shape[0]) & \
+                        (x_coords >= 0) & (x_coords < mask_shape[1])
+
+        # Assign stress components
+        stress_tensor[y_coords[valid_indices], x_coords[valid_indices], 0, 0] = stress_accum[valid_indices, 0]  # σxx
+        stress_tensor[y_coords[valid_indices], x_coords[valid_indices], 1, 1] = stress_accum[valid_indices, 1]  # σyy
+        stress_tensor[y_coords[valid_indices], x_coords[valid_indices], 0, 1] = stress_accum[valid_indices, 2]  # σxy
+        stress_tensor[y_coords[valid_indices], x_coords[valid_indices], 1, 0] = stress_accum[valid_indices, 2]  # σyx
 
         return stress_tensor
 
@@ -887,45 +990,60 @@ class MonolayerStressMicroscopy:
         return nodes_xy, x_points, y_points
 
     def _custom_solver(self, KG, RHSG, mask, nodes, IBC):
-        """Solver using Numba-optimized PCG with constraints"""
+        """Hybrid solver with preconditioning applied to system directly"""
+
+
         neq = KG.shape[0]
 
-        # Get node positions and set up constraints
+        # Get node positions and set up constraints using optimized method
         nodes_xy, x_points, y_points = self._find_eq_position(nodes, IBC, neq)
 
         # Calculate center of mass
         com = regionprops(mask.astype(int))[0].centroid
 
-        # Convert KG to CSR format if not already
-        KG_csr = KG.tocsr()
-
-        # Create initial guess
-        x0 = np.zeros_like(RHSG)
-
-        # Solve using constrained PCG solver
-        solution, n_iter = pcg_solver_with_constraints(
-            KG_csr.data,
-            KG_csr.indices,
-            KG_csr.indptr,
-            RHSG,
-            x0,
-            nodes_xy,
-            x_points,
-            y_points,
-            com,
-            tol=1e-12,
-            max_iter=200000
+        # Use Numba-accelerated constraint preparation
+        constraint_data, constraint_rows, constraint_cols = prepare_constraint_data_numba(
+            nodes_xy, x_points, y_points, com, neq
         )
 
-        return solution[:neq]
+        # Create sparse constraint matrix
+        constraints = csr_matrix(
+            (constraint_data, (constraint_rows, constraint_cols)),
+            shape=(3, neq)
+        )
 
+        # Create scaling based on diagonal of KG
+        diag = np.array(KG.diagonal())
+        scale = np.ones_like(diag)
+        valid_diag = np.abs(diag) > 1e-10
+        scale[valid_diag] = 1.0 / np.sqrt(np.abs(diag[valid_diag]))
+
+        # Create scaling matrix
+        S = diags(scale)
+
+        # Scale system
+        KG_scaled = KG.dot(S)
+
+        # Scale constraints and stack
+        constraint_scale = np.median(np.abs(diag[valid_diag]))
+        KG_constrained = vstack([KG_scaled, constraints * constraint_scale], format="csr")
+        RHSG_constrained = np.append(RHSG, np.zeros(3))
+
+        # Solve scaled system using LSQR
+        x_scaled = lsqr(KG_constrained, RHSG_constrained,
+                        atol=1e-12,
+                        btol=1e-12,
+                        iter_lim=200000,
+                        show=False)[0]
+
+        # Unscale solution
+        UG_sol = S.dot(x_scaled[:neq])
+
+        return UG_sol
 
 # Example usage
 if __name__ == "__main__":
-    import os
-    import matplotlib.pyplot as plt
-    import tifffile
-    import numpy as np
+
 
     # Start total execution timing
     total_start_time = time.time()
