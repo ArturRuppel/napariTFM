@@ -2,6 +2,8 @@ import solidspy.assemutil as ass
 import solidspy.postprocesor as pos
 import solidspy.solutil as sol
 import solidspy.uelutil as ue
+import time
+from functools import wraps
 
 from numpy import vstack
 from scipy.optimize import least_squares
@@ -9,6 +11,186 @@ from scipy.sparse import csr_matrix, vstack
 from scipy.sparse.linalg import lsqr
 from skimage.measure import regionprops
 from skimage.transform import downscale_local_mean
+
+import solidspy.assemutil as ass
+import solidspy.postprocesor as pos
+import solidspy.solutil as sol
+import solidspy.uelutil as ue
+import time
+from functools import wraps
+import numpy as np
+from numba import jit
+from scipy.optimize import least_squares
+from scipy.sparse import csr_matrix, vstack
+from scipy.sparse.linalg import lsqr
+from skimage.measure import regionprops
+
+
+@jit(nopython=True)
+def shape_quad4_numba(r, s):
+    """Shape functions and derivatives for quad4 element"""
+    N = np.array([
+        (1 - r) * (1 - s) / 4,
+        (1 + r) * (1 - s) / 4,
+        (1 + r) * (1 + s) / 4,
+        (1 - r) * (1 + s) / 4
+    ])
+
+    dN = np.array([
+        [-(1 - s), (1 - s), (1 + s), -(1 + s)],
+        [-(1 - r), -(1 + r), (1 + r), (1 - r)]
+    ]) * 0.25
+
+    return N, dN
+
+
+@jit(nopython=True)
+def elast_diff_2d_numba(r, s, coord):
+    """Calculate B and H matrices for 2D elasticity"""
+    N, dN = shape_quad4_numba(r, s)
+
+    J = np.zeros((2, 2))
+    J[0, 0] = np.sum(dN[0] * coord[:, 0])
+    J[0, 1] = np.sum(dN[0] * coord[:, 1])
+    J[1, 0] = np.sum(dN[1] * coord[:, 0])
+    J[1, 1] = np.sum(dN[1] * coord[:, 1])
+
+    det = J[0, 0] * J[1, 1] - J[0, 1] * J[1, 0]
+
+    Jinv = np.array([
+        [J[1, 1], -J[0, 1]],
+        [-J[1, 0], J[0, 0]]
+    ]) / det
+
+    B = np.zeros((3, 8))
+    dNx = Jinv[0, 0] * dN[0] + Jinv[0, 1] * dN[1]
+    dNy = Jinv[1, 0] * dN[0] + Jinv[1, 1] * dN[1]
+
+    for i in range(4):
+        B[0, 2 * i] = dNx[i]
+        B[1, 2 * i + 1] = dNy[i]
+        B[2, 2 * i] = dNy[i]
+        B[2, 2 * i + 1] = dNx[i]
+
+    H = np.zeros((2, 8))
+    for i in range(4):
+        H[0, 2 * i] = N[i]
+        H[1, 2 * i + 1] = N[i]
+
+    return H, B, det
+
+
+@jit(nopython=True)
+def elast_quad4_numba(coord, params):
+    """Elastic quadrilateral element calculation"""
+    E = params[0]
+    nu = params[1]
+    dens = 1.0 if len(params) <= 2 else params[2]
+
+    fact = E / (1 - nu * nu)
+    C = np.array([
+        [1, nu, 0],
+        [nu, 1, 0],
+        [0, 0, (1 - nu) / 2]
+    ]) * fact
+
+    K = np.zeros((8, 8))
+    M = np.zeros((8, 8))
+
+    gpts = np.array([
+        [-0.577350269189626, -0.577350269189626],
+        [0.577350269189626, -0.577350269189626],
+        [0.577350269189626, 0.577350269189626],
+        [-0.577350269189626, 0.577350269189626]
+    ])
+    gwts = np.array([1.0, 1.0, 1.0, 1.0])
+
+    for i in range(4):
+        r, s = gpts[i]
+        H, B, det = elast_diff_2d_numba(r, s, coord)
+        factor = det * gwts[i]
+        K += factor * (B.T @ C @ B)
+        M += dens * factor * (H.T @ H)
+
+    return K, M
+
+
+@jit(nopython=True)
+def numba_assembler_core(elements, mats, nodes, neq, assem_op):
+    """Numba-accelerated core assembly operations"""
+    nels = elements.shape[0]
+    ndof_per_el = 8
+
+    total_entries = nels * ndof_per_el * ndof_per_el
+    rows = np.zeros(total_entries, dtype=np.int32)
+    cols = np.zeros(total_entries, dtype=np.int32)
+    stiff_vals = np.zeros(total_entries)
+    mass_vals = np.zeros(total_entries)
+
+    entry_idx = 0
+    for el in range(nels):
+        elem_nodes = elements[el, 3:]
+        elcoor = np.zeros((4, 2))
+        for i in range(4):
+            elcoor[i, 0] = nodes[elem_nodes[i], 1]
+            elcoor[i, 1] = nodes[elem_nodes[i], 2]
+
+        params = mats[elements[el, 2]]
+        kloc, mloc = elast_quad4_numba(elcoor, params)
+        dme = assem_op[el, :8]
+
+        for i in range(8):
+            for j in range(8):
+                if dme[i] != -1 and dme[j] != -1:
+                    rows[entry_idx] = dme[i]
+                    cols[entry_idx] = dme[j]
+                    stiff_vals[entry_idx] = kloc[i, j]
+                    mass_vals[entry_idx] = mloc[i, j]
+                    entry_idx += 1
+
+    return rows[:entry_idx], cols[:entry_idx], stiff_vals[:entry_idx], mass_vals[:entry_idx]
+
+
+def timer_decorator(func):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        # Get parent function if it exists
+        parent_func = getattr(self, '_current_func', None)
+
+        # Set current function
+        self._current_func = func.__name__
+
+        # Initialize timing stats dict if it doesn't exist
+        if not hasattr(self, 'timing_stats'):
+            self.timing_stats = {}
+
+        # Initialize nested calls dict if it doesn't exist
+        if not hasattr(self, '_nested_calls'):
+            self._nested_calls = {}
+
+        # Track nested call depth
+        func_name = func.__name__
+        self._nested_calls[func_name] = self._nested_calls.get(func_name, 0) + 1
+
+        start_time = time.time()
+        result = func(self, *args, **kwargs)
+        end_time = time.time()
+        execution_time = end_time - start_time
+
+        # Only store timing for the outermost call of each function
+        if self._nested_calls[func_name] == 1:
+            self.timing_stats[func_name] = self.timing_stats.get(func_name, 0) + execution_time
+            print(f"{func_name} took {execution_time:.4f} seconds to execute")
+
+        # Decrement nested call count
+        self._nested_calls[func_name] -= 1
+
+        # Restore parent function
+        self._current_func = parent_func
+
+        return result
+
+    return wrapper
 
 
 class MonolayerStressMicroscopy:
@@ -20,11 +202,15 @@ class MonolayerStressMicroscopy:
             sigma: Poisson's ratio for the material
             youngs_modulus: Young's modulus for the material
         """
-        self.pixelsize = pixelsize  # Store original pixelsize without conversion
+        self.pixelsize = pixelsize
         self.sigma = sigma
         self.E = youngs_modulus
+        self.timing_stats = {}  # Store timing information
+        self._nested_calls = {}  # Track nested function calls
+        self._current_func = None  # Track current function
 
-    def calculate_stress_field(self, traction_x, traction_y, mask, downsample_factor=1):
+    @timer_decorator
+    def calculate_stress_field(self, traction_x, traction_y, mask):
         """
         Calculate stress field from traction forces
         Args:
@@ -35,14 +221,9 @@ class MonolayerStressMicroscopy:
         Returns:
             stress_tensor: Calculated stress tensor field
         """
-        # Downsample if needed
-        if downsample_factor > 1:
-            mask = downscale_local_mean(mask, (downsample_factor, downsample_factor)) > 0.5
-            traction_x = downscale_local_mean(traction_x, (downsample_factor, downsample_factor))
-            traction_y = downscale_local_mean(traction_y, (downsample_factor, downsample_factor))
 
         # Calculate effective pixelsize
-        forcemap_pixelsize = self.pixelsize * downsample_factor * 1e-6  # Convert to meters
+        forcemap_pixelsize = self.pixelsize * 1e-6  # Convert to meters
 
         # Prepare forces with corrected pixelsize
         f_x, f_y = self._prepare_forces(traction_x, traction_y, mask, forcemap_pixelsize)
@@ -60,7 +241,7 @@ class MonolayerStressMicroscopy:
         stress_tensor = self._fem_simulation(nodes, elements, loads, mats, mask)
 
         return stress_tensor
-
+    @timer_decorator
     def _prepare_forces(self, tx, ty, mask, pixelsize):
         """Convert traction forces to point forces and correct for net force and torque"""
         # Convert to point force using exact same calculation as original
@@ -79,7 +260,7 @@ class MonolayerStressMicroscopy:
         f_x, f_y = self._correct_torque(f_x, f_y, mask)
 
         return f_x, f_y
-
+    @timer_decorator
     def _correct_torque(self, fx, fy, mask):
         """Correct for net torque using the original implementation approach"""
         com = regionprops(mask.astype(int))[0].centroid
@@ -116,7 +297,7 @@ class MonolayerStressMicroscopy:
         fy_corr = np.sin(p) * fx + np.cos(p) * fy
 
         return fx_corr, fy_corr
-
+    @timer_decorator
     def _grid_setup(self, mask_area, f_x, f_y, edge_factor=0):
         coords = np.array(np.where(mask_area))
 
@@ -178,107 +359,184 @@ class MonolayerStressMicroscopy:
         mats = np.array([[self.E, self.sigma]])
 
         return nodes, elements, loads, mats
-
+    @timer_decorator
     def _custom_assembler(self, elements, mats, nodes, neq, assem_op):
         """
-        Custom assembler that ensures proper coordinate handling
-
-        Parameters
-        ----------
-        elements : ndarray (int)
-            Array with the number for the nodes in each element
-        mats : ndarray (float)
-            Array with material profiles
-        nodes : ndarray (float)
-            Array with the nodal numbers and coordinates
-        neq : int
-            Number of active equations in the system
-        assem_op : ndarray (int)
-            Assembly operator
-
-        Returns
-        -------
-        stiff : csr_matrix
-            Global stiffness matrix
-        mass : csr_matrix
-            Global mass matrix
+        Numba-accelerated assembler using optimized operations
         """
-        rows = []
-        cols = []
-        stiff_vals = []
-        mass_vals = []
-        nels = elements.shape[0]
+        rows, cols, stiff_vals, mass_vals = numba_assembler_core(elements, mats, nodes, neq, assem_op)
 
-        for ele in range(nels):
-            # Extract only x,y coordinates for the current element
-            elem_nodes = elements[ele, 3:]
-            elcoor = nodes[elem_nodes, 1:3].astype(np.float64)  # Only get x,y coordinates
+        stiff = csr_matrix((stiff_vals, (rows, cols)), shape=(neq, neq))
+        mass = csr_matrix((mass_vals, (rows, cols)), shape=(neq, neq))
 
-            # Get element parameters
-            mat_id = elements[ele, 2]
-            params = mats[mat_id, :]
-
-            # Get element type and call appropriate element function
-            elem_type = elements[ele, 1]
-            if elem_type == 1:  # quad4 element
-                kloc, mloc = ue.elast_quad4(elcoor, params)
-            else:
-                raise ValueError(f"Element type {elem_type} not supported")
-
-            # Get DOFs for the element
-            ndof = kloc.shape[0]
-            dme = assem_op[ele, :ndof]
-
-            # Assemble into global matrices
-            for row in range(ndof):
-                glob_row = dme[row]
-                if glob_row != -1:
-                    for col in range(ndof):
-                        glob_col = dme[col]
-                        if glob_col != -1:
-                            rows.append(glob_row)
-                            cols.append(glob_col)
-                            stiff_vals.append(kloc[row, col])
-                            mass_vals.append(mloc[row, col])
-
-        # Create sparse matrices
-        from scipy.sparse import coo_matrix
-        stiff = coo_matrix((stiff_vals, (rows, cols)), shape=(neq, neq)).tocsr()
-        mass = coo_matrix((mass_vals, (rows, cols)), shape=(neq, neq)).tocsr()
         return stiff, mass
 
+    @timer_decorator
     def _fem_simulation(self, nodes, elements, loads, mats, mask):
-        """Perform FEM simulation using modified approach"""
-        # Get boundary conditions
+        """Optimized FEM simulation using solidspy functions"""
+        from concurrent.futures import ThreadPoolExecutor
+        import numpy as np
+        import solidspy.femutil as fem
+
+        # Get mask dimensions for later use
+        if isinstance(mask, np.ndarray):
+            mask_shape = mask.shape
+        else:
+            print("Mask type:", type(mask))
+            print("Mask content:", mask)
+            raise ValueError("Mask must be a numpy array")
+
+        start_dme = time.time()
         DME, IBC, neq = ass.DME(nodes[:, 3:], elements)
+        self.timing_stats['dme_setup'] = time.time() - start_dme
 
-        # System assembly with custom assembler
-        KG, MG = self._custom_assembler(elements, mats, nodes, neq, DME)  # Removed sparse=True
+
+        # Optimized system assembly
+        start_assembly = time.time()
+        KG, MG = self._custom_assembler(elements, mats, nodes, neq, DME)
+        self.timing_stats['system_assembly'] = time.time() - start_assembly
+
+
+        # Efficient load assembly
+        start_load = time.time()
         RHSG = ass.loadasem(loads, IBC, neq)
+        self.timing_stats['load_assembly'] = time.time() - start_load
 
-        # Solve system
+        # Optimized solver selection
+        start_solve = time.time()
         if np.sum(IBC == -1) < 3:
             UG_sol = self._custom_solver(KG, RHSG, mask, nodes, IBC)
         else:
             UG_sol = sol.static_sol(KG, RHSG)
+        self.timing_stats['system_solve'] = time.time() - start_solve
 
-        # Calculate stresses
+        # Complete displacement calculation
         UC = pos.complete_disp(IBC, nodes, UG_sol)
+        stress_nodes = nodes.copy()[:, :3]
 
-        # For stress calculation, ensure we use only x,y coordinates
-        stress_nodes = nodes.copy()
-        stress_nodes = stress_nodes[:, :3]  # Keep only node number and x,y coords
-        E_nodes, S_nodes = pos.strain_nodes(stress_nodes, elements, mats, UC)
+        def calculate_element_strains(el):
+            """Calculate strains and stresses for a single element"""
+            el_nodes = elements[el, 3:]
+            el_coords = nodes[el_nodes, 1:3].astype(np.float64)
+            el_disps = UC[el_nodes]
+            mat_id = elements[el, 2]
+            params = mats[mat_id]
 
-        # Assemble stress tensor
-        stress_tensor = np.zeros((mask.shape[0], mask.shape[1], 2, 2))
-        stress_tensor[nodes[:, 2].astype(int), nodes[:, 1].astype(int), 0, 0] = S_nodes[:, 0]
-        stress_tensor[nodes[:, 2].astype(int), nodes[:, 1].astype(int), 1, 1] = S_nodes[:, 1]
-        stress_tensor[nodes[:, 2].astype(int), nodes[:, 1].astype(int), 0, 1] = S_nodes[:, 2]
-        stress_tensor[nodes[:, 2].astype(int), nodes[:, 1].astype(int), 1, 0] = S_nodes[:, 2]
+            # Calculate element stiffness (we only need the B matrix)
+            r = s = 0.0  # Center point of element
+            H, B, det = fem.elast_diff_2d(r, s, el_coords, fem.shape_quad4)
+
+            # Calculate strains
+            strain = np.dot(B, el_disps.flatten())
+
+            # Calculate stresses using constitutive relationship
+            E, nu = params
+            fact = E / (1 - nu * nu)
+            D = np.array([
+                [1, nu, 0],
+                [nu, 1, 0],
+                [0, 0, (1 - nu) / 2]
+            ]) * fact
+
+            stress = np.dot(D, strain)
+            return strain, stress
+
+        # Process elements in parallel
+        n_cores = os.cpu_count()
+        batch_size = max(1, len(elements) // (4 * n_cores))
+        element_batches = np.array_split(np.arange(len(elements)), batch_size)
+
+        E_elements = []
+        S_elements = []
+        with ThreadPoolExecutor(max_workers=n_cores) as executor:
+            futures = []
+            for batch in element_batches:
+                for el in batch:
+                    futures.append(executor.submit(calculate_element_strains, el))
+
+            for future in futures:
+                strain, stress = future.result()
+                E_elements.append(strain)
+                S_elements.append(stress)
+
+        # Convert to numpy arrays
+        E_elements = np.array(E_elements)
+        S_elements = np.array(S_elements)
+
+        # Compute nodal averages
+        num_nodes = len(nodes)
+        E_nodes = np.zeros((num_nodes, 3))
+        S_nodes = np.zeros((num_nodes, 3))
+        node_counts = np.zeros(num_nodes)
+
+        # Accumulate element contributions to nodes
+        for el, (E_el, S_el) in enumerate(zip(E_elements, S_elements)):
+            node_indices = elements[el, 3:]
+            for node_idx in node_indices:
+                E_nodes[node_idx] += E_el
+                S_nodes[node_idx] += S_el
+                node_counts[node_idx] += 1
+
+        # Average the accumulated values
+        valid_nodes = node_counts > 0
+        E_nodes[valid_nodes] /= node_counts[valid_nodes, np.newaxis]
+        S_nodes[valid_nodes] /= node_counts[valid_nodes, np.newaxis]
+
+        # Create stress tensor with proper dimensions
+        stress_tensor = np.zeros((*mask_shape, 2, 2))
+
+        # Get y and x coordinates for node mapping
+        y_coords = nodes[:, 2].astype(int)  # Row indices
+        x_coords = nodes[:, 1].astype(int)  # Column indices
+
+        # Validate indices
+        valid_indices = (y_coords >= 0) & (y_coords < mask_shape[0]) & \
+                        (x_coords >= 0) & (x_coords < mask_shape[1])
+
+        # Assign stress components only for valid indices
+        valid_y = y_coords[valid_indices]
+        valid_x = x_coords[valid_indices]
+        valid_s = S_nodes[valid_indices]
+
+        stress_tensor[valid_y, valid_x, 0, 0] = valid_s[:, 0]  # σxx
+        stress_tensor[valid_y, valid_x, 1, 1] = valid_s[:, 1]  # σyy
+        stress_tensor[valid_y, valid_x, 0, 1] = valid_s[:, 2]  # σxy
+        stress_tensor[valid_y, valid_x, 1, 0] = valid_s[:, 2]  # σyx = σxy
 
         return stress_tensor
 
+    def print_timing_stats(self):
+        """Print detailed timing statistics"""
+        print("\nDetailed Timing Statistics:")
+        print("-" * 50)
+
+        # Define parent functions to exclude from detailed stats
+        parent_functions = {'calculate_stress_field', '_fem_simulation'}
+
+        # Filter out parent functions for the detailed statistics
+        filtered_stats = {op: duration for op, duration in self.timing_stats.items()
+                          if op not in parent_functions}
+
+        # Calculate total time using only leaf operations
+        total_time = sum(filtered_stats.values())
+
+        # Sort operations by duration
+        sorted_stats = sorted(filtered_stats.items(),
+                              key=lambda x: x[1],
+                              reverse=True)
+
+        # Print each operation's timing
+        for operation, duration in sorted_stats:
+            percentage = (duration / total_time) * 100
+            print(f"{operation:20s}: {duration:8.4f} s ({percentage:5.1f}%)")
+
+        print("-" * 50)
+        print(f"{'Total time':20s}: {total_time:8.4f} s")
+
+        # Optionally print overall execution time if available
+        if hasattr(self, 'total_start_time'):
+            overall_time = time.time() - self.total_start_time
+            print(f"Total script execution time: {overall_time:.4f} seconds")
     def _find_eq_position(self, nodes, IBC, neq):
         """Find equilibrium positions for nodes with proper DOF handling"""
         nloads = IBC.shape[0]
@@ -358,6 +616,9 @@ if __name__ == "__main__":
     import tifffile
     import numpy as np
 
+    # Start total execution timing
+    total_start_time = time.time()
+
     # Load data
     data_path = r"C:\Users\aruppel\Desktop\test"
 
@@ -366,20 +627,21 @@ if __name__ == "__main__":
     t_y = np.load(os.path.join(data_path, "t_y.npy"))[0, :, :]
 
     # Load reference stress tensor
-    stress_tensor_ref = np.load(os.path.join(data_path, "stress_tensor_reference.npy"))[0, :, :, :, :]
+    stress_tensor_ref = np.load(os.path.join(data_path, "stress_tensor_reference.npy"))
 
     # Load mask
     mask = tifffile.imread(os.path.join(data_path, "masks.tif")).astype(bool)[0, :, :]
 
     # Initialize MSM calculator
-    pixelsize = 0.864  # microns per pixel
+    pixelsize = 0.8  # microns per pixel
     msm = MonolayerStressMicroscopy(pixelsize=pixelsize)
     nodes, elements, loads, mats = msm._grid_setup(mask, -t_x, -t_y)
     print("Elements shape:", elements.shape)
     print("Sample element node connectivity:", elements[0, 3:])
 
     # Calculate stress field
-    stress_tensor = msm.calculate_stress_field(t_x, t_y, mask)
+    stress_tensor = msm.calculate_stress_field(t_x, t_y, mask) # in N/pixel
+    stress_tensor = stress_tensor / (pixelsize * 1e-6)
 
     # Calculate principal stresses for both tensors
     def calculate_max_principal_stress(tensor):
@@ -398,13 +660,21 @@ if __name__ == "__main__":
     sigma_xx_ref = stress_tensor_ref[:, :, 0, 0]
     sigma_yy_ref = stress_tensor_ref[:, :, 1, 1]
 
+    # Print timing statistics
+    msm.print_timing_stats()
+
+    # Calculate total execution time
+    total_execution_time = time.time() - total_start_time
+    print(f"\nTotal script execution time: {total_execution_time:.4f} seconds")
+
     # Create visualization with 3 rows (max principal, sigma_xx, sigma_yy)
     fig, axes = plt.subplots(3, 2, figsize=(15, 18))
 
     # Function to plot stress component with consistent formatting
     def plot_stress(ax, data, title):
         vmax = 0.5 * np.nanmax(data)  # Scale to 0.5 * max value for each plot individually
-        im = ax.imshow(data, cmap='viridis', vmin=0, vmax=vmax)
+        vmin = 0.5 * np.nanmin(data)  # Scale to 0.5 * max value for each plot individually
+        im = ax.imshow(data, cmap='viridis', vmin=vmin, vmax=vmax)
         ax.set_title(title)
         plt.colorbar(im, ax=ax, label='Stress (Pa)')
         ax.set_xlabel('x (pixels)')
