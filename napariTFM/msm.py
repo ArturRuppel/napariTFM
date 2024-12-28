@@ -1,29 +1,16 @@
-import solidspy.assemutil as ass
-import solidspy.postprocesor as pos
-import solidspy.solutil as sol
-import solidspy.uelutil as ue
 import time
 from functools import wraps
 
+import solidspy.assemutil as ass
+import solidspy.postprocesor as pos
+import solidspy.solutil as sol
+from numba import jit
 from numpy import vstack
 from scipy.optimize import least_squares
 from scipy.sparse import csr_matrix, vstack
 from scipy.sparse.linalg import lsqr
 from skimage.measure import regionprops
-from skimage.transform import downscale_local_mean
 
-import solidspy.assemutil as ass
-import solidspy.postprocesor as pos
-import solidspy.solutil as sol
-import solidspy.uelutil as ue
-import time
-from functools import wraps
-import numpy as np
-from numba import jit
-from scipy.optimize import least_squares
-from scipy.sparse import csr_matrix, vstack
-from scipy.sparse.linalg import lsqr
-from skimage.measure import regionprops
 
 
 @jit(nopython=True)
@@ -149,6 +136,63 @@ def numba_assembler_core(elements, mats, nodes, neq, assem_op):
                     entry_idx += 1
 
     return rows[:entry_idx], cols[:entry_idx], stiff_vals[:entry_idx], mass_vals[:entry_idx]
+
+
+@jit(nopython=True)
+def prepare_constraint_data_numba(nodes_xy, x_points, y_points, com, neq):
+    """
+    Numba-accelerated preparation of constraint data
+    """
+    # Calculate positions relative to center of mass
+    r = np.zeros((neq, 2))
+    for i in range(neq):
+        if x_points[i] or y_points[i]:
+            r[i, 0] = nodes_xy[i, 0] - com[1]
+            r[i, 1] = nodes_xy[i, 1] - com[0]
+
+    # Pre-calculate array sizes
+    n_x = np.sum(x_points)
+    n_y = np.sum(y_points)
+    total_constraints = n_x + n_y + n_x + n_y  # Zero displacement + torque constraints
+
+    # Initialize arrays for constraint matrix construction
+    constraint_data = np.zeros(total_constraints)
+    constraint_rows = np.zeros(total_constraints, dtype=np.int32)
+    constraint_cols = np.zeros(total_constraints, dtype=np.int32)
+
+    idx = 0
+
+    # Zero displacement constraints for x
+    for i in range(neq):
+        if x_points[i]:
+            constraint_data[idx] = 1.0
+            constraint_rows[idx] = 0
+            constraint_cols[idx] = i
+            idx += 1
+
+    # Zero displacement constraints for y
+    for i in range(neq):
+        if y_points[i]:
+            constraint_data[idx] = 1.0
+            constraint_rows[idx] = 1
+            constraint_cols[idx] = i
+            idx += 1
+
+    # Torque constraints
+    for i in range(neq):
+        if x_points[i]:
+            constraint_data[idx] = r[i, 1]  # y component for x DOF
+            constraint_rows[idx] = 2
+            constraint_cols[idx] = i
+            idx += 1
+
+        if y_points[i]:
+            constraint_data[idx] = -r[i, 0]  # -x component for y DOF
+            constraint_rows[idx] = 2
+            constraint_cols[idx] = i
+            idx += 1
+
+    return constraint_data[:idx], constraint_rows[:idx], constraint_cols[:idx]
 
 
 def timer_decorator(func):
@@ -559,52 +603,35 @@ class MonolayerStressMicroscopy:
         return nodes_xy, x_points, y_points
 
     def _custom_solver(self, KG, RHSG, mask, nodes, IBC):
-        """Custom solver with zero displacement/rotation constraints"""
+        """Solver optimized with Numba acceleration for constraint handling"""
         neq = KG.shape[0]
-        zero_disp_x = np.zeros(neq)
-        zero_disp_y = np.zeros(neq)
-        zero_torque = np.zeros(neq)
 
-        # Get node positions relative to center of mass
-        com = regionprops(mask.astype(int))[0].centroid
+        # Get node positions and set up constraints
         nodes_xy, x_points, y_points = self._find_eq_position(nodes, IBC, neq)
 
-        # Calculate positions relative to center of mass
-        r = np.zeros((neq, 2))
-        r[x_points | y_points] = nodes_xy[x_points | y_points] - [com[1], com[0]]
+        # Calculate center of mass
+        com = regionprops(mask.astype(int))[0].centroid
 
-        # Set up constraints
-        zero_disp_x[x_points] = 1
-        zero_disp_y[y_points] = 1
+        # Use Numba-accelerated function to prepare constraint data
+        constraint_data, constraint_rows, constraint_cols = prepare_constraint_data_numba(
+            nodes_xy, x_points, y_points, com, neq)
 
-        # Set up torque constraints
-        zero_torque[x_points] = r[x_points, 1]  # -r2 factor for x DOFs
-        zero_torque[y_points] = -r[y_points, 0]  # r1 factor for y DOFs
+        # Create sparse constraint matrix directly
+        constraints = csr_matrix(
+            (constraint_data, (constraint_rows, constraint_cols)),
+            shape=(3, neq)
+        )
 
-        # Reshape arrays to 2D
-        zero_disp_x = zero_disp_x.reshape(1, -1)
-        zero_disp_y = zero_disp_y.reshape(1, -1)
-        zero_torque = zero_torque.reshape(1, -1)
+        # Stack matrices efficiently
+        KG_constrained = vstack([KG, constraints], format="csr")
+        RHSG_constrained = np.append(RHSG, np.zeros(3))
 
-        # Add constraints to system
-        if isinstance(KG, csr_matrix):
-            # Convert to sparse and stack
-            add_matrix = vstack([
-                csr_matrix(zero_disp_x),
-                csr_matrix(zero_disp_y),
-                csr_matrix(zero_torque)
-            ])
-            KG = vstack([KG, add_matrix], format="csr")
-        else:
-            # Dense matrix case
-            add_matrix = np.vstack([zero_disp_x, zero_disp_y, zero_torque])
-            KG = np.vstack([KG, add_matrix])
-
-        # Add zero RHS for constraints
-        RHSG = np.append(RHSG, np.zeros(3))
-
-        # Solve constrained system
-        UG_sol = lsqr(KG, RHSG, atol=1e-12, btol=1e-12, iter_lim=200000)[0]
+        # Use LSQR with optimized parameters
+        UG_sol = lsqr(KG_constrained, RHSG_constrained,
+                      atol=1e-12,
+                      btol=1e-12,
+                      iter_lim=200000,
+                      show=False)[0]
 
         return UG_sol
 
