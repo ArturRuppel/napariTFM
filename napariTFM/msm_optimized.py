@@ -312,101 +312,195 @@ def pcg_solver_numba(data, indices, indptr, b, x0, M_inv, tol, max_iter):
 
 
 @jit(nopython=True)
-def block_diagonal_preconditioner(data, indices, indptr):
+def prepare_constraint_data_numba(nodes_xy, x_points, y_points, com, neq):
     """
-    Create a block diagonal preconditioner with improved scaling
-    Focuses on numerical stability rather than matching specific values
+    Prepare constraint data with improved numerical stability
     """
-    n = len(indptr) - 1
-    M_inv = np.zeros(n)
+    # Calculate distances from center of mass with better precision
+    r = np.zeros((neq, 2))
+    for i in range(neq):
+        if x_points[i] or y_points[i]:
+            r[i, 0] = nodes_xy[i, 0] - com[1]  # x distance
+            r[i, 1] = nodes_xy[i, 1] - com[0]  # y distance
 
-    # Extract and analyze diagonal entries
-    diag_vals = np.zeros(n)
-    for i in range(n):
-        for j in range(indptr[i], indptr[i + 1]):
-            if indices[j] == i:
-                diag_vals[i] = abs(data[j])
-                break
+    # Calculate constraint matrix sizes
+    n_x = np.sum(x_points)
+    n_y = np.sum(y_points)
+    total_constraints = n_x + n_y + n_x + n_y
 
-    # Use median for robust scaling
-    scale = np.median(diag_vals[diag_vals > 0])
-    eps = scale * 1e-8  # Small value relative to matrix scale
+    # Initialize arrays
+    constraint_data = np.zeros(total_constraints)
+    constraint_rows = np.zeros(total_constraints, dtype=np.int32)
+    constraint_cols = np.zeros(total_constraints, dtype=np.int32)
 
-    # Compute inverse with stability threshold
-    for i in range(n):
-        if diag_vals[i] > eps:
-            M_inv[i] = 1.0 / diag_vals[i]
-        else:
-            M_inv[i] = 1.0 / eps
+    idx = 0
 
-    return M_inv
+    # Force balance constraints with improved scaling
+    scale_factor = 1.0 / max(np.sqrt(n_x + n_y), 1.0)
+
+    # X-direction force balance
+    for i in range(neq):
+        if x_points[i]:
+            constraint_data[idx] = scale_factor
+            constraint_rows[idx] = 0
+            constraint_cols[idx] = i
+            idx += 1
+
+    # Y-direction force balance
+    for i in range(neq):
+        if y_points[i]:
+            constraint_data[idx] = scale_factor
+            constraint_rows[idx] = 1
+            constraint_cols[idx] = i
+            idx += 1
+
+    # Moment balance with improved scaling
+    I_xx = I_yy = I_xy = 0.0
+    for i in range(neq):
+        if x_points[i]:
+            I_yy += r[i, 1] * r[i, 1]
+            I_xy += r[i, 0] * r[i, 1]
+        if y_points[i]:
+            I_xx += r[i, 0] * r[i, 0]
+            I_xy += r[i, 0] * r[i, 1]
+
+    I_scale = np.sqrt(I_xx * I_yy)
+    if I_scale > 0:
+        moment_scale = scale_factor / np.sqrt(I_scale)
+    else:
+        moment_scale = scale_factor
+
+    # Apply moment constraints with improved scaling
+    for i in range(neq):
+        if x_points[i]:
+            constraint_data[idx] = r[i, 1] * moment_scale
+            constraint_rows[idx] = 2
+            constraint_cols[idx] = i
+            idx += 1
+        if y_points[i]:
+            constraint_data[idx] = -r[i, 0] * moment_scale
+            constraint_rows[idx] = 2
+            constraint_cols[idx] = i
+            idx += 1
+
+    return constraint_data[:idx], constraint_rows[:idx], constraint_cols[:idx]
 
 
 @jit(nopython=True)
 def project_to_nullspace(x, nodes_xy, x_points, y_points, com):
     """
     Project vector onto nullspace of constraint matrix with improved stability
-    Uses geometric approach to maintain physical meaning
     """
-    # Calculate net force and torque
+    # Calculate inertia tensor components
+    I_xx = I_yy = I_xy = 0.0
     fx = fy = torque = 0.0
     n_x = n_y = 0
 
     for i in range(len(x)):
         if x_points[i]:
             fx += x[i]
-            torque += (nodes_xy[i, 1] - com[0]) * x[i]
+            y_arm = nodes_xy[i, 1] - com[0]
+            x_arm = nodes_xy[i, 0] - com[1]
+            I_yy += y_arm * y_arm
+            I_xy += x_arm * y_arm
+            torque += y_arm * x[i]
             n_x += 1
+
         if y_points[i]:
             fy += x[i]
-            torque -= (nodes_xy[i, 0] - com[1]) * x[i]
-            n_y += 1
-
-    # Calculate correction factors with better numerical stability
-    if n_x > 0:
-        fx_corr = fx / n_x
-    else:
-        fx_corr = 0.0
-
-    if n_y > 0:
-        fy_corr = fy / n_y
-    else:
-        fy_corr = 0.0
-
-    # Calculate moment of inertia tensor for proper scaling
-    I_xx = I_yy = 0.0
-    for i in range(len(x)):
-        if x_points[i]:
             y_arm = nodes_xy[i, 1] - com[0]
-            I_yy += y_arm * y_arm
-        if y_points[i]:
             x_arm = nodes_xy[i, 0] - com[1]
             I_xx += x_arm * x_arm
+            I_xy += x_arm * y_arm
+            torque -= x_arm * x[i]
+            n_y += 1
 
-    I = I_xx + I_yy
-    if I > 0:
-        torque_corr = torque / I
+    # Calculate corrections with improved stability
+    fx_corr = fx / max(n_x, 1)
+    fy_corr = fy / max(n_y, 1)
+
+    # Calculate determinant of inertia tensor
+    I_det = I_xx * I_yy - I_xy * I_xy
+    eps = np.finfo(np.float64).eps * max(I_xx, I_yy)
+
+    if I_det > eps:
+        # Full inertia tensor approach
+        I_inv_xx = I_yy / I_det
+        I_inv_yy = I_xx / I_det
+        I_inv_xy = -I_xy / I_det
+        torque_scale = 1.0
     else:
-        torque_corr = 0.0
+        # Fallback for near-singular case
+        I_inv_xx = I_inv_yy = 1.0 / (max(max(I_xx, I_yy), eps))
+        I_inv_xy = 0.0
+        torque_scale = 0.5  # Reduced influence of torque correction
 
-    # Apply corrections maintaining physical consistency
+    # Apply corrections with physical consistency
     result = np.zeros_like(x)
     for i in range(len(x)):
         if x_points[i]:
             y_arm = nodes_xy[i, 1] - com[0]
-            result[i] = x[i] - fx_corr - torque_corr * y_arm
-        if y_points[i]:
             x_arm = nodes_xy[i, 0] - com[1]
-            result[i] = x[i] - fy_corr + torque_corr * x_arm
+            result[i] = x[i] - fx_corr - torque_scale * (I_inv_xx * y_arm * torque + I_inv_xy * x_arm * torque)
+
+        if y_points[i]:
+            y_arm = nodes_xy[i, 1] - com[0]
+            x_arm = nodes_xy[i, 0] - com[1]
+            result[i] = x[i] - fy_corr - torque_scale * (I_inv_xy * y_arm * torque + I_inv_yy * x_arm * torque)
 
     return result
 
 
 @jit(nopython=True)
-def pcg_solver_with_constraints(data, indices, indptr, b, x0, nodes_xy, x_points, y_points,
-                                com, tol, max_iter):
+def block_diagonal_preconditioner(data, indices, indptr):
     """
-    PCG solver with nullspace projection for constraint handling
+    Create a block diagonal preconditioner with improved scaling and stability
+    """
+    n = len(indptr) - 1
+    M_inv = np.zeros(n)
+
+    # Extract diagonal entries and calculate statistics
+    diag_vals = np.zeros(n)
+    min_diag = np.inf
+    max_diag = -np.inf
+
+    for i in range(n):
+        for j in range(indptr[i], indptr[i + 1]):
+            if indices[j] == i:
+                diag_vals[i] = abs(data[j])
+                if diag_vals[i] > 0:
+                    min_diag = min(min_diag, diag_vals[i])
+                    max_diag = max(max_diag, diag_vals[i])
+                break
+
+    # Calculate scaling parameters
+    if min_diag == np.inf:
+        min_diag = 1.0
+    if max_diag == -np.inf:
+        max_diag = 1.0
+
+    eps = min_diag * 1e-14
+    threshold = max(eps, min_diag * 1e-7)
+
+    # Compute inverse with stability checks
+    for i in range(n):
+        if diag_vals[i] > threshold:
+            # Use actual diagonal value
+            M_inv[i] = 1.0 / diag_vals[i]
+        else:
+            # Use stabilized value for near-zero or zero diagonals
+            M_inv[i] = 1.0 / threshold
+
+        # Additional scaling for better conditioning
+        if M_inv[i] > 1.0 / eps:
+            M_inv[i] = 1.0 / eps
+
+    return M_inv
+
+@jit(nopython=True)
+def pcg_solver_with_constraints(data, indices, indptr, b, x0, nodes_xy, x_points, y_points, com, tol, max_iter):
+    """
+    PCG solver with improved constraint handling and convergence
     """
     n = len(b)
     x = x0.copy()
@@ -417,20 +511,18 @@ def pcg_solver_with_constraints(data, indices, indptr, b, x0, nodes_xy, x_points
     z = np.zeros_like(b)
     Ap = np.zeros_like(b)
 
-    # Create preconditioner
+    # Create preconditioner with improved scaling
     M_inv = block_diagonal_preconditioner(data, indices, indptr)
 
     # Initial residual: r = b - Ax
+    csr_matvec(data, indices, indptr, x, r)
     for i in range(n):
-        temp = 0.0
-        for j in range(indptr[i], indptr[i + 1]):
-            temp += data[j] * x[indices[j]]
-        r[i] = b[i] - temp
+        r[i] = b[i] - r[i]
 
     # Project initial residual
     r = project_to_nullspace(r, nodes_xy, x_points, y_points, com)
 
-    # Apply preconditioner: z = M⁻¹r
+    # Apply preconditioner
     for i in range(n):
         z[i] = M_inv[i] * r[i]
 
@@ -438,26 +530,26 @@ def pcg_solver_with_constraints(data, indices, indptr, b, x0, nodes_xy, x_points
     z = project_to_nullspace(z, nodes_xy, x_points, y_points, com)
     p[:] = z[:]
 
-    # Initial residual norm
+    # Initial residual norm with improved stability
     rz = np.dot(r, z)
-    initial_rz = rz
+    initial_rz = max(abs(rz), np.finfo(np.float64).eps)
+
+    # Convergence threshold with problem scaling
+    scaled_tol = tol * np.sqrt(initial_rz)
 
     # Main iteration loop
     for iter_count in range(max_iter):
-        # Matrix-vector product: Ap = A*p
-        for i in range(n):
-            temp = 0.0
-            for j in range(indptr[i], indptr[i + 1]):
-                temp += data[j] * p[indices[j]]
-            Ap[i] = temp
+        # Matrix-vector product
+        csr_matvec(data, indices, indptr, p, Ap)
 
         # Project Ap
         Ap = project_to_nullspace(Ap, nodes_xy, x_points, y_points, com)
 
-        # Compute step size alpha
+        # Compute step size with stability check
         pAp = np.dot(p, Ap)
-        if abs(pAp) < 1e-14:
+        if abs(pAp) < np.finfo(np.float64).eps * initial_rz:
             break
+
         alpha = rz / pAp
 
         # Update solution and residual
@@ -475,18 +567,18 @@ def pcg_solver_with_constraints(data, indices, indptr, b, x0, nodes_xy, x_points
         # Project preconditioned residual
         z = project_to_nullspace(z, nodes_xy, x_points, y_points, com)
 
-        # Compute beta and update search direction
+        # Compute new residual norm
         rz_new = np.dot(r, z)
 
-        # Check convergence with stricter criteria
-        rel_error = np.sqrt(abs(rz_new) / abs(initial_rz))
-        if rel_error < tol:
+        # Check convergence with improved criteria
+        rel_error = np.sqrt(abs(rz_new) / initial_rz)
+        if rel_error < scaled_tol and iter_count > 10:  # Ensure minimum iterations
             return x, iter_count + 1
 
+        # Update search direction
         beta = rz_new / rz
         rz = rz_new
 
-        # Update search direction
         for i in range(n):
             p[i] = z[i] + beta * p[i]
 
@@ -496,7 +588,152 @@ def pcg_solver_with_constraints(data, indices, indptr, b, x0, nodes_xy, x_points
     return x, max_iter
 
 
+@jit(nopython=True)
+def elast_diff_2d_gauss(r, s, coord):
+    """Calculate B and H matrices for 2D elasticity with improved stability"""
+    N, dN = shape_quad4_numba(r, s)
 
+    J = np.zeros((2, 2))
+    J[0, 0] = np.sum(dN[0] * coord[:, 0])
+    J[0, 1] = np.sum(dN[0] * coord[:, 1])
+    J[1, 0] = np.sum(dN[1] * coord[:, 0])
+    J[1, 1] = np.sum(dN[1] * coord[:, 1])
+
+    det = J[0, 0] * J[1, 1] - J[0, 1] * J[1, 0]
+
+    Jinv = np.array([
+        [J[1, 1], -J[0, 1]],
+        [-J[1, 0], J[0, 0]]
+    ]) / det
+
+    B = np.zeros((3, 8))
+    dNx = Jinv[0, 0] * dN[0] + Jinv[0, 1] * dN[1]
+    dNy = Jinv[1, 0] * dN[0] + Jinv[1, 1] * dN[1]
+
+    for i in range(4):
+        B[0, 2 * i] = dNx[i]
+        B[1, 2 * i + 1] = dNy[i]
+        B[2, 2 * i] = dNy[i]
+        B[2, 2 * i + 1] = dNx[i]
+
+    return N, B, det
+
+
+@jit(nopython=True)
+def calculate_element_stresses(el, elements, nodes, UC, mats):
+    """Calculate stresses at Gauss points with improved accuracy"""
+    el_nodes = elements[el, 3:]
+    el_coords = nodes[el_nodes, 1:3].astype(np.float64)
+    el_disps = UC[el_nodes]
+    mat_id = elements[el, 2]
+    params = mats[mat_id]
+
+    # 2x2 Gauss quadrature points
+    gpts = np.array([
+        [-0.577350269189626, -0.577350269189626],
+        [0.577350269189626, -0.577350269189626],
+        [0.577350269189626, 0.577350269189626],
+        [-0.577350269189626, 0.577350269189626]
+    ])
+
+    # Calculate constitutive matrix
+    E = params[0]
+    nu = params[1]
+    fact = E / (1 - nu * nu)
+    D = np.array([
+        [1, nu, 0],
+        [nu, 1, 0],
+        [0, 0, (1 - nu) / 2]
+    ]) * fact
+
+    # Calculate stresses at each Gauss point
+    stresses = np.zeros((4, 3))  # 4 Gauss points, 3 stress components
+    natural_coords = np.zeros((4, 2))  # Store natural coordinates
+
+    for i in range(4):
+        r, s = gpts[i]
+        N, B, det = elast_diff_2d_gauss(r, s, el_coords)
+
+        # Calculate strains and stresses
+        strain = np.dot(B, el_disps.flatten())
+        stresses[i] = np.dot(D, strain)
+        natural_coords[i] = [r, s]
+
+    return stresses, natural_coords, el_coords
+
+
+@jit(nopython=True)
+def extrapolate_to_nodes(gauss_stresses, natural_coords):
+    """Extrapolate Gauss point stresses to nodes using optimal sampling"""
+    # Vandermonde matrix for bilinear shape functions
+    V = np.zeros((4, 4))
+    for i in range(4):
+        r, s = natural_coords[i]
+        V[i, 0] = 1.0
+        V[i, 1] = r
+        V[i, 2] = s
+        V[i, 3] = r * s
+
+    # Node coordinates in natural space
+    node_coords = np.array([
+        [-1.0, -1.0],  # Node 1
+        [1.0, -1.0],  # Node 2
+        [1.0, 1.0],  # Node 3
+        [-1.0, 1.0]  # Node 4
+    ])
+
+    # Solve for coefficients of stress interpolation
+    # Use stable method for 4x4 system
+    nodal_stresses = np.zeros((4, 3))
+
+    for stress_comp in range(3):
+        # Get stresses for this component
+        stress_vals = gauss_stresses[:, stress_comp]
+
+        # Solve Va=b using stable method for 4x4 system
+        a = solve_4x4(V, stress_vals)
+
+        # Evaluate at nodes
+        for node in range(4):
+            r, s = node_coords[node]
+            nodal_stresses[node, stress_comp] = (a[0] + a[1] * r + a[2] * s + a[3] * r * s)
+
+    return nodal_stresses
+
+
+@jit(nopython=True)
+def solve_4x4(A, b):
+    """Solve 4x4 system using stable method"""
+    x = np.zeros(4)
+
+    # Simple Gaussian elimination with partial pivoting
+    for i in range(3):
+        # Find pivot
+        pivot = i
+        for j in range(i + 1, 4):
+            if abs(A[j, i]) > abs(A[pivot, i]):
+                pivot = j
+
+        # Swap rows
+        if pivot != i:
+            A[i, :], A[pivot, :] = A[pivot, :].copy(), A[i, :].copy()
+            b[i], b[pivot] = b[pivot], b[i]
+
+        # Eliminate
+        for j in range(i + 1, 4):
+            factor = A[j, i] / A[i, i]
+            b[j] -= factor * b[i]
+            for k in range(i, 4):
+                A[j, k] -= factor * A[i, k]
+
+    # Back substitution
+    for i in range(3, -1, -1):
+        sum_val = 0.0
+        for j in range(i + 1, 4):
+            sum_val += A[i, j] * x[j]
+        x[i] = (b[i] - sum_val) / A[i, i]
+
+    return x
 
 def timer_decorator(func):
     @wraps(func)
@@ -724,135 +961,53 @@ class MonolayerStressMicroscopy:
 
     @timer_decorator
     def _fem_simulation(self, nodes, elements, loads, mats, mask):
-        """Optimized FEM simulation using solidspy functions"""
-        from concurrent.futures import ThreadPoolExecutor
-        import numpy as np
-        import solidspy.femutil as fem
-
-        # Get mask dimensions for later use
-        if isinstance(mask, np.ndarray):
-            mask_shape = mask.shape
-        else:
-            print("Mask type:", type(mask))
-            print("Mask content:", mask)
-            raise ValueError("Mask must be a numpy array")
-
-        start_dme = time.time()
+        """Main FEM simulation with improved stress calculation"""
         DME, IBC, neq = ass.DME(nodes[:, 3:], elements)
-        self.timing_stats['dme_setup'] = time.time() - start_dme
 
-
-        # Optimized system assembly
-        start_assembly = time.time()
+        # System assembly
         KG, MG = self._custom_assembler(elements, mats, nodes, neq, DME)
-        self.timing_stats['system_assembly'] = time.time() - start_assembly
-
-
-        # Efficient load assembly
-        start_load = time.time()
         RHSG = ass.loadasem(loads, IBC, neq)
-        self.timing_stats['load_assembly'] = time.time() - start_load
 
-        # Optimized solver selection
-        start_solve = time.time()
+        # Solve system
         if np.sum(IBC == -1) < 3:
             UG_sol = self._custom_solver(KG, RHSG, mask, nodes, IBC)
         else:
             UG_sol = sol.static_sol(KG, RHSG)
-        self.timing_stats['system_solve'] = time.time() - start_solve
 
-        # Complete displacement calculation
+        # Complete displacement field
         UC = pos.complete_disp(IBC, nodes, UG_sol)
-        stress_nodes = nodes.copy()[:, :3]
 
-        def calculate_element_strains(el):
-            """Calculate strains and stresses for a single element"""
+        # Initialize stress arrays
+        stress_tensor = np.zeros((*mask.shape, 2, 2))
+        stress_counts = np.zeros(mask.shape, dtype=np.int32)
+
+        # Calculate stresses for each element
+        for el in range(len(elements)):
+            # Get stresses at Gauss points
+            gauss_stresses, natural_coords, el_coords = calculate_element_stresses(
+                el, elements, nodes, UC, mats
+            )
+
+            # Extrapolate to nodes
+            nodal_stresses = extrapolate_to_nodes(gauss_stresses, natural_coords)
+
+            # Map element nodes to global coordinates
             el_nodes = elements[el, 3:]
-            el_coords = nodes[el_nodes, 1:3].astype(np.float64)
-            el_disps = UC[el_nodes]
-            mat_id = elements[el, 2]
-            params = mats[mat_id]
+            for i, node_id in enumerate(el_nodes):
+                y, x = int(nodes[node_id, 2]), int(nodes[node_id, 1])
+                if 0 <= y < mask.shape[0] and 0 <= x < mask.shape[1]:
+                    # Accumulate stress components
+                    stress_tensor[y, x, 0, 0] += nodal_stresses[i, 0]  # σxx
+                    stress_tensor[y, x, 1, 1] += nodal_stresses[i, 1]  # σyy
+                    stress_tensor[y, x, 0, 1] += nodal_stresses[i, 2]  # σxy
+                    stress_tensor[y, x, 1, 0] += nodal_stresses[i, 2]  # σyx = σxy
+                    stress_counts[y, x] += 1
 
-            # Calculate element stiffness (we only need the B matrix)
-            r = s = 0.0  # Center point of element
-            H, B, det = fem.elast_diff_2d(r, s, el_coords, fem.shape_quad4)
-
-            # Calculate strains
-            strain = np.dot(B, el_disps.flatten())
-
-            # Calculate stresses using constitutive relationship
-            E, nu = params
-            fact = E / (1 - nu * nu)
-            D = np.array([
-                [1, nu, 0],
-                [nu, 1, 0],
-                [0, 0, (1 - nu) / 2]
-            ]) * fact
-
-            stress = np.dot(D, strain)
-            return strain, stress
-
-        # Process elements in parallel
-        n_cores = os.cpu_count()
-        batch_size = max(1, len(elements) // (4 * n_cores))
-        element_batches = np.array_split(np.arange(len(elements)), batch_size)
-
-        E_elements = []
-        S_elements = []
-        with ThreadPoolExecutor(max_workers=n_cores) as executor:
-            futures = []
-            for batch in element_batches:
-                for el in batch:
-                    futures.append(executor.submit(calculate_element_strains, el))
-
-            for future in futures:
-                strain, stress = future.result()
-                E_elements.append(strain)
-                S_elements.append(stress)
-
-        # Convert to numpy arrays
-        E_elements = np.array(E_elements)
-        S_elements = np.array(S_elements)
-
-        # Compute nodal averages
-        num_nodes = len(nodes)
-        E_nodes = np.zeros((num_nodes, 3))
-        S_nodes = np.zeros((num_nodes, 3))
-        node_counts = np.zeros(num_nodes)
-
-        # Accumulate element contributions to nodes
-        for el, (E_el, S_el) in enumerate(zip(E_elements, S_elements)):
-            node_indices = elements[el, 3:]
-            for node_idx in node_indices:
-                E_nodes[node_idx] += E_el
-                S_nodes[node_idx] += S_el
-                node_counts[node_idx] += 1
-
-        # Average the accumulated values
-        valid_nodes = node_counts > 0
-        E_nodes[valid_nodes] /= node_counts[valid_nodes, np.newaxis]
-        S_nodes[valid_nodes] /= node_counts[valid_nodes, np.newaxis]
-
-        # Create stress tensor with proper dimensions
-        stress_tensor = np.zeros((*mask_shape, 2, 2))
-
-        # Get y and x coordinates for node mapping
-        y_coords = nodes[:, 2].astype(int)  # Row indices
-        x_coords = nodes[:, 1].astype(int)  # Column indices
-
-        # Validate indices
-        valid_indices = (y_coords >= 0) & (y_coords < mask_shape[0]) & \
-                        (x_coords >= 0) & (x_coords < mask_shape[1])
-
-        # Assign stress components only for valid indices
-        valid_y = y_coords[valid_indices]
-        valid_x = x_coords[valid_indices]
-        valid_s = S_nodes[valid_indices]
-
-        stress_tensor[valid_y, valid_x, 0, 0] = valid_s[:, 0]  # σxx
-        stress_tensor[valid_y, valid_x, 1, 1] = valid_s[:, 1]  # σyy
-        stress_tensor[valid_y, valid_x, 0, 1] = valid_s[:, 2]  # σxy
-        stress_tensor[valid_y, valid_x, 1, 0] = valid_s[:, 2]  # σyx = σxy
+        # Average stresses where multiple elements contribute
+        valid_points = stress_counts > 0
+        for i in range(2):
+            for j in range(2):
+                stress_tensor[valid_points, i, j] /= stress_counts[valid_points]
 
         return stress_tensor
 
