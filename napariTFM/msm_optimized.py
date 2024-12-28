@@ -1,3 +1,32 @@
+"""
+Monolayer Stress Microscopy (MSM) module implementing finite element method (FEM) for
+calculating stress fields from traction forces in cell monolayers.
+
+Core MSM implementation is based on:
+- pyTFM package (https://github.com/fabrylab/pyTFM) - GNU GPL v3.0 License
+- Bauer et al. (2021). pyTFM: A tool for traction force and monolayer stress
+  microscopy. PLoS Computational Biology, 17(6), e1008364.
+  https://doi.org/10.1371/journal.pcbi.1008364
+
+FEM solver and assembly optimizations adapted from:
+- SolidsPy package (https://github.com/jpablo/solidspy) - MIT License
+- Gómez et al. (2019). SolidsPy: A FEM Implementation in Python for Teaching and Research
+  https://doi.org/10.21105/jose.00073
+
+Numerical methods and constraint handling based on:
+- Tambe et al. (2011). Collective cell guidance by cooperative intercellular forces
+  Nature Materials, 10(6), 469-475.
+- Tambe et al. (2013). Monolayer stress microscopy: limitations, artifacts, and
+  accuracy of recovered intercellular stresses
+PLoS ONE, 8(2), e55172.
+
+The implementation uses Numba-accelerated operations for performance optimization
+while maintaining the accuracy of the original MSM method. The solver employs an
+optimized LSQR implementation with careful constraint handling for solving the
+resulting system of equations.
+"""
+
+
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -1026,6 +1055,8 @@ class MonolayerStressMicroscopy:
 
         # Scale constraints and stack
         constraint_scale = np.median(np.abs(diag[valid_diag]))
+
+
         KG_constrained = vstack([KG_scaled, constraints * constraint_scale], format="csr")
         RHSG_constrained = np.append(RHSG, np.zeros(3))
 
