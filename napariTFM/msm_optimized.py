@@ -205,185 +205,6 @@ def csr_matvec(data, indices, indptr, x, out):
         out[i] = sum_val
 
 
-@jit(nopython=True)
-def vector_operations(p, r, z, alpha, beta):
-    """Fused vector operations for PCG"""
-    n = len(p)
-    rz_new = 0.0
-    rz_old = 0.0
-    pAp = 0.0
-
-    for i in range(n):
-        rz_old += r[i] * z[i]
-
-    # Update solution and residual
-    for i in range(n):
-        p[i] = z[i] + beta * p[i]
-        rz_new += r[i] * z[i]
-
-    return rz_new, rz_old, pAp
-
-
-@jit(nopython=True)
-def pcg_solver_numba(data, indices, indptr, b, x0, M_inv, tol, max_iter):
-    """
-    Preconditioned Conjugate Gradient solver with Numba optimization
-
-    Parameters:
-    -----------
-    data, indices, indptr : arrays
-        CSR format matrix data
-    b : array
-        Right-hand side vector
-    x0 : array
-        Initial guess
-    M_inv : array
-        Diagonal preconditioner (inverse)
-    tol : float
-        Convergence tolerance
-    max_iter : int
-        Maximum iterations
-
-    Returns:
-    --------
-    x : array
-        Solution vector
-    num_iter : int
-        Number of iterations performed
-    """
-    n = len(b)
-    x = x0.copy()
-
-    # Allocate vectors
-    r = np.zeros_like(b)
-    p = np.zeros_like(b)
-    z = np.zeros_like(b)
-    Ap = np.zeros_like(b)
-
-    # Initial residual: r = b - Ax
-    csr_matvec(data, indices, indptr, x, r)
-    for i in range(n):
-        r[i] = b[i] - r[i]
-
-    # Apply preconditioner: z = M⁻¹r
-    for i in range(n):
-        z[i] = M_inv[i] * r[i]
-
-    # Initial search direction
-    p[:] = z[:]
-
-    # Initial residual norm
-    rz = np.dot(r, z)
-    initial_rz = rz
-
-    # Main iteration loop
-    for iter_count in range(max_iter):
-        # Matrix-vector product: Ap = A*p
-        csr_matvec(data, indices, indptr, p, Ap)
-
-        # Compute step size alpha
-        pAp = np.dot(p, Ap)
-        if pAp == 0.0:
-            break
-        alpha = rz / pAp
-
-        # Update solution and residual
-        for i in range(n):
-            x[i] += alpha * p[i]
-            r[i] -= alpha * Ap[i]
-
-        # Apply preconditioner
-        for i in range(n):
-            z[i] = M_inv[i] * r[i]
-
-        # Compute beta and update search direction
-        rz_new = np.dot(r, z)
-        beta = rz_new / rz
-
-        # Check convergence
-        if np.sqrt(rz_new) < tol * np.sqrt(initial_rz):
-            return x, iter_count + 1
-
-        # Update for next iteration
-        rz = rz_new
-        p = z + beta * p
-
-    return x, max_iter
-
-
-@jit(nopython=True)
-def prepare_constraint_data_numba(nodes_xy, x_points, y_points, com, neq):
-    """
-    Prepare constraint data with improved numerical stability
-    """
-    # Calculate distances from center of mass with better precision
-    r = np.zeros((neq, 2))
-    for i in range(neq):
-        if x_points[i] or y_points[i]:
-            r[i, 0] = nodes_xy[i, 0] - com[1]  # x distance
-            r[i, 1] = nodes_xy[i, 1] - com[0]  # y distance
-
-    # Calculate constraint matrix sizes
-    n_x = np.sum(x_points)
-    n_y = np.sum(y_points)
-    total_constraints = n_x + n_y + n_x + n_y
-
-    # Initialize arrays
-    constraint_data = np.zeros(total_constraints)
-    constraint_rows = np.zeros(total_constraints, dtype=np.int32)
-    constraint_cols = np.zeros(total_constraints, dtype=np.int32)
-
-    idx = 0
-
-    # Force balance constraints with improved scaling
-    scale_factor = 1.0 / max(np.sqrt(n_x + n_y), 1.0)
-
-    # X-direction force balance
-    for i in range(neq):
-        if x_points[i]:
-            constraint_data[idx] = scale_factor
-            constraint_rows[idx] = 0
-            constraint_cols[idx] = i
-            idx += 1
-
-    # Y-direction force balance
-    for i in range(neq):
-        if y_points[i]:
-            constraint_data[idx] = scale_factor
-            constraint_rows[idx] = 1
-            constraint_cols[idx] = i
-            idx += 1
-
-    # Moment balance with improved scaling
-    I_xx = I_yy = I_xy = 0.0
-    for i in range(neq):
-        if x_points[i]:
-            I_yy += r[i, 1] * r[i, 1]
-            I_xy += r[i, 0] * r[i, 1]
-        if y_points[i]:
-            I_xx += r[i, 0] * r[i, 0]
-            I_xy += r[i, 0] * r[i, 1]
-
-    I_scale = np.sqrt(I_xx * I_yy)
-    if I_scale > 0:
-        moment_scale = scale_factor / np.sqrt(I_scale)
-    else:
-        moment_scale = scale_factor
-
-    # Apply moment constraints with improved scaling
-    for i in range(neq):
-        if x_points[i]:
-            constraint_data[idx] = r[i, 1] * moment_scale
-            constraint_rows[idx] = 2
-            constraint_cols[idx] = i
-            idx += 1
-        if y_points[i]:
-            constraint_data[idx] = -r[i, 0] * moment_scale
-            constraint_rows[idx] = 2
-            constraint_cols[idx] = i
-            idx += 1
-
-    return constraint_data[:idx], constraint_rows[:idx], constraint_cols[:idx]
 
 
 @jit(nopython=True)
@@ -1066,7 +887,7 @@ class MonolayerStressMicroscopy:
         return nodes_xy, x_points, y_points
 
     def _custom_solver(self, KG, RHSG, mask, nodes, IBC):
-        """Solver using Numba-optimized PCG"""
+        """Solver using Numba-optimized PCG with constraints"""
         neq = KG.shape[0]
 
         # Get node positions and set up constraints
@@ -1075,39 +896,28 @@ class MonolayerStressMicroscopy:
         # Calculate center of mass
         com = regionprops(mask.astype(int))[0].centroid
 
-        # Prepare constraint matrix
-        constraint_data, constraint_rows, constraint_cols = prepare_constraint_data_numba(
-            nodes_xy, x_points, y_points, com, neq)
+        # Convert KG to CSR format if not already
+        KG_csr = KG.tocsr()
 
-        # Create sparse constraint matrix
-        constraints = csr_matrix(
-            (constraint_data, (constraint_rows, constraint_cols)),
-            shape=(3, neq)
-        )
+        # Create initial guess
+        x0 = np.zeros_like(RHSG)
 
-        # Stack matrices
-        KG_constrained = vstack([KG, constraints], format="csr")
-        RHSG_constrained = np.append(RHSG, np.zeros(3))
-
-        # Convert to CSR format and extract data
-        KG_csr = KG_constrained.tocsr()
-
-        # Create diagonal preconditioner
-        diag = KG_csr.diagonal()
-        M_inv = 1.0 / (diag + 1e-12)  # Add small value to prevent division by zero
-
-        # Initial guess
-        x0 = np.zeros_like(RHSG_constrained)
-
-        # Solve using PCG
-        solution, n_iter = pcg_solver_numba(
-            KG_csr.data, KG_csr.indices, KG_csr.indptr,
-            RHSG_constrained, x0, M_inv,
+        # Solve using constrained PCG solver
+        solution, n_iter = pcg_solver_with_constraints(
+            KG_csr.data,
+            KG_csr.indices,
+            KG_csr.indptr,
+            RHSG,
+            x0,
+            nodes_xy,
+            x_points,
+            y_points,
+            com,
             tol=1e-12,
             max_iter=200000
         )
 
-        return solution
+        return solution[:neq]
 
 
 # Example usage
@@ -1198,54 +1008,3 @@ if __name__ == "__main__":
     plt.show()
 
 
-    def compare_stress_tensors(stress_tensor1, stress_tensor2, name1="Optimized", name2="Original"):
-        """
-        Compare two stress tensors and print detailed statistics
-        """
-
-        def compute_stats(tensor):
-            return {
-                'max': np.nanmax(tensor),
-                'min': np.nanmin(tensor),
-                'mean': np.nanmean(tensor),
-                'std': np.nanstd(tensor),
-                'median': np.nanmedian(tensor)
-            }
-
-        # Compare each component
-        components = [
-            ('σxx', (0, 0)),
-            ('σyy', (1, 1)),
-            ('σxy', (0, 1))
-        ]
-
-        print("\nDetailed Stress Tensor Comparison:")
-        print("-" * 80)
-        print(f"{'Component':<10} {'Metric':<10} {name1:<15} {name2:<15} {'Diff':<15} {'Rel Diff %':<10}")
-        print("-" * 80)
-
-        for comp_name, indices in components:
-            tensor1 = stress_tensor1[:, :, indices[0], indices[1]]
-            tensor2 = stress_tensor2[:, :, indices[0], indices[1]]
-
-            stats1 = compute_stats(tensor1)
-            stats2 = compute_stats(tensor2)
-
-            for metric in ['max', 'min', 'mean', 'median', 'std']:
-                val1 = stats1[metric]
-                val2 = stats2[metric]
-                diff = val2 - val1
-                rel_diff = (diff / val1 * 100) if val1 != 0 else float('inf')
-
-                print(f"{comp_name:<10} {metric:<10} {val1:<15.3e} {val2:<15.3e} {diff:<15.3e} {rel_diff:<10.2f}")
-
-        # Compute overall error metrics
-        valid_mask = ~np.isnan(stress_tensor1) & ~np.isnan(stress_tensor2)
-        rmse = np.sqrt(np.mean((stress_tensor1[valid_mask] - stress_tensor2[valid_mask]) ** 2))
-        max_abs_error = np.max(np.abs(stress_tensor1[valid_mask] - stress_tensor2[valid_mask]))
-
-        print("\nOverall Error Metrics:")
-        print(f"RMSE: {rmse:.3e}")
-        print(f"Maximum Absolute Error: {max_abs_error:.3e}")
-
-    compare_stress_tensors(stress_tensor, stress_tensor_ref)
