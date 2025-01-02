@@ -1095,9 +1095,6 @@ if __name__ == "__main__":
     # Initialize MSM calculator
     pixelsize = 0.8  # microns per pixel
     msm = MonolayerStressMicroscopy(pixelsize=pixelsize)
-    nodes, elements, loads, mats = msm._grid_setup(mask, -t_x, -t_y)
-    print("Elements shape:", elements.shape)
-    print("Sample element node connectivity:", elements[0, 3:])
 
     # Calculate stress field
     stress_tensor = msm.calculate_stress_field(t_x, t_y, mask) # in N/pixel

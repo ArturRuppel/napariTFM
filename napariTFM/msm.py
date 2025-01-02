@@ -29,12 +29,13 @@ resulting system of equations.
 
 import time
 from functools import wraps
-
+import os
 import solidspy.assemutil as ass
 import solidspy.postprocesor as pos
 import solidspy.solutil as sol
 from numba import jit
 from numpy import vstack
+import numpy as np
 from scipy.optimize import least_squares
 from scipy.sparse import csr_matrix, vstack
 from scipy.sparse.linalg import lsqr

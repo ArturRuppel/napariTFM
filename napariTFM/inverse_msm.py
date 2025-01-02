@@ -1,80 +1,172 @@
 import numpy as np
-from scipy.ndimage import sobel
+from scipy.ndimage import gaussian_filter1d
+import os
+import matplotlib.pyplot as plt
+from msm_optimized import MonolayerStressMicroscopy
+import tifffile
 
 
 def calculate_traction_from_stress(stress_tensor, mask, pixelsize):
     """
-    Calculate traction forces directly from stress tensor using t = σ⋅n
+    Calculate traction forces from stress tensor using the equilibrium equation:
+    t = div(σ) where div(σ) is the divergence of the stress tensor
 
     Args:
-        stress_tensor: 4D array (height, width, 2, 2) containing stress components in Pa
+        stress_tensor: 4D array (height, width, 2, 2) containing stress components
         mask: Boolean mask of valid area
         pixelsize: Pixel size in microns
 
     Returns:
-        tuple: (t_x, t_y) traction force components in Pa
+        tuple: (t_x, t_y) traction force components in Pascal
     """
     # Convert pixelsize to meters
-    pixelsize = pixelsize * 1e-6
+    dx = dy = pixelsize * 1e-6
 
     # Extract stress components
     sigma_xx = stress_tensor[:, :, 0, 0]
     sigma_yy = stress_tensor[:, :, 1, 1]
     sigma_xy = stress_tensor[:, :, 0, 1]
 
-    # Calculate gradients of mask to get normal vectors
-    ny = sobel(mask.astype(float), axis=0)
-    nx = sobel(mask.astype(float), axis=1)
+    # Apply small amount of smoothing to reduce numerical noise
+    sigma_xx = gaussian_filter1d(gaussian_filter1d(sigma_xx, sigma=1, axis=0), sigma=1, axis=1)
+    sigma_yy = gaussian_filter1d(gaussian_filter1d(sigma_yy, sigma=1, axis=0), sigma=1, axis=1)
+    sigma_xy = gaussian_filter1d(gaussian_filter1d(sigma_xy, sigma=1, axis=0), sigma=1, axis=1)
 
-    # Normalize the normal vectors
-    norm = np.sqrt(nx ** 2 + ny ** 2)
-    mask_nonzero = (norm > 0)
-    nx[mask_nonzero] = nx[mask_nonzero] / norm[mask_nonzero]
-    ny[mask_nonzero] = ny[mask_nonzero] / norm[mask_nonzero]
+    # Calculate derivatives using central differences
+    def central_diff_x(f):
+        """Central difference in x-direction"""
+        diff = np.zeros_like(f)
+        diff[:, 1:-1] = (f[:, 2:] - f[:, :-2]) / (2 * dx)
+        diff[:, 0] = (f[:, 1] - f[:, 0]) / dx  # Forward difference at left boundary
+        diff[:, -1] = (f[:, -1] - f[:, -2]) / dx  # Backward difference at right boundary
+        return diff
 
-    # Calculate traction components using t = σ⋅n
-    t_x = sigma_xx * nx + sigma_xy * ny
-    t_y = sigma_xy * nx + sigma_yy * ny
+    def central_diff_y(f):
+        """Central difference in y-direction"""
+        diff = np.zeros_like(f)
+        diff[1:-1, :] = (f[2:, :] - f[:-2, :]) / (2 * dy)
+        diff[0, :] = (f[1, :] - f[0, :]) / dy  # Forward difference at top boundary
+        diff[-1, :] = (f[-1, :] - f[-2, :]) / dy  # Backward difference at bottom boundary
+        return diff
 
-    # Convert to force per unit area
-    t_x = t_x / (pixelsize ** 2)
-    t_y = t_y / (pixelsize ** 2)
+    # Calculate divergence components
+    t_x = central_diff_x(sigma_xx) + central_diff_y(sigma_xy)
+    t_y = central_diff_x(sigma_xy) + central_diff_y(sigma_yy)
 
-    # Zero out values outside mask
+    # Apply mask
     t_x[~mask] = 0
     t_y[~mask] = 0
 
     return t_x, t_y
 
 
-# Example usage
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    # Load your stress tensor and mask data
-    # stress_tensor = ...
-    # mask = ...
-
-    # Calculate traction forces
-    pixelsize = 0.8  # microns per pixel
-    t_x, t_y = calculate_traction_from_stress(stress_tensor, mask, pixelsize)
-
-    # Visualize results
+def plot_traction_comparison(t_x_orig, t_y_orig, t_x_calc, t_y_calc, mask):
+    """
+    Plot original and calculated traction fields side by side
+    """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-    # Plot traction magnitude
-    traction_mag = np.sqrt(t_x ** 2 + t_y ** 2)
-    im1 = ax1.imshow(traction_mag)
-    ax1.set_title('Traction Magnitude')
+    # Calculate magnitudes
+    traction_mag_orig = np.sqrt(t_x_orig ** 2 + t_y_orig ** 2)
+    traction_mag_calc = np.sqrt(t_x_calc ** 2 + t_y_calc ** 2)
+
+    # Use same scale for both plots
+    vmax = np.percentile(traction_mag_orig[mask], 99.9) * 1.2
+
+    # Original tractions
+    im1 = ax1.imshow(traction_mag_orig, vmax=vmax)
     plt.colorbar(im1, ax=ax1, label='Traction (Pa)')
 
-    # Plot traction vectors (downsample for clarity)
+    # Add quiver plot
     spacing = 10
-    y, x = np.mgrid[:t_x.shape[0]:spacing, :t_x.shape[1]:spacing]
+    y, x = np.mgrid[:t_x_orig.shape[0]:spacing, :t_x_orig.shape[1]:spacing]
+    scale = np.percentile(traction_mag_orig[mask], 95) * 20
+
+    ax1.quiver(x, y,
+               t_x_orig[::spacing, ::spacing],
+               -t_y_orig[::spacing, ::spacing],
+               color='white',
+               scale=scale)
+    ax1.set_title('Original Traction Field')
+
+    # Recalculated tractions
+    im2 = ax2.imshow(traction_mag_calc, vmax=vmax)
+    plt.colorbar(im2, ax=ax2, label='Traction (Pa)')
+
     ax2.quiver(x, y,
-               t_x[::spacing, ::spacing],
-               t_y[::spacing, ::spacing])
-    ax2.set_title('Traction Vectors')
+               t_x_calc[::spacing, ::spacing],
+               -t_y_calc[::spacing, ::spacing],
+               color='white',
+               scale=scale)
+    ax2.set_title('Recalculated Traction Field')
 
     plt.tight_layout()
     plt.show()
+
+
+def calculate_error_metrics(t_x_orig, t_y_orig, t_x_calc, t_y_calc, mask):
+    """
+    Calculate error metrics between original and calculated traction fields
+    """
+    # Calculate magnitudes
+    t_mag_orig = np.sqrt(t_x_orig ** 2 + t_y_orig ** 2)
+    t_mag_calc = np.sqrt(t_x_calc ** 2 + t_y_calc ** 2)
+
+    # Calculate metrics only for masked region
+    t_mag_orig_masked = t_mag_orig[mask]
+    t_mag_calc_masked = t_mag_calc[mask]
+
+    # Root Mean Square Error
+    rmse = np.sqrt(np.mean((t_mag_calc_masked - t_mag_orig_masked) ** 2))
+
+    # Normalized RMSE
+    nrmse = rmse / np.mean(t_mag_orig_masked)
+
+    # Pearson correlation coefficient
+    correlation = np.corrcoef(t_mag_orig_masked, t_mag_calc_masked)[0, 1]
+
+    # Direction error (in degrees)
+    angle_orig = np.arctan2(t_y_orig[mask], t_x_orig[mask])
+    angle_calc = np.arctan2(t_y_calc[mask], t_x_calc[mask])
+    angle_diff = np.abs(np.rad2deg(angle_orig - angle_calc))
+    mean_angle_error = np.mean(np.minimum(angle_diff, 360 - angle_diff))
+
+    return {
+        'RMSE': rmse,
+        'NRMSE': nrmse,
+        'Correlation': correlation,
+        'Mean Angular Error': mean_angle_error
+    }
+
+
+if __name__ == "__main__":
+    # Load data
+    data_path = r"C:\Users\aruppel\Desktop\test"
+
+    # Load traction force data
+    t_x = np.load(os.path.join(data_path, "t_x.npy"))[0, :, :]
+    t_y = np.load(os.path.join(data_path, "t_y.npy"))[0, :, :]
+
+    # Load mask
+    mask = tifffile.imread(os.path.join(data_path, "masks.tif")).astype(bool)[0, :, :]
+
+    # Parameters
+    pixelsize = 0.8  # microns per pixel
+
+    # Initialize MSM calculator and compute stress field
+    msm = MonolayerStressMicroscopy(pixelsize=pixelsize)
+    stress_tensor = msm.calculate_stress_field(t_x, t_y, mask)  # in N/pixel
+    stress_tensor = stress_tensor / (pixelsize * 1e-6)  # Convert to Pa
+
+    # Calculate traction forces from stress tensor
+    t_x_calc, t_y_calc = calculate_traction_from_stress(stress_tensor, mask, pixelsize)
+
+    # Plot comparison
+    plot_traction_comparison(t_x, t_y, t_x_calc, t_y_calc, mask)
+
+    # Calculate and print error metrics
+    metrics = calculate_error_metrics(t_x, t_y, t_x_calc, t_y_calc, mask)
+    print("\nValidation Metrics:")
+    print("-" * 50)
+    for metric, value in metrics.items():
+        print(f"{metric}: {value:.4f}")
