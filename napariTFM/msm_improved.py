@@ -43,7 +43,7 @@ from scipy.sparse import csr_matrix, vstack, diags
 from scipy.sparse.linalg import lsqr
 from skimage.measure import regionprops
 
-from napariTFM.mesh_generator import TriangleMeshGenerator
+from napariTFM.mesh_generator import AdaptiveTriangleMeshGenerator
 
 
 @jit(nopython=True)
@@ -739,7 +739,7 @@ def elast_tri_numba(coord, params):
 
     return K, M
 class MonolayerStressMicroscopy:
-    def __init__(self, pixelsize, sigma=0.5, youngs_modulus=1, mesh_refinement=1.0):
+    def __init__(self, pixelsize, sigma=0.5, youngs_modulus=1, base_refinement=0.5, boundary_refinement=2.0, gradient_refinement=1.5):
         """
         Initialize MSM calculator with triangular elements
 
@@ -752,8 +752,11 @@ class MonolayerStressMicroscopy:
         self.pixelsize = pixelsize
         self.sigma = sigma
         self.E = youngs_modulus
-        self.mesh_refinement = mesh_refinement
-        self.mesh_generator = TriangleMeshGenerator(refinement_factor=mesh_refinement)
+        self.mesh_generator = AdaptiveTriangleMeshGenerator(
+            base_refinement=base_refinement,
+            boundary_refinement=boundary_refinement,
+            gradient_refinement=gradient_refinement
+        )
         self.timing_stats = {}
         self._nested_calls = {}
         self._current_func = None
@@ -848,7 +851,7 @@ class MonolayerStressMicroscopy:
     def _grid_setup(self, mask_area, f_x, f_y):
         """Setup triangular mesh and boundary conditions"""
         # Generate triangular mesh
-        nodes_xy, elements = self.mesh_generator.generate_mesh(mask_area)
+        nodes_xy, elements = self.mesh_generator.generate_mesh(mask_area, f_x, f_y)
 
         print(f"Number of nodes: {len(nodes_xy)}")
         print(f"Number of elements: {len(elements)}")
@@ -945,7 +948,7 @@ class MonolayerStressMicroscopy:
 
     @timer_decorator
     def _fem_simulation(self, nodes, elements, loads, mats, mask):
-        """Main FEM simulation with accurate stress calculation"""
+        """Main FEM simulation with improved boundary handling for stress interpolation"""
         # System assembly
         DME, IBC, neq = self._assemble_custom_dme(nodes, elements)
         KG, MG = self._custom_assembler(elements, mats, nodes, neq, DME)
@@ -992,11 +995,9 @@ class MonolayerStressMicroscopy:
 
         # Process batches in parallel
         with ThreadPoolExecutor(max_workers=n_cores) as executor:
-            # Submit all batches
             future_to_batch = {executor.submit(process_element_batch, batch): batch
                                for batch in element_batches}
 
-            # Process results as they complete
             for future in future_to_batch:
                 try:
                     batch_results = future.result()
@@ -1016,10 +1017,11 @@ class MonolayerStressMicroscopy:
         valid_nodes = weight_accum > 0
         stress_accum[valid_nodes] /= weight_accum[valid_nodes, np.newaxis]
 
-        from scipy.interpolate import griddata
+        from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 
         # Create regular grid for interpolation
         grid_y, grid_x = np.mgrid[0:mask.shape[0], 0:mask.shape[1]]
+        grid_points = np.column_stack((grid_x.ravel(), grid_y.ravel()))
 
         # Prepare points and values for interpolation
         points = nodes[:, 1:3]  # node coordinates
@@ -1032,12 +1034,41 @@ class MonolayerStressMicroscopy:
         # Initialize stress tensor
         stress_tensor = np.zeros((*mask.shape, 2, 2))
 
-        # Interpolate each stress component
-        for comp, values in stress_fields.items():
-            # Use cubic interpolation with linear fallback
-            interpolated = griddata(points, values, (grid_x, grid_y), method='cubic',
-                                    fill_value=0.0)
+        # Create boundary mask
+        from scipy.ndimage import binary_erosion
+        boundary_mask = mask & ~binary_erosion(mask)
 
+        # Interpolate each stress component with boundary preservation
+        for comp, values in stress_fields.items():
+            # Create primary linear interpolator
+            interpolator = LinearNDInterpolator(points, values, fill_value=np.nan)
+
+            # Create backup nearest interpolator for boundary regions
+            nearest_interpolator = NearestNDInterpolator(points, values)
+
+            # Perform initial interpolation
+            interpolated = interpolator(grid_x, grid_y)
+
+            # Fill boundary regions and NaN values with nearest neighbor interpolation
+            nan_mask = np.isnan(interpolated)
+            if np.any(nan_mask):
+                nearest_values = nearest_interpolator(grid_x[nan_mask], grid_y[nan_mask])
+                interpolated[nan_mask] = nearest_values
+
+            # Additional boundary smoothing using local averaging
+            if np.any(boundary_mask):
+                from scipy.ndimage import uniform_filter
+                boundary_values = interpolated.copy()
+                boundary_values[~boundary_mask] = 0
+                smoothed = uniform_filter(boundary_values, size=3)
+                weight_mask = uniform_filter(boundary_mask.astype(float), size=3)
+                smoothed[weight_mask > 0] /= weight_mask[weight_mask > 0]
+                interpolated[boundary_mask] = smoothed[boundary_mask]
+
+            # Apply mask
+            interpolated[~mask] = 0.0
+
+            # Assign to appropriate stress tensor component
             if comp == 'xx':
                 stress_tensor[..., 0, 0] = interpolated
             elif comp == 'yy':
@@ -1045,9 +1076,6 @@ class MonolayerStressMicroscopy:
             else:  # xy component
                 stress_tensor[..., 0, 1] = interpolated
                 stress_tensor[..., 1, 0] = interpolated
-
-        # Mask out regions outside the domain
-        stress_tensor[~mask] = 0.0
 
         return stress_tensor
 
@@ -1243,5 +1271,3 @@ if __name__ == "__main__":
 
     plt.tight_layout()
     plt.show()
-
-
