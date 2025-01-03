@@ -944,7 +944,6 @@ class MonolayerStressMicroscopy:
         return stiff, mass
 
     @timer_decorator
-    @timer_decorator
     def _fem_simulation(self, nodes, elements, loads, mats, mask):
         """Main FEM simulation with accurate stress calculation"""
         # System assembly
@@ -1017,23 +1016,41 @@ class MonolayerStressMicroscopy:
         valid_nodes = weight_accum > 0
         stress_accum[valid_nodes] /= weight_accum[valid_nodes, np.newaxis]
 
-        # Create final stress tensor
+        from scipy.interpolate import griddata
+
+        # Create regular grid for interpolation
+        grid_y, grid_x = np.mgrid[0:mask.shape[0], 0:mask.shape[1]]
+
+        # Prepare points and values for interpolation
+        points = nodes[:, 1:3]  # node coordinates
+        stress_fields = {
+            'xx': stress_accum[:, 0],
+            'yy': stress_accum[:, 1],
+            'xy': stress_accum[:, 2]
+        }
+
+        # Initialize stress tensor
         stress_tensor = np.zeros((*mask.shape, 2, 2))
 
-        # Map nodal stresses to the grid
-        y_coords = nodes[:, 2].astype(int)
-        x_coords = nodes[:, 1].astype(int)
-        valid_indices = (y_coords >= 0) & (y_coords < mask.shape[0]) & \
-                        (x_coords >= 0) & (x_coords < mask.shape[1])
+        # Interpolate each stress component
+        for comp, values in stress_fields.items():
+            # Use cubic interpolation with linear fallback
+            interpolated = griddata(points, values, (grid_x, grid_y), method='cubic',
+                                    fill_value=0.0)
 
-        # Assign stress components
-        stress_tensor[y_coords[valid_indices], x_coords[valid_indices], 0, 0] = stress_accum[valid_indices, 0]  # σxx
-        stress_tensor[y_coords[valid_indices], x_coords[valid_indices], 1, 1] = stress_accum[valid_indices, 1]  # σyy
-        stress_tensor[y_coords[valid_indices], x_coords[valid_indices], 0, 1] = stress_accum[valid_indices, 2]  # σxy
-        stress_tensor[y_coords[valid_indices], x_coords[valid_indices], 1, 0] = stress_accum[valid_indices, 2]  # σyx
+            if comp == 'xx':
+                stress_tensor[..., 0, 0] = interpolated
+            elif comp == 'yy':
+                stress_tensor[..., 1, 1] = interpolated
+            else:  # xy component
+                stress_tensor[..., 0, 1] = interpolated
+                stress_tensor[..., 1, 0] = interpolated
 
+        # Mask out regions outside the domain
+        stress_tensor[~mask] = 0.0
 
         return stress_tensor
+
 
     def print_timing_stats(self):
         """Print detailed timing statistics"""

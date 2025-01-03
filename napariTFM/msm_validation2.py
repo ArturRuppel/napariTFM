@@ -88,34 +88,69 @@ def calculate_metrics(true, calc, mask):
     return rmse, max_error, correlation, rel_error
 
 
-def validate_msm_with_fem_data(t_x_true, t_y_true, sigma_xx_true, sigma_yy_true, mask, pixelsize=0.8e-6):
+def pad_array(array, padding_width=5):
+    """Pad array with zeros around the border"""
+    return np.pad(array, padding_width, mode='constant', constant_values=0)
+
+
+def validate_msm_with_fem_data(t_x_true, t_y_true, sigma_xx_true, sigma_yy_true, mask, pixelsize=0.8e-6, padding_width=5):
     """
-    Validate MSM implementation using FEM simulation data
+    Validate MSM implementation using FEM simulation data with padded arrays
     All quantities in SI units
     """
-    # Create mask if not provided
-    if mask is None:
-        mask = np.ones_like(t_x_true, dtype=bool)
+    # Pad all input arrays
+    t_x_padded = pad_array(t_x_true, padding_width)
+    t_y_padded = pad_array(t_y_true, padding_width)
+    sigma_xx_padded = pad_array(sigma_xx_true, padding_width)
+    sigma_yy_padded = pad_array(sigma_yy_true, padding_width)
+    mask_padded = pad_array(mask, padding_width)
+
+    from scipy.ndimage import binary_dilation
+    kernel = np.ones((4, 4), np.uint8)
+    dilated = binary_dilation(mask_padded, kernel, iterations=1)
+    mask_padded = dilated
+    # plt.imshow(mask_padded)
+    # plt.show()
+    # plt.imshow(dilated)
+    # plt.show()
 
     # Initialize MSM calculator
     msm = MonolayerStressMicroscopy(pixelsize=pixelsize * 1e6)  # Convert to microns for the class
 
-    # Step 1: Calculate stress tensor from true tractions (Forward MSM)
-    stress_tensor_calc = msm.calculate_stress_field(t_x_true, t_y_true, mask) / pixelsize
-    sigma_xx_calc_fwd = stress_tensor_calc[:, :, 0, 0]
-    sigma_yy_calc_fwd = stress_tensor_calc[:, :, 1, 1]
+    # Generate and plot mesh using the built-in method
+    nodes, elements = msm.mesh_generator.generate_mesh(mask_padded)
+    mesh_fig = plt.figure(figsize=(10, 10))
+    msm.mesh_generator.plot_mesh(nodes, elements, mask_padded)
+    plt.title('Triangular Mesh with Padded Domain')
 
-    # Step 2: Calculate tractions from true stress (Inverse MSM)
-    # Create stress tensor array
-    stress_tensor_true = np.zeros((*mask.shape, 2, 2))
-    stress_tensor_true[:, :, 0, 0] = sigma_xx_true
-    stress_tensor_true[:, :, 1, 1] = sigma_yy_true
+    # Calculate stress tensor from true tractions (Forward MSM)
+    stress_tensor_calc = msm.calculate_stress_field(t_x_padded, t_y_padded, mask_padded) / pixelsize
+
+    # Create stress tensor array for inverse calculation
+    stress_tensor_true = np.zeros((*mask_padded.shape, 2, 2))
+    stress_tensor_true[:, :, 0, 0] = sigma_xx_padded
+    stress_tensor_true[:, :, 1, 1] = sigma_yy_padded
 
     # Calculate tractions using inverse MSM
     t_x_calc, t_y_calc = calculate_traction_from_stress(
         stress_tensor_true,
-        mask,
+        mask_padded,
         pixelsize * 1e6  # Convert to microns for the function
+    )
+
+    # Remove padding for comparison and visualization
+    slice_obj = slice(padding_width, -padding_width)
+    sigma_xx_calc_fwd = stress_tensor_calc[slice_obj, slice_obj, 0, 0]
+    sigma_yy_calc_fwd = stress_tensor_calc[slice_obj, slice_obj, 1, 1]
+    t_x_calc = t_x_calc[slice_obj, slice_obj]
+    t_y_calc = t_y_calc[slice_obj, slice_obj]
+
+    # Create visualizations
+    fig_traction, fig_stress = plot_validation_results(
+        t_x_true, t_y_true, t_x_calc, t_y_calc,
+        sigma_xx_true, sigma_yy_true,
+        sigma_xx_calc_fwd, sigma_yy_calc_fwd,
+        mask
     )
 
     # Print metrics for both forward and inverse calculations
@@ -148,17 +183,8 @@ def validate_msm_with_fem_data(t_x_true, t_y_true, sigma_xx_true, sigma_yy_true,
         print(f"Correlation: {corr:.4f}")
         print(f"Relative Error: {rel_error:.4f}")
 
-    # Create visualizations
-    fig_traction, fig_stress = plot_validation_results(
-        t_x_true, t_y_true, t_x_calc, t_y_calc,
-        sigma_xx_true, sigma_yy_true,
-        sigma_xx_calc_fwd, sigma_yy_calc_fwd,
-        mask
-    )
-    plt.show()
-
-    return (stress_tensor_calc, t_x_calc, t_y_calc,
-            fig_traction, fig_stress)
+    return (stress_tensor_calc[slice_obj, slice_obj], t_x_calc, t_y_calc,
+            fig_traction, fig_stress, mesh_fig)
 
 
 if __name__ == "__main__":
@@ -174,20 +200,19 @@ if __name__ == "__main__":
     sigma_xx_true = doublet_FEM_simulation["feedback0.0"]["sigma_xx"][:, :, 0]
     sigma_yy_true = doublet_FEM_simulation["feedback0.0"]["sigma_yy"][:, :, 0]
 
-    # Create a simple mask (you might want to adjust this based on your data)
-    mask = np.ones_like(t_x_true, dtype=bool)
-    mask = sigma_yy_true > 0
-    mask[0, 0:-1] = False
-    mask[0:-1, 0] = False
-    mask[-1, 0:-1] = False
-    mask[-1:-1, 0] = False
+    # Create mask based on stress data
+    mask = sigma_xx_true > 0.00006
+
 
     # Run the validation
     results = validate_msm_with_fem_data(
         t_x_true, t_y_true,
         sigma_xx_true, sigma_yy_true,
         mask,
-        pixelsize=0.8e-6  # 0.8 µm pixel size
+        pixelsize=0.8e-6,  # 0.8 µm pixel size
+        padding_width=5
     )
+
+    plt.show()
 
 hi = results[0][:,:,0,0]
