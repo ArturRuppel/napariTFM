@@ -157,7 +157,7 @@ def plot_comparison(t_x_orig, t_y_orig, t_x_calc, t_y_calc, mask, title):
     axes[0, 1].quiver(x, y,
                       t_x_calc[::spacing, ::spacing],
                       -t_y_calc[::spacing, ::spacing],
-                      color='white', scale=scale)
+                      color='white', scale=10*scale)
     axes[0, 1].set_title('Recalculated Traction Field')
 
     # Plot magnitude difference
