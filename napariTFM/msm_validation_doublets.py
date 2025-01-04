@@ -81,13 +81,14 @@ def validate_msm_with_fem_data(t_x_true, t_y_true, sigma_xx_true, sigma_yy_true,
     mask_padded = dilated
 
     # Initialize MSM calculator
-    msm = MonolayerStressMicroscopy(pixelsize=pixelsize * 1e6, base_refinement=0.5, boundary_refinement=1.0, gradient_refinement=1.0)
+    msm = MonolayerStressMicroscopy(sigma=0.5, pixelsize=pixelsize * 1e6, base_refinement=0.5, boundary_refinement=1.0, gradient_refinement=1.0)
 
     # Generate and plot mesh using the built-in method
     nodes, elements = msm.mesh_generator.generate_mesh(mask_padded)
-    mesh_fig = plt.figure(figsize=(10, 10))
-    msm.mesh_generator.plot_mesh(nodes, elements, mask_padded)
+    mesh_fig = msm.mesh_generator.plot_mesh(nodes, elements, mask_padded)
     plt.title('Triangular Mesh with Padded Domain')
+    mesh_fig.tight_layout()
+    plt.show()
 
     # Calculate stress tensor from true tractions (Forward MSM)
     stress_tensor_calc = msm.calculate_stress_field(t_x_padded, t_y_padded, mask_padded) / pixelsize
