@@ -1,48 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from msm_improved import MonolayerStressMicroscopy
-from inverse_msm import calculate_traction_from_stress
 
 
-def plot_validation_results(t_x_true, t_y_true, t_x_calc, t_y_calc, sigma_xx_true, sigma_yy_true,
+def plot_validation_results(t_x_true, t_y_true, sigma_xx_true, sigma_yy_true,
                             sigma_xx_calc, sigma_yy_calc, mask):
-    """Plot comparison between true and calculated fields for both traction and stress"""
-
-    # Create two figures - one for traction, one for stress
-    fig_traction = plt.figure(figsize=(12, 10))
-    plt.suptitle('Traction Force Validation', fontsize=14)
-
-    # Traction plots (2x2 grid)
-    ax_t1 = plt.subplot(221)
-    ax_t2 = plt.subplot(222)
-    ax_t3 = plt.subplot(223)
-    ax_t4 = plt.subplot(224)
-
-    # Get common scale for each traction component
-    vmax_x = np.nanpercentile(np.abs(t_x_true[mask]), 99)
-    vmax_y = np.nanpercentile(np.abs(t_y_true[mask]), 99)
-
-    def plot_component(ax, data, title, vmax):
-        masked_data = np.copy(data)
-        masked_data[~mask] = np.nan
-        im = ax.imshow(masked_data, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-        ax.set_title(title)
-        return im
-
-    # Plot traction components
-    im1 = plot_component(ax_t1, t_x_true, 'True Tx (Pa)', vmax_x)
-    plt.colorbar(im1, ax=ax_t1)
-
-    im2 = plot_component(ax_t2, t_x_calc, 'Calculated Tx (Pa)', vmax_x)
-    plt.colorbar(im2, ax=ax_t2)
-
-    im3 = plot_component(ax_t3, t_y_true, 'True Ty (Pa)', vmax_y)
-    plt.colorbar(im3, ax=ax_t3)
-
-    im4 = plot_component(ax_t4, t_y_calc, 'Calculated Ty (Pa)', vmax_y)
-    plt.colorbar(im4, ax=ax_t4)
-
-    plt.tight_layout()
+    """Plot comparison between true and calculated stress fields"""
 
     # Create stress tensor figure (2x2 grid)
     fig_stress = plt.figure(figsize=(12, 10))
@@ -57,6 +20,13 @@ def plot_validation_results(t_x_true, t_y_true, t_x_calc, t_y_calc, sigma_xx_tru
     # Get common scale for stress components
     vmax_xx = np.nanpercentile(np.abs(sigma_xx_true[mask]), 99)
     vmax_yy = np.nanpercentile(np.abs(sigma_yy_true[mask]), 99)
+
+    def plot_component(ax, data, title, vmax):
+        masked_data = np.copy(data)
+        masked_data[~mask] = np.nan
+        im = ax.imshow(masked_data, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+        ax.set_title(title)
+        return im
 
     # Plot stress components
     # σxx
@@ -75,7 +45,7 @@ def plot_validation_results(t_x_true, t_y_true, t_x_calc, t_y_calc, sigma_xx_tru
 
     plt.tight_layout()
 
-    return fig_traction, fig_stress
+    return fig_stress
 
 
 def calculate_metrics(true, calc, mask):
@@ -109,13 +79,9 @@ def validate_msm_with_fem_data(t_x_true, t_y_true, sigma_xx_true, sigma_yy_true,
     kernel = np.ones((4, 4), np.uint8)
     dilated = binary_dilation(mask_padded, kernel, iterations=1)
     mask_padded = dilated
-    # plt.imshow(mask_padded)
-    # plt.show()
-    # plt.imshow(dilated)
-    # plt.show()
 
     # Initialize MSM calculator
-    msm = MonolayerStressMicroscopy(pixelsize=pixelsize * 1e6, base_refinement=0.5, boundary_refinement=2.0, gradient_refinement=1.5)  # Convert to microns for the class
+    msm = MonolayerStressMicroscopy(pixelsize=pixelsize * 1e6, base_refinement=0.5, boundary_refinement=1.0, gradient_refinement=1.0)
 
     # Generate and plot mesh using the built-in method
     nodes, elements = msm.mesh_generator.generate_mesh(mask_padded)
@@ -126,42 +92,28 @@ def validate_msm_with_fem_data(t_x_true, t_y_true, sigma_xx_true, sigma_yy_true,
     # Calculate stress tensor from true tractions (Forward MSM)
     stress_tensor_calc = msm.calculate_stress_field(t_x_padded, t_y_padded, mask_padded) / pixelsize
 
-    # Create stress tensor array for inverse calculation
-    stress_tensor_true = np.zeros((*mask_padded.shape, 2, 2))
-    stress_tensor_true[:, :, 0, 0] = sigma_xx_padded
-    stress_tensor_true[:, :, 1, 1] = sigma_yy_padded
-
-    # Calculate tractions using inverse MSM
-    t_x_calc, t_y_calc = calculate_traction_from_stress(
-        stress_tensor_true,
-        mask_padded,
-        pixelsize * 1e6  # Convert to microns for the function
-    )
-
     # Remove padding for comparison and visualization
     slice_obj = slice(padding_width, -padding_width)
-    sigma_xx_calc_fwd = stress_tensor_calc[slice_obj, slice_obj, 0, 0]
-    sigma_yy_calc_fwd = stress_tensor_calc[slice_obj, slice_obj, 1, 1]
-    t_x_calc = t_x_calc[slice_obj, slice_obj]
-    t_y_calc = t_y_calc[slice_obj, slice_obj]
+    sigma_xx_calc = stress_tensor_calc[slice_obj, slice_obj, 0, 0]
+    sigma_yy_calc = stress_tensor_calc[slice_obj, slice_obj, 1, 1]
 
     # Create visualizations
-    fig_traction, fig_stress = plot_validation_results(
-        t_x_true, t_y_true, t_x_calc, t_y_calc,
+    fig_stress = plot_validation_results(
+        t_x_true, t_y_true,
         sigma_xx_true, sigma_yy_true,
-        sigma_xx_calc_fwd, sigma_yy_calc_fwd,
+        sigma_xx_calc, sigma_yy_calc,
         mask
     )
 
-    # Print metrics for both forward and inverse calculations
+    # Print metrics for forward calculation
     print("\nValidation Metrics:")
     print("-" * 50)
 
     # Forward MSM metrics (Traction -> Stress)
     print("\nForward MSM (Traction -> Stress):")
     for comp, true, calc in [
-        ('σxx', sigma_xx_true, sigma_xx_calc_fwd),
-        ('σyy', sigma_yy_true, sigma_yy_calc_fwd)
+        ('σxx', sigma_xx_true, sigma_xx_calc),
+        ('σyy', sigma_yy_true, sigma_yy_calc)
     ]:
         rmse, max_error, corr, rel_error = calculate_metrics(true, calc, mask)
         print(f"\n{comp}:")
@@ -170,21 +122,7 @@ def validate_msm_with_fem_data(t_x_true, t_y_true, sigma_xx_true, sigma_yy_true,
         print(f"Correlation: {corr:.4f}")
         print(f"Relative Error: {rel_error:.4f}")
 
-    # Inverse MSM metrics (Stress -> Traction)
-    print("\nInverse MSM (Stress -> Traction):")
-    for comp, true, calc in [
-        ('Tx', t_x_true, t_x_calc),
-        ('Ty', t_y_true, t_y_calc)
-    ]:
-        rmse, max_error, corr, rel_error = calculate_metrics(true, calc, mask)
-        print(f"\n{comp}:")
-        print(f"RMSE: {rmse:.2e} Pa")
-        print(f"Max Error: {max_error:.2e} Pa")
-        print(f"Correlation: {corr:.4f}")
-        print(f"Relative Error: {rel_error:.4f}")
-
-    return (stress_tensor_calc[slice_obj, slice_obj], t_x_calc, t_y_calc,
-            fig_traction, fig_stress, mesh_fig)
+    return stress_tensor_calc[slice_obj, slice_obj], fig_stress, mesh_fig
 
 
 if __name__ == "__main__":
@@ -203,7 +141,6 @@ if __name__ == "__main__":
     # Create mask based on stress data
     mask = sigma_xx_true > 0.00006
 
-
     # Run the validation
     results = validate_msm_with_fem_data(
         t_x_true, t_y_true,
@@ -214,4 +151,3 @@ if __name__ == "__main__":
     )
 
     plt.show()
-

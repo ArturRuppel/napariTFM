@@ -789,7 +789,7 @@ class MonolayerStressMicroscopy:
 
         return stress_tensor
 
-    @timer_decorator
+
     def _prepare_forces(self, tx, ty, mask, pixelsize):
         """Convert traction forces to point forces and correct for net force and torque"""
         # Convert to point force using exact same calculation as original
@@ -809,7 +809,7 @@ class MonolayerStressMicroscopy:
 
         return f_x, f_y
 
-    @timer_decorator
+
     def _correct_torque(self, fx, fy, mask):
         """Correct for net torque using the original implementation approach"""
         com = regionprops(mask.astype(int))[0].centroid
@@ -847,9 +847,9 @@ class MonolayerStressMicroscopy:
 
         return fx_corr, fy_corr
 
-    @timer_decorator
+
     def _grid_setup(self, mask_area, f_x, f_y):
-        """Setup triangular mesh and boundary conditions"""
+        """Setup triangular mesh with linear force interpolation"""
         # Generate triangular mesh
         nodes_xy, elements = self.mesh_generator.generate_mesh(mask_area, f_x, f_y)
 
@@ -881,27 +881,53 @@ class MonolayerStressMicroscopy:
         # Debug: Check elements
         print(f"Element connectivity range: [{np.min(elements_formatted[:, 3:])}, {np.max(elements_formatted[:, 3:])}]")
 
-        # Setup loads and interpolate forces
+        # Setup loads with linear interpolation
         loads = np.zeros((num_nodes, 3))
         loads[:, 0] = np.arange(num_nodes)
 
-        # Create interpolation masks
-        fx_valid = ~np.isnan(f_x)
-        fy_valid = ~np.isnan(f_y)
+        # Create grid points for input forces
+        grid_y, grid_x = np.mgrid[0:f_x.shape[0], 0:f_x.shape[1]]
 
-        # Interpolate forces and track interpolation success
-        force_assigned = 0
-        for i in range(num_nodes):
-            x, y = int(nodes[i, 1]), int(nodes[i, 2])
-            if 0 <= x < f_x.shape[1] and 0 <= y < f_x.shape[0]:
-                if fx_valid[y, x]:
-                    loads[i, 1] = f_x[y, x]
-                if fy_valid[y, x]:
-                    loads[i, 2] = f_y[y, x]
-                if not (np.isnan(loads[i, 1]) or np.isnan(loads[i, 2])):
-                    force_assigned += 1
+        # Create interpolators for x and y forces
+        from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 
-        print(f"Nodes with forces assigned: {force_assigned} out of {num_nodes}")
+        # Get valid force points
+        valid_mask_x = ~np.isnan(f_x)
+        valid_mask_y = ~np.isnan(f_y)
+
+        # Points for x force interpolation
+        points_x = np.column_stack((grid_x[valid_mask_x], grid_y[valid_mask_x]))
+        values_x = f_x[valid_mask_x]
+
+        # Points for y force interpolation
+        points_y = np.column_stack((grid_x[valid_mask_y], grid_y[valid_mask_y]))
+        values_y = f_y[valid_mask_y]
+
+        # Create linear interpolators
+        interp_x = LinearNDInterpolator(points_x, values_x)
+        interp_y = LinearNDInterpolator(points_y, values_y)
+
+        # Create nearest neighbor interpolators for NaN fill
+        nn_interp_x = NearestNDInterpolator(points_x, values_x)
+        nn_interp_y = NearestNDInterpolator(points_y, values_y)
+
+        # Interpolate forces to node positions
+        x_forces = interp_x(nodes[:, 1], nodes[:, 2])
+        y_forces = interp_y(nodes[:, 1], nodes[:, 2])
+
+        # Fill NaN values with nearest neighbor interpolation
+        nan_mask_x = np.isnan(x_forces)
+        nan_mask_y = np.isnan(y_forces)
+
+        if np.any(nan_mask_x):
+            x_forces[nan_mask_x] = nn_interp_x(nodes[nan_mask_x, 1], nodes[nan_mask_x, 2])
+        if np.any(nan_mask_y):
+            y_forces[nan_mask_y] = nn_interp_y(nodes[nan_mask_y, 1], nodes[nan_mask_y, 2])
+
+        # Assign interpolated forces to loads array
+        loads[:, 1] = x_forces
+        loads[:, 2] = y_forces
+
         print(f"Force range x: [{np.min(loads[:, 1])}, {np.max(loads[:, 1])}]")
         print(f"Force range y: [{np.min(loads[:, 2])}, {np.max(loads[:, 2])}]")
 
@@ -936,7 +962,7 @@ class MonolayerStressMicroscopy:
 
         return DME, IBC, neq
 
-    @timer_decorator
+
     def _custom_assembler(self, elements, mats, nodes, neq, assem_op):
         """Custom assembler for triangular elements"""
         rows, cols, stiff_vals, mass_vals = numba_assembler_core(elements, mats, nodes, neq, assem_op)
@@ -946,7 +972,6 @@ class MonolayerStressMicroscopy:
 
         return stiff, mass
 
-    @timer_decorator
     def _fem_simulation(self, nodes, elements, loads, mats, mask):
         """Main FEM simulation with simplified stress calculation and interpolation"""
         # System assembly
@@ -1086,7 +1111,7 @@ class MonolayerStressMicroscopy:
                 y_points[ily] = True
 
         return nodes_xy, x_points, y_points
-
+    @timer_decorator
     def _custom_solver(self, KG, RHSG, mask, nodes, IBC):
         """Hybrid solver with preconditioning applied to system directly"""
         neq = KG.shape[0]
@@ -1136,7 +1161,7 @@ class MonolayerStressMicroscopy:
         x_scaled = lsqr(KG_constrained, RHSG_constrained,
                         atol=1e-12,
                         btol=1e-12,
-                        iter_lim=200000,
+                        iter_lim=500000,
                         show=False)[0]
 
         # Unscale solution
