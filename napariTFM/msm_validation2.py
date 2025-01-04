@@ -115,7 +115,7 @@ def validate_msm_with_fem_data(t_x_true, t_y_true, sigma_xx_true, sigma_yy_true,
     # plt.show()
 
     # Initialize MSM calculator
-    msm = MonolayerStressMicroscopy(pixelsize=pixelsize * 1e6)  # Convert to microns for the class
+    msm = MonolayerStressMicroscopy(pixelsize=pixelsize * 1e6, base_refinement=0.75, boundary_refinement=2.0, gradient_refinement=1.5)  # Convert to microns for the class
 
     # Generate and plot mesh using the built-in method
     nodes, elements = msm.mesh_generator.generate_mesh(mask_padded)

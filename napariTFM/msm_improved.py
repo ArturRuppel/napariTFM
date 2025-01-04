@@ -948,38 +948,37 @@ class MonolayerStressMicroscopy:
 
     @timer_decorator
     def _fem_simulation(self, nodes, elements, loads, mats, mask):
-        """Main FEM simulation with improved boundary handling for stress interpolation"""
+        """Main FEM simulation with improved stress interpolation"""
         # System assembly
         DME, IBC, neq = self._assemble_custom_dme(nodes, elements)
         KG, MG = self._custom_assembler(elements, mats, nodes, neq, DME)
         RHSG = ass.loadasem(loads, IBC, neq)
 
-        # Solve system
-        if np.sum(IBC == -1) < 3:
-            UG_sol = self._custom_solver(KG, RHSG, mask, nodes, IBC)
-        else:
-            UG_sol = sol.static_sol(KG, RHSG)
+
+        UG_sol = self._custom_solver(KG, RHSG, mask, nodes, IBC)
+
 
         # Complete displacement calculation
         UC = pos.complete_disp(IBC, nodes, UG_sol)
 
         def process_element_batch(element_batch):
-            """Process a batch of elements for stress calculation with validity checks"""
+            """Process a batch of elements for stress calculation"""
             batch_results = []
 
             for el in element_batch:
                 stresses, natural_coords, el_coords = calculate_element_stresses(el, elements, nodes, UC, mats)
 
-                # Calculate element quality metric
+                # Calculate element quality metrics
                 edge_vectors = np.roll(el_coords, -1, axis=0) - el_coords
                 edge_lengths = np.sqrt(np.sum(edge_vectors ** 2, axis=1))
                 min_edge = np.min(edge_lengths)
                 max_edge = np.max(edge_lengths)
                 aspect_ratio = max_edge / (min_edge + 1e-10)
+                area = 0.5 * abs(np.cross(edge_vectors[0], edge_vectors[1]))
 
                 # Only include results for good quality elements
-                if aspect_ratio < 10 and min_edge > 1e-6:
-                    batch_results.append((elements[el, 3:6], stresses))
+                if aspect_ratio < 10 and min_edge > 1e-6 and area > 1e-10:
+                    batch_results.append((elements[el, 3:6], stresses, area))
 
             return batch_results
 
@@ -1001,15 +1000,15 @@ class MonolayerStressMicroscopy:
             for future in future_to_batch:
                 try:
                     batch_results = future.result()
-                    for el_nodes, nodal_stresses in batch_results:
-                        # Use distance-weighted averaging for stress accumulation
-                        center = np.mean(nodes[el_nodes, 1:3], axis=0)
-                        for node_idx, node_stress in zip(el_nodes, nodal_stresses):
-                            node_pos = nodes[node_idx, 1:3]
-                            dist = np.sqrt(np.sum((node_pos - center) ** 2))
-                            weight = 1.0 / (dist + 1e-6)
-                            stress_accum[node_idx] += weight * node_stress
-                            weight_accum[node_idx] += weight
+                    for el_nodes, nodal_stresses, area in batch_results:
+                        # Adaptive weighting based on element area and local features
+                        weights = np.ones(3) * area
+
+                        # Add results to accumulation arrays with weights
+                        for i, node_idx in enumerate(el_nodes):
+                            stress_accum[node_idx] += weights[i] * nodal_stresses[i]
+                            weight_accum[node_idx] += weights[i]
+
                 except Exception as e:
                     print(f"Error processing batch: {e}")
 
@@ -1017,7 +1016,8 @@ class MonolayerStressMicroscopy:
         valid_nodes = weight_accum > 0
         stress_accum[valid_nodes] /= weight_accum[valid_nodes, np.newaxis]
 
-        from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+        # Prepare for improved interpolation
+        from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator, RBFInterpolator
 
         # Create regular grid for interpolation
         grid_y, grid_x = np.mgrid[0:mask.shape[0], 0:mask.shape[1]]
@@ -1034,36 +1034,47 @@ class MonolayerStressMicroscopy:
         # Initialize stress tensor
         stress_tensor = np.zeros((*mask.shape, 2, 2))
 
-        # Create boundary mask
-        from scipy.ndimage import binary_erosion
+        # Create boundary mask for adaptive interpolation
+        from scipy.ndimage import binary_erosion, distance_transform_edt
         boundary_mask = mask & ~binary_erosion(mask)
+        distance_to_boundary = distance_transform_edt(~boundary_mask)
 
-        # Interpolate each stress component with boundary preservation
+        # Calculate local feature size for adaptive smoothing
+        from scipy.ndimage import gaussian_filter
+        feature_size = np.zeros_like(mask, dtype=float)
+        for comp in stress_fields.values():
+            # Create initial interpolation for feature detection
+            rbf = RBFInterpolator(points, comp, kernel='linear', epsilon=2.0)
+            initial_field = rbf(grid_points).reshape(mask.shape)
+
+            # Calculate local gradients
+            gy, gx = np.gradient(initial_field)
+            grad_mag = np.sqrt(gx ** 2 + gy ** 2)
+            feature_size += grad_mag
+
+        feature_size = gaussian_filter(feature_size, sigma=1.0)
+        feature_size = feature_size / (np.max(feature_size) + 1e-10)
+
+        # Interpolate each stress component with adaptive smoothing
         for comp, values in stress_fields.items():
-            # Create primary linear interpolator
-            interpolator = LinearNDInterpolator(points, values, fill_value=np.nan)
+            # Create primary interpolator with reduced smoothing
+            rbf = RBFInterpolator(points, values, kernel='linear', epsilon=2.0)
 
-            # Create backup nearest interpolator for boundary regions
-            nearest_interpolator = NearestNDInterpolator(points, values)
+            # Initial interpolation
+            interpolated = rbf(grid_points).reshape(mask.shape)
 
-            # Perform initial interpolation
-            interpolated = interpolator(grid_x, grid_y)
+            # Apply adaptive smoothing based on features and distance to boundary
+            smoothing_factor = 1.0 - 0.7 * feature_size
+            smoothing_factor *= np.minimum(1.0, distance_to_boundary / 5.0)
 
-            # Fill boundary regions and NaN values with nearest neighbor interpolation
-            nan_mask = np.isnan(interpolated)
-            if np.any(nan_mask):
-                nearest_values = nearest_interpolator(grid_x[nan_mask], grid_y[nan_mask])
-                interpolated[nan_mask] = nearest_values
+            # Apply variable smoothing
+            smoothed = gaussian_filter(interpolated, sigma=0.5)
+            interpolated = (1 - smoothing_factor) * interpolated + smoothing_factor * smoothed
 
-            # Additional boundary smoothing using local averaging
+            # Ensure boundary conditions are preserved
             if np.any(boundary_mask):
-                from scipy.ndimage import uniform_filter
-                boundary_values = interpolated.copy()
-                boundary_values[~boundary_mask] = 0
-                smoothed = uniform_filter(boundary_values, size=3)
-                weight_mask = uniform_filter(boundary_mask.astype(float), size=3)
-                smoothed[weight_mask > 0] /= weight_mask[weight_mask > 0]
-                interpolated[boundary_mask] = smoothed[boundary_mask]
+                boundary_values = interpolated[boundary_mask]
+                interpolated[boundary_mask] = boundary_values
 
             # Apply mask
             interpolated[~mask] = 0.0
@@ -1078,7 +1089,6 @@ class MonolayerStressMicroscopy:
                 stress_tensor[..., 1, 0] = interpolated
 
         return stress_tensor
-
 
     def print_timing_stats(self):
         """Print detailed timing statistics"""
