@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from msm_improved import MonolayerStressMicroscopy
+from msm import MonolayerStressMicroscopy
 
 
 def plot_validation_results(t_x_true, t_y_true, sigma_xx_true, sigma_yy_true,

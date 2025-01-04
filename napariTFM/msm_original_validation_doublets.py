@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from msm import MonolayerStressMicroscopy
+from msm_original import MonolayerStressMicroscopy
 from inverse_msm import calculate_traction_from_stress
 
 

@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from msm import MonolayerStressMicroscopy
+from msm_original import MonolayerStressMicroscopy
 
 
 def create_square_plate_problem(size=50, edge_traction=1.0, buffer=5):
