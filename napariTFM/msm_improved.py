@@ -948,145 +948,88 @@ class MonolayerStressMicroscopy:
 
     @timer_decorator
     def _fem_simulation(self, nodes, elements, loads, mats, mask):
-        """Main FEM simulation with improved stress interpolation"""
+        """Main FEM simulation with simplified stress calculation and interpolation"""
         # System assembly
         DME, IBC, neq = self._assemble_custom_dme(nodes, elements)
         KG, MG = self._custom_assembler(elements, mats, nodes, neq, DME)
         RHSG = ass.loadasem(loads, IBC, neq)
 
-
+        # Solve system
         UG_sol = self._custom_solver(KG, RHSG, mask, nodes, IBC)
-
 
         # Complete displacement calculation
         UC = pos.complete_disp(IBC, nodes, UG_sol)
 
-        def process_element_batch(element_batch):
-            """Process a batch of elements for stress calculation"""
-            batch_results = []
-
-            for el in element_batch:
-                stresses, natural_coords, el_coords = calculate_element_stresses(el, elements, nodes, UC, mats)
-
-                # Calculate element quality metrics
-                edge_vectors = np.roll(el_coords, -1, axis=0) - el_coords
-                edge_lengths = np.sqrt(np.sum(edge_vectors ** 2, axis=1))
-                min_edge = np.min(edge_lengths)
-                max_edge = np.max(edge_lengths)
-                aspect_ratio = max_edge / (min_edge + 1e-10)
-                area = 0.5 * abs(np.cross(edge_vectors[0], edge_vectors[1]))
-
-                # Only include results for good quality elements
-                if aspect_ratio < 10 and min_edge > 1e-6 and area > 1e-10:
-                    batch_results.append((elements[el, 3:6], stresses, area))
-
-            return batch_results
-
-        # Process elements in parallel with batching
-        n_cores = os.cpu_count()
-        batch_size = max(1, len(elements) // (4 * n_cores))
-        element_batches = np.array_split(np.arange(len(elements)), batch_size)
-
-        # Initialize arrays for accumulating nodal stresses
+        # Calculate nodal stresses
         num_nodes = len(nodes)
-        stress_accum = np.zeros((num_nodes, 3))
-        weight_accum = np.zeros(num_nodes)
+        nodal_stresses = np.zeros((num_nodes, 3))  # [σxx, σyy, σxy] for each node
+        node_weights = np.zeros(num_nodes)
 
-        # Process batches in parallel
-        with ThreadPoolExecutor(max_workers=n_cores) as executor:
-            future_to_batch = {executor.submit(process_element_batch, batch): batch
-                               for batch in element_batches}
+        # Calculate stresses at nodes by averaging from connected elements
+        for el in range(len(elements)):
+            el_nodes = elements[el, 3:6]  # indices of nodes for this element
+            stresses, _, _ = calculate_element_stresses(el, elements, nodes, UC, mats)
 
-            for future in future_to_batch:
-                try:
-                    batch_results = future.result()
-                    for el_nodes, nodal_stresses, area in batch_results:
-                        # Adaptive weighting based on element area and local features
-                        weights = np.ones(3) * area
+            # Simple averaging - each element contributes equally to its nodes
+            for i, node_idx in enumerate(el_nodes):
+                nodal_stresses[node_idx] += stresses[i]
+                node_weights[node_idx] += 1
 
-                        # Add results to accumulation arrays with weights
-                        for i, node_idx in enumerate(el_nodes):
-                            stress_accum[node_idx] += weights[i] * nodal_stresses[i]
-                            weight_accum[node_idx] += weights[i]
+        # Average the stresses at nodes
+        valid_nodes = node_weights > 0
+        nodal_stresses[valid_nodes] /= node_weights[valid_nodes, np.newaxis]
 
-                except Exception as e:
-                    print(f"Error processing batch: {e}")
+        # Interpolate stresses back to regular grid
+        return self._interpolate_stress_field(nodes, nodal_stresses, mask)
 
-        # Average the accumulated stresses
-        valid_nodes = weight_accum > 0
-        stress_accum[valid_nodes] /= weight_accum[valid_nodes, np.newaxis]
+    def _interpolate_stress_field(self, nodes, nodal_stresses, mask):
+        """
+        Simple linear interpolation of nodal stresses to regular grid.
 
-        # Prepare for improved interpolation
-        from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator, RBFInterpolator
+        Args:
+            nodes: Array of node coordinates and data
+            nodal_stresses: Array of stress components at nodes [σxx, σyy, σxy]
+            mask: Boolean mask indicating the region of interest
 
-        # Create regular grid for interpolation
+        Returns:
+            stress_tensor: Array of shape (*mask.shape, 2, 2) containing interpolated stress tensor
+        """
+        from scipy.interpolate import LinearNDInterpolator
+
+        # Setup interpolation points
+        points = nodes[:, 1:3]  # node coordinates
         grid_y, grid_x = np.mgrid[0:mask.shape[0], 0:mask.shape[1]]
         grid_points = np.column_stack((grid_x.ravel(), grid_y.ravel()))
-
-        # Prepare points and values for interpolation
-        points = nodes[:, 1:3]  # node coordinates
-        stress_fields = {
-            'xx': stress_accum[:, 0],
-            'yy': stress_accum[:, 1],
-            'xy': stress_accum[:, 2]
-        }
 
         # Initialize stress tensor
         stress_tensor = np.zeros((*mask.shape, 2, 2))
 
-        # Create boundary mask for adaptive interpolation
-        from scipy.ndimage import binary_erosion, distance_transform_edt
-        boundary_mask = mask & ~binary_erosion(mask)
-        distance_to_boundary = distance_transform_edt(~boundary_mask)
+        # Interpolate each stress component
+        for i, comp in enumerate(['xx', 'yy', 'xy']):
+            # Create interpolator for this stress component
+            interpolator = LinearNDInterpolator(points, nodal_stresses[:, i])
 
-        # Calculate local feature size for adaptive smoothing
-        from scipy.ndimage import gaussian_filter
-        feature_size = np.zeros_like(mask, dtype=float)
-        for comp in stress_fields.values():
-            # Create initial interpolation for feature detection
-            rbf = RBFInterpolator(points, comp, kernel='linear', epsilon=2.0)
-            initial_field = rbf(grid_points).reshape(mask.shape)
+            # Perform interpolation
+            stress_field = interpolator(grid_points).reshape(mask.shape)
 
-            # Calculate local gradients
-            gy, gx = np.gradient(initial_field)
-            grad_mag = np.sqrt(gx ** 2 + gy ** 2)
-            feature_size += grad_mag
-
-        feature_size = gaussian_filter(feature_size, sigma=1.0)
-        feature_size = feature_size / (np.max(feature_size) + 1e-10)
-
-        # Interpolate each stress component with adaptive smoothing
-        for comp, values in stress_fields.items():
-            # Create primary interpolator with reduced smoothing
-            rbf = RBFInterpolator(points, values, kernel='linear', epsilon=2.0)
-
-            # Initial interpolation
-            interpolated = rbf(grid_points).reshape(mask.shape)
-
-            # Apply adaptive smoothing based on features and distance to boundary
-            smoothing_factor = 1.0 - 0.7 * feature_size
-            smoothing_factor *= np.minimum(1.0, distance_to_boundary / 5.0)
-
-            # Apply variable smoothing
-            smoothed = gaussian_filter(interpolated, sigma=0.5)
-            interpolated = (1 - smoothing_factor) * interpolated + smoothing_factor * smoothed
-
-            # Ensure boundary conditions are preserved
-            if np.any(boundary_mask):
-                boundary_values = interpolated[boundary_mask]
-                interpolated[boundary_mask] = boundary_values
+            # Fill any NaN values with nearest neighbor
+            if np.any(np.isnan(stress_field)):
+                from scipy.interpolate import NearestNDInterpolator
+                nn_interpolator = NearestNDInterpolator(points, nodal_stresses[:, i])
+                nan_mask = np.isnan(stress_field)
+                stress_field[nan_mask] = nn_interpolator(grid_points).reshape(mask.shape)[nan_mask]
 
             # Apply mask
-            interpolated[~mask] = 0.0
+            stress_field[~mask] = 0.0
 
             # Assign to appropriate stress tensor component
             if comp == 'xx':
-                stress_tensor[..., 0, 0] = interpolated
+                stress_tensor[..., 0, 0] = stress_field
             elif comp == 'yy':
-                stress_tensor[..., 1, 1] = interpolated
+                stress_tensor[..., 1, 1] = stress_field
             else:  # xy component
-                stress_tensor[..., 0, 1] = interpolated
-                stress_tensor[..., 1, 0] = interpolated
+                stress_tensor[..., 0, 1] = stress_field
+                stress_tensor[..., 1, 0] = stress_field  # Symmetric tensor
 
         return stress_tensor
 
