@@ -1,9 +1,6 @@
+import matplotlib.pyplot as plt
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
-import os
-import matplotlib.pyplot as plt
-from msm_optimized import MonolayerStressMicroscopy
-import tifffile
 
 
 def calculate_traction_from_stress(stress_tensor, mask, pixelsize):
@@ -138,35 +135,3 @@ def calculate_error_metrics(t_x_orig, t_y_orig, t_x_calc, t_y_calc, mask):
         'Mean Angular Error': mean_angle_error
     }
 
-
-if __name__ == "__main__":
-    # Load data
-    data_path = r"C:\Users\aruppel\Desktop\test"
-
-    # Load traction force data
-    t_x = np.load(os.path.join(data_path, "t_x.npy"))[0, :, :]
-    t_y = np.load(os.path.join(data_path, "t_y.npy"))[0, :, :]
-
-    # Load mask
-    mask = tifffile.imread(os.path.join(data_path, "masks.tif")).astype(bool)[0, :, :]
-
-    # Parameters
-    pixelsize = 0.8  # microns per pixel
-
-    # Initialize MSM calculator and compute stress field
-    msm = MonolayerStressMicroscopy(pixelsize=pixelsize)
-    stress_tensor = msm.calculate_stress_field(t_x, t_y, mask)  # in N/pixel
-    stress_tensor = stress_tensor / (pixelsize * 1e-6)  # Convert to Pa
-
-    # Calculate traction forces from stress tensor
-    t_x_calc, t_y_calc = calculate_traction_from_stress(stress_tensor, mask, pixelsize)
-
-    # Plot comparison
-    plot_traction_comparison(t_x, t_y, t_x_calc, t_y_calc, mask)
-
-    # Calculate and print error metrics
-    metrics = calculate_error_metrics(t_x, t_y, t_x_calc, t_y_calc, mask)
-    print("\nValidation Metrics:")
-    print("-" * 50)
-    for metric, value in metrics.items():
-        print(f"{metric}: {value:.4f}")

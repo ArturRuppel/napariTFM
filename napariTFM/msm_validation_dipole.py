@@ -1,7 +1,7 @@
 import numpy as np
-from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
 from inverse_msm import calculate_traction_from_stress
+from napariTFM._archive.msm_optimized import MonolayerStressMicroscopy
 
 
 def create_force_dipole_field(shape=(200, 200), center=None, orientation=np.pi / 4, strength=1.0, separation=20, pixelsize=0.8e-6):
@@ -79,14 +79,6 @@ def create_force_dipole_field(shape=(200, 200), center=None, orientation=np.pi /
     return stress_tensor, t_x, t_y
 
 
-import numpy as np
-from scipy.ndimage import gaussian_filter
-import matplotlib.pyplot as plt
-from inverse_msm import calculate_traction_from_stress
-from msm_optimized import MonolayerStressMicroscopy
-
-
-# [Previous create_force_dipole_field function remains the same]
 
 def plot_validation_results(t_x_true, t_y_true, t_x_calc, t_y_calc, stress_true, stress_calc, mask):
     """Plot comparison between true and calculated fields for both traction and stress"""
