@@ -98,7 +98,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Mask parameters
         mask_params = [
-            ("dilation", "Mask Dilation (px):", 0, 20, 1, 0),
+            ("dilation", "Mask Dilation (px):", 0, 50, 1, 0),
         ]
 
         # Visualization parameters
@@ -238,14 +238,101 @@ class MSMWidget(BaseAnalysisWidget):
             spin.valueChanged.connect(self._update_parameters)
 
     def _create_mask_from_cells(self):
-        """Create a mask from the cell stack using thresholding or other methods."""
-        # TODO: Implement mask creation from cell stack
-        # - Get cell stack from data manager
-        # - Apply appropriate thresholding/segmentation
-        # - Create binary mask
-        # - Update current_mask and mask visualization
-        pass
+        """Create masks from the cell stack by thresholding and morphological operations."""
+        try:
+            # Get active layer
+            active_layer = self._get_active_image_layer()
+            if active_layer is None:
+                raise ValueError("No active image layer selected")
 
+            # Get image data
+            cell_stack = active_layer.data
+
+            # Ensure 3D stack
+            if cell_stack.ndim == 2:
+                cell_stack = cell_stack[np.newaxis, ...]
+
+            # Get number of frames
+            num_frames = cell_stack.shape[0]
+            mask_stack = np.zeros_like(cell_stack, dtype=bool)
+
+            # Update status
+            self.status_label.setText("Creating masks...")
+
+            # Process each frame
+            for frame in range(num_frames):
+                # Get cell image for current frame
+                cell_image = cell_stack[frame]
+
+                # Create initial binary mask (threshold > 0)
+                mask = cell_image > 0
+
+                # Fill holes in the mask
+                from scipy import ndimage
+                filled_mask = ndimage.binary_fill_holes(mask)
+
+                # Label connected components
+                labels, num_features = ndimage.label(filled_mask)
+
+                if num_features > 0:
+                    # Find sizes of all features
+                    sizes = ndimage.sum(filled_mask, labels, range(1, num_features + 1))
+
+                    # Keep only the largest component
+                    largest_feature = np.argmax(sizes) + 1
+                    filled_mask = labels == largest_feature
+
+                # Smooth edges
+                # Convert to float for Gaussian filter
+                float_mask = filled_mask.astype(float)
+                smoothed = ndimage.gaussian_filter(float_mask, sigma=1.0)
+                # Re-threshold to get binary mask (threshold at 0.5)
+                smoothed_mask = smoothed > 0.5
+
+                # Apply dilation if specified
+                dilation_pixels = self.parameter_spins['dilation'].value()
+                if dilation_pixels > 0:
+                    struct = ndimage.generate_binary_structure(2, 2)  # 8-connectivity
+                    dilated_mask = ndimage.binary_dilation(
+                        smoothed_mask,
+                        structure=struct,
+                        iterations=dilation_pixels
+                    )
+                else:
+                    dilated_mask = smoothed_mask
+
+                # Add to mask stack
+                mask_stack[frame] = dilated_mask
+
+                # Update progress
+                self.progress_bar.setValue(int((frame + 1) / num_frames * 100))
+
+            # Store the mask stack
+            self.current_mask = mask_stack
+
+            # Update visualization
+            if 'Cell Mask' in self.viewer.layers:
+                self.viewer.layers.remove('Cell Mask')
+
+            # Add as labels layer
+            self.viewer.add_labels(
+                mask_stack.astype(np.uint8),
+                name='Cell Mask',
+                visible=True,
+                opacity=0.5,
+            )
+
+            # Update mask status
+            self.mask_status.setText(f"Created from cells ({num_frames} frames)")
+            self.status_label.setText(f"Successfully created masks for {num_frames} frames\n")
+            self.progress_bar.setValue(100)
+
+            # Update UI state
+            self._update_ui_state()
+
+        except Exception as e:
+            self._handle_error(f"Failed to create mask from cells:\n{str(e)}")
+            self.progress_bar.setValue(0)
     def preview_current_frame(self):
         """Preview stress calculation for the current frame."""
         # TODO: Implement preview for current frame
