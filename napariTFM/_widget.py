@@ -10,6 +10,7 @@ from .fttc_widget import FTTCWidget
 from .preprocessing_widget import PreprocessingWidget
 from .data_manager import DataManager
 from .visualization_manager import VisualizationManager
+from .msm_widget import MSMWidget
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +66,18 @@ class napariTFMWidget(QWidget):
             self.visualization_manager
         )
 
+        # Initialize MSM widget
+        self.msm_widget = MSMWidget(
+            self.viewer,
+            self.data_manager,
+            self.visualization_manager
+        )
+
         # Add widgets to tabs
         tabs.addTab(self.preprocessing_widget, "Preprocessing")
         tabs.addTab(self.displacement_widget, "Displacement")
         tabs.addTab(self.force_widget, "Force Analysis")
+        tabs.addTab(self.msm_widget, "Stress Analysis")
 
         # Add tabs to container
         container_layout.addWidget(tabs)
@@ -94,6 +103,9 @@ class napariTFMWidget(QWidget):
 
         # Connect force calculation signals
         self.force_widget.force_calculated.connect(self._on_force_completed)
+
+        # Connect MSM signals
+        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
 
     def _on_preprocessing_completed(self, results):
         """Handle completion of preprocessing"""
@@ -128,8 +140,15 @@ class napariTFMWidget(QWidget):
         logger.info("Displacement analysis completed successfully")
         self.data_manager.displacement_results = results
         self.force_widget._update_ui_state()
+        self.msm_widget._update_ui_state()
 
     def _on_force_completed(self, results):
         """Handle completion of force calculation"""
         logger.info("Force calculation completed successfully")
         self.data_manager.force_results = results
+        self.msm_widget._update_ui_state()
+
+    def _on_stress_completed(self, results):
+        """Handle completion of stress calculation"""
+        logger.info("Stress calculation completed successfully")
+        self.data_manager.stress_results = results
