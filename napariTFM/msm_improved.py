@@ -26,7 +26,6 @@ optimized LSQR implementation with careful constraint handling for solving the
 resulting system of equations.
 """
 
-
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -44,95 +43,6 @@ from scipy.sparse.linalg import lsqr
 from skimage.measure import regionprops
 
 from napariTFM.mesh_generator import AdaptiveTriangleMeshGenerator
-
-
-@jit(nopython=True)
-def shape_quad4_numba(r, s):
-    """Shape functions and derivatives for quad4 element"""
-    N = np.array([
-        (1 - r) * (1 - s) / 4,
-        (1 + r) * (1 - s) / 4,
-        (1 + r) * (1 + s) / 4,
-        (1 - r) * (1 + s) / 4
-    ])
-
-    dN = np.array([
-        [-(1 - s), (1 - s), (1 + s), -(1 + s)],
-        [-(1 - r), -(1 + r), (1 + r), (1 - r)]
-    ]) * 0.25
-
-    return N, dN
-
-
-@jit(nopython=True)
-def elast_diff_2d_numba(r, s, coord):
-    """Calculate B and H matrices for 2D elasticity"""
-    N, dN = shape_quad4_numba(r, s)
-
-    J = np.zeros((2, 2))
-    J[0, 0] = np.sum(dN[0] * coord[:, 0])
-    J[0, 1] = np.sum(dN[0] * coord[:, 1])
-    J[1, 0] = np.sum(dN[1] * coord[:, 0])
-    J[1, 1] = np.sum(dN[1] * coord[:, 1])
-
-    det = J[0, 0] * J[1, 1] - J[0, 1] * J[1, 0]
-
-    Jinv = np.array([
-        [J[1, 1], -J[0, 1]],
-        [-J[1, 0], J[0, 0]]
-    ]) / det
-
-    B = np.zeros((3, 8))
-    dNx = Jinv[0, 0] * dN[0] + Jinv[0, 1] * dN[1]
-    dNy = Jinv[1, 0] * dN[0] + Jinv[1, 1] * dN[1]
-
-    for i in range(4):
-        B[0, 2 * i] = dNx[i]
-        B[1, 2 * i + 1] = dNy[i]
-        B[2, 2 * i] = dNy[i]
-        B[2, 2 * i + 1] = dNx[i]
-
-    H = np.zeros((2, 8))
-    for i in range(4):
-        H[0, 2 * i] = N[i]
-        H[1, 2 * i + 1] = N[i]
-
-    return H, B, det
-
-
-@jit(nopython=True)
-def elast_quad4_numba(coord, params):
-    """Elastic quadrilateral element calculation"""
-    E = params[0]
-    nu = params[1]
-    dens = 1.0 if len(params) <= 2 else params[2]
-
-    fact = E / (1 - nu * nu)
-    C = np.array([
-        [1, nu, 0],
-        [nu, 1, 0],
-        [0, 0, (1 - nu) / 2]
-    ]) * fact
-
-    K = np.zeros((8, 8))
-    M = np.zeros((8, 8))
-
-    gpts = np.array([
-        [-0.577350269189626, -0.577350269189626],
-        [0.577350269189626, -0.577350269189626],
-        [0.577350269189626, 0.577350269189626],
-        [-0.577350269189626, 0.577350269189626]
-    ])
-    gwts = np.array([1.0, 1.0, 1.0, 1.0])
-
-    for i in range(4):
-        r, s = gpts[i]
-        H, B, det = elast_diff_2d_numba(r, s, coord)
-        factor = det * gwts[i]
-        K += factor * (B.T @ C @ B)
-        M += dens * factor * (H.T @ H)
-
-    return K, M
 
 
 @jit(nopython=True)
@@ -229,249 +139,6 @@ def prepare_constraint_data_numba(nodes_xy, x_points, y_points, com, neq):
 
 
 @jit(nopython=True)
-def csr_matvec(data, indices, indptr, x, out):
-    """Numba-optimized CSR matrix-vector multiplication"""
-    for i in range(len(indptr) - 1):
-        sum_val = 0.0
-        for j in range(indptr[i], indptr[i + 1]):
-            sum_val += data[j] * x[indices[j]]
-        out[i] = sum_val
-
-
-@jit(nopython=True)
-def project_to_nullspace(x, nodes_xy, x_points, y_points, com):
-    """
-    Project vector onto nullspace of constraint matrix with improved stability
-    """
-    # Calculate inertia tensor components
-    I_xx = I_yy = I_xy = 0.0
-    fx = fy = torque = 0.0
-    n_x = n_y = 0
-
-    for i in range(len(x)):
-        if x_points[i]:
-            fx += x[i]
-            y_arm = nodes_xy[i, 1] - com[0]
-            x_arm = nodes_xy[i, 0] - com[1]
-            I_yy += y_arm * y_arm
-            I_xy += x_arm * y_arm
-            torque += y_arm * x[i]
-            n_x += 1
-
-        if y_points[i]:
-            fy += x[i]
-            y_arm = nodes_xy[i, 1] - com[0]
-            x_arm = nodes_xy[i, 0] - com[1]
-            I_xx += x_arm * x_arm
-            I_xy += x_arm * y_arm
-            torque -= x_arm * x[i]
-            n_y += 1
-
-    # Calculate corrections with improved stability
-    fx_corr = fx / max(n_x, 1)
-    fy_corr = fy / max(n_y, 1)
-
-    # Calculate determinant of inertia tensor
-    I_det = I_xx * I_yy - I_xy * I_xy
-    eps = np.finfo(np.float64).eps * max(I_xx, I_yy)
-
-    if I_det > eps:
-        # Full inertia tensor approach
-        I_inv_xx = I_yy / I_det
-        I_inv_yy = I_xx / I_det
-        I_inv_xy = -I_xy / I_det
-        torque_scale = 1.0
-    else:
-        # Fallback for near-singular case
-        I_inv_xx = I_inv_yy = 1.0 / (max(max(I_xx, I_yy), eps))
-        I_inv_xy = 0.0
-        torque_scale = 0.5  # Reduced influence of torque correction
-
-    # Apply corrections with physical consistency
-    result = np.zeros_like(x)
-    for i in range(len(x)):
-        if x_points[i]:
-            y_arm = nodes_xy[i, 1] - com[0]
-            x_arm = nodes_xy[i, 0] - com[1]
-            result[i] = x[i] - fx_corr - torque_scale * (I_inv_xx * y_arm * torque + I_inv_xy * x_arm * torque)
-
-        if y_points[i]:
-            y_arm = nodes_xy[i, 1] - com[0]
-            x_arm = nodes_xy[i, 0] - com[1]
-            result[i] = x[i] - fy_corr - torque_scale * (I_inv_xy * y_arm * torque + I_inv_yy * x_arm * torque)
-
-    return result
-
-
-@jit(nopython=True)
-def block_diagonal_preconditioner(data, indices, indptr):
-    """
-    Create a block diagonal preconditioner with improved scaling and stability
-    """
-    n = len(indptr) - 1
-    M_inv = np.zeros(n)
-
-    # Extract diagonal entries and calculate statistics
-    diag_vals = np.zeros(n)
-    min_diag = np.inf
-    max_diag = -np.inf
-
-    for i in range(n):
-        for j in range(indptr[i], indptr[i + 1]):
-            if indices[j] == i:
-                diag_vals[i] = abs(data[j])
-                if diag_vals[i] > 0:
-                    min_diag = min(min_diag, diag_vals[i])
-                    max_diag = max(max_diag, diag_vals[i])
-                break
-
-    # Calculate scaling parameters
-    if min_diag == np.inf:
-        min_diag = 1.0
-    if max_diag == -np.inf:
-        max_diag = 1.0
-
-    eps = min_diag * 1e-14
-    threshold = max(eps, min_diag * 1e-7)
-
-    # Compute inverse with stability checks
-    for i in range(n):
-        if diag_vals[i] > threshold:
-            # Use actual diagonal value
-            M_inv[i] = 1.0 / diag_vals[i]
-        else:
-            # Use stabilized value for near-zero or zero diagonals
-            M_inv[i] = 1.0 / threshold
-
-        # Additional scaling for better conditioning
-        if M_inv[i] > 1.0 / eps:
-            M_inv[i] = 1.0 / eps
-
-    return M_inv
-
-@jit(nopython=True)
-def pcg_solver_with_constraints(data, indices, indptr, b, x0, nodes_xy, x_points, y_points, com, tol, max_iter):
-    """
-    PCG solver with improved constraint handling and convergence
-    """
-    n = len(b)
-    x = x0.copy()
-
-    # Initialize vectors
-    r = np.zeros_like(b)
-    p = np.zeros_like(b)
-    z = np.zeros_like(b)
-    Ap = np.zeros_like(b)
-
-    # Create preconditioner with improved scaling
-    M_inv = block_diagonal_preconditioner(data, indices, indptr)
-
-    # Initial residual: r = b - Ax
-    csr_matvec(data, indices, indptr, x, r)
-    for i in range(n):
-        r[i] = b[i] - r[i]
-
-    # Project initial residual
-    r = project_to_nullspace(r, nodes_xy, x_points, y_points, com)
-
-    # Apply preconditioner
-    for i in range(n):
-        z[i] = M_inv[i] * r[i]
-
-    # Project preconditioned residual
-    z = project_to_nullspace(z, nodes_xy, x_points, y_points, com)
-    p[:] = z[:]
-
-    # Initial residual norm with improved stability
-    rz = np.dot(r, z)
-    initial_rz = max(abs(rz), np.finfo(np.float64).eps)
-
-    # Convergence threshold with problem scaling
-    scaled_tol = tol * np.sqrt(initial_rz)
-
-    # Main iteration loop
-    for iter_count in range(max_iter):
-        # Matrix-vector product
-        csr_matvec(data, indices, indptr, p, Ap)
-
-        # Project Ap
-        Ap = project_to_nullspace(Ap, nodes_xy, x_points, y_points, com)
-
-        # Compute step size with stability check
-        pAp = np.dot(p, Ap)
-        if abs(pAp) < np.finfo(np.float64).eps * initial_rz:
-            break
-
-        alpha = rz / pAp
-
-        # Update solution and residual
-        for i in range(n):
-            x[i] += alpha * p[i]
-            r[i] -= alpha * Ap[i]
-
-        # Project residual
-        r = project_to_nullspace(r, nodes_xy, x_points, y_points, com)
-
-        # Apply preconditioner
-        for i in range(n):
-            z[i] = M_inv[i] * r[i]
-
-        # Project preconditioned residual
-        z = project_to_nullspace(z, nodes_xy, x_points, y_points, com)
-
-        # Compute new residual norm
-        rz_new = np.dot(r, z)
-
-        # Check convergence with improved criteria
-        rel_error = np.sqrt(abs(rz_new) / initial_rz)
-        if rel_error < scaled_tol and iter_count > 10:  # Ensure minimum iterations
-            return x, iter_count + 1
-
-        # Update search direction
-        beta = rz_new / rz
-        rz = rz_new
-
-        for i in range(n):
-            p[i] = z[i] + beta * p[i]
-
-        # Project search direction
-        p = project_to_nullspace(p, nodes_xy, x_points, y_points, com)
-
-    return x, max_iter
-
-
-@jit(nopython=True)
-def elast_diff_2d_gauss(r, s, coord):
-    """Calculate B and H matrices for 2D elasticity with improved stability"""
-    N, dN = shape_quad4_numba(r, s)
-
-    J = np.zeros((2, 2))
-    J[0, 0] = np.sum(dN[0] * coord[:, 0])
-    J[0, 1] = np.sum(dN[0] * coord[:, 1])
-    J[1, 0] = np.sum(dN[1] * coord[:, 0])
-    J[1, 1] = np.sum(dN[1] * coord[:, 1])
-
-    det = J[0, 0] * J[1, 1] - J[0, 1] * J[1, 0]
-
-    Jinv = np.array([
-        [J[1, 1], -J[0, 1]],
-        [-J[1, 0], J[0, 0]]
-    ]) / det
-
-    B = np.zeros((3, 8))
-    dNx = Jinv[0, 0] * dN[0] + Jinv[0, 1] * dN[1]
-    dNy = Jinv[1, 0] * dN[0] + Jinv[1, 1] * dN[1]
-
-    for i in range(4):
-        B[0, 2 * i] = dNx[i]
-        B[1, 2 * i + 1] = dNy[i]
-        B[2, 2 * i] = dNy[i]
-        B[2, 2 * i + 1] = dNx[i]
-
-    return N, B, det
-
-
-@jit(nopython=True)
 def calculate_element_stresses(el, elements, nodes, UC, mats):
     """Calculate stresses for triangular element"""
     el_nodes = elements[el, 3:6]
@@ -491,7 +158,7 @@ def calculate_element_stresses(el, elements, nodes, UC, mats):
     ]) * fact
 
     # Calculate stresses at centroid
-    r, s = 1/3, 1/3
+    r, s = 1 / 3, 1 / 3
     N, B, det = elast_diff_tri_numba(r, s, el_coords)
 
     # Natural coordinates for triangle (same for all cases)
@@ -519,138 +186,6 @@ def calculate_element_stresses(el, elements, nodes, UC, mats):
 
 
 @jit(nopython=True)
-def extrapolate_to_nodes(gauss_stresses, natural_coords):
-    """Extrapolate Gauss point stresses to nodes using optimal sampling"""
-    # Vandermonde matrix for bilinear shape functions
-    V = np.zeros((4, 4))
-    for i in range(4):
-        r, s = natural_coords[i]
-        V[i, 0] = 1.0
-        V[i, 1] = r
-        V[i, 2] = s
-        V[i, 3] = r * s
-
-    # Node coordinates in natural space
-    node_coords = np.array([
-        [-1.0, -1.0],  # Node 1
-        [1.0, -1.0],  # Node 2
-        [1.0, 1.0],  # Node 3
-        [-1.0, 1.0]  # Node 4
-    ])
-
-    # Solve for coefficients of stress interpolation
-    # Use stable method for 4x4 system
-    nodal_stresses = np.zeros((4, 3))
-
-    for stress_comp in range(3):
-        # Get stresses for this component
-        stress_vals = gauss_stresses[:, stress_comp]
-
-        # Solve Va=b using stable method for 4x4 system
-        a = solve_4x4(V, stress_vals)
-
-        # Evaluate at nodes
-        for node in range(4):
-            r, s = node_coords[node]
-            nodal_stresses[node, stress_comp] = (a[0] + a[1] * r + a[2] * s + a[3] * r * s)
-
-    return nodal_stresses
-
-
-@jit(nopython=True)
-def solve_4x4(A, b):
-    """Solve 4x4 system using stable method"""
-    x = np.zeros(4)
-
-    # Simple Gaussian elimination with partial pivoting
-    for i in range(3):
-        # Find pivot
-        pivot = i
-        for j in range(i + 1, 4):
-            if abs(A[j, i]) > abs(A[pivot, i]):
-                pivot = j
-
-        # Swap rows
-        if pivot != i:
-            A[i, :], A[pivot, :] = A[pivot, :].copy(), A[i, :].copy()
-            b[i], b[pivot] = b[pivot], b[i]
-
-        # Eliminate
-        for j in range(i + 1, 4):
-            factor = A[j, i] / A[i, i]
-            b[j] -= factor * b[i]
-            for k in range(i, 4):
-                A[j, k] -= factor * A[i, k]
-
-    # Back substitution
-    for i in range(3, -1, -1):
-        sum_val = 0.0
-        for j in range(i + 1, 4):
-            sum_val += A[i, j] * x[j]
-        x[i] = (b[i] - sum_val) / A[i, i]
-
-    return x
-
-def timer_decorator(func):
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        # Get parent function if it exists
-        parent_func = getattr(self, '_current_func', None)
-
-        # Set current function
-        self._current_func = func.__name__
-
-        # Initialize timing stats dict if it doesn't exist
-        if not hasattr(self, 'timing_stats'):
-            self.timing_stats = {}
-
-        # Initialize nested calls dict if it doesn't exist
-        if not hasattr(self, '_nested_calls'):
-            self._nested_calls = {}
-
-        # Track nested call depth
-        func_name = func.__name__
-        self._nested_calls[func_name] = self._nested_calls.get(func_name, 0) + 1
-
-        start_time = time.time()
-        result = func(self, *args, **kwargs)
-        end_time = time.time()
-        execution_time = end_time - start_time
-
-        # Only store timing for the outermost call of each function
-        if self._nested_calls[func_name] == 1:
-            self.timing_stats[func_name] = self.timing_stats.get(func_name, 0) + execution_time
-            print(f"{func_name} took {execution_time:.4f} seconds to execute")
-
-        # Decrement nested call count
-        self._nested_calls[func_name] -= 1
-
-        # Restore parent function
-        self._current_func = parent_func
-
-        return result
-
-    return wrapper
-
-
-@jit(nopython=True)
-def shape_triangle_numba(r, s):
-    """Shape functions and derivatives for linear triangle element"""
-    N = np.array([
-        1 - r - s,  # N1
-        r,  # N2
-        s  # N3
-    ])
-
-    dN = np.array([
-        [-1, 1, 0],  # dN/dr
-        [-1, 0, 1]  # dN/ds
-    ])
-
-    return N, dN
-
-
-@jit(nopython=True)
 def shape_tri_numba(r, s):
     """Shape functions and derivatives for linear triangle element"""
     N = np.array([
@@ -665,6 +200,7 @@ def shape_tri_numba(r, s):
     ])
 
     return N, dN
+
 
 @jit(nopython=True)
 def elast_diff_tri_numba(r, s, coord):
@@ -738,6 +274,50 @@ def elast_tri_numba(coord, params):
     M = area * dens * (H.T @ H)
 
     return K, M
+
+
+def timer_decorator(func):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        # Get parent function if it exists
+        parent_func = getattr(self, '_current_func', None)
+
+        # Set current function
+        self._current_func = func.__name__
+
+        # Initialize timing stats dict if it doesn't exist
+        if not hasattr(self, 'timing_stats'):
+            self.timing_stats = {}
+
+        # Initialize nested calls dict if it doesn't exist
+        if not hasattr(self, '_nested_calls'):
+            self._nested_calls = {}
+
+        # Track nested call depth
+        func_name = func.__name__
+        self._nested_calls[func_name] = self._nested_calls.get(func_name, 0) + 1
+
+        start_time = time.time()
+        result = func(self, *args, **kwargs)
+        end_time = time.time()
+        execution_time = end_time - start_time
+
+        # Only store timing for the outermost call of each function
+        if self._nested_calls[func_name] == 1:
+            self.timing_stats[func_name] = self.timing_stats.get(func_name, 0) + execution_time
+            print(f"{func_name} took {execution_time:.4f} seconds to execute")
+
+        # Decrement nested call count
+        self._nested_calls[func_name] -= 1
+
+        # Restore parent function
+        self._current_func = parent_func
+
+        return result
+
+    return wrapper
+
+
 class MonolayerStressMicroscopy:
     def __init__(self, pixelsize, sigma=0.5, youngs_modulus=1, base_refinement=0.5, boundary_refinement=2.0, gradient_refinement=1.5):
         """
@@ -789,7 +369,6 @@ class MonolayerStressMicroscopy:
 
         return stress_tensor
 
-
     def _prepare_forces(self, tx, ty, mask, pixelsize):
         """Convert traction forces to point forces and correct for net force and torque"""
         # Convert to point force using exact same calculation as original
@@ -808,7 +387,6 @@ class MonolayerStressMicroscopy:
         f_x, f_y = self._correct_torque(f_x, f_y, mask)
 
         return f_x, f_y
-
 
     def _correct_torque(self, fx, fy, mask):
         """Correct for net torque using the original implementation approach"""
@@ -846,7 +424,6 @@ class MonolayerStressMicroscopy:
         fy_corr = np.sin(p) * fx + np.cos(p) * fy
 
         return fx_corr, fy_corr
-
 
     def _grid_setup(self, mask_area, f_x, f_y):
         """Setup triangular mesh with linear force interpolation"""
@@ -935,6 +512,7 @@ class MonolayerStressMicroscopy:
         mats = np.array([[self.E, self.sigma]])
 
         return nodes, elements_formatted, loads, mats
+
     def _assemble_custom_dme(self, nodes, elements):
         """Custom DME assembly for triangular elements"""
         nnodes = len(nodes)
@@ -961,7 +539,6 @@ class MonolayerStressMicroscopy:
                 DME[el, 2 * i:2 * i + 2] = IBC[node]
 
         return DME, IBC, neq
-
 
     def _custom_assembler(self, elements, mats, nodes, neq, assem_op):
         """Custom assembler for triangular elements"""
@@ -1111,6 +688,7 @@ class MonolayerStressMicroscopy:
                 y_points[ily] = True
 
         return nodes_xy, x_points, y_points
+
     @timer_decorator
     def _custom_solver(self, KG, RHSG, mask, nodes, IBC):
         """Hybrid solver with preconditioning applied to system directly"""
@@ -1153,7 +731,6 @@ class MonolayerStressMicroscopy:
         # Scale constraints and stack
         constraint_scale = np.median(np.abs(diag[valid_diag]))
 
-
         KG_constrained = vstack([KG_scaled, constraints * constraint_scale], format="csr")
         RHSG_constrained = np.append(RHSG, np.zeros(3))
 
@@ -1169,10 +746,9 @@ class MonolayerStressMicroscopy:
 
         return UG_sol
 
+
 # Example usage
 if __name__ == "__main__":
-
-
     # Start total execution timing
     total_start_time = time.time()
 
@@ -1194,8 +770,9 @@ if __name__ == "__main__":
     msm = MonolayerStressMicroscopy(pixelsize=pixelsize)
 
     # Calculate stress field
-    stress_tensor = msm.calculate_stress_field(t_x, t_y, mask) # in N/pixel
+    stress_tensor = msm.calculate_stress_field(t_x, t_y, mask)  # in N/pixel
     stress_tensor = stress_tensor / (pixelsize * 1e-6)
+
 
     # Calculate principal stresses for both tensors
     def calculate_max_principal_stress(tensor):
@@ -1203,6 +780,7 @@ if __name__ == "__main__":
         sigma_yy = tensor[:, :, 1, 1]
         sigma_xy = tensor[:, :, 0, 1]
         return (sigma_xx + sigma_yy) / 2 + np.sqrt(((sigma_xx - sigma_yy) / 2) ** 2 + sigma_xy ** 2)
+
 
     # Calculate maximum principal stresses
     sigma_max = calculate_max_principal_stress(stress_tensor)
@@ -1224,6 +802,7 @@ if __name__ == "__main__":
     # Create visualization with 3 rows (max principal, sigma_xx, sigma_yy)
     fig, axes = plt.subplots(3, 2, figsize=(15, 18))
 
+
     # Function to plot stress component with consistent formatting
     def plot_stress(ax, data, title):
         vmax = 0.5 * np.nanmax(data)  # Scale to 0.5 * max value for each plot individually
@@ -1234,6 +813,7 @@ if __name__ == "__main__":
         ax.set_xlabel('x (pixels)')
         ax.set_ylabel('y (pixels)')
         return im
+
 
     # Plot maximum principal stress
     plot_stress(axes[0, 0], sigma_max, 'Calculated Maximum Principal Stress')
