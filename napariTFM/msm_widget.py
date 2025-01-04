@@ -351,15 +351,150 @@ class MSMWidget(BaseAnalysisWidget):
         pass
 
     def _load_mask(self):
-        """Load mask from active layer."""
-        # TODO: Implement mask loading from active layer
-        pass
+        """Load and validate mask from file or active layer."""
+        try:
+            # Get active layer
+            active_layer = self._get_active_image_layer()
+            if active_layer is None:
+                raise ValueError("No active image layer selected")
+
+            # Get mask data
+            mask_data = active_layer.data
+
+            # Input validation
+            if not np.issubdtype(mask_data.dtype, np.bool_) and not np.issubdtype(mask_data.dtype, np.integer):
+                raise ValueError("Mask must be boolean or integer type")
+
+            # Convert to boolean if integer
+            if np.issubdtype(mask_data.dtype, np.integer):
+                mask_data = mask_data > 0
+
+            # Ensure 3D
+            if mask_data.ndim == 2:
+                mask_data = mask_data[np.newaxis, ...]
+
+            # Basic validation
+            if not np.any(mask_data):
+                raise ValueError("Mask is empty (all False)")
+
+            # Store mask
+            self.current_mask = mask_data
+
+            # Update mask status
+            num_frames = mask_data.shape[0]
+            self.mask_status.setText(f"Loaded ({num_frames} frames)")
+
+            # Enable relevant buttons
+            self.preview_mesh_btn.setEnabled(True)
+
+            # Update status
+            self._update_status(f"Successfully loaded mask with {num_frames} frames", 100)
+
+        except Exception as e:
+            self._handle_error(f"Failed to load mask: {str(e)}")
+            self.mask_status.setText("Not loaded")
+            self.preview_mesh_btn.setEnabled(False)
+            self.current_mask = None
 
     def preview_mesh(self):
-        """Generate and display preview of the mesh."""
-        # TODO: Implement mesh preview visualization
-        pass
+        """Generate and display preview of the triangular mesh for the current frame."""
+        try:
+            # Check for mask
+            if self.current_mask is None:
+                raise ValueError("No mask loaded. Please load a mask first.")
 
+            # Update parameters
+            self._update_parameters()
+
+            # Get current frame index
+            current_frame = self.viewer.dims.current_step[0]
+
+            # Get current frame's mask
+            current_mask = self.current_mask[current_frame]
+
+            # Get traction forces for the current frame if available
+            tx = ty = None
+            if self.data_manager.force_results is not None:
+                tx = self.data_manager.force_results['tx'][current_frame]
+                ty = self.data_manager.force_results['ty'][current_frame]
+
+            # Update status and progress
+            self._update_status("Generating mesh...", 20)
+
+            # Generate mesh
+            nodes_xy, elements = self.analyzer.mesh_generator.generate_mesh(
+                current_mask,
+                tx,
+                ty
+            )
+
+            self._update_status("Creating visualization...", 50)
+
+            # Remove existing mesh layers
+            for layer_name in ['Mesh Edges', 'Mesh Nodes']:
+                if layer_name in self.viewer.layers:
+                    self.viewer.layers.remove(layer_name)
+
+            # Create edge data for visualization
+            num_elements = len(elements)
+            edge_data = np.zeros((num_elements * 3, 2, 2))  # 3 edges per triangle, 2 points per edge, 2 coordinates per point
+
+            # Swap x and y coordinates to fix rotation
+            nodes_rotated = np.column_stack((nodes_xy[:, 1], nodes_xy[:, 0]))
+
+            for i, element in enumerate(elements):
+                # Get node coordinates for triangle vertices
+                v1 = nodes_rotated[element[0]]
+                v2 = nodes_rotated[element[1]]
+                v3 = nodes_rotated[element[2]]
+
+                # Add three edges (v1-v2, v2-v3, v3-v1)
+                edge_data[i * 3] = np.array([v1, v2])
+                edge_data[i * 3 + 1] = np.array([v2, v3])
+                edge_data[i * 3 + 2] = np.array([v3, v1])
+
+            self._update_status("Adding visualization layers...", 80)
+
+            # Add edges as shapes layer
+            self.viewer.add_shapes(
+                edge_data,
+                shape_type='line',
+                edge_color='yellow',
+                edge_width=0.2,  # Reduced further from 0.5
+                opacity=0.6,
+                name='Mesh Edges'
+            )
+
+            # Add nodes as points layer (also with rotated coordinates)
+            self.viewer.add_points(
+                nodes_rotated,
+                size=1,
+                face_color='red',
+                opacity=0.3,
+                name='Mesh Nodes'
+            )
+
+            # Store original (unrotated) mesh for later use
+            self.mesh = {
+                'nodes': nodes_xy,
+                'elements': elements,
+                'frame': current_frame
+            }
+
+            # Update status
+            num_nodes = len(nodes_xy)
+            num_elements = len(elements)
+            self._update_status(
+                f"Mesh preview generated: {num_nodes} nodes, {num_elements} elements",
+                100
+            )
+
+            # Enable preview frame button if we have force data
+            self.preview_frame_btn.setEnabled(self.data_manager.force_results is not None)
+
+        except Exception as e:
+            self._handle_error(f"Failed to preview mesh: {str(e)}")
+            self.progress_bar.setValue(0)
     def run_analysis(self):
         """Run the MSM analysis."""
         # TODO: Implement full MSM analysis workflow
