@@ -47,7 +47,7 @@ class AdaptiveTriangleMeshGenerator:
             force_y: Y component of force field (optional)
 
         Returns:
-            nodes: Array of node coordinates
+            nodes: Array of node coordinates (x, y)
             elements: Array of element connectivity
         """
         # Calculate local refinement field
@@ -59,8 +59,9 @@ class AdaptiveTriangleMeshGenerator:
         # Generate interior points with adaptive density
         interior_points = self._generate_interior_points(mask, refinement_field)
 
-        # Combine points
+        # Combine points and swap x,y coordinates to match MSM convention
         all_points = np.vstack((boundary_points, interior_points))
+        all_points = all_points[:, [1, 0]]  # Swap x and y coordinates
 
         # Generate initial triangulation
         tri = Delaunay(all_points)
@@ -94,7 +95,7 @@ class AdaptiveTriangleMeshGenerator:
             force_mag[~mask] = 0
 
             # Compute gradient magnitude
-            grad_y, grad_x = np.gradient(force_mag)
+            grad_x, grad_y = np.gradient(force_mag)  # Swap gradient order
             grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2)
 
             # Normalize gradient magnitude
@@ -176,10 +177,10 @@ class AdaptiveTriangleMeshGenerator:
         base_spacing = 1.0 / self.base_refinement
 
         # Generate denser grid and subsample based on refinement field
-        y, x = np.mgrid[0:mask.shape[0]:base_spacing / 2,
-               0:mask.shape[1]:base_spacing / 2]
+        x, y = np.mgrid[0:mask.shape[1]:base_spacing / 2,  # Swap x,y order
+               0:mask.shape[0]:base_spacing / 2]
 
-        points = np.column_stack((y.ravel(), x.ravel()))
+        points = np.column_stack((y.ravel(), x.ravel()))  # Keep y,x order for now
         valid_mask = mask[points[:, 0].astype(int),
         points[:, 1].astype(int)]
         points = points[valid_mask]
@@ -199,8 +200,11 @@ class AdaptiveTriangleMeshGenerator:
                                  points: np.ndarray,
                                  mask: np.ndarray) -> np.ndarray:
         """Filter and improve triangulation"""
+        # Convert points back to y,x for mask checking
+        points_yx = points[:, [1, 0]]
+
         # Filter elements to only those inside mask
-        centroids = np.mean(points[tri.simplices], axis=1)
+        centroids = np.mean(points_yx[tri.simplices], axis=1)
         valid_elements = mask[centroids[:, 0].astype(int),
         centroids[:, 1].astype(int)]
         elements = tri.simplices[valid_elements]
@@ -270,10 +274,10 @@ class AdaptiveTriangleMeshGenerator:
         for i, element in enumerate(elements):
             # Get node coordinates for triangle vertices
             triangle = nodes[element]
-            # Create edge segments
-            edges[i * 3] = triangle[[0, 1]][:, [1, 0]]  # x,y order for plotting
-            edges[i * 3 + 1] = triangle[[1, 2]][:, [1, 0]]
-            edges[i * 3 + 2] = triangle[[2, 0]][:, [1, 0]]
+            # Create edge segments (already in x,y order)
+            edges[i * 3] = triangle[[0, 1]]
+            edges[i * 3 + 1] = triangle[[1, 2]]
+            edges[i * 3 + 2] = triangle[[2, 0]]
 
         # Create line collection for efficient edge plotting
         line_collection = LineCollection(edges, linewidths=0.5, alpha=0.6, color='b')
@@ -281,14 +285,16 @@ class AdaptiveTriangleMeshGenerator:
 
         # Plot nodes efficiently if refinement field is available
         if refinement_field is not None:
-            node_refinements = refinement_field[nodes[:, 0].astype(int),
-            nodes[:, 1].astype(int)]
+            # Convert node coordinates back to y,x for refinement lookup
+            nodes_yx = nodes[:, [1, 0]]
+            node_refinements = refinement_field[nodes_yx[:, 0].astype(int),
+            nodes_yx[:, 1].astype(int)]
             node_sizes = 20 * node_refinements / np.max(refinement_field)
-            # Single scatter call instead of multiple plots
-            ax1.scatter(nodes[:, 1], nodes[:, 0], s=node_sizes, c='r',
+            # Single scatter call with x,y coordinates
+            ax1.scatter(nodes[:, 0], nodes[:, 1], s=node_sizes, c='r',
                         alpha=0.3, rasterized=True)
         else:
-            ax1.scatter(nodes[:, 1], nodes[:, 0], s=10, c='r',
+            ax1.scatter(nodes[:, 0], nodes[:, 1], s=10, c='r',
                         alpha=0.3, rasterized=True)
 
         ax1.set_title('Mesh Structure')
@@ -310,8 +316,8 @@ class AdaptiveTriangleMeshGenerator:
 
             # Efficient quiver plot with reduced density
             step = max(1, int(force_x.shape[0] / 20))
-            y, x = np.mgrid[0:force_x.shape[0]:step, 0:force_x.shape[1]:step]
-            # Single quiver call with downsampled data
+            x, y = np.mgrid[0:force_x.shape[1]:step, 0:force_x.shape[0]:step]  # Swap x,y order
+            # Single quiver call with proper coordinate order
             ax3.quiver(x, y,
                        force_x[::step, ::step],
                        force_y[::step, ::step],
@@ -320,12 +326,13 @@ class AdaptiveTriangleMeshGenerator:
 
         # Set limits and labels
         for ax in axes:
-            ax.set_xlim(-1, mask.shape[1] if mask is not None else nodes[:, 1].max() + 1)
-            ax.set_ylim(-1, mask.shape[0] if mask is not None else nodes[:, 0].max() + 1)
+            ax.set_xlim(-1, mask.shape[1] if mask is not None else nodes[:, 0].max() + 1)
+            ax.set_ylim(-1, mask.shape[0] if mask is not None else nodes[:, 1].max() + 1)
             ax.set_xlabel('x (pixels)')
             ax.set_ylabel('y (pixels)')
 
         plt.tight_layout()
         return fig
+
 
 
