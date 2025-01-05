@@ -318,7 +318,7 @@ def timer_decorator(func):
 
 
 class MonolayerStressMicroscopy:
-    def __init__(self, pixelsize, sigma=0.5, youngs_modulus=1, base_refinement=0.5, boundary_refinement=2.0, gradient_refinement=1.5):
+    def __init__(self, pixelsize, sigma=0.5, youngs_modulus=1, target_nodes=1000, boundary_refinement=2.0, gradient_refinement=1.5):
         """
         Initialize MSM calculator with triangular elements
 
@@ -332,7 +332,7 @@ class MonolayerStressMicroscopy:
         self.sigma = sigma
         self.E = youngs_modulus
         self.mesh_generator = AdaptiveTriangleMeshGenerator(
-            base_refinement=base_refinement,
+            target_nodes=target_nodes,
             boundary_refinement=boundary_refinement,
             gradient_refinement=gradient_refinement
         )

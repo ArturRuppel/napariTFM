@@ -78,58 +78,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         self.setLayout(main_layout)
 
-    def _create_parameters_group(self) -> QGroupBox:
-        """Create the analysis parameters group."""
-        group = QGroupBox("Analysis Parameters")
-        layout = QVBoxLayout()
-
-        # Mesh parameters
-        mesh_params = [
-            ("base_refinement", "Base Refinement:", 0.1, 2.0, 0.1, 0.5),
-            ("boundary_refinement", "Boundary Refinement:", 0.1, 5.0, 0.1, 2.0),
-            ("gradient_refinement", "Gradient Refinement:", 0.1, 5.0, 0.1, 1.5),
-        ]
-
-        # Material parameters
-        material_params = [
-            ("sigma", "Poisson's Ratio:", 0.0, 1.0, 0.01, 0.5),
-            ("pixelsize", "Pixel Size (µm):", 0.1, 10.0, 0.1, 1.0),
-        ]
-
-        # Mask parameters
-        mask_params = [
-            ("dilation", "Mask Dilation (px):", 0, 50, 1, 0),
-        ]
-
-        # Visualization parameters
-        vis_params = [
-            ("max_stress", "Max Stress (mN/m):", 0.1, 1000.0, 0.1, 10.0),
-        ]
-
-        # Add all parameters to layout
-        for param_name, label, min_val, max_val, step, default in (
-                mesh_params + material_params + mask_params + vis_params
-        ):
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-
-            if isinstance(step, int):
-                spin = QSpinBox()
-            else:
-                spin = QDoubleSpinBox()
-                spin.setDecimals(2)
-
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
-
-            self.parameter_spins[param_name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        group.setLayout(layout)
-        return group
-
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame with compact layout."""
         frame = QFrame()
@@ -160,25 +108,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         frame.setLayout(layout)
         return frame
-
-    def _update_parameters(self):
-        """Update analysis parameters."""
-        try:
-            # Update MSM analyzer with current parameters
-            self.analyzer = MonolayerStressMicroscopy(
-                pixelsize=self.parameter_spins['pixelsize'].value(),
-                sigma=self.parameter_spins['sigma'].value(),
-                base_refinement=self.parameter_spins['base_refinement'].value(),
-                boundary_refinement=self.parameter_spins['boundary_refinement'].value(),
-                gradient_refinement=self.parameter_spins['gradient_refinement'].value()
-            )
-
-            # Update colorbar limits based on max_stress parameter
-            max_stress = self.parameter_spins['max_stress'].value()
-            self.colorbar_manager.update_limits(0, max_stress)
-
-        except Exception as e:
-            self._handle_error(str(e))
 
     def cleanup(self):
         """Clean up resources."""
@@ -396,6 +325,77 @@ class MSMWidget(BaseAnalysisWidget):
             self.preview_mesh_btn.setEnabled(False)
             self.current_mask = None
 
+    def _create_parameters_group(self) -> QGroupBox:
+        """Create the analysis parameters group."""
+        group = QGroupBox("Analysis Parameters")
+        layout = QVBoxLayout()
+
+        # Mesh parameters
+        mesh_params = [
+            ("target_nodes", "Target Nodes:", 100, 10000, 100, 1000),
+            ("boundary_refinement", "Boundary Refinement:", 1.0, 5.0, 0.1, 2.0),
+            ("gradient_refinement", "Gradient Refinement:", 1.0, 5.0, 0.1, 1.5),
+        ]
+
+        # Material parameters
+        material_params = [
+            ("sigma", "Poisson's Ratio:", 0.0, 1.0, 0.01, 0.5),
+            ("pixelsize", "Pixel Size (µm):", 0.01, 10.0, 0.01, 1.0),
+        ]
+
+        # Mask parameters
+        mask_params = [
+            ("dilation", "Mask Dilation (px):", 0, 50, 1, 0),
+        ]
+
+        # Visualization parameters
+        vis_params = [
+            ("max_stress", "Max Stress (mN/m):", 0.1, 1000.0, 0.1, 10.0),
+        ]
+
+        # Add all parameters to layout
+        for param_name, label, min_val, max_val, step, default in (
+                mesh_params + material_params + mask_params + vis_params
+        ):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+
+            if isinstance(step, int):
+                spin = QSpinBox()
+            else:
+                spin = QDoubleSpinBox()
+                spin.setDecimals(2)
+
+            spin.setRange(min_val, max_val)
+            spin.setSingleStep(step)
+            spin.setValue(default)
+
+            self.parameter_spins[param_name] = spin
+            row.addWidget(spin)
+            layout.addLayout(row)
+
+        group.setLayout(layout)
+        return group
+
+    def _update_parameters(self):
+        """Update analysis parameters."""
+        try:
+            # Update MSM analyzer with current parameters
+            self.analyzer = MonolayerStressMicroscopy(
+                pixelsize=self.parameter_spins['pixelsize'].value(),
+                sigma=self.parameter_spins['sigma'].value(),
+                target_nodes=self.parameter_spins['target_nodes'].value(),
+                boundary_refinement=self.parameter_spins['boundary_refinement'].value(),
+                gradient_refinement=self.parameter_spins['gradient_refinement'].value()
+            )
+
+            # Update colorbar limits based on max_stress parameter
+            max_stress = self.parameter_spins['max_stress'].value()
+            self.colorbar_manager.update_limits(0, max_stress)
+
+        except Exception as e:
+            self._handle_error(str(e))
+
     def preview_mesh(self):
         """Generate and display preview of the triangular mesh for the current frame."""
         try:
@@ -421,7 +421,7 @@ class MSMWidget(BaseAnalysisWidget):
             # Update status and progress
             self._update_status("Generating mesh...", 20)
 
-            # Generate mesh
+            # Generate mesh with target nodes
             nodes_xy, elements = self.analyzer.mesh_generator.generate_mesh(
                 current_mask,
                 tx,
@@ -437,7 +437,7 @@ class MSMWidget(BaseAnalysisWidget):
 
             # Create edge data for visualization
             num_elements = len(elements)
-            edge_data = np.zeros((num_elements * 3, 2, 2))  # 3 edges per triangle, 2 points per edge, 2 coordinates per point
+            edge_data = np.zeros((num_elements * 3, 2, 2))
 
             # Swap x and y coordinates to fix rotation
             nodes_rotated = np.column_stack((nodes_xy[:, 1], nodes_xy[:, 0]))
@@ -460,17 +460,17 @@ class MSMWidget(BaseAnalysisWidget):
                 edge_data,
                 shape_type='line',
                 edge_color='yellow',
-                edge_width=0.2,  # Reduced further from 0.5
+                edge_width=0.2,
                 opacity=0.6,
                 name='Mesh Edges'
             )
 
-            # Add nodes as points layer (also with rotated coordinates)
+            # Add nodes as points layer
             self.viewer.add_points(
                 nodes_rotated,
-                size=1,
+                size=2,
                 face_color='red',
-                opacity=0.3,
+                opacity=0.7,
                 name='Mesh Nodes'
             )
 
@@ -481,11 +481,11 @@ class MSMWidget(BaseAnalysisWidget):
                 'frame': current_frame
             }
 
-            # Update status
+            # Update status with actual node count
             num_nodes = len(nodes_xy)
             num_elements = len(elements)
             self._update_status(
-                f"Mesh preview generated: {num_nodes} nodes, {num_elements} elements",
+                f"Mesh preview generated: \n{num_nodes} nodes ({num_nodes / self.parameter_spins['target_nodes'].value():.1%} of target), {num_elements} elements",
                 100
             )
 

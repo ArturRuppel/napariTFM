@@ -17,23 +17,43 @@ class MeshQuality:
 
 class AdaptiveTriangleMeshGenerator:
     def __init__(self,
-                 base_refinement: float = 1.0,
+                 target_nodes: int = 1000,
                  boundary_refinement: float = 2.0,
                  gradient_refinement: float = 1.5,
                  quality_threshold: float = 0.3):
         """
-        Initialize adaptive mesh generator with refinement controls
+        Initialize adaptive mesh generator with node count control
 
         Args:
-            base_refinement: Base mesh density (higher = finer mesh)
+            target_nodes: Approximate number of nodes desired in the final mesh
             boundary_refinement: Additional refinement factor at boundaries
             gradient_refinement: Additional refinement in high gradient regions
             quality_threshold: Minimum acceptable element quality (0-1)
         """
-        self.base_refinement = base_refinement
+        self.target_nodes = target_nodes
         self.boundary_refinement = boundary_refinement
         self.gradient_refinement = gradient_refinement
         self.quality_threshold = quality_threshold
+
+    def _estimate_base_refinement(self, mask: np.ndarray) -> float:
+        """
+        Estimate base refinement factor to achieve target node count
+
+        Args:
+            mask: Binary mask defining the domain
+
+        Returns:
+            float: Estimated base refinement factor
+        """
+        # Calculate domain area
+        domain_area = np.sum(mask)
+
+        # Estimate node density needed for target count
+        # Using relationship: nodes ≈ area / spacing^2
+        # where spacing = 1 / refinement
+        base_refinement = np.sqrt(0.2 * self.target_nodes / domain_area)
+
+        return base_refinement
 
     def generate_mesh(self, mask: np.ndarray,
                       force_x: Optional[np.ndarray] = None,
@@ -50,8 +70,11 @@ class AdaptiveTriangleMeshGenerator:
             nodes: Array of node coordinates (x, y)
             elements: Array of element connectivity
         """
+        # Calculate base refinement from target node count
+        base_refinement = self._estimate_base_refinement(mask)
+
         # Calculate local refinement field
-        refinement_field = self._calculate_refinement_field(mask, force_x, force_y)
+        refinement_field = self._calculate_refinement_field(mask, force_x, force_y, base_refinement)
 
         # Extract and refine boundary points
         boundary_points = self._extract_boundary_points(mask, refinement_field)
@@ -74,14 +97,15 @@ class AdaptiveTriangleMeshGenerator:
     def _calculate_refinement_field(self,
                                     mask: np.ndarray,
                                     force_x: Optional[np.ndarray],
-                                    force_y: Optional[np.ndarray]) -> np.ndarray:
-        """Calculate local refinement factor field"""
+                                    force_y: Optional[np.ndarray],
+                                    base_refinement: float) -> np.ndarray:
+        """Calculate local refinement factor field with conservation of total refinement"""
         from scipy.ndimage import distance_transform_edt, gaussian_filter
 
         # Initialize refinement field with base value
-        refinement = np.ones_like(mask, dtype=float) * self.base_refinement
+        refinement = np.ones_like(mask, dtype=float)
 
-        # Add boundary refinement
+        # Calculate boundary influence
         distance = distance_transform_edt(mask)
         max_dist = np.max(distance)
         if max_dist > 0:
@@ -90,23 +114,24 @@ class AdaptiveTriangleMeshGenerator:
 
         # Add gradient-based refinement if force fields are provided
         if force_x is not None and force_y is not None:
-            # Calculate force magnitude gradients
             force_mag = np.sqrt(force_x ** 2 + force_y ** 2)
             force_mag[~mask] = 0
 
-            # Compute gradient magnitude
-            grad_x, grad_y = np.gradient(force_mag)  # Swap gradient order
+            grad_x, grad_y = np.gradient(force_mag)
             grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2)
 
-            # Normalize gradient magnitude
             if np.max(grad_mag) > 0:
                 grad_mag = grad_mag / np.max(grad_mag)
-
-                # Add gradient-based refinement
                 refinement += grad_mag * (self.gradient_refinement - 1)
 
         # Smooth refinement field
         refinement = gaussian_filter(refinement, sigma=2.0)
+
+        # Normalize refinement field to maintain total node count
+        # Scale so the average refinement equals base_refinement
+        valid_mask = mask > 0
+        avg_refinement = np.mean(refinement[valid_mask])
+        refinement = (refinement * base_refinement) / avg_refinement
 
         return refinement
 
@@ -173,12 +198,12 @@ class AdaptiveTriangleMeshGenerator:
                                   mask: np.ndarray,
                                   refinement_field: np.ndarray) -> np.ndarray:
         """Generate interior points with adaptive density"""
-        # Calculate base grid size
-        base_spacing = 1.0 / self.base_refinement
+        # Calculate base spacing from local refinement
+        min_spacing = 1.0 / np.max(refinement_field)
 
         # Generate denser grid and subsample based on refinement field
-        x, y = np.mgrid[0:mask.shape[1]:base_spacing / 2,  # Swap x,y order
-               0:mask.shape[0]:base_spacing / 2]
+        x, y = np.mgrid[0:mask.shape[1]:min_spacing / 2,
+               0:mask.shape[0]:min_spacing / 2]  # Swap x,y order
 
         points = np.column_stack((y.ravel(), x.ravel()))  # Keep y,x order for now
         valid_mask = mask[points[:, 0].astype(int),
@@ -248,11 +273,8 @@ class AdaptiveTriangleMeshGenerator:
                   force_x: Optional[np.ndarray] = None,
                   force_y: Optional[np.ndarray] = None,
                   figsize: Tuple[int, int] = (15, 5)):
-        """
-        Fast visualization of the generated mesh using vectorized operations
-        """
-        from matplotlib.collections import LineCollection, PolyCollection
-        import matplotlib.pyplot as plt
+        """Plot the generated mesh and associated fields"""
+        from matplotlib.collections import LineCollection
 
         fig = plt.figure(figsize=figsize)
 
@@ -265,59 +287,53 @@ class AdaptiveTriangleMeshGenerator:
             ax1 = plt.subplot(111)
             axes = [ax1]
 
-        # Plot base mesh using vectorized operations
+        # Plot base mesh
         if mask is not None:
             ax1.imshow(mask, alpha=0.3, cmap='gray', interpolation='nearest')
 
-        # Create edge segments for all triangles at once
+        # Create edge segments for all triangles
         edges = np.zeros((len(elements) * 3, 2, 2))
         for i, element in enumerate(elements):
-            # Get node coordinates for triangle vertices
             triangle = nodes[element]
-            # Create edge segments (already in x,y order)
             edges[i * 3] = triangle[[0, 1]]
             edges[i * 3 + 1] = triangle[[1, 2]]
             edges[i * 3 + 2] = triangle[[2, 0]]
 
-        # Create line collection for efficient edge plotting
         line_collection = LineCollection(edges, linewidths=0.5, alpha=0.6, color='b')
         ax1.add_collection(line_collection)
 
-        # Plot nodes efficiently if refinement field is available
+        # Plot nodes
         if refinement_field is not None:
-            # Convert node coordinates back to y,x for refinement lookup
             nodes_yx = nodes[:, [1, 0]]
             node_refinements = refinement_field[nodes_yx[:, 0].astype(int),
             nodes_yx[:, 1].astype(int)]
             node_sizes = 20 * node_refinements / np.max(refinement_field)
-            # Single scatter call with x,y coordinates
             ax1.scatter(nodes[:, 0], nodes[:, 1], s=node_sizes, c='r',
                         alpha=0.3, rasterized=True)
         else:
             ax1.scatter(nodes[:, 0], nodes[:, 1], s=10, c='r',
                         alpha=0.3, rasterized=True)
 
-        ax1.set_title('Mesh Structure')
+        ax1.set_title(f'Mesh Structure ({len(nodes)} nodes)')
         ax1.set_aspect('equal')
 
         if len(axes) > 1:
-            # Plot refinement field efficiently
+            # Plot refinement field
             im2 = ax2.imshow(refinement_field, cmap='viridis',
                              interpolation='nearest')
             plt.colorbar(im2, ax=ax2, label='Refinement Factor')
             ax2.set_title('Refinement Field')
 
-            # Plot force magnitude efficiently
+            # Plot force magnitude
             force_mag = np.sqrt(force_x ** 2 + force_y ** 2)
             im3 = ax3.imshow(force_mag, cmap='magma',
                              interpolation='nearest')
             plt.colorbar(im3, ax=ax3, label='Force Magnitude')
             ax3.set_title('Force Field')
 
-            # Efficient quiver plot with reduced density
+            # Add quiver plot
             step = max(1, int(force_x.shape[0] / 20))
-            x, y = np.mgrid[0:force_x.shape[1]:step, 0:force_x.shape[0]:step]  # Swap x,y order
-            # Single quiver call with proper coordinate order
+            x, y = np.mgrid[0:force_x.shape[1]:step, 0:force_x.shape[0]:step]
             ax3.quiver(x, y,
                        force_x[::step, ::step],
                        force_y[::step, ::step],
@@ -333,6 +349,3 @@ class AdaptiveTriangleMeshGenerator:
 
         plt.tight_layout()
         return fig
-
-
-
