@@ -1,3 +1,5 @@
+import os
+
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QSizePolicy,
     QSpinBox, QDoubleSpinBox, QPushButton, QFrame,
@@ -43,9 +45,9 @@ class MSMWidget(BaseAnalysisWidget):
         colorbar_layout.setContentsMargins(6, 6, 6, 6)
 
         colorbar_group = self.create_colorbar_widget(
-            colormap_name='cividis',
+            colormap_name='seismic',
             label="Stress (mN/m)",
-            clim=(0, 1),  # Will be updated based on max_stress parameter
+            clim=(-1, 1),  # Will be updated based on max_stress parameter
             colorbar_manager=self.colorbar_manager
         )
         colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -324,12 +326,94 @@ class MSMWidget(BaseAnalysisWidget):
 
     def analyze_all_frames(self):
         """Run stress analysis for all frames."""
-        # TODO: Implement full analysis for all frames
-        # - Process each frame
-        # - Update progress bar
-        # - Store results
-        # - Update visualization
-        pass
+        try:
+            # Validate prerequisites
+            if self.current_mask is None:
+                raise ValueError("No mask loaded. Please load a mask first.")
+
+            if self.data_manager.force_results is None:
+                raise ValueError("No force data available. Please calculate forces first.")
+
+            # Get force data
+            tx = self.data_manager.force_results['tx']
+            ty = self.data_manager.force_results['ty']
+            num_frames = len(tx)
+
+            # Update parameters and initialize analyzer
+            self._update_parameters()
+
+            # Initialize results storage
+            stress_results = []
+            pixelsize = self.parameter_spins['pixelsize'].value()
+
+            # Process each frame
+            for frame in range(num_frames):
+                self._update_status(
+                    f"Processing frame {frame + 1}/{num_frames}...",
+                    int((frame / num_frames) * 100)
+                )
+
+                # Get current frame's data
+                current_tx = tx[frame]
+                current_ty = ty[frame]
+                current_mask = self.current_mask[frame]
+
+                # Resize mask if needed
+                if current_mask.shape != current_tx.shape:
+                    from skimage.transform import resize
+                    current_mask = resize(
+                        current_mask.astype(float),
+                        current_tx.shape,
+                        order=0
+                    ) > 0.5
+
+                # Calculate stress tensor for current frame
+                stress_tensor = self.analyzer.calculate_stress_field(
+                    current_tx,
+                    current_ty,
+                    current_mask
+                )
+
+                # Convert units from N/pixel² to mN/m
+                stress_tensor = stress_tensor / (pixelsize * 1e-6)
+                stress_results.append(stress_tensor)
+
+            # Convert results to numpy array
+            stress_tensor_stack = np.stack(stress_results, axis=0)
+
+            # Store results in data manager with all parameters
+            self.data_manager.stress_results = {
+                'stress_tensor': stress_tensor_stack,
+                'parameters': {
+                    'pixelsize': pixelsize,
+                    'youngs_modulus': self.analyzer.E,
+                    'poisson_ratio': self.analyzer.sigma,
+                    'target_nodes': self.parameter_spins['target_nodes'].value(),
+                    'boundary_refinement': self.parameter_spins['boundary_refinement'].value(),
+                    'gradient_refinement': self.parameter_spins['gradient_refinement'].value(),
+                    'max_stress': self.parameter_spins['max_stress'].value()  # Added max_stress to parameters
+                }
+            }
+
+            # Emit results
+            self.stress_calculated.emit(self.data_manager.stress_results)
+
+            # Update visualization using the new method
+            self._update_status("Updating visualization...", 90)
+            max_stress = self.parameter_spins['max_stress'].value()
+            self.visualization_manager.visualize_stress_results(
+                self.data_manager.stress_results,
+                max_stress=max_stress
+            )
+
+            self._update_status(
+                f"Stress analysis completed for {num_frames} frames",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(f"Failed to analyze frames: {str(e)}")
+            self.progress_bar.setValue(0)
 
     def _load_mask(self):
         """Load and validate mask from file or active layer."""
@@ -443,7 +527,7 @@ class MSMWidget(BaseAnalysisWidget):
 
             # Update colorbar limits based on max_stress parameter
             max_stress = self.parameter_spins['max_stress'].value()
-            self.colorbar_manager.update_limits(0, max_stress)
+            self.colorbar_manager.update_limits(-max_stress, max_stress)
 
         except Exception as e:
             self._handle_error(str(e))
@@ -562,20 +646,91 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to preview mesh: {str(e)}")
             self.progress_bar.setValue(0)
-    def run_analysis(self):
-        """Run the MSM analysis."""
-        # TODO: Implement full MSM analysis workflow
-        pass
 
     def _save_stress_tensor(self):
-        """Save stress tensor results to file."""
-        # TODO: Implement stress tensor saving
-        pass
+        """Save stress tensor data to file."""
+        if not hasattr(self.data_manager, 'stress_results') or not self.data_manager.stress_results:
+            QMessageBox.warning(self, "Warning", "No stress tensor data to save.")
+            return
+
+        try:
+            # Get directory to save file
+            save_dir = QFileDialog.getExistingDirectory(
+                self,
+                "Select Directory to Save Stress Tensor Data",
+                os.path.expanduser("~")
+            )
+
+            if save_dir:
+                stress_tensor = self.data_manager.stress_results['stress_tensor']
+
+                # Save file
+                np.save(os.path.join(save_dir, 'stress_tensor.npy'), stress_tensor)
+
+                self._update_status(f"Stress tensor data successfully saved to:\n{save_dir}", 100)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to save stress tensor data: {str(e)}"
+            )
 
     def _load_stress_tensor(self):
-        """Load stress tensor results from file."""
-        # TODO: Implement stress tensor loading
-        pass
+        """Load stress tensor data from file."""
+        try:
+            # Get directory containing the file
+            load_dir = QFileDialog.getExistingDirectory(
+                self,
+                "Select Directory Containing Stress Tensor Data",
+                os.path.expanduser("~")
+            )
+
+            if load_dir:
+                # Check if file exists
+                stress_tensor_path = os.path.join(load_dir, 'stress_tensor.npy')
+
+                if not os.path.exists(stress_tensor_path):
+                    raise FileNotFoundError("Could not find stress_tensor.npy in selected directory")
+
+                # Load the stress tensor
+                stress_tensor = np.load(stress_tensor_path)
+
+                # Create results dictionary with current parameters
+                results = {
+                    'stress_tensor': stress_tensor,
+                    'parameters': {
+                        'pixelsize': self.parameter_spins['pixelsize'].value(),
+                        'youngs_modulus': self.analyzer.E,
+                        'poisson_ratio': self.analyzer.sigma,
+                        'target_nodes': self.parameter_spins['target_nodes'].value(),
+                        'boundary_refinement': self.parameter_spins['boundary_refinement'].value(),
+                        'gradient_refinement': self.parameter_spins['gradient_refinement'].value(),
+                        'max_stress': self.parameter_spins['max_stress'].value()
+                    }
+                }
+
+                # Update data manager and visualization
+                self.data_manager.stress_results = results
+                self.visualization_manager.visualize_stress_results(
+                    results,
+                    max_stress=self.parameter_spins['max_stress'].value()
+                )
+
+                # Enable save button
+                self.save_stress_btn.setEnabled(True)
+
+                # Emit the stress_calculated signal with the results
+                self.stress_calculated.emit(results)
+
+                self._update_status(f"Stress tensor data successfully loaded from:\n{load_dir}", 100)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load stress tensor data: {str(e)}"
+            )
 
     def _update_ui_state(self):
         """Update UI element states based on current data availability."""

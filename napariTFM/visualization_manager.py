@@ -562,7 +562,7 @@ class VisualizationManager(ErrorHandlingMixin):
             stress_tensor: np.ndarray,
             max_stress: float,
     ) -> None:
-        """Visualize stress tensor components for a single frame.
+        """Visualize stress tensor components for a single frame with proper scaling.
 
         Parameters
         ----------
@@ -580,10 +580,26 @@ class VisualizationManager(ErrorHandlingMixin):
                 'Average Normal Stress'
             ])
 
-            # Extract stress components
-            sigma_xx = stress_tensor[..., 0, 0]
-            sigma_yy = stress_tensor[..., 1, 1]
-            sigma_xy = stress_tensor[..., 0, 1]  # Equal to sigma_yx for symmetric tensor
+            # Get downscale factor from displacement results if available
+            downscale_factor = 1
+            if self.data_manager.displacement_results is not None:
+                downscale_factor = self.data_manager.displacement_results.get('parameters', {}).get('downscale_factor', 1)
+
+            # Function to upscale stress components
+            def upscale_component(component):
+                if downscale_factor > 1:
+                    return cv2.resize(
+                        component,
+                        (component.shape[1] * downscale_factor,
+                         component.shape[0] * downscale_factor),
+                        interpolation=cv2.INTER_LINEAR
+                    )
+                return component
+
+            # Extract and upscale stress components
+            sigma_xx = upscale_component(stress_tensor[..., 0, 0]) * 1e3 # convert to mN/m
+            sigma_yy = upscale_component(stress_tensor[..., 1, 1]) * 1e3 # convert to mN/m
+            sigma_xy = upscale_component(stress_tensor[..., 0, 1]) * 1e3 # convert to mN/m
 
             # Calculate average normal stress
             sigma_normal = (sigma_xx + sigma_yy) / 2
@@ -594,7 +610,7 @@ class VisualizationManager(ErrorHandlingMixin):
                 self._layers['stress_xx'] = self.viewer.add_image(
                     sigma_xx,
                     name='Normal Stress XX',
-                    colormap='cividis',
+                    colormap='seismic',
                     blending='additive',
                     contrast_limits=(-max_stress, max_stress)
                 )
@@ -603,7 +619,7 @@ class VisualizationManager(ErrorHandlingMixin):
                 self._layers['stress_yy'] = self.viewer.add_image(
                     sigma_yy,
                     name='Normal Stress YY',
-                    colormap='cividis',
+                    colormap='seismic',
                     blending='additive',
                     contrast_limits=(-max_stress, max_stress)
                 )
@@ -612,16 +628,16 @@ class VisualizationManager(ErrorHandlingMixin):
                 self._layers['stress_xy'] = self.viewer.add_image(
                     sigma_xy,
                     name='Shear Stress',
-                    colormap='cividis',
+                    colormap='seismic',
                     blending='additive',
-                    contrast_limits=(-max_stress, max_stress)
+                    contrast_limits=(-max_stress, max_stress)  # Shear typically smaller
                 )
 
                 # Average normal stress
                 self._layers['stress_normal'] = self.viewer.add_image(
                     sigma_normal,
                     name='Average Normal Stress',
-                    colormap='cividis',
+                    colormap='seismic',
                     blending='additive',
                     contrast_limits=(-max_stress, max_stress)
                 )
@@ -638,6 +654,119 @@ class VisualizationManager(ErrorHandlingMixin):
             self.handle_error(error)
             raise
 
+    def visualize_stress_results(
+            self,
+            results: Dict[str, Any],
+            max_stress: Optional[float] = None
+    ) -> None:
+        """Visualize stress results for all frames.
+
+        Parameters
+        ----------
+        results : Dict[str, Any]
+            Dictionary containing stress tensor results and parameters
+        max_stress : Optional[float]
+            Maximum stress value for colormap scaling
+        """
+        try:
+            # Clear existing layers
+            self._clear_layers([
+                'Normal Stress XX',
+                'Normal Stress YY',
+                'Shear Stress',
+                'Average Normal Stress'
+            ])
+
+            # Get the stress tensor stack
+            stress_tensor = results['stress_tensor']
+
+            if max_stress is None:
+                max_stress = results.get('parameters', {}).get('max_stress', 1.0)
+
+            # Get downscale factor from displacement results if available
+            downscale_factor = 1
+            if self.data_manager.displacement_results is not None:
+                downscale_factor = self.data_manager.displacement_results.get('parameters', {}).get('downscale_factor', 1)
+
+            # Function to upscale stress components
+            def upscale_component(component):
+                if downscale_factor > 1:
+                    if component.ndim == 3:  # Multiple frames
+                        return np.stack([
+                            cv2.resize(
+                                frame,
+                                (frame.shape[1] * downscale_factor,
+                                 frame.shape[0] * downscale_factor),
+                                interpolation=cv2.INTER_LINEAR
+                            )
+                            for frame in component
+                        ])
+                    else:  # Single frame
+                        return cv2.resize(
+                            component,
+                            (component.shape[1] * downscale_factor,
+                             component.shape[0] * downscale_factor),
+                            interpolation=cv2.INTER_LINEAR
+                        )
+                return component
+
+            # Extract and upscale stress components
+            sigma_xx = upscale_component(stress_tensor[..., 0, 0]) * 1e3  # convert to mN/m
+            sigma_yy = upscale_component(stress_tensor[..., 1, 1]) * 1e3  # convert to mN/m
+            sigma_xy = upscale_component(stress_tensor[..., 0, 1]) * 1e3  # convert to mN/m
+
+            # Calculate average normal stress
+            sigma_normal = (sigma_xx + sigma_yy) / 2
+
+            # Add visualization layers
+            with self.viewer.events.blocker_all():
+                # Normal stress XX
+                self._layers['stress_xx'] = self.viewer.add_image(
+                    sigma_xx,
+                    name='Normal Stress XX',
+                    colormap='seismic',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)
+                )
+
+                # Normal stress YY
+                self._layers['stress_yy'] = self.viewer.add_image(
+                    sigma_yy,
+                    name='Normal Stress YY',
+                    colormap='seismic',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)
+                )
+
+                # Shear stress
+                self._layers['stress_xy'] = self.viewer.add_image(
+                    sigma_xy,
+                    name='Shear Stress',
+                    colormap='seismic',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)  # Shear typically smaller
+                )
+
+                # Average normal stress
+                self._layers['stress_normal'] = self.viewer.add_image(
+                    sigma_normal,
+                    name='Average Normal Stress',
+                    colormap='seismic',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)
+                )
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to visualize stress results",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Try adjusting visualization parameters or check data consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+            raise
     def _on_frame_changed(self, event=None) -> None:
         """Handle frame change events for both displacement and force visualizations."""
         try:
