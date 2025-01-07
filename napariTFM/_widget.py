@@ -5,6 +5,7 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy
 )
 
+from .batch_analysis import BatchAnalysisWidget
 from .displacement_analysis_widget import DisplacementAnalysisWidget
 from .fttc_widget import FTTCWidget
 from .preprocessing_widget import PreprocessingWidget
@@ -73,11 +74,19 @@ class napariTFMWidget(QWidget):
             self.visualization_manager
         )
 
+        # Initialize batch analysis widget
+        self.batch_widget = BatchAnalysisWidget(
+            self.viewer,
+            self.data_manager,
+            self.visualization_manager
+        )
+
         # Add widgets to tabs
         tabs.addTab(self.preprocessing_widget, "Preprocessing")
         tabs.addTab(self.displacement_widget, "Displacement")
         tabs.addTab(self.force_widget, "Force Analysis")
         tabs.addTab(self.msm_widget, "Stress Analysis")
+        tabs.addTab(self.batch_widget, "Batch Analysis")
 
         # Add tabs to container
         container_layout.addWidget(tabs)
@@ -92,20 +101,98 @@ class napariTFMWidget(QWidget):
 
         self.connect_signals()
 
-    def connect_signals(self):
-        """Connect signals between components"""
-        # Connect preprocessing signals
-        self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
-        self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
+    def _connect_parameter_sync(self):
+        """Connect parameter synchronization between widgets."""
+        # Sync preprocessing parameters
+        if hasattr(self.preprocessing_widget, 'pixel_spin'):
+            self.preprocessing_widget.pixel_spin.valueChanged.connect(
+                lambda val: self._sync_pixel_size(val, source='preprocessing')
+            )
 
-        # Connect displacement signals
-        self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
+        # Sync displacement parameters
+        if hasattr(self.displacement_widget, 'pixel_spin'):
+            self.displacement_widget.pixel_spin.valueChanged.connect(
+                lambda val: self._sync_pixel_size(val, source='displacement')
+            )
 
-        # Connect force calculation signals
-        self.force_widget.force_calculated.connect(self._on_force_completed)
+        # Sync force parameters
+        if hasattr(self.force_widget, 'pixel_spin'):
+            self.force_widget.pixel_spin.valueChanged.connect(
+                lambda val: self._sync_pixel_size(val, source='force')
+            )
 
-        # Connect MSM signals
-        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
+        # Sync MSM parameters
+        if hasattr(self.msm_widget, 'parameter_spins'):
+            for param_name, spin in self.msm_widget.parameter_spins.items():
+                spin.valueChanged.connect(
+                    lambda val, name=param_name: self._sync_parameter(name, val, source='msm')
+                )
+
+        # Sync batch widget parameters
+        if hasattr(self.batch_widget, 'parameter_spins'):
+            for param_name, spin in self.batch_widget.parameter_spins.items():
+                spin.valueChanged.connect(
+                    lambda val, name=param_name: self._sync_parameter(name, val, source='batch')
+                )
+
+    def _sync_pixel_size(self, value: float, source: str):
+        """Synchronize pixel size across all widgets."""
+        widgets = {
+            'preprocessing': self.preprocessing_widget,
+            'displacement': self.displacement_widget,
+            'force': self.force_widget,
+            'msm': self.msm_widget,
+            'batch': self.batch_widget
+        }
+
+        # Update pixel size in all widgets except source
+        for name, widget in widgets.items():
+            if name != source and hasattr(widget, 'pixel_spin'):
+                widget.pixel_spin.blockSignals(True)
+                widget.pixel_spin.setValue(value)
+                widget.pixel_spin.blockSignals(False)
+
+            # Special handling for batch widget
+            if name != source and name == 'batch' and hasattr(widget, 'parameter_spins'):
+                if 'pixelsize' in widget.parameter_spins:
+                    widget.parameter_spins['pixelsize'].blockSignals(True)
+                    widget.parameter_spins['pixelsize'].setValue(value)
+                    widget.parameter_spins['pixelsize'].blockSignals(False)
+
+    def _sync_parameter(self, param_name: str, value: float, source: str):
+        """Synchronize parameters between widgets."""
+        # Map of parameter names between widgets
+        param_mapping = {
+            'youngs_modulus': ['young_spin'],
+            'poisson_ratio': ['poisson_spin'],
+            'target_nodes': ['target_nodes_spin'],
+            'boundary_refinement': ['boundary_refinement_spin'],
+            # Add more parameter mappings as needed
+        }
+
+        # Update parameters in relevant widgets
+        widgets = {
+            'force': self.force_widget,
+            'msm': self.msm_widget,
+            'batch': self.batch_widget
+        }
+
+        for widget_name, widget in widgets.items():
+            if widget_name != source:
+                # Handle batch widget parameters
+                if widget_name == 'batch' and hasattr(widget, 'parameter_spins'):
+                    if param_name in widget.parameter_spins:
+                        widget.parameter_spins[param_name].blockSignals(True)
+                        widget.parameter_spins[param_name].setValue(value)
+                        widget.parameter_spins[param_name].blockSignals(False)
+
+                # Handle other widgets
+                elif param_name in param_mapping:
+                    for mapped_name in param_mapping[param_name]:
+                        if hasattr(widget, mapped_name):
+                            getattr(widget, mapped_name).blockSignals(True)
+                            getattr(widget, mapped_name).setValue(value)
+                            getattr(widget, mapped_name).blockSignals(False)
 
     def _on_preprocessing_completed(self, results):
         """Handle completion of preprocessing"""
@@ -152,3 +239,19 @@ class napariTFMWidget(QWidget):
         """Handle completion of stress calculation"""
         logger.info("Stress calculation completed successfully")
         self.data_manager.stress_results = results
+
+    def connect_signals(self):
+        """Connect signals between components"""
+        # Connect preprocessing signals
+        self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
+        self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
+
+        # Connect displacement signals
+        self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
+
+        # Connect force calculation signals
+        self.force_widget.force_calculated.connect(self._on_force_completed)
+
+        # Connect MSM signals
+        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
+
