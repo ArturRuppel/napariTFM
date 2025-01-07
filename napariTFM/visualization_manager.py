@@ -556,6 +556,88 @@ class VisualizationManager(ErrorHandlingMixin):
             )
             self.handle_error(error)
             raise
+
+    def visualize_stress_preview(
+            self,
+            stress_tensor: np.ndarray,
+            max_stress: float,
+    ) -> None:
+        """Visualize stress tensor components for a single frame.
+
+        Parameters
+        ----------
+        stress_tensor : np.ndarray
+            4D array with shape (height, width, 2, 2) containing stress tensor components
+        max_stress : float
+            Maximum stress value for colormap scaling
+        """
+        try:
+            # Clear existing layers
+            self._clear_layers([
+                'Normal Stress XX',
+                'Normal Stress YY',
+                'Shear Stress',
+                'Average Normal Stress'
+            ])
+
+            # Extract stress components
+            sigma_xx = stress_tensor[..., 0, 0]
+            sigma_yy = stress_tensor[..., 1, 1]
+            sigma_xy = stress_tensor[..., 0, 1]  # Equal to sigma_yx for symmetric tensor
+
+            # Calculate average normal stress
+            sigma_normal = (sigma_xx + sigma_yy) / 2
+
+            # Add visualization layers
+            with self.viewer.events.blocker_all():
+                # Normal stress XX
+                self._layers['stress_xx'] = self.viewer.add_image(
+                    sigma_xx,
+                    name='Normal Stress XX',
+                    colormap='cividis',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)
+                )
+
+                # Normal stress YY
+                self._layers['stress_yy'] = self.viewer.add_image(
+                    sigma_yy,
+                    name='Normal Stress YY',
+                    colormap='cividis',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)
+                )
+
+                # Shear stress
+                self._layers['stress_xy'] = self.viewer.add_image(
+                    sigma_xy,
+                    name='Shear Stress',
+                    colormap='cividis',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)
+                )
+
+                # Average normal stress
+                self._layers['stress_normal'] = self.viewer.add_image(
+                    sigma_normal,
+                    name='Average Normal Stress',
+                    colormap='cividis',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)
+                )
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to visualize stress preview",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Try adjusting visualization parameters or check input data",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+            raise
+
     def _on_frame_changed(self, event=None) -> None:
         """Handle frame change events for both displacement and force visualizations."""
         try:

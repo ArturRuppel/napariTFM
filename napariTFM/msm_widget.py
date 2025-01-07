@@ -262,13 +262,65 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to create mask from cells:\n{str(e)}")
             self.progress_bar.setValue(0)
+
     def preview_current_frame(self):
         """Preview stress calculation for the current frame."""
-        # TODO: Implement preview for current frame
-        # - Get current frame index
-        # - Calculate stress for single frame
-        # - Update visualization
-        pass
+        try:
+            # Check prerequisites
+            if self.current_mask is None:
+                raise ValueError("No mask loaded. Please load a mask first.")
+
+            if self.data_manager.force_results is None:
+                raise ValueError("No force data available. Please calculate forces first.")
+
+            # Get current frame index
+            current_frame = self.viewer.dims.current_step[0]
+
+            # Get force data for current frame
+            tx = self.data_manager.force_results['tx'][current_frame]
+            ty = self.data_manager.force_results['ty'][current_frame]
+
+            # Get current frame's mask
+            current_mask = self.current_mask[current_frame]
+
+            # Resize mask if needed
+            from skimage.transform import resize
+            if current_mask.shape != tx.shape:
+                current_mask = resize(current_mask.astype(float), tx.shape, order=0) > 0.5
+
+            # Update status
+            self._update_status("Calculating stress field...", 20)
+
+            # Update parameters and initialize analyzer
+            self._update_parameters()
+
+            # Calculate stress tensor
+            stress_tensor = self.analyzer.calculate_stress_field(tx, ty, current_mask)
+
+            # Convert stress units from N/pixel² to mN/m
+            pixelsize = self.parameter_spins['pixelsize'].value()
+            stress_tensor = stress_tensor / (pixelsize * 1e-6)
+
+            self._update_status("Updating visualization...", 80)
+
+            # Get max stress parameter
+            max_stress = self.parameter_spins['max_stress'].value()
+
+            # Update visualization
+            self.visualization_manager.visualize_stress_preview(
+                stress_tensor,
+                max_stress
+            )
+
+            # Update status
+            self._update_status(
+                f"Stress preview generated for frame {current_frame}",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(f"Failed to preview stress field: {str(e)}")
+            self.progress_bar.setValue(0)
 
     def analyze_all_frames(self):
         """Run stress analysis for all frames."""
@@ -397,20 +449,32 @@ class MSMWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
 
     def preview_mesh(self):
-        """Generate and display preview of the triangular mesh for the current frame."""
+        """Generate and display preview of the triangular mesh for the current frame with proper scaling."""
         try:
-            # Check for mask
             if self.current_mask is None:
                 raise ValueError("No mask loaded. Please load a mask first.")
 
-            # Update parameters
             self._update_parameters()
-
-            # Get current frame index
             current_frame = self.viewer.dims.current_step[0]
-
-            # Get current frame's mask
             current_mask = self.current_mask[current_frame]
+
+            # Get force data shape and downscale factor
+            target_shape = None
+            downscale_factor = 1  # Default scale factor
+
+            # Get downscale factor from displacement results if available
+            if self.data_manager.displacement_results is not None:
+                downscale_factor = self.data_manager.displacement_results.get('parameters', {}).get('downscale_factor', 1)
+
+            # Get target shape from force results if available
+            if self.data_manager.force_results is not None:
+                tx = self.data_manager.force_results['tx'][current_frame]
+                target_shape = tx.shape
+
+            # Resize mask if needed
+            if target_shape is not None and current_mask.shape != target_shape:
+                from skimage.transform import resize
+                current_mask = resize(current_mask.astype(float), target_shape, order=0) > 0.5
 
             # Get traction forces for the current frame if available
             tx = ty = None
@@ -418,7 +482,6 @@ class MSMWidget(BaseAnalysisWidget):
                 tx = self.data_manager.force_results['tx'][current_frame]
                 ty = self.data_manager.force_results['ty'][current_frame]
 
-            # Update status and progress
             self._update_status("Generating mesh...", 20)
 
             # Generate mesh with target nodes
@@ -435,12 +498,15 @@ class MSMWidget(BaseAnalysisWidget):
                 if layer_name in self.viewer.layers:
                     self.viewer.layers.remove(layer_name)
 
+            # Scale up the node coordinates
+            nodes_xy_scaled = nodes_xy * downscale_factor
+
             # Create edge data for visualization
             num_elements = len(elements)
             edge_data = np.zeros((num_elements * 3, 2, 2))
 
-            # Swap x and y coordinates to fix rotation
-            nodes_rotated = np.column_stack((nodes_xy[:, 1], nodes_xy[:, 0]))
+            # Swap x and y coordinates and apply scaling
+            nodes_rotated = np.column_stack((nodes_xy_scaled[:, 1], nodes_xy_scaled[:, 0]))
 
             for i, element in enumerate(elements):
                 # Get node coordinates for triangle vertices
@@ -460,7 +526,7 @@ class MSMWidget(BaseAnalysisWidget):
                 edge_data,
                 shape_type='line',
                 edge_color='yellow',
-                edge_width=0.2,
+                edge_width=1,
                 opacity=0.6,
                 name='Mesh Edges'
             )
@@ -468,7 +534,7 @@ class MSMWidget(BaseAnalysisWidget):
             # Add nodes as points layer
             self.viewer.add_points(
                 nodes_rotated,
-                size=2,
+                size=4,
                 face_color='red',
                 opacity=0.7,
                 name='Mesh Nodes'
@@ -476,9 +542,10 @@ class MSMWidget(BaseAnalysisWidget):
 
             # Store original (unrotated) mesh for later use
             self.mesh = {
-                'nodes': nodes_xy,
+                'nodes': nodes_xy,  # Store unscaled coordinates
                 'elements': elements,
-                'frame': current_frame
+                'frame': current_frame,
+                'scale_factor': downscale_factor
             }
 
             # Update status with actual node count
@@ -512,5 +579,9 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self):
         """Update UI element states based on current data availability."""
-        # TODO: Implement UI state updates
-        pass
+        has_mask = self.current_mask is not None
+        has_force_data = self.data_manager.force_results is not None
+
+        self.preview_mesh_btn.setEnabled(has_mask)
+        self.preview_frame_btn.setEnabled(has_mask and has_force_data)
+        self.analyze_btn.setEnabled(has_mask and has_force_data)
