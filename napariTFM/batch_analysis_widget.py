@@ -78,6 +78,56 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self.load_params_btn.clicked.connect(self._load_parameters)
         self.reset_params_btn.clicked.connect(self._reset_parameters)
 
+    def _get_parameter_dict(self) -> dict:
+        """Get dictionary of current parameter values."""
+        params = {}
+
+        # Add values from spinboxes
+        for name, spin in self.parameter_spins.items():
+            params[name] = spin.value()
+
+        # Add values from checkboxes
+        for name, check in self.parameter_checks.items():
+            params[name] = check.isChecked()
+
+        # Add values from comboboxes
+        for name, combo in self.parameter_combos.items():
+            params[name] = combo.currentText().lower()
+
+        for name, checkbox in self.visualization_checkboxes.items():
+            params[f'save_{name}'] = checkbox.isChecked()
+
+        return params
+
+    def _set_parameters(self, params: dict):
+        """Set parameter values in UI elements."""
+        # Update spinbox values
+        for name, value in params.items():
+            if name in self.parameter_spins:
+                self.parameter_spins[name].setValue(value)
+
+        # Update checkbox values
+        for name, value in params.items():
+            if name in self.parameter_checks:
+                self.parameter_checks[name].setChecked(value)
+
+        # Update combobox values
+        for name, value in params.items():
+            if name in self.parameter_combos:
+                index = self.parameter_combos[name].findText(
+                    value.capitalize(),
+                    Qt.MatchFixedString
+                )
+                if index >= 0:
+                    self.parameter_combos[name].setCurrentIndex(index)
+
+        # Update visualization checkboxes
+        for name, value in params.items():
+            if name.startswith('viz_'):
+                viz_name = name[4:]  # Remove 'viz_' prefix
+                if viz_name in self.visualization_checkboxes:
+                    self.visualization_checkboxes[viz_name].setChecked(value)
+
     def _save_parameters(self):
         """Save current parameters to a YAML file."""
         try:
@@ -98,6 +148,10 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
             # Get current parameters
             params = self._get_parameter_dict()
+
+            # Add visualization parameters
+            for name, checkbox in self.visualization_checkboxes.items():
+                params[f'viz_{name}'] = checkbox.isChecked()
 
             # Add comments for parameter groups
             yaml_str = "# TFM Analysis Parameters\n\n"
@@ -148,6 +202,12 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 'dilation', 'max_stress'
             ]}
             yaml_str += yaml.dump({'stress': stress_params}, default_flow_style=False)
+            yaml_str += "\n"
+
+            # Add visualization parameters
+            yaml_str += "# Visualization Parameters\n"
+            viz_params = {k: v for k, v in params.items() if k.startswith('viz_')}
+            yaml_str += yaml.dump({'visualization': viz_params}, default_flow_style=False)
 
             # Save to file
             with open(file_path, 'w') as f:
@@ -184,6 +244,12 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             # Update UI with loaded parameters
             self._set_parameters(params)
 
+            # Update visualization checkboxes
+            for name, checkbox in self.visualization_checkboxes.items():
+                viz_param = f'viz_{name}'
+                if viz_param in params:
+                    checkbox.setChecked(params[viz_param])
+
             QMessageBox.information(self, "Success", "Parameters loaded successfully!")
 
         except Exception as e:
@@ -207,28 +273,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to reset parameters: {str(e)}")
-
-    def _set_parameters(self, params: dict):
-        """Set parameter values in UI elements."""
-        # Update spinbox values
-        for name, value in params.items():
-            if name in self.parameter_spins:
-                self.parameter_spins[name].setValue(value)
-
-        # Update checkbox values
-        for name, value in params.items():
-            if name in self.parameter_checks:
-                self.parameter_checks[name].setChecked(value)
-
-        # Update combobox values
-        for name, value in params.items():
-            if name in self.parameter_combos:
-                index = self.parameter_combos[name].findText(
-                    value.capitalize(),
-                    Qt.MatchFixedString
-                )
-                if index >= 0:
-                    self.parameter_combos[name].setCurrentIndex(index)
 
     def _create_general_params_group(self) -> QGroupBox:
         """Create general parameters group."""
@@ -563,8 +607,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             # Add analysis function
             script_lines.extend([
                 "def run_analysis(folder):",
-                "    print(f'\\nProcessing folder: {folder}')",
-                "",
                 "    # Preprocessing",
                 "    if 'preprocessing' in enabled_steps:",
                 "        print('Running preprocessing...')",
@@ -667,6 +709,10 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 "            for i in range(len(beads)):",
                 "                print(f'Processing frame {i+1}/{len(beads)}')",
                 "                flow = analyzer.calculate_flow(reference, beads[i])",
+                "                # Apply downscaling if factor > 1",
+                "                if params['downscale_factor'] > 1:",
+                "                    flow = analyzer.downscale_flow(flow, params['downscale_factor'])",
+                "                ",
                 "                flows.append(flow)",
                 "",
                 "            # Save results",
@@ -674,11 +720,28 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 "                'flows': flows,",
                 "                'parameters': {",
                 "                    'pixelsize': params['pixelsize'],",
-                "                    'downscale_factor': params['downscale_factor']",
+                "                    'downscale_factor': params['downscale_factor'],",
+                "                    'arrow_scale': params['disp_arrow_scale'],",
+                "                    'vector_stride': params['disp_vector_stride'],",
+                "                    'd_max': params['d_max']",
                 "                }",
                 "            }",
                 "",
                 "            np.save(os.path.join(folder, 'displacement.npy'), displacement_results)",
+
+                "            # Save displacement visualizations",
+                "            if params.get('save_displacement_map', False):",
+                "                print('Creating displacement visualization...')",
+                "                try:",
+                "                    visualizer = BatchVisualizationSaver(folder)",
+                "                    visualizer.save_displacement_visualization(",
+                "                        displacement_results,",
+                "                        fps=10",
+                "                    )",
+                "                    print('Displacement visualization saved successfully')",
+                "                except Exception as e:",
+                "                    print(f'Failed to create displacement visualization: {str(e)}')\n",
+
                 "            print('Displacement analysis completed successfully')",
                 "",
                 "        except Exception as e:",
@@ -820,28 +883,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(str(e))
-
-    def _get_parameter_dict(self) -> dict:
-        """Get dictionary of current parameter values."""
-        params = {}
-
-        # Add values from spinboxes
-        for name, spin in self.parameter_spins.items():
-            params[name] = spin.value()
-
-        # Add values from checkboxes
-        for name, check in self.parameter_checks.items():
-            params[name] = check.isChecked()
-
-        # Add values from comboboxes
-        for name, combo in self.parameter_combos.items():
-            params[name] = combo.currentText().lower()
-
-        # Add visualization parameters
-        for viz_name, checkbox in self.visualization_checkboxes.items():
-            params[f'save_{viz_name}'] = checkbox.isChecked()
-
-        return params
 
     def _add_folder(self):
         """Add folder to analysis queue."""

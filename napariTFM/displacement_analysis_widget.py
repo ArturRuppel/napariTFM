@@ -494,7 +494,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 outer_iterations=self.parameter_spins['outer_iterations'].value(),
                 scale_step=self.parameter_spins['scale_step'].value(),
                 median_filtering=self.parameter_spins['median_filtering'].value(),
-                downscale_factor=self.parameter_spins['downscale_factor'].value()  # Added to params update
+                downscale_factor=self.parameter_spins['downscale_factor'].value()
             )
             self.analyzer = DisplacementAnalyzer(params)
 
