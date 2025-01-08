@@ -541,7 +541,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 "from napariTFM.preprocessing import PreprocessingParameters, ImagePreprocessor",
                 "from napariTFM.displacement_analysis import TVL1Parameters, DisplacementAnalyzer",
                 "from napariTFM.fttc import FTTC",
-                "from napariTFM.msm import MonolayerStressMicroscopy\n",
+                "from napariTFM.msm import MonolayerStressMicroscopy",
+                "from napariTFM.batch_analysis_visualizations import BatchVisualizationSaver\n"
             ])
 
             # Add folder list
@@ -614,6 +615,21 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 "                processed_cells = (processed_cells * 65535).astype(np.uint16)",
                 "                tifffile.imwrite(os.path.join(folder, 'preprocessed_cells.tif'),",
                 "                                processed_cells)",
+                "            # Add visualization saving\n"
+                "            if params.get('save_bead_overlay', False):\n"
+                "                try:\n"
+                "                    viz_saver = BatchVisualizationSaver(folder)\n"
+                "                    processed_beads = tifffile.imread(os.path.join(folder, 'preprocessed_beads.tif'))\n"
+                "                    processed_reference = tifffile.imread(os.path.join(folder, 'preprocessed_reference.tif'))\n"
+                "                    \n"
+                "                    # Convert from uint16 back to float [0,1] range\n"
+                "                    processed_beads = processed_beads.astype(float) / 65535\n"
+                "                    processed_reference = processed_reference.astype(float) / 65535\n"
+                "                    \n"
+                "                    viz_saver.save_bead_overlay(processed_beads, processed_reference)\n"
+                "                    print('Saved bead overlay visualization')\n"
+                "                except Exception as e:\n"
+                "                    print(f'Failed to save bead overlay visualization: {str(e)}')\n"
                 "",
                 "            print('Preprocessing completed successfully')",
                 "",
@@ -820,6 +836,10 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Add values from comboboxes
         for name, combo in self.parameter_combos.items():
             params[name] = combo.currentText().lower()
+
+        # Add visualization parameters
+        for viz_name, checkbox in self.visualization_checkboxes.items():
+            params[f'save_{viz_name}'] = checkbox.isChecked()
 
         return params
 
