@@ -319,15 +319,7 @@ def timer_decorator(func):
 
 class MonolayerStressMicroscopy:
     def __init__(self, pixelsize, sigma=0.5, youngs_modulus=1, target_nodes=1000, boundary_refinement=2.0, gradient_refinement=1.5):
-        """
-        Initialize MSM calculator with triangular elements
-
-        Args:
-            pixelsize: Pixel size in microns
-            sigma: Poisson's ratio
-            youngs_modulus: Young's modulus
-            mesh_refinement: Mesh refinement factor (higher = finer mesh)
-        """
+        """Initialize MSM calculator with triangular elements"""
         self.pixelsize = pixelsize
         self.sigma = sigma
         self.E = youngs_modulus
@@ -339,6 +331,74 @@ class MonolayerStressMicroscopy:
         self.timing_stats = {}
         self._nested_calls = {}
         self._current_func = None
+
+    def create_mask_from_cells(self, cell_stack, dilation_pixels=0, smoothing_sigma=1.0):
+
+        """
+        Create masks from cell data by thresholding and morphological operations.
+
+        Args:
+            cell_stack (ndarray): 2D or 3D array of cell data
+            dilation_pixels (int): Number of pixels to dilate the mask
+
+        Returns:
+            ndarray: Boolean mask array with same dimensions as input
+        """
+        from scipy import ndimage
+
+        # Ensure 3D stack
+        if cell_stack.ndim == 2:
+            cell_stack = cell_stack[np.newaxis, ...]
+
+        # Initialize mask stack
+        mask_stack = np.zeros_like(cell_stack, dtype=bool)
+
+        # Process each frame
+        for frame in range(cell_stack.shape[0]):
+            # Get cell image for current frame
+            cell_image = cell_stack[frame]
+
+            # Create initial binary mask (threshold > 0)
+            mask = cell_image > 0
+
+            # Fill holes in the mask
+            filled_mask = ndimage.binary_fill_holes(mask)
+
+            # Label connected components
+            labels, num_features = ndimage.label(filled_mask)
+
+            if num_features > 0:
+                # Find sizes of all features
+                sizes = ndimage.sum(filled_mask, labels, range(1, num_features + 1))
+
+                # Keep only the largest component
+                largest_feature = np.argmax(sizes) + 1
+                filled_mask = labels == largest_feature
+
+            # Smooth edges
+            # Convert to float for Gaussian filter
+            float_mask = filled_mask.astype(float)
+            smoothed = ndimage.gaussian_filter(float_mask, sigma=smoothing_sigma)
+            # Re-threshold to get binary mask (threshold at 0.5)
+            smoothed_mask = smoothed > 0.5
+
+            smoothed_mask = ndimage.binary_fill_holes(smoothed_mask)
+
+            # Apply dilation if specified
+            if dilation_pixels > 0:
+                struct = ndimage.generate_binary_structure(2, 2)  # 8-connectivity
+                dilated_mask = ndimage.binary_dilation(
+                    smoothed_mask,
+                    structure=struct,
+                    iterations=dilation_pixels
+                )
+            else:
+                dilated_mask = smoothed_mask
+
+            # Add to mask stack
+            mask_stack[frame] = dilated_mask
+
+        return mask_stack
 
     @timer_decorator
     def calculate_stress_field(self, traction_x, traction_y, mask):

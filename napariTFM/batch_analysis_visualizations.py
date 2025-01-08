@@ -130,7 +130,7 @@ class BatchVisualizationSaver:
 
             # Calculate magnitudes for vector filtering
             magnitudes = np.sqrt(U ** 2 + V ** 2)
-            mask = magnitudes > d_max * 0.01
+            mask = magnitudes > -1
 
             # Plot filtered vectors
             ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
@@ -190,7 +190,6 @@ class BatchVisualizationSaver:
         f_max = params.get('f_max', 1000.0)  # Pa
         vector_stride = params.get('vector_stride', 20)
         arrow_scale = params.get('arrow_scale', 1.0)
-        pixelsize = params.get('pixelsize', 1.0)  # µm/pixel
 
         frames = []
         for frame_idx in range(len(tx)):
@@ -211,17 +210,20 @@ class BatchVisualizationSaver:
             x_points = np.arange(vector_stride // 2, w - vector_stride // 2, vector_stride)
             Y, X = np.meshgrid(y_points, x_points, indexing='ij')
 
-            # Get force components and scale them
+            # Get force components at grid points
             U = tx[frame_idx][Y, X] * arrow_scale / 1000  # Scale down for visualization
             V = ty[frame_idx][Y, X] * arrow_scale / 1000
 
-            # Calculate magnitudes for vector filtering
-            magnitudes = np.sqrt(U ** 2 + V ** 2)
-            mask = magnitudes > f_max * 0.01 / 1000  # Account for scaling
+            # Calculate magnitudes for vector filtering and coloring
+            magnitudes = np.sqrt(tx[frame_idx][Y, X] ** 2 + ty[frame_idx][Y, X] ** 2)  # Original magnitudes in Pa
+            mask = magnitudes > -1
+
+            # Get colors for vectors based on magnitude
+            colors = plt.cm.inferno(magnitudes[mask] / f_max)  # Normalize by f_max
 
             # Plot filtered vectors
             ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
-                          magnitudes[mask], cmap='inferno',
+                          color=colors,
                           scale=1.0, scale_units='xy',
                           angles='xy', width=0.003)
 
@@ -248,4 +250,113 @@ class BatchVisualizationSaver:
 
         # Save as GIF
         output_path = self.viz_folder / 'force_map.gif'
+        imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
+    def save_force_cell_overlay(self, force_results: dict, cell_images: np.ndarray, fps: int = 10) -> None:
+        """
+        Create and save a GIF of force vectors overlaid on the cell images.
+
+        Parameters
+        ----------
+        force_results : dict
+            Dictionary containing force analysis results including tx and ty components
+        cell_images : np.ndarray
+            Stack of cell images with shape (n_frames, height, width)
+        fps : int, optional
+            Frames per second for the GIF
+        """
+        # Extract force components and parameters
+        tx = force_results['tx']
+        ty = force_results['ty']
+        params = force_results.get('parameters', {})
+
+        # Get visualization parameters
+        f_max = params.get('f_max', 1000.0)  # Pa
+        vector_stride = params.get('vector_stride', 20)
+        arrow_scale = params.get('arrow_scale', 1.0)
+
+        # Ensure cell_images has at least as many frames as traction forces
+        n_frames = min(len(tx), len(cell_images))
+        cell_images = cell_images[:n_frames]
+
+        frames = []
+        for frame_idx in range(n_frames):
+            # Create figure with two subplots - one for vectors, one for colorbar
+            fig, (ax_map, ax_cbar) = plt.subplots(2, 1, figsize=(8, 10),
+                                                  gridspec_kw={'height_ratios': [20, 1]})
+
+            # Set font properties for better visibility
+            plt.rcParams.update({'font.size': 18, 'text.color': 'black'})
+
+            # Normalize and invert cell image
+            cell_img = cell_images[frame_idx].astype(float)
+            cell_img = (cell_img - cell_img.min()) / (cell_img.max() - cell_img.min())
+            cell_img = 1 - cell_img
+
+            # Display cell image
+            ax_map.imshow(cell_img, cmap='gray')
+
+            # Calculate force magnitude for colormap
+            force_magnitude = np.sqrt(tx[frame_idx] ** 2 + ty[frame_idx] ** 2)
+
+            # Create a dummy mappable for the colorbar
+            dummy_mappable = plt.cm.ScalarMappable(cmap='inferno', norm=plt.Normalize(vmin=0, vmax=f_max))
+
+            # Calculate scaling factors between force grid and cell image
+            scale_y = cell_img.shape[0] / tx[frame_idx].shape[0]
+            scale_x = cell_img.shape[1] / tx[frame_idx].shape[1]
+
+            # Add vectors using the same stride as in save_force_visualization
+            h, w = tx[frame_idx].shape
+            y_points = np.arange(vector_stride // 2, h - vector_stride // 2, vector_stride)
+            x_points = np.arange(vector_stride // 2, w - vector_stride // 2, vector_stride)
+            Y, X = np.meshgrid(y_points, x_points, indexing='ij')
+
+            # Scale grid points to match cell image dimensions
+            Y_scaled = Y * scale_y
+            X_scaled = X * scale_x
+
+            # Get force components and scale them
+            U = tx[frame_idx][Y, X] * arrow_scale / 1000  # Scale down for visualization
+            V = ty[frame_idx][Y, X] * arrow_scale / 1000
+
+            # Scale the vectors by the same factor as the grid
+            U_scaled = U * scale_x
+            V_scaled = V * scale_y
+
+            # Calculate magnitudes for vector filtering and coloring
+            magnitudes = np.sqrt(tx[frame_idx][Y, X] ** 2 + ty[frame_idx][Y, X] ** 2)  # Original magnitudes in Pa
+            mask = magnitudes > f_max * 0.01  # Filter threshold in Pa
+
+            # Get colors for vectors based on magnitude
+            colors = plt.cm.inferno(magnitudes[mask] / f_max)  # Normalize by f_max without scaling
+
+            # Plot filtered vectors with scaled grid and vectors
+            ax_map.quiver(X_scaled[mask], Y_scaled[mask], U_scaled[mask], V_scaled[mask],
+                          color=colors,
+                          scale=1.0, scale_units='xy',
+                          angles='xy', width=0.003)
+
+            # Add colorbar with improved styling
+            cbar = plt.colorbar(dummy_mappable, cax=ax_cbar, orientation='horizontal',
+                                label='Force (Pa)')
+
+            # Style the colorbar
+            cbar.ax.tick_params(labelsize=16, labelcolor='black')
+            cbar.set_label('Force (Pa)', size=20, color='black')
+
+            # Remove axes and adjust layout
+            ax_map.set_xticks([])
+            ax_map.set_yticks([])
+            plt.tight_layout()
+
+            # Convert figure to image
+            fig.canvas.draw()
+            frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+            frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            frames.append(frame)
+
+            plt.close(fig)
+
+        # Save as GIF
+        output_path = self.viz_folder / 'force_cell_overlay.gif'
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)

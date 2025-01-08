@@ -21,8 +21,10 @@ class MSMWidget(BaseAnalysisWidget):
     def __init__(self, viewer, data_manager, visualization_manager):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Initialize MSM analyzer
-        self.analyzer = None  # Will be initialized with parameters
+        # Initialize MSM analyzer with default parameters
+        self.pixelsize = 1.0  # Default pixelsize, will be updated from parameters
+        self.analyzer = MonolayerStressMicroscopy(pixelsize=self.pixelsize)
+
         self.parameter_spins = {}
         self.current_mask = None
         self.mesh = None
@@ -30,8 +32,83 @@ class MSMWidget(BaseAnalysisWidget):
 
         self._setup_ui()
         self._connect_signals()
+        self._update_parameters()  # Initialize analyzer with UI parameters
         self._update_ui_state()
 
+    def _update_parameters(self):
+        """Update analysis parameters."""
+        try:
+            # Get parameters from UI
+            pixelsize = self.parameter_spins['pixelsize'].value()
+            sigma = self.parameter_spins['sigma'].value()
+            target_nodes = self.parameter_spins['target_nodes'].value()
+            boundary_refinement = self.parameter_spins['boundary_refinement'].value()
+            gradient_refinement = self.parameter_spins['gradient_refinement'].value()
+
+            # Create new analyzer instance with current parameters
+            self.analyzer = MonolayerStressMicroscopy(
+                pixelsize=pixelsize,
+                sigma=sigma,
+                target_nodes=target_nodes,
+                boundary_refinement=boundary_refinement,
+                gradient_refinement=gradient_refinement
+            )
+
+            # Update colorbar limits based on max_stress parameter
+            max_stress = self.parameter_spins['max_stress'].value()
+            self.colorbar_manager.update_limits(-max_stress, max_stress)
+
+        except Exception as e:
+            self._handle_error(f"Failed to update parameters: {str(e)}")
+
+    def _create_mask_from_cells(self):
+        """Create masks from the cell stack using MSM analyzer."""
+        try:
+            # Ensure analyzer is initialized
+            if self.analyzer is None:
+                self._update_parameters()
+                if self.analyzer is None:
+                    raise ValueError("Failed to initialize MSM analyzer")
+
+            # Get active layer
+            active_layer = self._get_active_image_layer()
+            if active_layer is None:
+                raise ValueError("No active image layer selected")
+
+            # Update status
+            self.status_label.setText("Creating masks...")
+            self.progress_bar.setValue(20)
+
+            # Create masks using MSM analyzer
+            self.current_mask = self.analyzer.create_mask_from_cells(
+                active_layer.data,
+                dilation_pixels=self.parameter_spins['dilation'].value(),
+                smoothing_sigma=self.parameter_spins['smoothing_sigma'].value()
+            )
+
+            # Update visualization
+            if 'Cell Mask' in self.viewer.layers:
+                self.viewer.layers.remove('Cell Mask')
+
+            # Add as labels layer
+            self.viewer.add_labels(
+                self.current_mask.astype(np.uint8),
+                name='Cell Mask',
+                visible=True,
+                opacity=0.5,
+            )
+
+            # Update status
+            num_frames = self.current_mask.shape[0]
+            self.status_label.setText(f"Successfully created masks for {num_frames} frames")
+            self.progress_bar.setValue(100)
+
+            # Update UI state
+            self._update_ui_state()
+
+        except Exception as e:
+            self._handle_error(f"Failed to create mask from cells:\n{str(e)}")
+            self.progress_bar.setValue(0)
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
@@ -47,7 +124,7 @@ class MSMWidget(BaseAnalysisWidget):
         colorbar_group = self.create_colorbar_widget(
             colormap_name='seismic',
             label="Stress (mN/m)",
-            clim=(-1, 1),  # Will be updated based on max_stress parameter
+            clim=(-1, 1),
             colorbar_manager=self.colorbar_manager
         )
         colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -66,7 +143,6 @@ class MSMWidget(BaseAnalysisWidget):
         right_layout.setContentsMargins(6, 6, 6, 6)
 
         # Add main UI elements
-        right_layout.addWidget(self._create_data_loading_group())
         right_layout.addWidget(self._create_parameters_group())
         right_layout.addWidget(self._create_action_buttons())
         right_layout.addWidget(self._create_status_frame())
@@ -79,7 +155,6 @@ class MSMWidget(BaseAnalysisWidget):
         main_layout.addStretch(1)
 
         self.setLayout(main_layout)
-
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame with compact layout."""
         frame = QFrame()
@@ -122,23 +197,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         super().cleanup()
 
-    def _create_data_loading_group(self) -> QGroupBox:
-        """Create the data loading group with mask loading functionality."""
-        group = QGroupBox("Data")
-        layout = QVBoxLayout()
-
-        # Add mask loading button and status
-        self.load_mask_btn = QPushButton("Load Mask")
-        self.mask_status = QLabel("Not loaded")
-
-        row = QHBoxLayout()
-        row.addWidget(self.load_mask_btn)
-        row.addWidget(self.mask_status)
-        layout.addLayout(row)
-
-        group.setLayout(layout)
-        return group
-
     def _create_status_frame(self) -> QFrame:
         """Create the status and progress frame."""
         frame = QFrame()
@@ -156,7 +214,6 @@ class MSMWidget(BaseAnalysisWidget):
     def _connect_signals(self):
         """Connect widget signals."""
         # Buttons
-        self.load_mask_btn.clicked.connect(self._load_mask)
         self.create_mask_btn.clicked.connect(self._create_mask_from_cells)
         self.preview_mesh_btn.clicked.connect(self.preview_mesh)
         self.preview_frame_btn.clicked.connect(self.preview_current_frame)
@@ -167,103 +224,6 @@ class MSMWidget(BaseAnalysisWidget):
         # Parameters
         for spin in self.parameter_spins.values():
             spin.valueChanged.connect(self._update_parameters)
-
-    def _create_mask_from_cells(self):
-        """Create masks from the cell stack by thresholding and morphological operations."""
-        try:
-            # Get active layer
-            active_layer = self._get_active_image_layer()
-            if active_layer is None:
-                raise ValueError("No active image layer selected")
-
-            # Get image data
-            cell_stack = active_layer.data
-
-            # Ensure 3D stack
-            if cell_stack.ndim == 2:
-                cell_stack = cell_stack[np.newaxis, ...]
-
-            # Get number of frames
-            num_frames = cell_stack.shape[0]
-            mask_stack = np.zeros_like(cell_stack, dtype=bool)
-
-            # Update status
-            self.status_label.setText("Creating masks...")
-
-            # Process each frame
-            for frame in range(num_frames):
-                # Get cell image for current frame
-                cell_image = cell_stack[frame]
-
-                # Create initial binary mask (threshold > 0)
-                mask = cell_image > 0
-
-                # Fill holes in the mask
-                from scipy import ndimage
-                filled_mask = ndimage.binary_fill_holes(mask)
-
-                # Label connected components
-                labels, num_features = ndimage.label(filled_mask)
-
-                if num_features > 0:
-                    # Find sizes of all features
-                    sizes = ndimage.sum(filled_mask, labels, range(1, num_features + 1))
-
-                    # Keep only the largest component
-                    largest_feature = np.argmax(sizes) + 1
-                    filled_mask = labels == largest_feature
-
-                # Smooth edges
-                # Convert to float for Gaussian filter
-                float_mask = filled_mask.astype(float)
-                smoothed = ndimage.gaussian_filter(float_mask, sigma=1.0)
-                # Re-threshold to get binary mask (threshold at 0.5)
-                smoothed_mask = smoothed > 0.5
-
-                # Apply dilation if specified
-                dilation_pixels = self.parameter_spins['dilation'].value()
-                if dilation_pixels > 0:
-                    struct = ndimage.generate_binary_structure(2, 2)  # 8-connectivity
-                    dilated_mask = ndimage.binary_dilation(
-                        smoothed_mask,
-                        structure=struct,
-                        iterations=dilation_pixels
-                    )
-                else:
-                    dilated_mask = smoothed_mask
-
-                # Add to mask stack
-                mask_stack[frame] = dilated_mask
-
-                # Update progress
-                self.progress_bar.setValue(int((frame + 1) / num_frames * 100))
-
-            # Store the mask stack
-            self.current_mask = mask_stack
-
-            # Update visualization
-            if 'Cell Mask' in self.viewer.layers:
-                self.viewer.layers.remove('Cell Mask')
-
-            # Add as labels layer
-            self.viewer.add_labels(
-                mask_stack.astype(np.uint8),
-                name='Cell Mask',
-                visible=True,
-                opacity=0.5,
-            )
-
-            # Update mask status
-            self.mask_status.setText(f"Created from cells ({num_frames} frames)")
-            self.status_label.setText(f"Successfully created masks for {num_frames} frames\n")
-            self.progress_bar.setValue(100)
-
-            # Update UI state
-            self._update_ui_state()
-
-        except Exception as e:
-            self._handle_error(f"Failed to create mask from cells:\n{str(e)}")
-            self.progress_bar.setValue(0)
 
     def preview_current_frame(self):
         """Preview stress calculation for the current frame."""
@@ -415,52 +375,6 @@ class MSMWidget(BaseAnalysisWidget):
             self._handle_error(f"Failed to analyze frames: {str(e)}")
             self.progress_bar.setValue(0)
 
-    def _load_mask(self):
-        """Load and validate mask from file or active layer."""
-        try:
-            # Get active layer
-            active_layer = self._get_active_image_layer()
-            if active_layer is None:
-                raise ValueError("No active image layer selected")
-
-            # Get mask data
-            mask_data = active_layer.data
-
-            # Input validation
-            if not np.issubdtype(mask_data.dtype, np.bool_) and not np.issubdtype(mask_data.dtype, np.integer):
-                raise ValueError("Mask must be boolean or integer type")
-
-            # Convert to boolean if integer
-            if np.issubdtype(mask_data.dtype, np.integer):
-                mask_data = mask_data > 0
-
-            # Ensure 3D
-            if mask_data.ndim == 2:
-                mask_data = mask_data[np.newaxis, ...]
-
-            # Basic validation
-            if not np.any(mask_data):
-                raise ValueError("Mask is empty (all False)")
-
-            # Store mask
-            self.current_mask = mask_data
-
-            # Update mask status
-            num_frames = mask_data.shape[0]
-            self.mask_status.setText(f"Loaded ({num_frames} frames)")
-
-            # Enable relevant buttons
-            self.preview_mesh_btn.setEnabled(True)
-
-            # Update status
-            self._update_status(f"Successfully loaded mask with {num_frames} frames", 100)
-
-        except Exception as e:
-            self._handle_error(f"Failed to load mask: {str(e)}")
-            self.mask_status.setText("Not loaded")
-            self.preview_mesh_btn.setEnabled(False)
-            self.current_mask = None
-
     def _create_parameters_group(self) -> QGroupBox:
         """Create the analysis parameters group."""
         group = QGroupBox("Analysis Parameters")
@@ -482,6 +396,7 @@ class MSMWidget(BaseAnalysisWidget):
         # Mask parameters
         mask_params = [
             ("dilation", "Mask Dilation (px):", 0, 50, 1, 0),
+            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 1.0),
         ]
 
         # Visualization parameters
@@ -512,25 +427,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
-
-    def _update_parameters(self):
-        """Update analysis parameters."""
-        try:
-            # Update MSM analyzer with current parameters
-            self.analyzer = MonolayerStressMicroscopy(
-                pixelsize=self.parameter_spins['pixelsize'].value(),
-                sigma=self.parameter_spins['sigma'].value(),
-                target_nodes=self.parameter_spins['target_nodes'].value(),
-                boundary_refinement=self.parameter_spins['boundary_refinement'].value(),
-                gradient_refinement=self.parameter_spins['gradient_refinement'].value()
-            )
-
-            # Update colorbar limits based on max_stress parameter
-            max_stress = self.parameter_spins['max_stress'].value()
-            self.colorbar_manager.update_limits(-max_stress, max_stress)
-
-        except Exception as e:
-            self._handle_error(str(e))
 
     def preview_mesh(self):
         """Generate and display preview of the triangular mesh for the current frame with proper scaling."""
