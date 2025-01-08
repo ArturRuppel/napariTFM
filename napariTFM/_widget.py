@@ -5,7 +5,7 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy
 )
 
-from .batch_analysis import BatchAnalysisWidget
+from .batch_analysis_widget import BatchAnalysisWidget
 from .displacement_analysis_widget import DisplacementAnalysisWidget
 from .fttc_widget import FTTCWidget
 from .preprocessing_widget import PreprocessingWidget
