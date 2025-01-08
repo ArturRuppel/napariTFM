@@ -249,8 +249,8 @@ def elast_tri_numba(coord, params):
     dens = 1.0 if len(params) <= 2 else float(params[2])
 
     # Print actual values during first call
-    if coord[0, 0] == 0:  # Only print for first element
-        print(f"Element calculation with E={E}, nu={nu}")
+    # if coord[0, 0] == 0:  # Only print for first element
+    #     print(f"Element calculation with E={E}, nu={nu}")
 
     fact = E / (1 - nu * nu)
     C = np.array([
@@ -304,7 +304,7 @@ def timer_decorator(func):
         # Only store timing for the outermost call of each function
         if self._nested_calls[func_name] == 1:
             self.timing_stats[func_name] = self.timing_stats.get(func_name, 0) + execution_time
-            print(f"{func_name} took {execution_time:.4f} seconds to execute")
+            # print(f"{func_name} took {execution_time:.4f} seconds to execute")
 
         # Decrement nested call count
         self._nested_calls[func_name] -= 1
@@ -407,8 +407,8 @@ class MonolayerStressMicroscopy:
         if np.all(np.isnan(traction_x)) or np.all(np.isnan(traction_y)):
             raise ValueError("Input tractions are all NaN")
 
-        print(f"Input traction range x: [{np.nanmin(traction_x)}, {np.nanmax(traction_x)}]")
-        print(f"Input traction range y: [{np.nanmin(traction_y)}, {np.nanmax(traction_y)}]")
+        # print(f"Input traction range x: [{np.nanmin(traction_x)}, {np.nanmax(traction_x)}]")
+        # print(f"Input traction range y: [{np.nanmin(traction_y)}, {np.nanmax(traction_y)}]")
 
         # Resize mask if needed
         if mask.shape != traction_x.shape:
@@ -425,9 +425,9 @@ class MonolayerStressMicroscopy:
         # Prepare forces
         f_x, f_y = self._prepare_forces(traction_x, traction_y, mask, forcemap_pixelsize)
 
-        # Verify forces after preparation
-        print(f"Prepared force range x: [{np.nanmin(f_x)}, {np.nanmax(f_x)}]")
-        print(f"Prepared force range y: [{np.nanmin(f_y)}, {np.nanmax(f_y)}]")
+        # # Verify forces after preparation
+        # print(f"Prepared force range x: [{np.nanmin(f_x)}, {np.nanmax(f_x)}]")
+        # print(f"Prepared force range y: [{np.nanmin(f_y)}, {np.nanmax(f_y)}]")
 
         # Setup triangular mesh
         nodes, elements, loads, mats = self._grid_setup(mask, -f_x, -f_y)
@@ -498,11 +498,11 @@ class MonolayerStressMicroscopy:
         # Generate triangular mesh
         nodes_xy, elements = self.mesh_generator.generate_mesh(mask_area, f_x, f_y)
 
-        print(f"Number of nodes: {len(nodes_xy)}")
-        print(f"Number of elements: {len(elements)}")
-        print(f"Max input force x: {np.nanmax(np.abs(f_x))}")
-        print(f"Max input force y: {np.nanmax(np.abs(f_y))}")
-        print(f"E: {self.E}, nu: {self.sigma}")
+        # print(f"Number of nodes: {len(nodes_xy)}")
+        # print(f"Number of elements: {len(elements)}")
+        # print(f"Max input force x: {np.nanmax(np.abs(f_x))}")
+        # print(f"Max input force y: {np.nanmax(np.abs(f_y))}")
+        # print(f"E: {self.E}, nu: {self.sigma}")
 
         # Convert to required format
         num_nodes = len(nodes_xy)
@@ -511,9 +511,9 @@ class MonolayerStressMicroscopy:
         nodes[:, 1:3] = nodes_xy  # x,y coordinates
         nodes[:, 3:] = 0  # BC flags
 
-        # Debug: Check nodes
-        print(f"Node coordinate range x: [{np.min(nodes[:, 1])}, {np.max(nodes[:, 1])}]")
-        print(f"Node coordinate range y: [{np.min(nodes[:, 2])}, {np.max(nodes[:, 2])}]")
+        # # Debug: Check nodes
+        # print(f"Node coordinate range x: [{np.min(nodes[:, 1])}, {np.max(nodes[:, 1])}]")
+        # print(f"Node coordinate range y: [{np.min(nodes[:, 2])}, {np.max(nodes[:, 2])}]")
 
         # Convert element connectivity
         num_elements = len(elements)
@@ -524,7 +524,7 @@ class MonolayerStressMicroscopy:
         elements_formatted[:, 3:] = elements  # connectivity
 
         # Debug: Check elements
-        print(f"Element connectivity range: [{np.min(elements_formatted[:, 3:])}, {np.max(elements_formatted[:, 3:])}]")
+        # print(f"Element connectivity range: [{np.min(elements_formatted[:, 3:])}, {np.max(elements_formatted[:, 3:])}]")
 
         # Setup loads with linear interpolation
         loads = np.zeros((num_nodes, 3))
@@ -573,8 +573,8 @@ class MonolayerStressMicroscopy:
         loads[:, 1] = x_forces
         loads[:, 2] = y_forces
 
-        print(f"Force range x: [{np.min(loads[:, 1])}, {np.max(loads[:, 1])}]")
-        print(f"Force range y: [{np.min(loads[:, 2])}, {np.max(loads[:, 2])}]")
+        # print(f"Force range x: [{np.min(loads[:, 1])}, {np.max(loads[:, 1])}]")
+        # print(f"Force range y: [{np.min(loads[:, 2])}, {np.max(loads[:, 2])}]")
 
         # Setup materials
         mats = np.array([[self.E, self.sigma]])
@@ -762,10 +762,10 @@ class MonolayerStressMicroscopy:
         """Hybrid solver with preconditioning applied to system directly"""
         neq = KG.shape[0]
 
-        print(f"System size: {neq}")
-        print(f"Condition number estimate: {np.linalg.norm(KG.todense(), 1) * np.linalg.norm(np.linalg.pinv(KG.todense()), 1)}")
-        print(f"Max RHS value: {np.max(np.abs(RHSG))}")
-        print(f"Number of non-zeros in K: {KG.nnz}")
+        # print(f"System size: {neq}")
+        # print(f"Condition number estimate: {np.linalg.norm(KG.todense(), 1) * np.linalg.norm(np.linalg.pinv(KG.todense()), 1)}")
+        # print(f"Max RHS value: {np.max(np.abs(RHSG))}")
+        # print(f"Number of non-zeros in K: {KG.nnz}")
 
         # Get node positions and set up constraints using optimized method
         nodes_xy, x_points, y_points = self._find_eq_position(nodes, IBC, neq)
@@ -861,11 +861,11 @@ if __name__ == "__main__":
     sigma_yy_ref = stress_tensor_ref[:, :, 1, 1]
 
     # Print timing statistics
-    msm.print_timing_stats()
+    # msm.print_timing_stats()
 
     # Calculate total execution time
-    total_execution_time = time.time() - total_start_time
-    print(f"\nTotal script execution time: {total_execution_time:.4f} seconds")
+    # total_execution_time = time.time() - total_start_time
+    # print(f"\nTotal script execution time: {total_execution_time:.4f} seconds")
 
     # Create visualization with 3 rows (max principal, sigma_xx, sigma_yy)
     fig, axes = plt.subplots(3, 2, figsize=(15, 18))

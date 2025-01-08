@@ -115,7 +115,7 @@ class BatchVisualizationSaver:
             plt.rcParams.update({'font.size': 18, 'text.color': 'black'})
 
             # Calculate and display magnitude
-            magnitude = np.sqrt(np.sum(flow ** 2, axis=-1)) # Convert to µm
+            magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))  # Convert to µm
             im = ax_map.imshow(magnitude, cmap='viridis', vmin=0, vmax=d_max)
 
             # Add vectors
@@ -251,6 +251,7 @@ class BatchVisualizationSaver:
         # Save as GIF
         output_path = self.viz_folder / 'force_map.gif'
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
+
     def save_force_cell_overlay(self, force_results: dict, cell_images: np.ndarray, fps: int = 10) -> None:
         """
         Create and save a GIF of force vectors overlaid on the cell images.
@@ -360,3 +361,89 @@ class BatchVisualizationSaver:
         # Save as GIF
         output_path = self.viz_folder / 'force_cell_overlay.gif'
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
+
+    def save_stress_visualization(self, stress_results: dict, fps: int = 10) -> None:
+        """
+        Create and save GIFs of stress tensor components.
+
+        Parameters
+        ----------
+        stress_results : dict
+            Dictionary containing stress tensor results and parameters
+        fps : int, optional
+            Frames per second for the GIF
+        """
+        # Extract stress tensor and parameters
+        stress_tensor = stress_results['stress_tensor']
+        params = stress_results.get('parameters', {})
+        max_stress = params.get('max_stress', 10.0)  # mN/m
+
+        # Define components and their corresponding visualization parameters
+        components = {
+            'sigma_xx': {
+                'data': stress_tensor[..., 0, 0] * 1e3,  # Convert to mN/m
+                'label': 'Normal Stress XX (mN/m)',
+                'enabled': params.get('save_sigma_xx', False)
+            },
+            'sigma_yy': {
+                'data': stress_tensor[..., 1, 1] * 1e3,  # Convert to mN/m
+                'label': 'Normal Stress YY (mN/m)',
+                'enabled': params.get('save_sigma_yy', False)
+            },
+            'shear': {
+                'data': stress_tensor[..., 0, 1] * 1e3,  # Convert to mN/m
+                'label': 'Shear Stress (mN/m)',
+                'enabled': params.get('save_shear', False)
+            },
+            'normal_stress': {
+                'data': (stress_tensor[..., 0, 0] + stress_tensor[..., 1, 1]) * 0.5e3,  # Convert to mN/m
+                'label': 'Average Normal Stress (mN/m)',
+                'enabled': params.get('save_normal_stress', False)
+            }
+        }
+
+        # Process each component if enabled
+        for component_name, info in components.items():
+            if not info['enabled']:
+                continue
+
+            frames = []
+            for frame_idx in range(len(info['data'])):
+                # Create figure with two subplots - one for stress map, one for colorbar
+                fig, (ax_map, ax_cbar) = plt.subplots(2, 1, figsize=(8, 10),
+                                                      gridspec_kw={'height_ratios': [20, 1]})
+
+                # Set font properties for better visibility
+                plt.rcParams.update({'font.size': 18, 'text.color': 'black'})
+
+                # Plot stress component with seismic colormap
+                im = ax_map.imshow(info['data'][frame_idx],
+                                   cmap='seismic',
+                                   vmin=-max_stress,
+                                   vmax=max_stress)
+
+                # Add colorbar with improved styling
+                cbar = plt.colorbar(im, cax=ax_cbar, orientation='horizontal',
+                                    label=info['label'])
+
+                # Style the colorbar
+                cbar.ax.tick_params(labelsize=16, labelcolor='black')
+                cbar.set_label(info['label'], size=20, color='black')
+
+                # Remove axes and adjust layout
+                ax_map.set_xticks([])
+                ax_map.set_yticks([])
+                plt.tight_layout()
+
+                # Convert figure to image
+                fig.canvas.draw()
+                frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+                frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+                frames.append(frame)
+
+                plt.close(fig)
+
+            if frames:  # Only save if we have frames
+                # Save as GIF
+                output_path = self.viz_folder / f'{component_name}.gif'
+                imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
