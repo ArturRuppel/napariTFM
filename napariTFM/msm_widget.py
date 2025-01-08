@@ -245,10 +245,10 @@ class MSMWidget(BaseAnalysisWidget):
             # Get current frame's mask
             current_mask = self.current_mask[current_frame]
 
-            # Resize mask if needed
-            from skimage.transform import resize
-            if current_mask.shape != tx.shape:
-                current_mask = resize(current_mask.astype(float), tx.shape, order=0) > 0.5
+            # # Resize mask if needed
+            # from skimage.transform import resize
+            # if current_mask.shape != tx.shape:
+            #     current_mask = resize(current_mask.astype(float), tx.shape, order=0) > 0.5
 
             # Update status
             self._update_status("Calculating stress field...", 20)
@@ -318,14 +318,14 @@ class MSMWidget(BaseAnalysisWidget):
                 current_ty = ty[frame]
                 current_mask = self.current_mask[frame]
 
-                # Resize mask if needed
-                if current_mask.shape != current_tx.shape:
-                    from skimage.transform import resize
-                    current_mask = resize(
-                        current_mask.astype(float),
-                        current_tx.shape,
-                        order=0
-                    ) > 0.5
+                # # Resize mask if needed
+                # if current_mask.shape != current_tx.shape:
+                #     from skimage.transform import resize
+                #     current_mask = resize(
+                #         current_mask.astype(float),
+                #         current_tx.shape,
+                #         order=0
+                #     ) > 0.5
 
                 # Calculate stress tensor for current frame
                 stress_tensor = self.analyzer.calculate_stress_field(

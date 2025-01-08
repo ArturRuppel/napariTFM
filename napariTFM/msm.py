@@ -410,6 +410,15 @@ class MonolayerStressMicroscopy:
         print(f"Input traction range x: [{np.nanmin(traction_x)}, {np.nanmax(traction_x)}]")
         print(f"Input traction range y: [{np.nanmin(traction_y)}, {np.nanmax(traction_y)}]")
 
+        # Resize mask if needed
+        if mask.shape != traction_x.shape:
+            from skimage.transform import resize
+            mask = resize(
+                mask.astype(float),
+                traction_x.shape,
+                order=0
+            ) > 0.5
+
         # Calculate effective pixelsize
         forcemap_pixelsize = self.pixelsize * 1e-6
 
