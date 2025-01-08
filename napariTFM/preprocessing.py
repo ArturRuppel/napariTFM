@@ -191,6 +191,7 @@ class ImagePreprocessor:
             self.transform_matrices = []
 
             for i in range(bead_stack.shape[0]):
+                print(f'Processing frame {i + 1}/{bead_stack.shape[0]}')
                 if progress_callback:
                     progress_callback(
                         current_step / total_steps * 100,
