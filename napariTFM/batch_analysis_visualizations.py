@@ -104,17 +104,6 @@ class BatchVisualizationSaver:
         d_max = params.get('d_max', 10.0)  # µm
         vector_stride = params.get('vector_stride', 20)
         arrow_scale = params.get('arrow_scale', 1.0)
-        pixelsize = params.get('pixelsize', 1.0)  # µm/pixel
-
-        # Print the parameters
-        print(f"Maximum displacement (d_max): {d_max} µm")
-        print(f"Vector stride: {vector_stride} pixels")
-        print(f"Arrow scale: {arrow_scale}")
-        print(f"Pixel size: {pixelsize} µm/pixel")
-
-        # Create fixed colormap and normalization
-        cmap = plt.cm.viridis
-        norm = plt.Normalize(vmin=0, vmax=d_max)
 
         frames = []
         for flow in flows:
@@ -126,7 +115,7 @@ class BatchVisualizationSaver:
             plt.rcParams.update({'font.size': 18, 'text.color': 'black'})
 
             # Calculate and display magnitude
-            magnitude = np.sqrt(np.sum(flow ** 2, axis=-1)) * pixelsize  # Convert to µm
+            magnitude = np.sqrt(np.sum(flow ** 2, axis=-1)) # Convert to µm
             im = ax_map.imshow(magnitude, cmap='viridis', vmin=0, vmax=d_max)
 
             # Add vectors
@@ -140,7 +129,7 @@ class BatchVisualizationSaver:
             V = flow[Y, X, 1] * arrow_scale
 
             # Calculate magnitudes for vector filtering
-            magnitudes = np.sqrt(U ** 2 + V ** 2) * pixelsize
+            magnitudes = np.sqrt(U ** 2 + V ** 2)
             mask = magnitudes > d_max * 0.01
 
             # Plot filtered vectors
@@ -155,7 +144,7 @@ class BatchVisualizationSaver:
 
             # Style the colorbar
             cbar.ax.tick_params(labelsize=16, labelcolor='black')
-            cbar.set_label('Displacement (µm)', size=12, color='black')
+            cbar.set_label('Displacement (µm)', size=20, color='black')
 
             # Remove axes and adjust layout
             ax_map.set_xticks([])
@@ -180,3 +169,83 @@ class BatchVisualizationSaver:
             palettesize=256,  # Use maximum palette size
             loop=0  # Enable infinite looping
         )
+
+    def save_force_visualization(self, force_results: dict, fps: int = 10) -> None:
+        """
+        Create and save a GIF of force magnitudes with vectors.
+
+        Parameters
+        ----------
+        force_results : dict
+            Dictionary containing force analysis results including tx and ty components
+        fps : int, optional
+            Frames per second for the GIF
+        """
+        # Extract force components and parameters
+        tx = force_results['tx']
+        ty = force_results['ty']
+        params = force_results.get('parameters', {})
+
+        # Get visualization parameters
+        f_max = params.get('f_max', 1000.0)  # Pa
+        vector_stride = params.get('vector_stride', 20)
+        arrow_scale = params.get('arrow_scale', 1.0)
+        pixelsize = params.get('pixelsize', 1.0)  # µm/pixel
+
+        frames = []
+        for frame_idx in range(len(tx)):
+            # Create figure with two subplots - one for vectors, one for colorbar
+            fig, (ax_map, ax_cbar) = plt.subplots(2, 1, figsize=(8, 10),
+                                                  gridspec_kw={'height_ratios': [20, 1]})
+
+            # Set font properties for better visibility
+            plt.rcParams.update({'font.size': 18, 'text.color': 'black'})
+
+            # Calculate and display magnitude
+            force_magnitude = np.sqrt(tx[frame_idx] ** 2 + ty[frame_idx] ** 2)
+            im = ax_map.imshow(force_magnitude, cmap='inferno', vmin=0, vmax=f_max)
+
+            # Add vectors
+            h, w = tx[frame_idx].shape
+            y_points = np.arange(vector_stride // 2, h - vector_stride // 2, vector_stride)
+            x_points = np.arange(vector_stride // 2, w - vector_stride // 2, vector_stride)
+            Y, X = np.meshgrid(y_points, x_points, indexing='ij')
+
+            # Get force components and scale them
+            U = tx[frame_idx][Y, X] * arrow_scale / 1000  # Scale down for visualization
+            V = ty[frame_idx][Y, X] * arrow_scale / 1000
+
+            # Calculate magnitudes for vector filtering
+            magnitudes = np.sqrt(U ** 2 + V ** 2)
+            mask = magnitudes > f_max * 0.01 / 1000  # Account for scaling
+
+            # Plot filtered vectors
+            ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
+                          magnitudes[mask], cmap='inferno',
+                          scale=1.0, scale_units='xy',
+                          angles='xy', width=0.003)
+
+            # Add colorbar with improved styling
+            cbar = plt.colorbar(im, cax=ax_cbar, orientation='horizontal',
+                                label='Force (Pa)')
+
+            # Style the colorbar
+            cbar.ax.tick_params(labelsize=16, labelcolor='black')
+            cbar.set_label('Force (Pa)', size=20, color='black')
+
+            # Remove axes and adjust layout
+            ax_map.set_xticks([])
+            ax_map.set_yticks([])
+            plt.tight_layout()
+
+            # Convert figure to image
+            fig.canvas.draw()
+            frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+            frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            frames.append(frame)
+
+            plt.close(fig)
+
+        # Save as GIF
+        output_path = self.viz_folder / 'force_map.gif'
+        imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
