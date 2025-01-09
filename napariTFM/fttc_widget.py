@@ -32,11 +32,10 @@ class FTTCWidget(BaseAnalysisWidget):
         self.young_modulus = 10000  # Pa
         self.poisson_ratio = 0.49
         self.gel_height = None  # μm (None means infinite)
-        self._pixel_size = 0.1  # μm/pixel
+        self._pixel_size = None  # Will be set from data manager
         self.regularization = 1e-6
         self.mesh_size = 1  # hardcoded to 1
         self.lanczos_exp = 1
-        self._using_inherited_pixel_size = False
 
         # Initialize calculator
         self.calculator = None
@@ -47,6 +46,146 @@ class FTTCWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._register_controls()
         self._update_ui_state()
+
+    def _create_material_params_group(self) -> QGroupBox:
+        """Create the material parameters group."""
+        group = QGroupBox("Material Parameters")
+        layout = QVBoxLayout()
+
+        # Add reset parameters button at the top
+        self.reset_params_btn = QPushButton("Reset Parameters")
+        layout.addWidget(self.reset_params_btn)
+
+        # Create spinboxes
+        self.young_spin = QDoubleSpinBox()
+        self.poisson_spin = QDoubleSpinBox()
+        self.height_spin = QDoubleSpinBox()
+        self.lanczos_exp_spin = QSpinBox()
+
+        params = [
+            ("Young's Modulus (Pa):", self.young_spin, 100, 1000000, 100, self.young_modulus),
+            ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, self.poisson_ratio),
+            ("Gel Height (μm):", self.height_spin, 0, 1000, 10, 0),
+            ("Lanczos Exponent:", self.lanczos_exp_spin, 0, 5, 1, self.lanczos_exp)
+        ]
+
+        for label_text, spin, min_val, max_val, step, default in params:
+            row = QHBoxLayout()
+            label = QLabel(label_text)
+            label.setFixedWidth(120)
+            row.addWidget(label)
+
+            spin.setRange(min_val, max_val)
+            spin.setSingleStep(step)
+            spin.setValue(default)
+            if label_text.startswith("Gel Height"):
+                spin.setSpecialValueText("∞")
+            row.addWidget(spin)
+            layout.addLayout(row)
+
+        group.setLayout(layout)
+        return group
+
+    def _register_controls(self):
+        """Register all controls with the base widget."""
+        controls = [
+            self.young_spin,
+            self.poisson_spin,
+            self.height_spin,
+            self.lanczos_exp_spin,
+            self.regularization_spin,
+            self.calculate_btn,
+            self.preview_btn,
+            self.reset_params_btn,
+            self.save_force_btn,
+            self.load_force_btn,
+            self.progress_bar,
+            self.status_label,
+            self.gcv_button,
+            self.auto_gcv_checkbox
+        ] + list(self.visualization_params.values())
+
+        for control in controls:
+            self.register_control(control)
+
+    def _connect_signals(self):
+        """Connect all widget signals."""
+        # Parameter updates
+        self.young_spin.valueChanged.connect(self._update_parameters)
+        self.poisson_spin.valueChanged.connect(self._update_parameters)
+        self.height_spin.valueChanged.connect(self._update_parameters)
+        self.lanczos_exp_spin.valueChanged.connect(self._update_parameters)
+        self.regularization_spin.valueChanged.connect(self._update_parameters)
+
+        # Action buttons
+        self.calculate_btn.clicked.connect(self.calculate_forces)
+        self.preview_btn.clicked.connect(self.preview_force)
+        self.save_force_btn.clicked.connect(self._save_force_data)
+        self.load_force_btn.clicked.connect(self._load_force_data)
+        self.reset_params_btn.clicked.connect(self.reset_parameters)
+
+    def _update_parameters(self):
+        """Update parameters from UI controls and data manager."""
+        # Update basic parameters
+        self.young_modulus = self.young_spin.value()
+        self.poisson_ratio = self.poisson_spin.value()
+        self.regularization = 10 ** self.regularization_spin.value()
+        self.mesh_size = 1  # hardcoded to 1
+        self.lanczos_exp = self.lanczos_exp_spin.value()
+
+        # Handle gel height
+        height_value = self.height_spin.value()
+        self.gel_height = None if height_value == 0 else height_value
+
+        # Get pixel size from data manager
+        if self.data_manager.displacement_results:
+            disp_params = self.data_manager.displacement_results.get('parameters', {})
+            base_pixel_size = disp_params.get('pixel_size')
+            downscale_factor = disp_params.get('downscale_factor', 1)
+            if base_pixel_size is not None:
+                self._pixel_size = base_pixel_size * downscale_factor
+
+        # Update UI state
+        self._update_ui_state()
+
+    def reset_parameters(self):
+        """Reset all parameters to defaults."""
+        self.young_spin.setValue(10000)
+        self.poisson_spin.setValue(0.49)
+        self.height_spin.setValue(0)
+        self.mesh_size = 1  # hardcoded to 1
+        self.lanczos_exp_spin.setValue(1)
+        self.regularization_spin.setValue(-17)  # 10^-17
+        self.auto_gcv_checkbox.setChecked(False)
+
+        self.visualization_params['vector_stride'].setValue(20)
+        self.visualization_params['arrow_scale'].setValue(1.0)
+        self.visualization_params['f_max'].setValue(1000.0)
+
+        self._update_status("Parameters reset to defaults")
+
+    def _update_ui_state(self):
+        """Update UI elements based on current state."""
+        # Check if required data is available
+        has_required_data = self._validate_input_data()
+
+        # Update button states
+        self.calculate_btn.setEnabled(has_required_data)
+        self.preview_btn.setEnabled(has_required_data)
+
+        if has_required_data:
+            # Display current pixel size in status
+            disp_params = self.data_manager.displacement_results.get('parameters', {})
+            base_pixel_size = disp_params.get('pixel_size')
+            downscale_factor = disp_params.get('downscale_factor', 1)
+            if base_pixel_size is not None:
+                effective_pixel_size = base_pixel_size * downscale_factor
+                self._update_status(
+                    f"Current pixel size: {effective_pixel_size:.3f} μm\n"
+                    f"(Base: {base_pixel_size:.3f} μm, Downscale: {downscale_factor}x)"
+                )
+        else:
+            self._update_status("Required displacement data not available")
 
     def _create_calculation_params_group(self) -> QGroupBox:
         """Create the calculation parameters group."""
@@ -85,131 +224,12 @@ class FTTCWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
-    def _register_controls(self):
-        """Register all controls with the base widget."""
-        controls = [
-                       self.young_spin,
-                       self.poisson_spin,
-                       self.height_spin,
-                       self.pixel_spin,
-                       self.lanczos_exp_spin,
-                       self.regularization_spin,
-                       self.calculate_btn,
-                       self.preview_btn,
-                       self.reset_params_btn,
-                       self.save_force_btn,
-                       self.load_force_btn,
-                       self.progress_bar,
-                       self.status_label,
-                       self.gcv_button,
-                       self.auto_gcv_checkbox
-                   ] + list(self.visualization_params.values())
-
-        for control in controls:
-            self.register_control(control)
-
     def _on_auto_gcv_changed(self, state):
         """Handle changes to the auto-GCV checkbox state."""
         is_checked = state == Qt.Checked
         self.gcv_button.setEnabled(not is_checked)
         self.regularization_spin.setEnabled(not is_checked)
 
-    def reset_parameters(self):
-        """Reset all parameters to defaults."""
-        self._using_inherited_pixel_size = False
-        self.young_spin.setValue(10000)
-        self.poisson_spin.setValue(0.49)
-        self.height_spin.setValue(0)
-        self.pixel_spin.setValue(0.1)
-        self.mesh_size = 1  # hardcoded to 1
-        self.lanczos_exp_spin.setValue(1)
-        self.regularization_spin.setValue(-17)  # 10^-17
-        self.auto_gcv_checkbox.setChecked(False)
-
-        self.visualization_params['vector_stride'].setValue(20)
-        self.visualization_params['arrow_scale'].setValue(1.0)
-        self.visualization_params['f_max'].setValue(1000.0)
-
-        self.pixel_spin.setStyleSheet("")
-        self._update_status("Parameters reset to defaults")
-
-    def _create_material_params_group(self) -> QGroupBox:
-        """Create the material parameters group."""
-        group = QGroupBox("Material Parameters")
-        layout = QVBoxLayout()
-
-        # Add reset parameters button at the top
-        self.reset_params_btn = QPushButton("Reset Parameters")
-        layout.addWidget(self.reset_params_btn)
-
-        # Create spinboxes
-        self.young_spin = QDoubleSpinBox()
-        self.poisson_spin = QDoubleSpinBox()
-        self.height_spin = QDoubleSpinBox()
-        self.pixel_spin = QDoubleSpinBox()
-        self.lanczos_exp_spin = QSpinBox()
-
-        params = [
-            ("Young's Modulus (Pa):", self.young_spin, 100, 1000000, 100, self.young_modulus),
-            ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, self.poisson_ratio),
-            ("Gel Height (μm):", self.height_spin, 0, 1000, 10, 0),
-            ("Pixel Size (μm):", self.pixel_spin, 0.001, 10, 0.1, self._pixel_size),
-            ("Lanczos Exponent:", self.lanczos_exp_spin, 0, 5, 1, self.lanczos_exp)
-        ]
-
-        for label_text, spin, min_val, max_val, step, default in params:
-            row = QHBoxLayout()
-            label = QLabel(label_text)
-            label.setFixedWidth(120)
-            row.addWidget(label)
-
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
-            if label_text.startswith("Gel Height"):
-                spin.setSpecialValueText("∞")
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        group.setLayout(layout)
-        return group
-
-    def _connect_signals(self):
-        """Connect all widget signals."""
-        # Parameter updates
-        self.young_spin.valueChanged.connect(self._update_parameters)
-        self.poisson_spin.valueChanged.connect(self._update_parameters)
-        self.height_spin.valueChanged.connect(self._update_parameters)
-        self.pixel_spin.valueChanged.connect(self._on_pixel_size_changed)
-        self.lanczos_exp_spin.valueChanged.connect(self._update_parameters)
-        self.regularization_spin.valueChanged.connect(self._update_parameters)
-
-        # Action buttons
-        self.calculate_btn.clicked.connect(self.calculate_forces)
-        self.preview_btn.clicked.connect(self.preview_force)
-        self.save_force_btn.clicked.connect(self._save_force_data)
-        self.load_force_btn.clicked.connect(self._load_force_data)
-        self.reset_params_btn.clicked.connect(self.reset_parameters)
-
-    def _update_parameters(self):
-        """Update parameters from UI controls."""
-        # Update basic parameters
-        self.young_modulus = self.young_spin.value()
-        self.poisson_ratio = self.poisson_spin.value()
-        self.regularization = 10 ** self.regularization_spin.value()
-        self.mesh_size = 1  # hardcoded to 1, removed from UI
-        self.lanczos_exp = self.lanczos_exp_spin.value()
-
-        # Handle gel height
-        height_value = self.height_spin.value()
-        self.gel_height = None if height_value == 0 else height_value
-
-        # Handle pixel size inheritance
-        if not self._using_inherited_pixel_size:
-            self._pixel_size = self.pixel_spin.value()
-
-        # Update UI state
-        self._update_ui_state()
 
     def _load_parameters_to_ui(self, params: dict):
         """Load parameters from dictionary to UI controls."""
@@ -549,10 +569,12 @@ class FTTCWidget(BaseAnalysisWidget):
             self._set_controls_enabled(False)
             self._update_status("Calculating forces...", 0)
 
+            # Make sure parameters are up to date
+            self._update_parameters()
+
             # Get displacement data and parameters
             displacement_results = self.data_manager.displacement_results
             flows = displacement_results['flows']
-            # Get downscale factor from displacement results
             downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
 
             # Get current frame index
@@ -569,10 +591,27 @@ class FTTCWidget(BaseAnalysisWidget):
 
             x = np.arange(u_data.shape[1])
             y = np.arange(u_data.shape[0])
-            dx = self._pixel_size
+
+            # Make sure we have a valid pixel size
+            if self._pixel_size is None:
+                disp_params = displacement_results.get('parameters', {})
+                base_pixel_size = disp_params.get('pixel_size')
+                if base_pixel_size is not None:
+                    self._pixel_size = base_pixel_size * downscale_factor
+                else:
+                    raise ValueError("No pixel size available from displacement data")
 
             # Initialize calculator with current parameters
-            self._initialize_calculator()
+            # Convert gel height from μm to m if specified
+            gel_height_m = None if self.gel_height is None else self.gel_height * 1e-6
+
+            self.calculator = FTTC(
+                E=self.young_modulus,
+                nu=self.poisson_ratio,
+                mesh_size=self.mesh_size,
+                lanczos_exp=self.lanczos_exp,
+                gel_height=gel_height_m
+            )
 
             # Calculate forces for current frame
             xy, fnorm, f, urec, u, energy, force, Ftf, Fturec = self.calculator.calculate_traction(
@@ -580,7 +619,7 @@ class FTTCWidget(BaseAnalysisWidget):
                 y=y,
                 u_data=u_data,
                 v_data=v_data,
-                dx=dx,
+                dx=self._pixel_size,
                 set_lam=self.regularization
             )
 
@@ -620,7 +659,6 @@ class FTTCWidget(BaseAnalysisWidget):
             ))
         finally:
             self._set_controls_enabled(True)
-
     def _set_regularization_with_gcv(self):
         """Handle GCV-based regularization parameter selection."""
         try:
@@ -678,47 +716,6 @@ class FTTCWidget(BaseAnalysisWidget):
         if not self._using_inherited_pixel_size:
             self._pixel_size = value
             self._update_parameters()
-
-    def _update_ui_state(self):
-        """Update UI elements based on current state."""
-        # Check if required data is available
-        has_required_data = self._validate_input_data()
-
-        # Update button states
-        self.calculate_btn.setEnabled(has_required_data)
-        self.preview_btn.setEnabled(has_required_data)
-
-        # Handle pixel size inheritance if displacement results are available
-        if self.data_manager.displacement_results:
-            disp_params = self.data_manager.displacement_results.get('parameters', {})
-            base_pixel_size = disp_params.get('pixel_size')
-            downscale_factor = disp_params.get('downscale_factor', 1)
-
-            if base_pixel_size is not None:
-                # Calculate effective pixel size considering downscaling
-                inherited_pixel_size = base_pixel_size * downscale_factor
-
-                if self._using_inherited_pixel_size:
-                    self._pixel_size = inherited_pixel_size
-                    self.pixel_spin.setValue(inherited_pixel_size)
-                    self.pixel_spin.setStyleSheet("color: gray;")
-                    self.pixel_spin.setToolTip(
-                        f"Inherited from displacement analysis\n"
-                        f"Base pixel size: {base_pixel_size} μm\n"
-                        f"Downscale factor: {downscale_factor}"
-                    )
-            else:
-                self._using_inherited_pixel_size = False
-                self.pixel_spin.setStyleSheet("")
-                self.pixel_spin.setToolTip("")
-        else:
-            # No displacement results available
-            self._using_inherited_pixel_size = False
-            self.pixel_spin.setStyleSheet("")
-            self.pixel_spin.setToolTip("")
-
-            if not has_required_data:
-                self._update_status("Required displacement data not available")
 
     def _validate_input_data(self) -> bool:
         """Validate required input data is available."""
