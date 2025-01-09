@@ -392,13 +392,19 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 results = self.data_manager.displacement_results
                 flows = np.array(results['flows'])
 
-                # Split into x and y components
-                d_x = flows[..., 0]  # (frames, height, width)
-                d_y = flows[..., 1]  # (frames, height, width)
+                displacement_results = {
+                    'flows': flows,
+                    'parameters': {
+                        'pixelsize': results['parameters']['pixel_size'],
+                        'downscale_factor': results['parameters']['downscale_factor'],
+                        'arrow_scale': results['visualization_params']['arrow_scale'],
+                        'vector_stride': results['visualization_params']['vector_stride'],
+                        'd_max': results['visualization_params']['d_max']
+                    }
+                }
 
                 # Save files
-                np.save(os.path.join(save_dir, 'd_x.npy'), d_x)
-                np.save(os.path.join(save_dir, 'd_y.npy'), d_y)
+                np.save(os.path.join(save_dir, 'displacement.npy'), displacement_results)
 
                 self._update_status(f"Displacement data successfully saved to:\n{save_dir}", 100)
 
@@ -412,40 +418,52 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     def _load_displacement(self):
         """Load displacement data from files."""
         try:
-            # Get directory containing the files
-            load_dir = QFileDialog.getExistingDirectory(
+            # Get file to load
+            file_path, _ = QFileDialog.getOpenFileName(
                 self,
-                "Select Directory Containing Displacement Data",
-                os.path.expanduser("~")
+                "Select Displacement Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
             )
 
-            if load_dir:
-                # Check if both files exist
-                d_x_path = os.path.join(load_dir, 'd_x.npy')
-                d_y_path = os.path.join(load_dir, 'd_y.npy')
+            if file_path:
+                # Load the displacement data
+                displacement_data = np.load(file_path, allow_pickle=True).item()
 
-                if not (os.path.exists(d_x_path) and os.path.exists(d_y_path)):
-                    raise FileNotFoundError("Could not find d_x.npy and d_y.npy in selected directory")
+                # Convert flows to numpy array if it isn't already
+                flows = np.array(displacement_data['flows'])
+                if len(flows.shape) == 3:  # If flows is (frames, height*2, width)
+                    frames, height_doubled, width = flows.shape
+                    height = height_doubled // 2
+                    # Reshape to (frames, height, width, 2)
+                    flows = flows.reshape(frames, 2, height, width).transpose(0, 2, 3, 1)
 
-                # Load the displacement components
-                d_x = np.load(d_x_path)
-                d_y = np.load(d_y_path)
+                parameters = displacement_data['parameters']
 
-                # Combine into flows format
-                flows = np.stack([d_x, d_y], axis=-1)  # (frames, height, width, 2)
+                # Update UI parameters with loaded values
+                if 'pixelsize' in parameters:
+                    self.parameter_spins['pixel_size'].setValue(parameters['pixelsize'])
+                if 'downscale_factor' in parameters:
+                    self.parameter_spins['downscale_factor'].setValue(parameters['downscale_factor'])
+                if 'arrow_scale' in parameters:
+                    self.visualization_params['arrow_scale'].setValue(parameters['arrow_scale'])
+                if 'vector_stride' in parameters:
+                    self.visualization_params['vector_stride'].setValue(parameters['vector_stride'])
+                if 'd_max' in parameters:
+                    self.visualization_params['d_max'].setValue(parameters['d_max'])
 
                 # Create results dictionary
                 results = {
                     'flows': flows,
                     'parameters': {
                         'tvl1_params': self.analyzer.params,
-                        'downscale_factor': self.parameter_spins['downscale_factor'].value(),
-                        'pixel_size': self.parameter_spins['pixel_size'].value()
+                        'downscale_factor': parameters['downscale_factor'],
+                        'pixel_size': parameters['pixelsize']
                     },
                     'visualization_params': {
-                        'd_max': self.visualization_params['d_max'].value(),
-                        'vector_stride': self.visualization_params['vector_stride'].value(),
-                        'arrow_scale': self.visualization_params['arrow_scale'].value()
+                        'd_max': parameters['d_max'],
+                        'vector_stride': parameters['vector_stride'],
+                        'arrow_scale': parameters['arrow_scale']
                     },
                     'original_shape': flows.shape[1:3],
                     'flow_shape': flows.shape[1:3],
@@ -456,8 +474,11 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 self.data_manager.displacement_results = results
                 self.visualization_manager.visualize_displacement_results(
                     results,
-                    downscale_factor=self.parameter_spins['downscale_factor'].value()
+                    downscale_factor=parameters['downscale_factor']
                 )
+
+                # Update colorbar with loaded d_max
+                self.colorbar_manager.update_limits(0, parameters['d_max'])
 
                 # Enable save button
                 self.save_displacement_btn.setEnabled(True)
@@ -465,8 +486,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 # Emit the displacement_calculated signal with the results
                 self.displacement_calculated.emit(results)
 
-                self._update_status(f"Displacement data successfully loaded from:\n{load_dir}", 100)
-
+                self._update_status(f"Displacement data successfully loaded from:\n{file_path}", 100)
 
         except Exception as e:
             QMessageBox.critical(
@@ -474,7 +494,9 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 "Error",
                 f"Failed to load displacement data: {str(e)}"
             )
-
+            # Print the full error for debugging
+            import traceback
+            traceback.print_exc()
     def _on_displacement_completed(self, results):
         """Handle completion of displacement analysis"""
         super()._on_displacement_completed(results)
