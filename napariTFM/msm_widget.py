@@ -530,13 +530,13 @@ class MSMWidget(BaseAnalysisWidget):
             self.progress_bar.setValue(0)
 
     def _save_stress_tensor(self):
-        """Save stress tensor data to file."""
+        """Save stress tensor data to files."""
         if not hasattr(self.data_manager, 'stress_results') or not self.data_manager.stress_results:
             QMessageBox.warning(self, "Warning", "No stress tensor data to save.")
             return
 
         try:
-            # Get directory to save file
+            # Get directory to save files
             save_dir = QFileDialog.getExistingDirectory(
                 self,
                 "Select Directory to Save Stress Tensor Data",
@@ -544,10 +544,24 @@ class MSMWidget(BaseAnalysisWidget):
             )
 
             if save_dir:
-                stress_tensor = self.data_manager.stress_results['stress_tensor']
+                # Package results with all necessary parameters - matching batch analyzer structure
+                stress_results = {
+                    'stress_tensor': self.data_manager.stress_results['stress_tensor'],
+                    'parameters': {
+                        'pixelsize': self.parameter_spins['pixelsize'].value(),
+                        'youngs_modulus': self.analyzer.E,
+                        'poisson_ratio': self.parameter_spins['sigma'].value(),  # Use poisson_ratio as key
+                        'target_nodes': self.parameter_spins['target_nodes'].value(),
+                        'boundary_refinement': self.parameter_spins['boundary_refinement'].value(),
+                        'gradient_refinement': self.parameter_spins['gradient_refinement'].value(),
+                        'max_stress': self.parameter_spins['max_stress'].value(),
+                        'dilation': self.parameter_spins['dilation'].value(),
+                        'smoothing_sigma': self.parameter_spins['smoothing_sigma'].value()
+                    }
+                }
 
                 # Save file
-                np.save(os.path.join(save_dir, 'stress_tensor.npy'), stress_tensor)
+                np.save(os.path.join(save_dir, 'stress_tensor.npy'), stress_results)
 
                 self._update_status(f"Stress tensor data successfully saved to:\n{save_dir}", 100)
 
@@ -561,51 +575,76 @@ class MSMWidget(BaseAnalysisWidget):
     def _load_stress_tensor(self):
         """Load stress tensor data from file."""
         try:
-            # Get directory containing the file
-            load_dir = QFileDialog.getExistingDirectory(
+            # Get file to load
+            file_path, _ = QFileDialog.getOpenFileName(
                 self,
-                "Select Directory Containing Stress Tensor Data",
-                os.path.expanduser("~")
+                "Select Stress Tensor Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
             )
 
-            if load_dir:
-                # Check if file exists
-                stress_tensor_path = os.path.join(load_dir, 'stress_tensor.npy')
+            if file_path:
+                # Load the stress tensor data
+                stress_data = np.load(file_path, allow_pickle=True).item()
 
-                if not os.path.exists(stress_tensor_path):
-                    raise FileNotFoundError("Could not find stress_tensor.npy in selected directory")
+                # Validate the loaded data structure
+                required_fields = ['stress_tensor', 'parameters']
+                if not all(field in stress_data for field in required_fields):
+                    raise ValueError("Invalid stress tensor data format")
 
-                # Load the stress tensor
-                stress_tensor = np.load(stress_tensor_path)
+                parameters = stress_data['parameters']
 
-                # Create results dictionary with current parameters
-                results = {
-                    'stress_tensor': stress_tensor,
-                    'parameters': {
-                        'pixelsize': self.parameter_spins['pixelsize'].value(),
-                        'youngs_modulus': self.analyzer.E,
-                        'poisson_ratio': self.analyzer.sigma,
-                        'target_nodes': self.parameter_spins['target_nodes'].value(),
-                        'boundary_refinement': self.parameter_spins['boundary_refinement'].value(),
-                        'gradient_refinement': self.parameter_spins['gradient_refinement'].value(),
-                        'max_stress': self.parameter_spins['max_stress'].value()
-                    }
+                # Extract poisson ratio - expecting 'poisson_ratio' from batch analyzer
+                if 'poisson_ratio' not in parameters:
+                    raise ValueError("Required parameter 'poisson_ratio' not found in file")
+
+                poisson_ratio = parameters['poisson_ratio']
+
+                # Update UI parameters with loaded values
+                parameter_mapping = {
+                    'pixelsize': 'pixelsize',
+                    'target_nodes': 'target_nodes',
+                    'boundary_refinement': 'boundary_refinement',
+                    'gradient_refinement': 'gradient_refinement',
+                    'max_stress': 'max_stress',
+                    'dilation': 'dilation',
+                    'smoothing_sigma': 'smoothing_sigma'
                 }
 
-                # Update data manager and visualization
-                self.data_manager.stress_results = results
-                self.visualization_manager.visualize_stress_results(
-                    results,
-                    max_stress=self.parameter_spins['max_stress'].value()
+                for param_name, spin_name in parameter_mapping.items():
+                    if param_name in parameters:
+                        self.parameter_spins[spin_name].setValue(parameters[param_name])
+
+                # Update sigma spinbox with the loaded Poisson ratio
+                self.parameter_spins['sigma'].setValue(poisson_ratio)
+
+                # Update analyzer with loaded parameters
+                self.analyzer = MonolayerStressMicroscopy(
+                    pixelsize=parameters['pixelsize'],
+                    sigma=poisson_ratio,
+                    youngs_modulus=parameters['youngs_modulus'],
+                    target_nodes=parameters['target_nodes'],
+                    boundary_refinement=parameters['boundary_refinement'],
+                    gradient_refinement=parameters['gradient_refinement']
                 )
+
+                # Update data manager and visualization
+                self.data_manager.stress_results = stress_data
+                self.visualization_manager.visualize_stress_results(
+                    stress_data,
+                    max_stress=parameters['max_stress']
+                )
+
+                # Update colorbar with loaded max_stress
+                self.colorbar_manager.update_limits(-parameters['max_stress'], parameters['max_stress'])
 
                 # Enable save button
                 self.save_stress_btn.setEnabled(True)
 
                 # Emit the stress_calculated signal with the results
-                self.stress_calculated.emit(results)
+                self.stress_calculated.emit(stress_data)
 
-                self._update_status(f"Stress tensor data successfully loaded from:\n{load_dir}", 100)
+                self._update_status(f"Stress tensor data successfully loaded from:\n{file_path}", 100)
 
         except Exception as e:
             QMessageBox.critical(

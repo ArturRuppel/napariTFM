@@ -835,10 +835,7 @@ class FTTCWidget(BaseAnalysisWidget):
                 if 'gel_height' in parameters:
                     self.height_spin.setValue(0 if parameters['gel_height'] is None
                                               else parameters['gel_height'] * 1e6)  # Convert back to μm
-                if 'pixelsize' in parameters:
-                    pixel_size = parameters['pixelsize']
-                    downscale_factor = parameters.get('downscale_factor', 1)
-                    self.pixel_spin.setValue(pixel_size / downscale_factor)
+
                 if 'vector_stride' in parameters:
                     self.visualization_params['vector_stride'].setValue(parameters['vector_stride'])
                 if 'arrow_scale' in parameters:

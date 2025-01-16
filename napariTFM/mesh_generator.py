@@ -1,351 +1,198 @@
-import numpy as np
-from scipy.spatial import Delaunay
-from skimage import measure
-import matplotlib.pyplot as plt
 from dataclasses import dataclass
-from typing import Tuple, List, Optional
-import numpy.typing as npt
+from typing import Tuple, Dict
+
+import gmsh
+import numpy as np
+from skimage import measure
 
 
 @dataclass
-class MeshQuality:
-    min_angle: float
-    max_angle: float
-    aspect_ratios: npt.NDArray[np.float64]
-    edge_ratios: npt.NDArray[np.float64]
+class MeshParameters:
+    """Parameters for mesh generation"""
+    mask: np.ndarray
+    density_factor: float = 0.01
+    algorithm: int = 2
+    use_optimization: bool = True
 
 
-class AdaptiveTriangleMeshGenerator:
-    def __init__(self,
-                 target_nodes: int = 1000,
-                 boundary_refinement: float = 2.0,
-                 gradient_refinement: float = 1.5,
-                 quality_threshold: float = 0.3):
-        """
-        Initialize adaptive mesh generator with node count control
+class MeshGenerator:
+    """Generate and analyze triangular meshes using GMSH"""
 
-        Args:
-            target_nodes: Approximate number of nodes desired in the final mesh
-            boundary_refinement: Additional refinement factor at boundaries
-            gradient_refinement: Additional refinement in high gradient regions
-            quality_threshold: Minimum acceptable element quality (0-1)
-        """
-        self.target_nodes = target_nodes
-        self.boundary_refinement = boundary_refinement
-        self.gradient_refinement = gradient_refinement
-        self.quality_threshold = quality_threshold
+    def __init__(self, params: MeshParameters):
+        self.input_params = params
+        self.mesh_params = self._transform_parameters()
 
-    def _estimate_base_refinement(self, mask: np.ndarray) -> float:
-        """
-        Estimate base refinement factor to achieve target node count
+    def _transform_parameters(self) -> dict:
+        """Transform input parameters into GMSH-specific parameters"""
+        max_dim = max(self.input_params.mask.shape)
+        target_size = max_dim * self.input_params.density_factor
 
-        Args:
-            mask: Binary mask defining the domain
+        return {
+            'target_size': target_size,
+            'min_size': target_size * 0.5,
+            'max_size': target_size * 2.0,
+            'algorithm': self.input_params.algorithm,
+            'optimize_netgen': self.input_params.use_optimization,
+            'optimize_steps': 10 if self.input_params.use_optimization else 0,
+            'smoothing_steps': 5 if self.input_params.use_optimization else 0
+        }
 
-        Returns:
-            float: Estimated base refinement factor
-        """
-        # Calculate domain area
-        domain_area = np.sum(mask)
+    def generate_mesh(self, mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Generate triangular mesh from binary mask"""
+        gmsh.initialize()
+        gmsh.model.add("mask_mesh")
 
-        # Estimate node density needed for target count
-        # Using relationship: nodes ≈ area / spacing^2
-        # where spacing = 1 / refinement
-        base_refinement = np.sqrt(0.2 * self.target_nodes / domain_area)
+        try:
+            self._setup_mesh_parameters()
+            self._create_geometry(mask)
 
-        return base_refinement
+            # Generate initial mesh
+            gmsh.model.mesh.generate(2)
 
-    def generate_mesh(self, mask: np.ndarray,
-                      force_x: Optional[np.ndarray] = None,
-                      force_y: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Generate adaptive triangular mesh based on domain shape and force gradients
+            if self.mesh_params['optimize_netgen']:
+                gmsh.model.mesh.optimize("Netgen")
 
-        Args:
-            mask: Binary mask defining the domain
-            force_x: X component of force field (optional)
-            force_y: Y component of force field (optional)
+            return self._extract_mesh()
+        finally:
+            gmsh.finalize()
 
-        Returns:
-            nodes: Array of node coordinates (x, y)
-            elements: Array of element connectivity
-        """
-        # Calculate base refinement from target node count
-        base_refinement = self._estimate_base_refinement(mask)
+    def _setup_mesh_parameters(self):
+        """Configure GMSH mesh generation parameters"""
+        # Fewer console outputs:
+        # gmsh.option.setNumber("General.Terminal", 2)
+        gmsh.option.setNumber("General.Verbosity", 3)
 
-        # Calculate local refinement field
-        refinement_field = self._calculate_refinement_field(mask, force_x, force_y, base_refinement)
+        # Disable automatic mesh size computation
+        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
 
-        # Extract and refine boundary points
-        boundary_points = self._extract_boundary_points(mask, refinement_field)
+        # Set mesh parameters
+        gmsh.option.setNumber("Mesh.Algorithm", self.mesh_params['algorithm'])
+        gmsh.option.setNumber("Mesh.MeshSizeMin", self.mesh_params['min_size'])
+        gmsh.option.setNumber("Mesh.MeshSizeMax", self.mesh_params['max_size'])
 
-        # Generate interior points with adaptive density
-        interior_points = self._generate_interior_points(mask, refinement_field)
+        # Optimization settings
+        gmsh.option.setNumber("Mesh.OptimizeNetgen", int(self.mesh_params['optimize_netgen']))
+        gmsh.option.setNumber("Mesh.Optimize", self.mesh_params['optimize_steps'])
+        gmsh.option.setNumber("Mesh.Smoothing", self.mesh_params['smoothing_steps'])
 
-        # Combine points and swap x,y coordinates to match MSM convention
-        all_points = np.vstack((boundary_points, interior_points))
-        all_points = all_points[:, [1, 0]]  # Swap x and y coordinates
+        # Create and set background mesh field
+        field = gmsh.model.mesh.field.add("Constant")
+        gmsh.model.mesh.field.setNumber(field, "VIn", self.mesh_params['target_size'])
+        gmsh.model.mesh.field.setAsBackgroundMesh(field)
 
-        # Generate initial triangulation
-        tri = Delaunay(all_points)
-
-        # Filter and improve mesh
-        elements = self._filter_and_improve_mesh(tri, all_points, mask)
-
-        return all_points, elements
-
-    def _calculate_refinement_field(self,
-                                    mask: np.ndarray,
-                                    force_x: Optional[np.ndarray],
-                                    force_y: Optional[np.ndarray],
-                                    base_refinement: float) -> np.ndarray:
-        """Calculate local refinement factor field with conservation of total refinement"""
-        from scipy.ndimage import distance_transform_edt, gaussian_filter
-
-        # Initialize refinement field with base value
-        refinement = np.ones_like(mask, dtype=float)
-
-        # Calculate boundary influence
-        distance = distance_transform_edt(mask)
-        max_dist = np.max(distance)
-        if max_dist > 0:
-            boundary_factor = np.exp(-2 * distance / max_dist)
-            refinement += boundary_factor * (self.boundary_refinement - 1)
-
-        # Add gradient-based refinement if force fields are provided
-        if force_x is not None and force_y is not None:
-            force_mag = np.sqrt(force_x ** 2 + force_y ** 2)
-            force_mag[~mask] = 0
-
-            grad_x, grad_y = np.gradient(force_mag)
-            grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2)
-
-            if np.max(grad_mag) > 0:
-                grad_mag = grad_mag / np.max(grad_mag)
-                refinement += grad_mag * (self.gradient_refinement - 1)
-
-        # Smooth refinement field
-        refinement = gaussian_filter(refinement, sigma=2.0)
-
-        # Normalize refinement field to maintain total node count
-        # Scale so the average refinement equals base_refinement
-        valid_mask = mask > 0
-        avg_refinement = np.mean(refinement[valid_mask])
-        refinement = (refinement * base_refinement) / avg_refinement
-
-        return refinement
-
-    def _extract_boundary_points(self,
-                                 mask: np.ndarray,
-                                 refinement_field: np.ndarray) -> np.ndarray:
-        """Extract boundary points with adaptive spacing"""
-        # Find contours
+    def _create_geometry(self, mask: np.ndarray):
+        """Create geometry from mask contours"""
         contours = measure.find_contours(mask, 0.5)
-        boundary_points = []
+        contours = [self._simplify_contour(contour) for contour in contours]
+        contours = [c for c in contours if len(c) >= 3]
 
+        surface_loops = []
         for contour in contours:
-            # Calculate local refinement along contour
-            contour_refinement = np.array([
-                refinement_field[int(y), int(x)]
-                for y, x in contour
-            ])
+            points = []
+            lines = []
 
-            # Calculate adaptive spacing
-            cumulative_length = np.cumsum(
-                np.sqrt(np.sum(np.diff(contour, axis=0) ** 2, axis=1))
+            # Add points
+            for x, y in contour:
+                point_tag = gmsh.model.geo.addPoint(y, x, 0)
+                points.append(point_tag)
+
+            # Create lines between points
+            for i in range(len(points)):
+                line = gmsh.model.geo.addLine(points[i], points[(i + 1) % len(points)])
+                lines.append(line)
+
+            # Create curve loop
+            curve_loop = gmsh.model.geo.addCurveLoop(lines)
+            surface_loops.append(curve_loop)
+
+        # Create surface
+        if surface_loops:
+            gmsh.model.geo.addPlaneSurface([surface_loops[0]] + surface_loops[1:])
+            gmsh.model.geo.synchronize()
+        else:
+            raise ValueError("No valid contours found in mask")
+
+    def _simplify_contour(self, contour: np.ndarray, tolerance: float = 2.0) -> np.ndarray:
+        """Simplify contour by removing points that are too close together"""
+        if len(contour) < 3:
+            return contour
+
+        simplified = [contour[0]]
+        for point in contour[1:]:
+            if np.linalg.norm(point - simplified[-1]) > tolerance:
+                simplified.append(point)
+
+        if np.linalg.norm(simplified[-1] - simplified[0]) <= tolerance:
+            simplified.pop()
+
+        return np.array(simplified)
+
+    def _extract_mesh(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Extract mesh points and triangles from GMSH"""
+        node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
+        points = node_coords.reshape(-1, 3)[:, :2]
+
+        elem_types, elem_tags, elem_conn = gmsh.model.mesh.getElements()
+        triangle_type_index = np.where(elem_types == 2)[0]
+
+        if len(triangle_type_index) == 0:
+            raise ValueError("No triangular elements found in the mesh")
+
+        triangles = elem_conn[triangle_type_index[0]].reshape(-1, 3) - 1
+        return points, triangles
+
+    def analyze_mesh_quality(self, points: np.ndarray, triangles: np.ndarray) -> Dict[str, float]:
+        """Compute quality metrics for the generated mesh"""
+        # Get triangle vertices
+        v0 = points[triangles[:, 0]]
+        v1 = points[triangles[:, 1]]
+        v2 = points[triangles[:, 2]]
+
+        # Compute edge vectors
+        e0 = v1 - v0
+        e1 = v2 - v1
+        e2 = v0 - v2
+
+        # Compute edge lengths
+        lengths = np.stack([
+            np.linalg.norm(e0, axis=1),
+            np.linalg.norm(e1, axis=1),
+            np.linalg.norm(e2, axis=1)
+        ]).T
+
+        # Compute angles
+        angles = []
+        for i in range(3):
+            e_prev = -e2 if i == 0 else -e0 if i == 1 else -e1
+            e_next = e0 if i == 0 else e1 if i == 1 else e2
+            cos_angle = np.sum(e_prev * e_next, axis=1) / (
+                    np.linalg.norm(e_prev, axis=1) * np.linalg.norm(e_next, axis=1)
             )
-            total_length = cumulative_length[-1]
+            angles.append(np.arccos(np.clip(cos_angle, -1.0, 1.0)))
+        angles = np.concatenate(angles) * 180 / np.pi
 
-            # Target number of points based on average refinement
-            avg_refinement = np.mean(contour_refinement)
-            n_points = int(total_length * avg_refinement)
+        # Compute areas
+        areas = 0.5 * np.abs(
+            (v0[:, 0] * v1[:, 1] + v1[:, 0] * v2[:, 1] + v2[:, 0] * v0[:, 1]) -
+            (v1[:, 0] * v0[:, 1] + v2[:, 0] * v1[:, 1] + v0[:, 0] * v2[:, 1])
+        )
 
-            if n_points > 0:
-                # Generate points with adaptive spacing
-                desired_spacing = total_length / n_points
-                current_length = 0
-                current_point = contour[0]
-                new_points = [current_point]
+        # Quality metrics
+        aspect_ratios = np.max(lengths, axis=1) / np.min(lengths, axis=1)
+        s = np.sum(lengths, axis=1) / 2
+        r_in = 2 * areas / (s * 2)
+        r_out = np.prod(lengths, axis=1) / (4 * areas)
+        quality = 2 * r_in / r_out
 
-                for i in range(1, len(contour)):
-                    vec = contour[i] - current_point
-                    seg_length = np.sqrt(np.sum(vec ** 2))
+        return {
+            "min_angle": np.min(angles),
+            "mean_angle": np.mean(angles),
+            "min_quality": np.min(quality),
+            "mean_quality": np.mean(quality),
+            "max_aspect_ratio": np.max(aspect_ratios),
+            "mean_aspect_ratio": np.mean(aspect_ratios),
+            "n_elements": len(triangles)
+        }
 
-                    # Local refinement factor
-                    local_refinement = contour_refinement[i]
-                    local_spacing = desired_spacing / local_refinement
-
-                    while current_length + seg_length > local_spacing:
-                        # Add new point
-                        frac = (local_spacing - current_length) / seg_length
-                        new_point = current_point + frac * vec
-                        new_points.append(new_point)
-
-                        # Update for next point
-                        current_point = new_point
-                        vec = contour[i] - current_point
-                        seg_length = np.sqrt(np.sum(vec ** 2))
-                        current_length = 0
-
-                    current_length += seg_length
-                    current_point = contour[i]
-
-                boundary_points.extend(new_points)
-
-        return np.array(boundary_points)
-
-    def _generate_interior_points(self,
-                                  mask: np.ndarray,
-                                  refinement_field: np.ndarray) -> np.ndarray:
-        """Generate interior points with adaptive density"""
-        # Calculate base spacing from local refinement
-        min_spacing = 1.0 / np.max(refinement_field)
-
-        # Generate denser grid and subsample based on refinement field
-        x, y = np.mgrid[0:mask.shape[1]:min_spacing / 2,
-               0:mask.shape[0]:min_spacing / 2]  # Swap x,y order
-
-        points = np.column_stack((y.ravel(), x.ravel()))  # Keep y,x order for now
-        valid_mask = mask[points[:, 0].astype(int),
-        points[:, 1].astype(int)]
-        points = points[valid_mask]
-
-        # Get local refinement values
-        local_refinement = refinement_field[points[:, 0].astype(int),
-        points[:, 1].astype(int)]
-
-        # Probabilistic point selection based on refinement
-        probs = local_refinement / np.max(refinement_field)
-        keep_mask = np.random.random(len(points)) < probs
-
-        return points[keep_mask]
-
-    def _filter_and_improve_mesh(self,
-                                 tri: Delaunay,
-                                 points: np.ndarray,
-                                 mask: np.ndarray) -> np.ndarray:
-        """Filter and improve triangulation"""
-        # Convert points back to y,x for mask checking
-        points_yx = points[:, [1, 0]]
-
-        # Filter elements to only those inside mask
-        centroids = np.mean(points_yx[tri.simplices], axis=1)
-        valid_elements = mask[centroids[:, 0].astype(int),
-        centroids[:, 1].astype(int)]
-        elements = tri.simplices[valid_elements]
-
-        # Calculate element quality metrics
-        qualities = self._calculate_element_qualities(points, elements)
-
-        # Filter out poor quality elements
-        good_elements = qualities > self.quality_threshold
-        elements = elements[good_elements]
-
-        return elements
-
-    def _calculate_element_qualities(self,
-                                     points: np.ndarray,
-                                     elements: np.ndarray) -> np.ndarray:
-        """Calculate quality metrics for mesh elements"""
-        qualities = np.zeros(len(elements))
-
-        for i, element in enumerate(elements):
-            # Get vertex coordinates
-            vertices = points[element]
-
-            # Calculate edge lengths
-            edges = np.roll(vertices, -1, axis=0) - vertices
-            lengths = np.sqrt(np.sum(edges ** 2, axis=1))
-
-            # Calculate area using cross product
-            area = np.abs(np.cross(edges[0], edges[1])) / 2
-
-            # Calculate quality metric (ratio of area to sum of squared edge lengths)
-            qualities[i] = 4 * np.sqrt(3) * area / np.sum(lengths ** 2)
-
-        return qualities
-
-    def plot_mesh(self,
-                  nodes: np.ndarray,
-                  elements: np.ndarray,
-                  mask: Optional[np.ndarray] = None,
-                  refinement_field: Optional[np.ndarray] = None,
-                  force_x: Optional[np.ndarray] = None,
-                  force_y: Optional[np.ndarray] = None,
-                  figsize: Tuple[int, int] = (15, 5)):
-        """Plot the generated mesh and associated fields"""
-        from matplotlib.collections import LineCollection
-
-        fig = plt.figure(figsize=figsize)
-
-        if force_x is not None and force_y is not None and refinement_field is not None:
-            ax1 = plt.subplot(131)
-            ax2 = plt.subplot(132)
-            ax3 = plt.subplot(133)
-            axes = [ax1, ax2, ax3]
-        else:
-            ax1 = plt.subplot(111)
-            axes = [ax1]
-
-        # Plot base mesh
-        if mask is not None:
-            ax1.imshow(mask, alpha=0.3, cmap='gray', interpolation='nearest')
-
-        # Create edge segments for all triangles
-        edges = np.zeros((len(elements) * 3, 2, 2))
-        for i, element in enumerate(elements):
-            triangle = nodes[element]
-            edges[i * 3] = triangle[[0, 1]]
-            edges[i * 3 + 1] = triangle[[1, 2]]
-            edges[i * 3 + 2] = triangle[[2, 0]]
-
-        line_collection = LineCollection(edges, linewidths=0.5, alpha=0.6, color='b')
-        ax1.add_collection(line_collection)
-
-        # Plot nodes
-        if refinement_field is not None:
-            nodes_yx = nodes[:, [1, 0]]
-            node_refinements = refinement_field[nodes_yx[:, 0].astype(int),
-            nodes_yx[:, 1].astype(int)]
-            node_sizes = 20 * node_refinements / np.max(refinement_field)
-            ax1.scatter(nodes[:, 0], nodes[:, 1], s=node_sizes, c='r',
-                        alpha=0.3, rasterized=True)
-        else:
-            ax1.scatter(nodes[:, 0], nodes[:, 1], s=10, c='r',
-                        alpha=0.3, rasterized=True)
-
-        ax1.set_title(f'Mesh Structure ({len(nodes)} nodes)')
-        ax1.set_aspect('equal')
-
-        if len(axes) > 1:
-            # Plot refinement field
-            im2 = ax2.imshow(refinement_field, cmap='viridis',
-                             interpolation='nearest')
-            plt.colorbar(im2, ax=ax2, label='Refinement Factor')
-            ax2.set_title('Refinement Field')
-
-            # Plot force magnitude
-            force_mag = np.sqrt(force_x ** 2 + force_y ** 2)
-            im3 = ax3.imshow(force_mag, cmap='magma',
-                             interpolation='nearest')
-            plt.colorbar(im3, ax=ax3, label='Force Magnitude')
-            ax3.set_title('Force Field')
-
-            # Add quiver plot
-            step = max(1, int(force_x.shape[0] / 20))
-            x, y = np.mgrid[0:force_x.shape[1]:step, 0:force_x.shape[0]:step]
-            ax3.quiver(x, y,
-                       force_x[::step, ::step],
-                       force_y[::step, ::step],
-                       angles='xy', scale_units='xy', scale=2,
-                       color='w', alpha=0.6, width=0.003)
-
-        # Set limits and labels
-        for ax in axes:
-            ax.set_xlim(-1, mask.shape[1] if mask is not None else nodes[:, 0].max() + 1)
-            ax.set_ylim(-1, mask.shape[0] if mask is not None else nodes[:, 1].max() + 1)
-            ax.set_xlabel('x (pixels)')
-            ax.set_ylabel('y (pixels)')
-
-        plt.tight_layout()
-        return fig
