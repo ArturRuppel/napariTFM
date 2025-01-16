@@ -150,110 +150,73 @@ class MonolayerStressMicroscopy:
 
         return mask_stack
 
-    @timer_decorator
-    def calculate_stress_field(self, traction_x, traction_y):
-        """Calculate stress field using triangular elements"""
-        if np.all(np.isnan(traction_x)) or np.all(np.isnan(traction_y)):
-            raise ValueError("Input tractions are all NaN")
-
-        # Resize mask if needed
-        if self.mask.shape != traction_x.shape:
-            from skimage.transform import resize
-            resized_mask = resize(
-                self.mask.astype(float),
-                traction_x.shape,
-                order=0
-            ) > 0.5
-
-            self.nodes, self.elements = self.mesh_generator.generate_mesh(resized_mask)
-            self.mask = resized_mask
-
-        # Prepare forces
-        f_x, f_y = self._prepare_forces(traction_x, traction_y, self.mask, self.pixelsize)
-
-        # Format mesh for FEM solver
-        nodes_formatted, elements_formatted, loads, mats = self._grid_setup(
-            nodes_xy=self.nodes,  # Raw node coordinates from mesh generator
-            elements=self.elements,  # Raw element connectivity from mesh generator
-            f_x=-f_x,  # Force field on regular grid
-            f_y=-f_y
-        )
-
-        # Calculate stress tensor
-        stress_tensor = self._fem_simulation(nodes_formatted, elements_formatted, loads, mats, self.mask)
-
-        return stress_tensor
-
     def _grid_setup(self, nodes_xy, elements, f_x, f_y):
-        """Setup triangular mesh with linear force interpolation
-
-        Args:
-            nodes_xy: Node coordinates from mesh generator (N x 2 array)
-            elements: Element connectivity from mesh generator
-            f_x: x-component force field on regular grid
-            f_y: y-component force field on regular grid
-        """
+        """Setup triangular mesh with linear force interpolation and proper scaling"""
         # Convert to required format
         num_nodes = len(nodes_xy)
         nodes = np.zeros((num_nodes, 5))
         nodes[:, 0] = np.arange(num_nodes)  # node numbers
-        nodes[:, 1:3] = nodes_xy  # x,y coordinates from mesh generator
+        nodes[:, 1:3] = nodes_xy  # x,y coordinates
         nodes[:, 3:] = 0  # BC flags
 
         # Convert element connectivity
         num_elements = len(elements)
         elements_formatted = np.zeros((num_elements, 6), dtype=np.int64)
-        elements_formatted[:, 0] = np.arange(num_elements)  # element numbers
+        elements_formatted[:, 0] = np.arange(num_elements)
         elements_formatted[:, 1] = 1  # element type (1 for triangle)
         elements_formatted[:, 2] = 0  # material number
-        elements_formatted[:, 3:] = elements  # connectivity
+        elements_formatted[:, 3:] = elements
 
-        # Setup loads with linear interpolation
+        # Calculate nodal tributary areas
+        node_areas = np.zeros(num_nodes)
+        for el in range(num_elements):
+            el_nodes = elements[el]
+            # Calculate element area
+            x = nodes_xy[el_nodes, 0]
+            y = nodes_xy[el_nodes, 1]
+            area = 0.5 * abs((x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]))
+            # Distribute area to nodes (1/3 to each node)
+            node_areas[el_nodes] += area / 3.0
+
+        # Setup loads with area-weighted interpolation
         loads = np.zeros((num_nodes, 3))
         loads[:, 0] = np.arange(num_nodes)
 
         # Create grid points for input forces
         grid_y, grid_x = np.mgrid[0:f_x.shape[0], 0:f_x.shape[1]]
 
-        # Create interpolators for x and y forces
-        from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
-
         # Get valid force points
         valid_mask_x = ~np.isnan(f_x)
         valid_mask_y = ~np.isnan(f_y)
 
-        # Points for x force interpolation
+        # Points for interpolation
         points_x = np.column_stack((grid_x[valid_mask_x], grid_y[valid_mask_x]))
         values_x = f_x[valid_mask_x]
-
-        # Points for y force interpolation
         points_y = np.column_stack((grid_x[valid_mask_y], grid_y[valid_mask_y]))
         values_y = f_y[valid_mask_y]
 
-        # Create linear interpolators
+        # Create interpolators
+        from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
         interp_x = LinearNDInterpolator(points_x, values_x)
         interp_y = LinearNDInterpolator(points_y, values_y)
-
-        # Create nearest neighbor interpolators for NaN fill
         nn_interp_x = NearestNDInterpolator(points_x, values_x)
         nn_interp_y = NearestNDInterpolator(points_y, values_y)
 
-        # Interpolate forces to node positions
+        # Interpolate forces to node positions with area weighting
         x_forces = interp_x(nodes[:, 1], nodes[:, 2])
         y_forces = interp_y(nodes[:, 1], nodes[:, 2])
 
-        # Fill NaN values with nearest neighbor interpolation
+        # Fill NaN values
         nan_mask_x = np.isnan(x_forces)
         nan_mask_y = np.isnan(y_forces)
-
         if np.any(nan_mask_x):
             x_forces[nan_mask_x] = nn_interp_x(nodes[nan_mask_x, 1], nodes[nan_mask_x, 2])
         if np.any(nan_mask_y):
             y_forces[nan_mask_y] = nn_interp_y(nodes[nan_mask_y, 1], nodes[nan_mask_y, 2])
 
-        # Assign interpolated forces to loads array
-        loads[:, 1] = x_forces
-        loads[:, 2] = y_forces
+        # Apply area weighting to forces
+        loads[:, 1] = x_forces * node_areas
+        loads[:, 2] = y_forces * node_areas
 
         # Setup materials
         mats = np.array([[self.E, self.sigma]])
@@ -490,28 +453,70 @@ class MonolayerStressMicroscopy:
 
         return nodes_xy, x_points, y_points
 
-    @timer_decorator
-    @timer_decorator
-    def _custom_solver(self, KG, RHSG, mask, nodes, IBC):
-        """Hybrid solver with explicit DOF-based constraint scaling"""
-        neq = KG.shape[0]
+    def calculate_stress_field(self, traction_x, traction_y):
+        """Calculate stress field using triangular elements with detailed debugging"""
+        if np.all(np.isnan(traction_x)) or np.all(np.isnan(traction_y)):
+            raise ValueError("Input tractions are all NaN")
 
-        # Get node positions and set up constraints using optimized method
+        print("\n=== Debug: Stress Field Calculation Start ===")
+
+        # Prepare forces
+        f_x, f_y = self._prepare_forces(traction_x, traction_y, self.mask, self.pixelsize)
+
+        # Format mesh for FEM solver
+        nodes_formatted, elements_formatted, loads, mats = self._grid_setup(
+            nodes_xy=self.nodes,
+            elements=self.elements,
+            f_x=-f_x,
+            f_y=-f_y
+        )
+
+        print(f"\nMesh statistics:")
+        print(f"Number of nodes: {len(nodes_formatted)}")
+        print(f"Number of elements: {len(elements_formatted)}")
+        print(f"Load statistics:")
+        print(f"Load X - min: {np.min(loads[:, 1]):.2e}, max: {np.max(loads[:, 1]):.2e}, mean: {np.mean(loads[:, 1]):.2e}")
+        print(f"Load Y - min: {np.min(loads[:, 2]):.2e}, max: {np.max(loads[:, 2]):.2e}, mean: {np.mean(loads[:, 2]):.2e}")
+
+        # Calculate stress tensor
+        stress_tensor = self._fem_simulation(nodes_formatted, elements_formatted, loads, mats, self.mask)
+
+        print("\nFinal stress tensor statistics:")
+        print(f"σxx - min: {np.nanmin(stress_tensor[:, :, 0, 0]):.2e}, max: {np.nanmax(stress_tensor[:, :, 0, 0]):.2e}, mean: {np.nanmean(stress_tensor[:, :, 0, 0]):.2e}")
+        print(f"σyy - min: {np.nanmin(stress_tensor[:, :, 1, 1]):.2e}, max: {np.nanmax(stress_tensor[:, :, 1, 1]):.2e}, mean: {np.nanmean(stress_tensor[:, :, 1, 1]):.2e}")
+        print(f"σxy - min: {np.nanmin(stress_tensor[:, :, 0, 1]):.2e}, max: {np.nanmax(stress_tensor[:, :, 0, 1]):.2e}, mean: {np.nanmean(stress_tensor[:, :, 0, 1]):.2e}")
+        print("=== Debug: Stress Field Calculation End ===\n")
+
+        return stress_tensor
+
+    def _custom_solver(self, KG, RHSG, mask, nodes, IBC):
+        """Hybrid solver with explicit DOF-based constraint scaling and debugging"""
+        print("\n=== Debug: Custom Solver Start ===")
+        print(f"System size (neq): {KG.shape[0]}")
+        print(f"RHSG statistics - min: {np.min(RHSG):.2e}, max: {np.max(RHSG):.2e}, mean: {np.mean(RHSG):.2e}")
+
+        neq = KG.shape[0]
         nodes_xy, x_points, y_points = self._find_eq_position(nodes, IBC, neq)
 
-        # Calculate center of mass
-        com = regionprops(mask.astype(int))[0].centroid
+        # Debug KG matrix properties
+        print(f"\nStiffness matrix (KG) statistics:")
+        print(f"KG diagonal - min: {np.min(KG.diagonal()):.2e}, max: {np.max(KG.diagonal()):.2e}")
+        print(f"KG non-zero elements: {KG.nnz}")
+        print(f"KG sparsity: {KG.nnz / (neq * neq):.2e}")
 
-        # Use Numba-accelerated constraint preparation
+        com = regionprops(mask.astype(int))[0].centroid
         constraint_data, constraint_rows, constraint_cols = prepare_constraint_data_numba(
             nodes_xy, x_points, y_points, com, neq
         )
 
-        # Create sparse constraint matrix
         constraints = csr_matrix(
             (constraint_data, (constraint_rows, constraint_cols)),
             shape=(3, neq)
         )
+
+        print("\nConstraint matrix statistics:")
+        print(f"Constraint values - min: {np.min(constraint_data):.2e}, max: {np.max(constraint_data):.2e}")
+        print(f"Number of constraint equations: {constraints.shape[0]}")
 
         # Create scaling based on diagonal of KG
         diag = np.array(KG.diagonal())
@@ -519,28 +524,39 @@ class MonolayerStressMicroscopy:
         valid_diag = np.abs(diag) > 1e-10
         scale[valid_diag] = 1.0 / np.sqrt(np.abs(diag[valid_diag]))
 
-        # Create scaling matrix
         S = diags(scale)
-
-        # Scale system
         KG_scaled = KG.dot(S)
 
-        # Calculate constraint scaling with explicit DOF consideration
+        # Calculate and print scaling factors
+        print("\nScaling statistics:")
+        print(f"Diagonal scaling - min: {np.min(scale[valid_diag]):.2e}, max: {np.max(scale[valid_diag]):.2e}")
+
         base_scaling = np.sqrt(np.sum(KG_scaled.data ** 2)) / np.sqrt(np.sum(constraints.data ** 2))
-        constraint_scale = base_scaling * np.sqrt(neq)
+        constraint_scale = base_scaling
+        print(f"Base constraint scaling: {base_scaling:.2e}")
 
         # Stack scaled system
         KG_constrained = vstack([KG_scaled, constraints * constraint_scale], format="csr")
         RHSG_constrained = np.append(RHSG, np.zeros(3))
 
-        # Solve scaled system using LSQR
+        print("\nConstrained system statistics:")
+        print(f"System size after constraints: {KG_constrained.shape}")
+        print(f"RHSG constrained - min: {np.min(RHSG_constrained):.2e}, max: {np.max(RHSG_constrained):.2e}")
+
+        # Solve system
         x_scaled = lsqr(KG_constrained, RHSG_constrained,
-                        atol=1e-16,
-                        btol=1e-16,
+                        atol=1e-16, btol=1e-16,
                         iter_lim=5000000,
-                        show=True)[0]
+                        show=False)[0]
+
+        print("\nSolution statistics:")
+        print(f"Scaled solution - min: {np.min(x_scaled):.2e}, max: {np.max(x_scaled):.2e}, mean: {np.mean(x_scaled):.2e}")
 
         # Unscale solution
         UG_sol = S.dot(x_scaled[:neq])
+        print(f"Final solution - min: {np.min(UG_sol):.2e}, max: {np.max(UG_sol):.2e}, mean: {np.mean(UG_sol):.2e}")
+        print("=== Debug: Custom Solver End ===\n")
 
         return UG_sol
+
+
