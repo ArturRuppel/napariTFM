@@ -4,15 +4,15 @@ import matplotlib.pyplot as plt
 from napariTFM.msm import MonolayerStressMicroscopy
 
 
-def run_msm_simulation(t_x, t_y, mask, density_factor, pixelsize=0.2):
+def run_msm_simulation(t_x, t_y, mask, density_factor, pixelsize=0.3*1e-6):
     """Run MSM simulation with given density factor"""
     msm = MonolayerStressMicroscopy(
         mask=mask,
         pixelsize=pixelsize,
         density_factor=density_factor,
-        algorithm=4,
+        algorithm=2,
         use_optimization=True,
-        youngs_modulus=100
+        youngs_modulus=1
     )
 
     stress_tensor_calc = msm.calculate_stress_field(t_x, t_y)
@@ -45,7 +45,7 @@ def plot_comparison_results(sigma_xx_true, sigma_xx_results, density_factors, ma
         masked_calc[~mask] = np.nan
         vmax_calc = np.nanpercentile(np.abs(masked_calc), 99)
         print(f"Density {density}: {vmax_calc:.2e}")
-        im = ax.imshow(masked_calc, cmap='RdBu_r', vmin=-vmax_calc, vmax=vmax_calc)
+        im = ax.imshow(masked_calc, cmap='RdBu_r', vmin=-vmax_true, vmax=vmax_true)
         ax.set_title(f'σxx (density={density})')
         plt.colorbar(im, ax=ax)
 
@@ -64,11 +64,12 @@ def main():
     sigma_xx_true = np.load(synthetic_cell_dir / 'Stress_xx_warped.npy')
     sigma_yy_true = np.load(synthetic_cell_dir / 'Stress_yy_warped.npy')
 
+
     # Create mask based on stress magnitude
     mask = np.abs(sigma_xx_true) > 0
 
     # Define density factors to test
-    density_factors = [0.005, 0.01, 0.02]
+    density_factors = [0.008, 0.01, 0.02]
 
     # Run simulations for each density factor
     sigma_xx_results = []

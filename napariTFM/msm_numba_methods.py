@@ -121,16 +121,10 @@ def calculate_element_stresses(el, elements, nodes, UC, mats):
     # Natural coordinates for triangle (same for all cases)
     natural_coords = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64)
 
-    # Check for element quality
-    area = abs(det) / 2
-    if area < 1e-10:
-        # Return zero stresses for degenerate elements
-        stresses = np.zeros((3, 3), dtype=np.float64)
-        return stresses, natural_coords, el_coords
-
     # Calculate strains and stresses
     strain = np.dot(B, el_disps.flatten())
     stress = np.dot(D, strain)
+
 
     # For triangles, stress is constant across element
     stresses = np.zeros((3, 3), dtype=np.float64)

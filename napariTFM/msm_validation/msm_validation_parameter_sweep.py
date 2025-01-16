@@ -220,7 +220,7 @@ if __name__ == "__main__":
         print("Results file not found. Running parameter sweep...")
         # Get the current directory and construct path to synthetic_cell
         current_dir = Path(__file__).parent
-        synthetic_cell_dir = current_dir.parent / 'benchmarks' / 'synthetic_cell_downscaled'
+        synthetic_cell_dir = current_dir.parent / 'benchmarks' / 'synthetic_cell_physical_units'
 
         # Load data
         t_x = np.load(synthetic_cell_dir / 'Traction_x_warped.npy')
@@ -236,7 +236,7 @@ if __name__ == "__main__":
             t_x, t_y,
             sigma_xx_true, sigma_yy_true,
             mask,
-            pixelsize=1 * 1e6  # assuming unit pixels
+            pixelsize=0.3 * 1e-6  # assuming unit pixels
         )
 
         # Save results to CSV
