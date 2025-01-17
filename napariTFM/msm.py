@@ -477,8 +477,7 @@ class MonolayerStressMicroscopy:
         # print("\nScaling statistics:")
         # print(f"Diagonal scaling - min: {np.min(scale[valid_diag]):.2e}, max: {np.max(scale[valid_diag]):.2e}")
 
-        base_scaling = np.sqrt(np.sum(KG_scaled.data ** 2)) / np.sqrt(np.sum(constraints.data ** 2))
-        constraint_scale = base_scaling
+        constraint_scale = np.sqrt(np.sum(KG_scaled.data ** 2)) / np.sqrt(np.sum(constraints.data ** 2))
         # print(f"Base constraint scaling: {base_scaling:.2e}")
 
         # Stack scaled system
@@ -495,13 +494,13 @@ class MonolayerStressMicroscopy:
                         iter_lim=5000000,
                         show=False)[0]
 
-        print("\nSolution statistics:")
-        print(f"Scaled solution - min: {np.min(x_scaled):.2e}, max: {np.max(x_scaled):.2e}, mean: {np.mean(x_scaled):.2e}")
+        # print("\nSolution statistics:")
+        # print(f"Scaled solution - min: {np.min(x_scaled):.2e}, max: {np.max(x_scaled):.2e}, mean: {np.mean(x_scaled):.2e}")
 
         # Unscale solution
         UG_sol = S.dot(x_scaled[:neq])
-        print(f"Final solution - min: {np.min(UG_sol):.2e}, max: {np.max(UG_sol):.2e}, mean: {np.mean(UG_sol):.2e}")
-        print("=== Debug: Custom Solver End ===\n")
+        # print(f"Final solution - min: {np.min(UG_sol):.2e}, max: {np.max(UG_sol):.2e}, mean: {np.mean(UG_sol):.2e}")
+        # print("=== Debug: Custom Solver End ===\n")
 
         return UG_sol
 
@@ -523,9 +522,9 @@ class MonolayerStressMicroscopy:
         f_x, f_y = self._correct_torque(f_x, f_y, mask)
 
         # Debug output for force magnitudes
-        print(f"\nForce preparation:")
-        print(f"Traction range x: [{np.nanmin(f_x):.2e}, {np.nanmax(f_x):.2e}] Pa")
-        print(f"Traction range y: [{np.nanmin(f_y):.2e}, {np.nanmax(f_y):.2e}] Pa")
+        # print(f"\nForce preparation:")
+        # print(f"Traction range x: [{np.nanmin(f_x):.2e}, {np.nanmax(f_x):.2e}] Pa")
+        # print(f"Traction range y: [{np.nanmin(f_y):.2e}, {np.nanmax(f_y):.2e}] Pa")
 
         return f_x, f_y
 
