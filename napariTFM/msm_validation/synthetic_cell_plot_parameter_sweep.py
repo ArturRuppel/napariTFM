@@ -16,45 +16,62 @@ def plot_selected_cases(results, ground_truth, save_path=None):
     """Plot three cases with different mesh densities and their stress fields compared to ground truth"""
     stress_xx_gt, stress_yy_gt = ground_truth
 
-    # Find the best case based on correlation
+    # Find the best algorithm based on average correlation
     successful_runs = [run for run in results['runs'] if run['success']]
     for run in successful_runs:
         run['avg_corr'] = (run['xx_metrics']['correlation'] + run['yy_metrics']['correlation']) / 2
 
-    sorted_runs = sorted(successful_runs, key=lambda x: x['avg_corr'], reverse=True)
-    best_case = sorted_runs[0]
+    # Group by algorithm and find the best one
+    algo_performances = {}
+    for run in successful_runs:
+        algo = run['parameters']['algorithm']
+        if algo not in algo_performances:
+            algo_performances[algo] = []
+        algo_performances[algo].append(run['avg_corr'])
 
-    # Find cases with same parameters but different density factors
-    same_param_runs = [
+    best_algo = max(algo_performances.items(), key=lambda x: np.mean(x[1]))[0]
+
+    # Get all cases with the best algorithm
+    best_algo_runs = [
         run for run in successful_runs
-        if (run['parameters']['algorithm'] == best_case['parameters']['algorithm'] and
-            run['parameters']['use_optimization'] == best_case['parameters']['use_optimization'] and
-            run['parameters']['youngs_modulus'] == best_case['parameters']['youngs_modulus'])
+        if run['parameters']['algorithm'] == best_algo
     ]
 
-    # Sort by density factor and select three cases
-    same_param_runs.sort(key=lambda x: x['parameters']['density_factor'])
-    cases = [same_param_runs[0], same_param_runs[len(same_param_runs) // 2], best_case]
-    titles = ['Coarse Mesh', 'Medium Mesh', 'Fine Mesh']
+    # Define the densities we want and their labels
+    density_mapping = {
+        0.05: ('Coarse Mesh', 2),  # index 2 means it will appear last
+        0.01: ('Medium Mesh', 1),  # index 1 means it will appear in the middle
+        0.005: ('Fine Mesh', 0)  # index 0 means it will appear first
+    }
+
+    # Sort cases into the correct slots
+    cases = [None] * 3
+    for run in best_algo_runs:
+        df = run['parameters']['density_factor']
+        if df in density_mapping:
+            label, idx = density_mapping[df]
+            cases[idx] = (run, label)
+
+    # Ensure we found all three densities
+    if None in cases:
+        raise ValueError("Could not find all required density factors in the results")
+
+    # Unpack the cases and titles
+    cases, titles = zip(*cases)
 
     # Create figure with 4x4 grid
     fig = plt.figure(figsize=(20, 20))
-    plt.suptitle('Mesh Refinement Comparison', fontsize=16)
+    plt.suptitle(f'Mesh Refinement Comparison (Algorithm {best_algo})', fontsize=16)
 
     # Fixed stress limits
     stress_lim = 0.004
-
-    # Print debug information
-    print(f"Number of cases: {len(cases)}")
-    for idx, case in enumerate(cases):
-        print(f"Case {idx} density factor: {case['parameters']['density_factor']}")
 
     # First column: empty plot and meshes
     plt.subplot(4, 3, 1).set_visible(False)  # Empty plot
 
     # Plot meshes (first column, rows 2-4)
     for idx in range(3):
-        ax_mesh = plt.subplot(4, 3, 3 * idx + 4)  # This gives indices 4, 7, 10
+        ax_mesh = plt.subplot(4, 3, 3 * idx + 4)
         case = cases[idx]
         title = titles[idx]
 
@@ -86,7 +103,7 @@ def plot_selected_cases(results, ground_truth, save_path=None):
     ax_gt_xx.set_title('Ground Truth σxx')
 
     for idx in range(3):
-        ax_xx = plt.subplot(4, 3, 3 * idx + 5)  # This gives indices 5, 8, 11
+        ax_xx = plt.subplot(4, 3, 3 * idx + 5)
         case = cases[idx]
         im_xx = ax_xx.imshow(case['stress_tensor'][:, :, 0, 0],
                              cmap='RdBu_r', vmin=-stress_lim, vmax=stress_lim)
@@ -101,7 +118,7 @@ def plot_selected_cases(results, ground_truth, save_path=None):
     ax_gt_yy.set_title('Ground Truth σyy')
 
     for idx in range(3):
-        ax_yy = plt.subplot(4, 3, 3 * idx + 6)  # This gives indices 6, 9, 12
+        ax_yy = plt.subplot(4, 3, 3 * idx + 6)
         case = cases[idx]
         im_yy = ax_yy.imshow(case['stress_tensor'][:, :, 1, 1],
                              cmap='RdBu_r', vmin=-stress_lim, vmax=stress_lim)
@@ -113,8 +130,54 @@ def plot_selected_cases(results, ground_truth, save_path=None):
         plt.savefig(save_path / 'selected_cases.png', dpi=300, bbox_inches='tight')
     plt.show()
 
-def plot_mesh_quality_vs_density(results, save_path=None):
-    """Plot mesh quality vs density factor with algorithm and optimization encoded in color and marker"""
+def plot_residual_correlation(results, save_path=None):
+    """Plot residual vs correlation"""
+    successful_runs = [run for run in results['runs'] if run['success']]
+
+    # Prepare data
+    data = {
+        'Algorithm': [],
+        'Optimization': [],
+        'Residual': [],
+        'Average Correlation': []
+    }
+
+    for run in successful_runs:
+        data['Algorithm'].append(run['parameters']['algorithm'])
+        data['Optimization'].append('On' if run['parameters']['use_optimization'] else 'Off')
+        data['Residual'].append(run['numerical_metrics']['residual_norm'])
+        data['Average Correlation'].append(
+            (run['xx_metrics']['correlation'] + run['yy_metrics']['correlation']) / 2
+        )
+
+    plt.figure(figsize=(10, 6))
+    markers = {'On': 'o', 'Off': 's'}
+
+    for algo in set(data['Algorithm']):
+        for opt in ['On', 'Off']:
+            mask = [(a == algo and o == opt) for a, o in zip(data['Algorithm'], data['Optimization'])]
+            if any(mask):
+                plt.scatter(
+                    [r for r, m in zip(data['Residual'], mask) if m],
+                    [c for c, m in zip(data['Average Correlation'], mask) if m],
+                    label=f'Algorithm {algo} (Opt {opt})',
+                    marker=markers[opt]
+                )
+
+    plt.xscale('log')
+    plt.xlabel('Residual Norm')
+    plt.ylabel('Average Correlation')
+    plt.title('Solution Residual vs Correlation')
+    plt.legend()
+    plt.grid(True)
+
+    if save_path:
+        plt.savefig(save_path / 'residual_correlation.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+
+def plot_condition_density(results, save_path=None):
+    """Plot condition number vs mesh density"""
     successful_runs = [run for run in results['runs'] if run['success']]
 
     # Prepare data
@@ -122,256 +185,43 @@ def plot_mesh_quality_vs_density(results, save_path=None):
         'Algorithm': [],
         'Optimization': [],
         'Density Factor': [],
-        'Mean Quality': []
+        'Condition Number': []
     }
 
     for run in successful_runs:
         data['Algorithm'].append(run['parameters']['algorithm'])
         data['Optimization'].append('On' if run['parameters']['use_optimization'] else 'Off')
         data['Density Factor'].append(run['parameters']['density_factor'])
-        data['Mean Quality'].append(run['mesh_metrics']['mean_quality'])
+        data['Condition Number'].append(run['numerical_metrics']['condition_number'])
 
     plt.figure(figsize=(10, 6))
-
-    # Create unique markers for optimization states
     markers = {'On': 'o', 'Off': 's'}
 
-    # Plot for each algorithm and optimization combination
     for algo in set(data['Algorithm']):
         for opt in ['On', 'Off']:
             mask = [(a == algo and o == opt) for a, o in zip(data['Algorithm'], data['Optimization'])]
             if any(mask):
                 plt.scatter(
                     [df for df, m in zip(data['Density Factor'], mask) if m],
-                    [q for q, m in zip(data['Mean Quality'], mask) if m],
-                    label=f'{algo} (Opt {opt})',
+                    [cn for cn, m in zip(data['Condition Number'], mask) if m],
+                    label=f'Algorithm {algo} (Opt {opt})',
                     marker=markers[opt]
                 )
 
+    plt.yscale('log')
     plt.xlabel('Density Factor')
-    plt.ylabel('Mean Mesh Quality')
-    plt.title('Mesh Quality vs Density Factor')
+    plt.ylabel('Condition Number')
+    plt.title('Mesh Density vs Condition Number')
     plt.legend()
     plt.grid(True)
 
     if save_path:
-        plt.savefig(save_path / 'mesh_quality_vs_density.png', dpi=300, bbox_inches='tight')
-    plt.show()
-
-
-def plot_mesh_density_vs_correlation(results, save_path=None):
-    """Plot mesh density vs solution correlation for different algorithms"""
-    successful_runs = [run for run in results['runs'] if run['success']]
-
-    # Prepare data
-    data = {
-        'Algorithm': [],
-        'Optimization': [],
-        'Density Factor': [],
-        'XX Correlation': [],
-        'YY Correlation': []
-    }
-
-    for run in successful_runs:
-        data['Algorithm'].append(run['parameters']['algorithm'])
-        data['Optimization'].append('On' if run['parameters']['use_optimization'] else 'Off')
-        data['Density Factor'].append(run['parameters']['density_factor'])
-        data['XX Correlation'].append(run['xx_metrics']['correlation'])
-        data['YY Correlation'].append(run['yy_metrics']['correlation'])
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-
-    markers = {'On': 'o', 'Off': 's'}
-
-    # Plot density vs XX correlation
-    for algo in set(data['Algorithm']):
-        for opt in ['On', 'Off']:
-            mask = [(a == algo and o == opt) for a, o in zip(data['Algorithm'], data['Optimization'])]
-            if any(mask):
-                ax1.scatter(
-                    [df for df, m in zip(data['Density Factor'], mask) if m],
-                    [c for c, m in zip(data['XX Correlation'], mask) if m],
-                    label=f'{algo} (Opt {opt})',
-                    marker=markers[opt]
-                )
-
-    ax1.set_xlabel('Density Factor')
-    ax1.set_ylabel('XX Correlation')
-    ax1.set_title('Mesh Density vs XX Correlation')
-    ax1.legend()
-    ax1.grid(True)
-
-    # Plot density vs YY correlation
-    for algo in set(data['Algorithm']):
-        for opt in ['On', 'Off']:
-            mask = [(a == algo and o == opt) for a, o in zip(data['Algorithm'], data['Optimization'])]
-            if any(mask):
-                ax2.scatter(
-                    [df for df, m in zip(data['Density Factor'], mask) if m],
-                    [c for c, m in zip(data['YY Correlation'], mask) if m],
-                    label=f'{algo} (Opt {opt})',
-                    marker=markers[opt]
-                )
-
-    ax2.set_xlabel('Density Factor')
-    ax2.set_ylabel('YY Correlation')
-    ax2.set_title('Mesh Density vs YY Correlation')
-    ax2.legend()
-    ax2.grid(True)
-
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path / 'density_vs_correlation.png', dpi=300, bbox_inches='tight')
-    plt.show()
-
-
-def plot_optimization_impact(results, save_path=None):
-    """Plot the impact of optimization on solution quality"""
-    successful_runs = [run for run in results['runs'] if run['success']]
-
-    # Group runs by parameters excluding optimization
-    param_groups = {}
-    for run in successful_runs:
-        key = (run['parameters']['algorithm'],
-               run['parameters']['density_factor'],
-               run['parameters']['youngs_modulus'])
-        if key not in param_groups:
-            param_groups[key] = {'opt_on': None, 'opt_off': None}
-
-        if run['parameters']['use_optimization']:
-            param_groups[key]['opt_on'] = run
-        else:
-            param_groups[key]['opt_off'] = run
-
-    # Prepare data for plotting
-    data = {
-        'Algorithm': [],
-        'Density Factor': [],
-        'XX Improvement': [],
-        'YY Improvement': []
-    }
-
-    for params, runs in param_groups.items():
-        if runs['opt_on'] and runs['opt_off']:  # Only compare when we have both cases
-            data['Algorithm'].append(params[0])
-            data['Density Factor'].append(params[1])
-            data['XX Improvement'].append(
-                runs['opt_on']['xx_metrics']['correlation'] -
-                runs['opt_off']['xx_metrics']['correlation']
-            )
-            data['YY Improvement'].append(
-                runs['opt_on']['yy_metrics']['correlation'] -
-                runs['opt_off']['yy_metrics']['correlation']
-            )
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-
-    # Plot XX improvement
-    for algo in set(data['Algorithm']):
-        mask = [a == algo for a in data['Algorithm']]
-        ax1.scatter(
-            [df for df, m in zip(data['Density Factor'], mask) if m],
-            [imp for imp, m in zip(data['XX Improvement'], mask) if m],
-            label=algo
-        )
-
-    ax1.axhline(y=0, color='k', linestyle='--', alpha=0.5)
-    ax1.set_xlabel('Density Factor')
-    ax1.set_ylabel('XX Correlation Improvement')
-    ax1.set_title('Impact of Optimization on XX Stress')
-    ax1.legend()
-    ax1.grid(True)
-
-    # Plot YY improvement
-    for algo in set(data['Algorithm']):
-        mask = [a == algo for a in data['Algorithm']]
-        ax2.scatter(
-            [df for df, m in zip(data['Density Factor'], mask) if m],
-            [imp for imp, m in zip(data['YY Improvement'], mask) if m],
-            label=algo
-        )
-
-    ax2.axhline(y=0, color='k', linestyle='--', alpha=0.5)
-    ax2.set_xlabel('Density Factor')
-    ax2.set_ylabel('YY Correlation Improvement')
-    ax2.set_title('Impact of Optimization on YY Stress')
-    ax2.legend()
-    ax2.grid(True)
-
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path / 'optimization_impact.png', dpi=300, bbox_inches='tight')
-    plt.show()
-
-
-def plot_youngs_impact(results, save_path=None):
-    """Plot the impact of Young's modulus on solution quality"""
-    successful_runs = [run for run in results['runs'] if run['success']]
-
-    # Prepare data
-    data = {
-        'Algorithm': [],
-        'Optimization': [],
-        'Young\'s Modulus': [],
-        'XX Correlation': [],
-        'YY Correlation': []
-    }
-
-    for run in successful_runs:
-        data['Algorithm'].append(run['parameters']['algorithm'])
-        data['Optimization'].append('On' if run['parameters']['use_optimization'] else 'Off')
-        data['Young\'s Modulus'].append(run['parameters']['youngs_modulus'])
-        data['XX Correlation'].append(run['xx_metrics']['correlation'])
-        data['YY Correlation'].append(run['yy_metrics']['correlation'])
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-
-    markers = {'On': 'o', 'Off': 's'}
-
-    # Plot XX correlation
-    for algo in set(data['Algorithm']):
-        for opt in ['On', 'Off']:
-            mask = [(a == algo and o == opt) for a, o in zip(data['Algorithm'], data['Optimization'])]
-            if any(mask):
-                ax1.scatter(
-                    [e for e, m in zip(data['Young\'s Modulus'], mask) if m],
-                    [c for c, m in zip(data['XX Correlation'], mask) if m],
-                    label=f'{algo} (Opt {opt})',
-                    marker=markers[opt]
-                )
-
-    ax1.set_xlabel('Young\'s Modulus')
-    ax1.set_ylabel('XX Correlation')
-    ax1.set_title('Impact on XX Stress Component')
-    ax1.legend()
-    ax1.grid(True)
-
-    # Plot YY correlation
-    for algo in set(data['Algorithm']):
-        for opt in ['On', 'Off']:
-            mask = [(a == algo and o == opt) for a, o in zip(data['Algorithm'], data['Optimization'])]
-            if any(mask):
-                ax2.scatter(
-                    [e for e, m in zip(data['Young\'s Modulus'], mask) if m],
-                    [c for c, m in zip(data['YY Correlation'], mask) if m],
-                    label=f'{algo} (Opt {opt})',
-                    marker=markers[opt]
-                )
-
-    ax2.set_xlabel('Young\'s Modulus')
-    ax2.set_ylabel('YY Correlation')
-    ax2.set_title('Impact on YY Stress Component')
-    ax2.legend()
-    ax2.grid(True)
-
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path / 'youngs_impact.png', dpi=300, bbox_inches='tight')
+        plt.savefig(save_path / 'condition_density.png', dpi=300, bbox_inches='tight')
     plt.show()
 
 
 def plot_solution_ranking(results, save_path=None):
-    """Plot ranking of solutions based on correlation metrics"""
+    """Plot ranking of solutions based on correlation metrics with detailed parameter labels"""
     successful_runs = [run for run in results['runs'] if run['success']]
 
     # Calculate combined metric (average of XX and YY correlations)
@@ -389,93 +239,32 @@ def plot_solution_ranking(results, save_path=None):
     correlations = [run['combined_correlation'] for run in sorted_runs]
 
     # Create parameter strings for labels
-    labels = [f"df={run['parameters']['density_factor']}, "
-              f"algo={run['parameters']['algorithm']}, "
-              f"opt={run['parameters']['use_optimization']}, "
-              f"E={run['parameters']['youngs_modulus']}"
-              for run in sorted_runs]
+    labels = []
+    for run in sorted_runs:
+        label = (f"df={run['parameters']['density_factor']}, "
+                 f"algo={run['parameters']['algorithm']}, "
+                 f"opt={run['parameters']['use_optimization']}, "
+                 f"E={run['parameters']['youngs_modulus']}, "
+                 f"corr={run['combined_correlation']:.3f}, "
+                 f"res={run['numerical_metrics']['residual_norm']:.2e}, "
+                 f"cond={run['numerical_metrics']['condition_number']:.2e}")
+        labels.append(label)
 
-    plt.figure(figsize=(15, 8))
+    plt.figure(figsize=(15, 10))
     plt.plot(ranks, correlations, 'o-')
     plt.xlabel('Rank')
     plt.ylabel('Average Correlation')
     plt.title('Solution Ranking by Average Correlation')
 
-    # Add parameter details for top 5 and bottom 5 cases
-    for i in [0, 1, 2, 3, 4, -5, -4, -3, -2, -1]:
+    # Add parameter details for all points with smaller font and angled text
+    for i in range(len(ranks)):
         plt.annotate(labels[i], (ranks[i], correlations[i]),
                      xytext=(5, 5), textcoords='offset points',
-                     fontsize=8, rotation=45, ha='left')
+                     fontsize=6, rotation=45, ha='left')
 
     plt.grid(True)
     if save_path:
         plt.savefig(save_path / 'solution_ranking.png', dpi=300, bbox_inches='tight')
-    plt.show()
-
-
-def plot_quality_vs_solution(results, save_path=None):
-    """Plot mesh quality metrics vs solution correlation with algorithm and optimization encoding"""
-    successful_runs = [run for run in results['runs'] if run['success']]
-
-    # Prepare data
-    data = {
-        'Algorithm': [],
-        'Optimization': [],
-        'Mean Quality': [],
-        'XX Correlation': [],
-        'YY Correlation': []
-    }
-
-    for run in successful_runs:
-        data['Algorithm'].append(run['parameters']['algorithm'])
-        data['Optimization'].append('On' if run['parameters']['use_optimization'] else 'Off')
-        data['Mean Quality'].append(run['mesh_metrics']['mean_quality'])
-        data['XX Correlation'].append(run['xx_metrics']['correlation'])
-        data['YY Correlation'].append(run['yy_metrics']['correlation'])
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-    markers = {'On': 'o', 'Off': 's'}
-
-    # Plot mesh quality vs XX correlation
-    for algo in set(data['Algorithm']):
-        for opt in ['On', 'Off']:
-            mask = [(a == algo and o == opt) for a, o in zip(data['Algorithm'], data['Optimization'])]
-            if any(mask):
-                ax1.scatter(
-                    [q for q, m in zip(data['Mean Quality'], mask) if m],
-                    [c for c, m in zip(data['XX Correlation'], mask) if m],
-                    label=f'{algo} (Opt {opt})',
-                    marker=markers[opt]
-                )
-
-    ax1.set_xlabel('Mean Mesh Quality')
-    ax1.set_ylabel('XX Correlation')
-    ax1.set_title('Mesh Quality vs XX Correlation')
-    ax1.legend()
-    ax1.grid(True)
-
-    # Plot mesh quality vs YY correlation
-    for algo in set(data['Algorithm']):
-        for opt in ['On', 'Off']:
-            mask = [(a == algo and o == opt) for a, o in zip(data['Algorithm'], data['Optimization'])]
-            if any(mask):
-                ax2.scatter(
-                    [q for q, m in zip(data['Mean Quality'], mask) if m],
-                    [c for c, m in zip(data['YY Correlation'], mask) if m],
-                    label=f'{algo} (Opt {opt})',
-                    marker=markers[opt]
-                )
-
-    ax2.set_xlabel('Mean Mesh Quality')
-    ax2.set_ylabel('YY Correlation')
-    ax2.set_title('Mesh Quality vs YY Correlation')
-    ax2.legend()
-    ax2.grid(True)
-
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(save_path / 'quality_vs_solution.png', dpi=300, bbox_inches='tight')
     plt.show()
 
 
@@ -496,12 +285,9 @@ def main():
 
     # Generate all plots
     plot_selected_cases(results, ground_truth, plot_dir)
-    # plot_mesh_quality_vs_density(results, plot_dir)
-    # plot_mesh_density_vs_correlation(results, plot_dir)
-    # plot_optimization_impact(results, plot_dir)
-    # plot_youngs_impact(results, plot_dir)
-    # plot_solution_ranking(results, plot_dir)
-    # plot_quality_vs_solution(results, plot_dir)
+    plot_residual_correlation(results, plot_dir)
+    plot_condition_density(results, plot_dir)
+    plot_solution_ranking(results, plot_dir)
 
 
 if __name__ == "__main__":

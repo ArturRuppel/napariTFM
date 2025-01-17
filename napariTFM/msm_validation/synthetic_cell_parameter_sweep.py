@@ -3,37 +3,7 @@ import numpy as np
 import pickle
 from tqdm import tqdm
 from napariTFM.msm import MonolayerStressMicroscopy
-
-
-def calculate_mesh_quality(nodes, elements):
-    """Calculate mesh quality metrics"""
-    qualities = []
-    for element in elements:
-        # Get triangle vertices
-        vertices = nodes[element]
-
-        # Calculate edge lengths
-        edges = [
-            np.linalg.norm(vertices[1] - vertices[0]),
-            np.linalg.norm(vertices[2] - vertices[1]),
-            np.linalg.norm(vertices[0] - vertices[2])
-        ]
-
-        # Calculate area using Heron's formula
-        s = sum(edges) / 2
-        area = np.sqrt(s * (s - edges[0]) * (s - edges[1]) * (s - edges[2]))
-
-        # Calculate quality (ratio of area to sum of squared edge lengths)
-        quality = 4 * np.sqrt(3) * area / sum(e * e for e in edges)
-        qualities.append(quality)
-
-    return {
-        'min_quality': min(qualities),
-        'max_quality': max(qualities),
-        'mean_quality': np.mean(qualities),
-        'std_quality': np.std(qualities),
-        'num_elements': len(elements)
-    }
+from napariTFM.mesh_generator import MeshGenerator, MeshParameters
 
 
 def calculate_metrics(true, calc, mask):
@@ -51,6 +21,18 @@ def calculate_metrics(true, calc, mask):
     }
 
 
+def analyze_mesh_quality(points, triangles, mask, density_factor, algorithm, use_optimization):
+    """Compute quality metrics for the generated mesh using MeshGenerator's method"""
+    mesh_params = MeshParameters(
+        mask=mask,
+        density_factor=density_factor,
+        algorithm=algorithm,
+        use_optimization=use_optimization
+    )
+    mesh_gen = MeshGenerator(mesh_params)
+    return mesh_gen.analyze_mesh_quality(points, triangles)
+
+
 def run_msm_analysis(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, params):
     """Run MSM analysis with given parameters and return results"""
     try:
@@ -64,8 +46,8 @@ def run_msm_analysis(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, params):
             youngs_modulus=params['youngs_modulus']
         )
 
-        # Calculate stress tensor
-        stress_tensor_calc = msm.calculate_stress_field(t_x, t_y)
+        # Calculate stress tensor and get numerical metrics
+        stress_tensor_calc, condition_number, residual = msm.calculate_stress_field(t_x, t_y)
 
         # Extract components
         sigma_xx_calc = stress_tensor_calc[:, :, 0, 0]
@@ -74,7 +56,22 @@ def run_msm_analysis(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, params):
         # Calculate metrics
         xx_metrics = calculate_metrics(sigma_xx_true, sigma_xx_calc, mask)
         yy_metrics = calculate_metrics(sigma_yy_true, sigma_yy_calc, mask)
-        mesh_metrics = calculate_mesh_quality(msm.nodes, msm.elements)
+
+        # Use MeshGenerator's mesh quality analysis via helper function
+        mesh_metrics = analyze_mesh_quality(
+            msm.nodes,
+            msm.elements,
+            mask=mask,
+            density_factor=params['density_factor'],
+            algorithm=params['algorithm'],
+            use_optimization=params['use_optimization']
+        )
+
+        # Add numerical quality metrics
+        numerical_metrics = {
+            'condition_number': condition_number,
+            'residual_norm': residual
+        }
 
         return {
             'success': True,
@@ -84,10 +81,12 @@ def run_msm_analysis(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, params):
             'mesh_metrics': mesh_metrics,
             'xx_metrics': xx_metrics,
             'yy_metrics': yy_metrics,
+            'numerical_metrics': numerical_metrics,
             'parameters': params
         }
 
     except Exception as e:
+        print(f"Error during analysis: {str(e)}")  # Added error printing for debugging
         return {
             'success': False,
             'error': str(e),
@@ -118,10 +117,10 @@ def parameter_sweep():
             'use_optimization': opt,
             'youngs_modulus': E
         }
-        for df in [0.0025, 0.005, 0.01, 0.05]  # Mesh density factors
+        for df in [0.005, 0.01, 0.05]  # Mesh density factors
         for algo in [1, 2, 4, 5, 6]  # Different meshing algorithms
         for opt in [True, False]  # Optimization settings
-        for E in [0.001, 1.0, 1000]  # Young's modulus values
+        for E in [1]  # Young's modulus values
     ]
 
     # Initialize results dictionary
@@ -157,6 +156,9 @@ def parameter_sweep():
     if successful_runs:
         best_xx_rmse = min(successful_runs, key=lambda x: x['xx_metrics']['rmse'])
         best_mesh_quality = max(successful_runs, key=lambda x: x['mesh_metrics']['mean_quality'])
+        best_condition = min(successful_runs, key=lambda x: x['numerical_metrics']['condition_number'])
+        best_residual = min(successful_runs, key=lambda x: x['numerical_metrics']['residual_norm'])
+        best_min_angle = max(successful_runs, key=lambda x: x['mesh_metrics']['min_angle'])
 
         print("\nBest XX RMSE parameters:")
         print(best_xx_rmse['parameters'])
@@ -165,6 +167,20 @@ def parameter_sweep():
         print("\nBest mesh quality parameters:")
         print(best_mesh_quality['parameters'])
         print(f"Mean quality: {best_mesh_quality['mesh_metrics']['mean_quality']:.4f}")
+        print(f"Min angle: {best_mesh_quality['mesh_metrics']['min_angle']:.2f}°")
+        print(f"Mean aspect ratio: {best_mesh_quality['mesh_metrics']['mean_aspect_ratio']:.4f}")
+
+        print("\nBest minimum angle parameters:")
+        print(best_min_angle['parameters'])
+        print(f"Min angle: {best_min_angle['mesh_metrics']['min_angle']:.2f}°")
+
+        print("\nBest condition number parameters:")
+        print(best_condition['parameters'])
+        print(f"Condition number: {best_condition['numerical_metrics']['condition_number']:.2e}")
+
+        print("\nBest residual norm parameters:")
+        print(best_residual['parameters'])
+        print(f"Residual norm: {best_residual['numerical_metrics']['residual_norm']:.2e}")
 
 
 if __name__ == "__main__":
