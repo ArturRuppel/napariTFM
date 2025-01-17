@@ -271,7 +271,7 @@ def plot_solution_ranking(results, save_path=None):
 def main():
     # Load results
     current_dir = Path(__file__).parent
-    benchmark_dir = current_dir.parent / 'benchmarks/synthetic_cell_physical_units'
+    benchmark_dir = current_dir.parent / 'benchmarks/synthetic_cell'
 
     with open(current_dir / 'parameter_sweep_results' / 'msm_parameter_sweep.pickle', 'rb') as f:
         results = pickle.load(f)

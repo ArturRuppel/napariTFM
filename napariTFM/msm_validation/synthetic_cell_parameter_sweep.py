@@ -97,7 +97,7 @@ def run_msm_analysis(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, params):
 def parameter_sweep():
     # Get the current directory and construct path to synthetic_cell
     current_dir = Path(__file__).parent
-    synthetic_cell_dir = current_dir.parent / 'benchmarks' / 'synthetic_cell_physical_units'
+    synthetic_cell_dir = current_dir.parent / 'benchmarks' / 'synthetic_cell'
 
     # Load data
     t_x = np.load(synthetic_cell_dir / 'Traction_x_warped.npy')
