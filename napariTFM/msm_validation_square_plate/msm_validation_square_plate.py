@@ -1,9 +1,6 @@
-from pathlib import Path
-
 import numpy as np
 import matplotlib.pyplot as plt
-
-from napariTFM.msm import MonolayerStressMicroscopy
+from msm import MonolayerStressMicroscopy
 
 
 def create_square_plate_problem(size=50, edge_traction=1.0, buffer=5):
@@ -89,7 +86,7 @@ def validate_msm_square_plate(size=50, edge_traction=1.0, pixelsize=0.8e-6, buff
         pixelsize=pixelsize * 1e6,  # Convert to microns
         sigma=0.5,  # Poisson's ratio
         youngs_modulus=1.0,  # Young's modulus
-        target_nodes=1000,
+        target_nodes=500,
         boundary_refinement=1.0,
         gradient_refinement=1.0
     )

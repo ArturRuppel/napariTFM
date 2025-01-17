@@ -2,7 +2,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from napariTFM.msm import MonolayerStressMicroscopy
-from napariTFM.msm_validation.msm_validation_synthetic_cell import calculate_metrics
+from napariTFM.msm_validation.synthetic_cell import calculate_metrics
 
 
 def analyze_density_impact(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, pixelsize=1.0):

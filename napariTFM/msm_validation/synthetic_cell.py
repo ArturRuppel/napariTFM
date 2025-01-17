@@ -43,40 +43,22 @@ def plot_validation_results_common_scale(t_x, t_y, sigma_xx_true, sigma_yy_true,
     return fig_stress
 
 
-def plot_validation_results_individual_scale(t_x, t_y, sigma_xx_true, sigma_yy_true,
-                                             sigma_xx_calc, sigma_yy_calc, mask):
-    """Plot comparison between true and calculated stress fields with individual scales"""
-    fig_stress = plt.figure(figsize=(12, 10))
-    plt.suptitle('Stress Tensor Validation (Synthetic Cell) - Individual Scales', fontsize=14)
+def plot_mesh(nodes, elements, mask):
+    """Plot triangular mesh overlaid on mask"""
+    fig, ax = plt.subplots(figsize=(10, 8))
 
-    ax_s1 = plt.subplot(221)
-    ax_s2 = plt.subplot(222)
-    ax_s3 = plt.subplot(223)
-    ax_s4 = plt.subplot(224)
+    # Plot mask as background
+    ax.imshow(mask, cmap='gray', alpha=0.3)
 
-    def plot_component(ax, data, title):
-        masked_data = np.copy(data)
-        masked_data[~mask] = np.nan
-        vmax = np.nanpercentile(np.abs(masked_data), 99)
-        im = ax.imshow(masked_data, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-        ax.set_title(title)
-        return im
+    # Plot triangular elements
+    for element in elements:
+        vertices = nodes[element]
+        ax.plot([vertices[0][0], vertices[1][0]], [vertices[0][1], vertices[1][1]], 'b-', linewidth=0.5)
+        ax.plot([vertices[1][0], vertices[2][0]], [vertices[1][1], vertices[2][1]], 'b-', linewidth=0.5)
+        ax.plot([vertices[2][0], vertices[0][0]], [vertices[2][1], vertices[0][1]], 'b-', linewidth=0.5)
 
-    # Plot stress components
-    im5 = plot_component(ax_s1, sigma_xx_true, 'True σxx (Warped)')
-    plt.colorbar(im5, ax=ax_s1)
-
-    im6 = plot_component(ax_s2, sigma_xx_calc, 'Calculated σxx')
-    plt.colorbar(im6, ax=ax_s2)
-
-    im7 = plot_component(ax_s3, sigma_yy_true, 'True σyy (Warped)')
-    plt.colorbar(im7, ax=ax_s3)
-
-    im8 = plot_component(ax_s4, sigma_yy_calc, 'Calculated σyy')
-    plt.colorbar(im8, ax=ax_s4)
-
-    plt.tight_layout()
-    return fig_stress
+    ax.set_aspect('equal')
+    return fig
 
 
 def calculate_metrics(true, calc, mask):
@@ -89,54 +71,23 @@ def calculate_metrics(true, calc, mask):
     return rmse, max_error, correlation, rel_error
 
 
-def validate_msm_synthetic_cell(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, pixelsize=1.0):
+def validate_msm_synthetic_cell(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, msm):
     """Validate MSM implementation using synthetic cell data"""
-    def plot_mesh(nodes, elements, mask):
-        """Plot triangular mesh overlaid on mask"""
-        fig, ax = plt.subplots(figsize=(10, 8))
 
-        # Plot mask as background
-        ax.imshow(mask, cmap='gray', alpha=0.3)
 
-        # Plot triangular elements
-        for element in elements:
-            vertices = nodes[element]
-            ax.plot([vertices[0][0], vertices[1][0]], [vertices[0][1], vertices[1][1]], 'b-', linewidth=0.5)
-            ax.plot([vertices[1][0], vertices[2][0]], [vertices[1][1], vertices[2][1]], 'b-', linewidth=0.5)
-            ax.plot([vertices[2][0], vertices[0][0]], [vertices[2][1], vertices[0][1]], 'b-', linewidth=0.5)
-
-        ax.set_aspect('equal')
-        return fig
-
-    # Initialize MSM calculator
-    msm = MonolayerStressMicroscopy(
-        mask=mask,
-        pixelsize=pixelsize,
-        density_factor=0.01,  # Finer mesh
-        algorithm=4,  # MeshAdapt algorithm
-        use_optimization=True,  # Enable Netgen optimization
-        youngs_modulus=1
-    )
 
     # Plot mesh
-    # mesh_fig = plot_mesh(msm.nodes, msm.elements, mask)
-    # plt.title('Triangular Mesh (Synthetic Cell)')
-    # plt.savefig("mesh.svg")
-    # plt.show()
+    mesh_fig = plot_mesh(msm.nodes, msm.elements, mask)
+    plt.title('Triangular Mesh (Synthetic Cell)')
+    plt.show()
 
     # Calculate stress tensor
     stress_tensor_calc = msm.calculate_stress_field(t_x, t_y)
     sigma_xx_calc = stress_tensor_calc[:, :, 0, 0]
     sigma_yy_calc = stress_tensor_calc[:, :, 1, 1]
 
-    # # Create visualizations
-    # fig_stress_common = plot_validation_results_common_scale(
-    #     t_x, t_y, sigma_xx_true, sigma_yy_true,
-    #     sigma_xx_calc, sigma_yy_calc, mask
-    # )
-    # plt.show()
-    plt.figure()
-    fig_stress_individual = plot_validation_results_individual_scale(
+    # Create visualizations
+    fig_stress_common = plot_validation_results_common_scale(
         t_x, t_y, sigma_xx_true, sigma_yy_true,
         sigma_xx_calc, sigma_yy_calc, mask
     )
@@ -164,7 +115,7 @@ def validate_msm_synthetic_cell(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, pi
 if __name__ == "__main__":
     # Get the current directory and construct path to synthetic_cell
     current_dir = Path(__file__).parent
-    synthetic_cell_dir = current_dir.parent / 'benchmarks' / 'synthetic_cell_unitless'
+    synthetic_cell_dir = current_dir.parent / 'benchmarks' / 'synthetic_cell_physical_units'
 
     # Load data
     t_x = np.load(synthetic_cell_dir / 'Traction_x_warped.npy')
@@ -175,10 +126,20 @@ if __name__ == "__main__":
     # Create mask based on stress magnitude
     mask = np.abs(sigma_xx_true) > 0
 
+    # Initialize MSM calculator
+    msm = MonolayerStressMicroscopy(
+        mask=mask,
+        pixelsize=0.3*1e-6,
+        density_factor=0.01,  # Finer mesh
+        algorithm=4,  # MeshAdapt algorithm
+        use_optimization=True,  # Enable Netgen optimization
+        youngs_modulus=1
+    )
+
     # Run validation
     validate_msm_synthetic_cell(
         t_x, t_y,
         sigma_xx_true, sigma_yy_true,
         mask,
-        pixelsize=1
+        msm
     )
