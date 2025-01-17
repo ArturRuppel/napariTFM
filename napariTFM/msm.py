@@ -302,8 +302,11 @@ class MonolayerStressMicroscopy:
         KG, MG = self._custom_assembler(elements, mats, nodes, neq, DME)
         RHSG = ass.loadasem(loads, IBC, neq)
 
-        # Solve system
-        UG_sol = self._custom_solver(KG, RHSG, mask, nodes, IBC)
+        # Solve system and get metrics
+        solver_output = self._custom_solver(KG, RHSG, mask, nodes, IBC)
+        UG_sol = solver_output[0]  # Extract just the solution array
+        condition_number = solver_output[1]
+        residual = solver_output[2]
 
         # Complete displacement calculation
         UC = pos.complete_disp(IBC, nodes, UG_sol)
@@ -328,8 +331,9 @@ class MonolayerStressMicroscopy:
         nodal_stresses[valid_nodes] /= node_weights[valid_nodes, np.newaxis]
 
         # Interpolate stresses back to regular grid
-        return self._interpolate_stress_field(nodes, nodal_stresses, mask)
+        stress_tensor = self._interpolate_stress_field(nodes, nodal_stresses, mask)
 
+        return stress_tensor, condition_number, residual
     def _interpolate_stress_field(self, nodes, nodal_stresses, mask):
         """
         Simple linear interpolation of nodal stresses to regular grid.
@@ -436,73 +440,62 @@ class MonolayerStressMicroscopy:
         return nodes_xy, x_points, y_points
 
     def _custom_solver(self, KG, RHSG, mask, nodes, IBC):
-        """Hybrid solver with explicit DOF-based constraint scaling and debugging"""
-        # print("\n=== Debug: Custom Solver Start ===")
-        # print(f"System size (neq): {KG.shape[0]}")
-        # print(f"RHSG statistics - min: {np.min(RHSG):.2e}, max: {np.max(RHSG):.2e}, mean: {np.mean(RHSG):.2e}")
-
+        """Modified solver that also returns condition number and residual"""
         neq = KG.shape[0]
         nodes_xy, x_points, y_points = self._find_eq_position(nodes, IBC, neq)
 
-        # Debug KG matrix properties
-        # print(f"\nStiffness matrix (KG) statistics:")
-        # print(f"KG diagonal - min: {np.min(KG.diagonal()):.2e}, max: {np.max(KG.diagonal()):.2e}")
-        # print(f"KG non-zero elements: {KG.nnz}")
-        # print(f"KG sparsity: {KG.nnz / (neq * neq):.2e}")
-
+        # Get constraint matrix
         com = regionprops(mask.astype(int))[0].centroid
         constraint_data, constraint_rows, constraint_cols = prepare_constraint_data_numba(
             nodes_xy, x_points, y_points, com, neq
         )
-
         constraints = csr_matrix(
             (constraint_data, (constraint_rows, constraint_cols)),
             shape=(3, neq)
         )
-
-        # print("\nConstraint matrix statistics:")
-        # print(f"Constraint values - min: {np.min(constraint_data):.2e}, max: {np.max(constraint_data):.2e}")
-        # print(f"Number of constraint equations: {constraints.shape[0]}")
 
         # Create scaling based on diagonal of KG
         diag = np.array(KG.diagonal())
         scale = np.ones_like(diag)
         valid_diag = np.abs(diag) > 1e-10
         scale[valid_diag] = 1.0 / np.sqrt(np.abs(diag[valid_diag]))
-
         S = diags(scale)
         KG_scaled = KG.dot(S)
 
-        # Calculate and print scaling factors
-        # print("\nScaling statistics:")
-        # print(f"Diagonal scaling - min: {np.min(scale[valid_diag]):.2e}, max: {np.max(scale[valid_diag]):.2e}")
-
-        constraint_scale = np.sqrt(np.sum(KG_scaled.data ** 2)) / np.sqrt(np.sum(constraints.data ** 2))
-        # print(f"Base constraint scaling: {base_scaling:.2e}")
-
         # Stack scaled system
+        constraint_scale = np.sqrt(np.sum(KG_scaled.data ** 2)) / np.sqrt(np.sum(constraints.data ** 2))
         KG_constrained = vstack([KG_scaled, constraints * constraint_scale], format="csr")
         RHSG_constrained = np.append(RHSG, np.zeros(3))
 
-        # print("\nConstrained system statistics:")
-        # print(f"System size after constraints: {KG_constrained.shape}")
-        # print(f"RHSG constrained - min: {np.min(RHSG_constrained):.2e}, max: {np.max(RHSG_constrained):.2e}")
+        # Estimate condition number (using power iteration for efficiency)
+        def power_iteration(A, num_iterations=10):
+            n = A.shape[0]
+            v = np.random.rand(n)
+            for _ in range(num_iterations):
+                Av = A.dot(v)
+                v_new = Av / np.linalg.norm(Av)
+                if np.allclose(v, v_new):
+                    break
+                v = v_new
+            return np.linalg.norm(A.dot(v)) / np.linalg.norm(v)
 
-        # Solve system
-        x_scaled = lsqr(KG_constrained, RHSG_constrained,
+        AtA = KG_constrained.T.dot(KG_constrained)
+        largest_eigval = power_iteration(AtA)
+        smallest_eigval = 1 / power_iteration(csr_matrix(np.linalg.inv(AtA.toarray())))
+        condition_number = np.sqrt(largest_eigval / smallest_eigval)
+
+        # Solve system and get residual
+        solution = lsqr(KG_constrained, RHSG_constrained,
                         atol=1e-16, btol=1e-16,
                         iter_lim=5000000,
-                        show=False)[0]
-
-        # print("\nSolution statistics:")
-        # print(f"Scaled solution - min: {np.min(x_scaled):.2e}, max: {np.max(x_scaled):.2e}, mean: {np.mean(x_scaled):.2e}")
+                        show=False)
+        x_scaled = solution[0]
+        residual_norm = solution[3]  # Get the residual norm from LSQR output
 
         # Unscale solution
         UG_sol = S.dot(x_scaled[:neq])
-        # print(f"Final solution - min: {np.min(UG_sol):.2e}, max: {np.max(UG_sol):.2e}, mean: {np.mean(UG_sol):.2e}")
-        # print("=== Debug: Custom Solver End ===\n")
 
-        return UG_sol
+        return UG_sol, condition_number, residual_norm
 
     def _prepare_forces(self, tx, ty, mask):
         """Convert traction forces to point forces while keeping spatial units in pixels"""
@@ -529,43 +522,27 @@ class MonolayerStressMicroscopy:
         return f_x, f_y
 
     def calculate_stress_field(self, traction_x, traction_y):
-        """Calculate stress field using triangular elements with detailed debugging"""
+        """Calculate stress field and return quality metrics"""
         if np.all(np.isnan(traction_x)) or np.all(np.isnan(traction_y)):
             raise ValueError("Input tractions are all NaN")
 
-        # print("\n=== Debug: Stress Field Calculation Start ===")
-        # print(f"Input traction range x: [{np.nanmin(traction_x):.2e}, {np.nanmax(traction_x):.2e}] Pa")
-        # print(f"Input traction range y: [{np.nanmin(traction_y):.2e}, {np.nanmax(traction_y):.2e}] Pa")
-        # print(f"Pixelsize: {self.pixelsize:.2e} m")
-
-        # Prepare forces, output is in Pa
+        # Prepare forces
         f_x, f_y = self._prepare_forces(traction_x, traction_y, self.mask)
 
         # Format mesh for FEM solver
         nodes_formatted, elements_formatted, loads, mats = self._grid_setup(
             nodes_xy=self.nodes,
             elements=self.elements,
-            f_x=-f_x,  # Note the negative sign for correct orientation
+            f_x=-f_x,
             f_y=-f_y
         )
 
-        # Calculate stress tensor
-        stress_tensor = self._fem_simulation(nodes_formatted, elements_formatted, loads, mats, self.mask)
+        # Calculate stress tensor and get metrics
+        stress_tensor, condition_number, residual = self._fem_simulation(
+            nodes_formatted, elements_formatted, loads, mats, self.mask
+        )
 
-        # print(f"\nScaling diagnostics:")
-        # print(f"Raw stress tensor range before scaling:")
-        # print(f"σxx: [{np.nanmin(stress_tensor[:, :, 0, 0]):.2e}, {np.nanmax(stress_tensor[:, :, 0, 0]):.2e}]")
-        # print(f"σyy: [{np.nanmin(stress_tensor[:, :, 1, 1]):.2e}, {np.nanmax(stress_tensor[:, :, 1, 1]):.2e}]")
-        # print(f"σxy: [{np.nanmin(stress_tensor[:, :, 0, 1]):.2e}, {np.nanmax(stress_tensor[:, :, 0, 1]):.2e}]")
-
-        # Scale stress tensor to convert from pixel units to meters
+        # Scale stress tensor
         stress_tensor = stress_tensor * self.pixelsize
 
-        # print(f"Final stress tensor range after scaling:")
-        # print(f"σxx: [{np.nanmin(stress_tensor[:, :, 0, 0]):.2e}, {np.nanmax(stress_tensor[:, :, 0, 0]):.2e}] Pa")
-        # print(f"σyy: [{np.nanmin(stress_tensor[:, :, 1, 1]):.2e}, {np.nanmax(stress_tensor[:, :, 1, 1]):.2e}] Pa")
-        # print(f"σxy: [{np.nanmin(stress_tensor[:, :, 0, 1]):.2e}, {np.nanmax(stress_tensor[:, :, 0, 1]):.2e}] Pa")
-
-        return stress_tensor
-
-
+        return stress_tensor, condition_number, residual

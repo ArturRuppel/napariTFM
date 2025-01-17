@@ -73,18 +73,21 @@ def calculate_metrics(true, calc, mask):
 
 def validate_msm_synthetic_cell(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, msm):
     """Validate MSM implementation using synthetic cell data"""
-
-
-
     # Plot mesh
     mesh_fig = plot_mesh(msm.nodes, msm.elements, mask)
     plt.title('Triangular Mesh (Synthetic Cell)')
     plt.show()
 
-    # Calculate stress tensor
-    stress_tensor_calc = msm.calculate_stress_field(t_x, t_y)
+    # Calculate stress tensor and get numerical metrics
+    stress_tensor_calc, condition_number, residual = msm.calculate_stress_field(t_x, t_y)
     sigma_xx_calc = stress_tensor_calc[:, :, 0, 0]
     sigma_yy_calc = stress_tensor_calc[:, :, 1, 1]
+
+    # Print numerical quality metrics
+    print("\nNumerical Quality Metrics:")
+    print("-" * 50)
+    print(f"Condition Number: {condition_number:.2e}")
+    print(f"Residual Norm: {residual:.2e}")
 
     # Create visualizations
     fig_stress_common = plot_validation_results_common_scale(
@@ -93,9 +96,11 @@ def validate_msm_synthetic_cell(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, ms
     )
     plt.show()
 
-    # Print metrics
+    # Print validation metrics
     print("\nValidation Metrics (Synthetic Cell):")
     print("-" * 50)
+
+    all_metrics = {}  # Dictionary to store all metrics
 
     for comp, true, calc in [
         ('σxx', sigma_xx_true, sigma_xx_calc),
@@ -108,8 +113,26 @@ def validate_msm_synthetic_cell(t_x, t_y, sigma_xx_true, sigma_yy_true, mask, ms
         print(f"Correlation: {corr:.4f}")
         print(f"Relative Error: {rel_error:.4f}")
 
-    # return stress_tensor_calc, fig_stress_common, fig_stress_individual, mesh_fig
-    return
+        # Store metrics
+        all_metrics[comp] = {
+            'rmse': rmse,
+            'max_error': max_error,
+            'correlation': corr,
+            'relative_error': rel_error
+        }
+
+    # Add numerical metrics to dictionary
+    all_metrics['numerical'] = {
+        'condition_number': condition_number,
+        'residual': residual
+    }
+
+    # Save metrics to file
+    metrics_file = synthetic_cell_dir / 'validation_metrics.npz'
+    np.savez(metrics_file, **all_metrics)
+    print(f"\nMetrics saved to: {metrics_file}")
+
+    return all_metrics
 
 
 if __name__ == "__main__":
@@ -130,14 +153,14 @@ if __name__ == "__main__":
     msm = MonolayerStressMicroscopy(
         mask=mask,
         pixelsize=0.3*1e-6,
-        density_factor=0.01,  # Finer mesh
-        algorithm=4,  # MeshAdapt algorithm
-        use_optimization=True,  # Enable Netgen optimization
+        density_factor=0.0025,  # Finer mesh
+        algorithm=6,  # MeshAdapt algorithm
+        use_optimization=False,  # Enable Netgen optimization
         youngs_modulus=1
     )
 
-    # Run validation
-    validate_msm_synthetic_cell(
+    # Run validation and get metrics
+    metrics = validate_msm_synthetic_cell(
         t_x, t_y,
         sigma_xx_true, sigma_yy_true,
         mask,
