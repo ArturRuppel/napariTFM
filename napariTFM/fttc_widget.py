@@ -285,7 +285,6 @@ class FTTCWidget(BaseAnalysisWidget):
         finally:
             self._set_controls_enabled(True)
 
-
     def _create_material_params_group(self) -> QGroupBox:
         """Create the material parameters group."""
         group = QGroupBox("Material Parameters")
@@ -661,8 +660,7 @@ class FTTCWidget(BaseAnalysisWidget):
             gel_height=gel_height_m
         )
 
-
-    def _set_regularization_with_gcv(self):
+    def _set_regulariation_with_gcv(self):
         """Handle GCV-based regularization parameter selection."""
         try:
             if not self._validate_input_data():
@@ -762,14 +760,15 @@ class FTTCWidget(BaseAnalysisWidget):
             return
 
         try:
-            # Get directory to save files
-            save_dir = QFileDialog.getExistingDirectory(
+            # Get file path from user
+            save_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Select Directory to Save Force Data",
-                os.path.expanduser("~")
+                "Save Force Data",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
             )
 
-            if save_dir:
+            if save_path:
                 results = self.data_manager.force_results
 
                 # Safely handle gel height conversion
@@ -778,7 +777,6 @@ class FTTCWidget(BaseAnalysisWidget):
                     gel_height_m = gel_height * 1e-6
                 else:
                     gel_height_m = None
-
 
                 # Structure the data to match batch script format
                 force_results = {
@@ -799,9 +797,9 @@ class FTTCWidget(BaseAnalysisWidget):
                 }
 
                 # Save as single .npy file with all data
-                np.save(os.path.join(save_dir, 'traction_forces.npy'), force_results)
+                np.save(save_path, force_results)
 
-                self._update_status(f"Force data successfully saved to:\n{save_dir}", 100)
+                self._update_status(f"Force data successfully saved to:\n{save_path}", 100)
 
         except Exception as e:
             QMessageBox.critical(
@@ -908,6 +906,7 @@ class FTTCWidget(BaseAnalysisWidget):
             # Print the full error for debugging
             import traceback
             traceback.print_exc()
+
     def _handle_visualization_layers(self):
         """Handle layer visibility and ordering for better force visualization."""
         from qtpy.QtCore import QTimer
