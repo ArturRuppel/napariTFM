@@ -1,7 +1,7 @@
 from typing import Optional, Tuple
 
 import numpy as np
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTabWidget
 from qtpy.QtCore import Signal
 import napari
 import logging
@@ -29,6 +29,38 @@ class BaseAnalysisWidget(QWidget):
         self.data_manager = data_manager
         self.visualization_manager = visualization_manager
         self._controls = []
+
+    @property
+    def pixel_size(self) -> float:
+        """Get the current pixel size in µm from the parent widget."""
+        parent_widget = self.get_parent_tfm_widget()
+        if parent_widget is None:
+            return 1.0  # Default value if parent not found
+        return parent_widget.pixel_spin.value()
+
+    @property
+    def frame_length(self) -> float:
+        """Get the current frame length in minutes from the parent widget."""
+        parent_widget = self.get_parent_tfm_widget()
+        if parent_widget is None:
+            return 1.0  # Default value if parent not found
+        return parent_widget.frame_spin.value()
+
+    def get_parent_tfm_widget(self) -> Optional["napariTFMWidget"]:
+        """Traverse up the widget hierarchy to find the parent napariTFMWidget."""
+        current = self.parent()
+        while current is not None:
+            # First check if this is the napariTFMWidget directly
+            if hasattr(current, 'pixel_spin') and hasattr(current, 'frame_spin'):
+                return current
+            # Then check if this is the tab widget
+            if isinstance(current, QTabWidget):
+                # The tab widget's parent should be the napariTFMWidget
+                parent = current.parent()
+                if hasattr(parent, 'pixel_spin') and hasattr(parent, 'frame_spin'):
+                    return parent
+            current = current.parent()
+        return None
 
     def create_colorbar_widget(
             self,

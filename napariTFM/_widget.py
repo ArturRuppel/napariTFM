@@ -134,7 +134,31 @@ class napariTFMWidget(QWidget):
 
         self.connect_signals()
 
+    def connect_signals(self):
+        """Connect signals between components"""
+        # Existing signal connections
+        self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
+        self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
+        self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
+        self.force_widget.force_calculated.connect(self._on_force_completed)
+        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
 
+        # Add new calibration signal connections
+        self.pixel_spin.valueChanged.connect(self._on_calibration_changed)
+        self.frame_spin.valueChanged.connect(self._on_calibration_changed)
+
+    def _on_calibration_changed(self):
+        """Handle changes to calibration values"""
+        # Notify all widgets that calibration has changed
+        for widget in [
+            self.preprocessing_widget,
+            self.displacement_widget,
+            self.force_widget,
+            self.msm_widget,
+            self.batch_widget
+        ]:
+            if hasattr(widget, '_update_calibration'):
+                widget._update_calibration()
     def _on_preprocessing_completed(self, results):
         """Handle completion of preprocessing"""
         logger.info("Preprocessing completed successfully")
@@ -181,18 +205,4 @@ class napariTFMWidget(QWidget):
         logger.info("Stress calculation completed successfully")
         self.data_manager.stress_results = results
 
-    def connect_signals(self):
-        """Connect signals between components"""
-        # Connect preprocessing signals
-        self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
-        self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
-
-        # Connect displacement signals
-        self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
-
-        # Connect force calculation signals
-        self.force_widget.force_calculated.connect(self._on_force_completed)
-
-        # Connect MSM signals
-        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
 

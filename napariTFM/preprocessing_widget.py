@@ -225,6 +225,18 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         self.update_parameters()
 
+    def _update_calibration(self):
+        """Update widget when calibration values change"""
+        # If we have preprocessed data and save button is enabled, update the status
+        # to show new calibration values
+        if self.save_btn.isEnabled():
+            pixel_size = self.pixel_size
+            frame_length = self.frame_length
+            self._update_status(
+                f"Current calibration: pixel size = {pixel_size:.3f} µm, "
+                f"frame length = {frame_length:.3f} min"
+            )
+
     def _create_registration_group(self):
         """Create the registration group."""
         registration_group = QGroupBox("Registration")
@@ -832,7 +844,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.update_preview_frame()
 
     def _save_preprocessed_data(self):
-        """Save preprocessed data to user-selected directory"""
+        """Save preprocessed data to user-selected directory with calibration metadata."""
         try:
             # Get directory from user
             save_dir = QFileDialog.getExistingDirectory(
@@ -847,6 +859,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
             files_saved = []
 
+            # Get calibration values
+            pixel_size = self.pixel_size  # µm/pixel
+            frame_length = self.frame_length  # minutes/frame
+
             # Function to save a single stack/image
             def save_tiff(data: np.ndarray, filename: str):
                 if data is None:
@@ -854,11 +870,31 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
                 # Convert to 16-bit
                 data_normalized = data.astype(float)
-                data_normalized = (data_normalized - data_normalized.min()) / (data_normalized.max() - data_normalized.min())
+                data_normalized = (data_normalized - data_normalized.min()) / (
+                        data_normalized.max() - data_normalized.min())
                 data_16bit = (data_normalized * 65535).astype(np.uint16)
 
                 filepath = os.path.join(save_dir, filename)
-                tifffile.imwrite(filepath, data_16bit)
+
+                # Prepare metadata dictionary
+                metadata = {
+                    'PhysicalSizeX': pixel_size,
+                    'PhysicalSizeXUnit': 'µm',
+                    'PhysicalSizeY': pixel_size,
+                    'PhysicalSizeYUnit': 'µm',
+                    'TimeIncrement': frame_length,
+                    'TimeIncrementUnit': 'min'
+                }
+
+                # Save with metadata using tifffile's ImageJ-compatible metadata
+                resolution = 1.0 / pixel_size  # pixels per µm
+                tifffile.imwrite(
+                    filepath,
+                    data_16bit,
+                    metadata=metadata,
+                    resolution=(resolution, resolution),  # X,Y resolution in pixels per unit
+                    resolutionunit='MICROMETER'  # Specify unit is micrometers
+                )
                 return True
 
             # Save bead stack if available
@@ -877,7 +913,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
                     files_saved.append("preprocessed_cells.tif")
 
             if files_saved:
-                self._update_status("Saved files:\n" + "\n".join(files_saved))
+                self._update_status(
+                    f"Saved files with calibration (pixel size: {pixel_size} µm, "
+                    f"frame length: {frame_length} min):\n" + "\n".join(files_saved)
+                )
             else:
                 self._update_status("No preprocessed data available to save")
 
