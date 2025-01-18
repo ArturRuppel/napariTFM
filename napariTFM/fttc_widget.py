@@ -38,6 +38,9 @@ class FTTCWidget(BaseAnalysisWidget):
         self.mesh_size = 1  # hardcoded to 1
         self.lanczos_exp = 1
 
+        # Add flag to track if analysis is running
+        self.is_analysis_running = False
+
         # Initialize calculator
         self.calculator = None
         self.colorbar_manager = ColorbarManager()
@@ -48,6 +51,393 @@ class FTTCWidget(BaseAnalysisWidget):
         self._register_controls()
         self._update_ui_state()
 
+    def calculate_forces(self):
+        """Calculate traction forces using the FTTC calculator."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            # Set analysis running flag and disable controls
+            self.is_analysis_running = True
+            self._set_controls_enabled(False)
+            self._update_status("Starting force calculation...", 0)
+
+            # Get displacement data
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            self.total_frames = len(flows)
+
+            # Initialize result arrays
+            self.force_results = {
+                'tx': [],
+                'ty': []
+            }
+            self.flows = flows
+            self.current_frame = 0
+
+            # Initialize calculator if needed
+            self._initialize_calculator()
+
+            # Start processing first frame
+            self._process_next_frame()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.is_analysis_running = False
+            self._set_controls_enabled(True)
+
+    def _process_next_frame(self):
+        """Process the next frame in the sequence."""
+        try:
+            if self.current_frame >= self.total_frames:
+                self._finalize_force_results()
+                return
+
+            # Get spatial coordinates for current frame
+            shape = self.flows[self.current_frame].shape[:-1]
+            x = np.arange(shape[1])  # Width
+            y = np.arange(shape[0])  # Height
+
+            # Create worker for current frame
+            worker = self.calculator.calculate_traction(
+                x=x,
+                y=y,
+                u_data=self.flows[self.current_frame][..., 0],
+                v_data=self.flows[self.current_frame][..., 1],
+                dx=self._pixel_size,
+                set_lam=self.regularization
+            )
+
+            # Connect worker signals with proper error handling
+            worker.returned.connect(self._handle_force_frame)
+            worker.finished.connect(self._on_frame_finished)
+            worker.errored.connect(self._handle_error)
+
+            # Start the worker
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def _handle_force_frame(self, results):
+        """Handle results from a single frame calculation."""
+        try:
+            # Unpack results
+            (_, _), _, f, _, _, energy, force, _, _ = results
+
+            # Store force components
+            self.force_results['tx'].append(f[0])
+            self.force_results['ty'].append(f[1])
+
+            # Update progress
+            progress = (self.current_frame + 1) / self.total_frames * 100
+            self._update_status(
+                f"Processing frame {self.current_frame + 1}/{self.total_frames}...\n"
+                f"Computing forces...",
+                progress
+            )
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def _on_frame_finished(self):
+        """Handle completion of a frame calculation."""
+        try:
+            # Increment frame counter
+            self.current_frame += 1
+
+            # Process next frame or finalize
+            if self.current_frame < self.total_frames:
+                self._process_next_frame()
+            else:
+                self._finalize_force_results()
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def _finalize_force_results(self):
+        """Finalize and handle the complete force calculation results."""
+        try:
+            # Convert lists to arrays
+            self.force_results['tx'] = np.stack(self.force_results['tx'])
+            self.force_results['ty'] = np.stack(self.force_results['ty'])
+
+            # Store calculation parameters
+            visualization_params = {
+                'vector_stride': self.visualization_params['vector_stride'].value(),
+                'arrow_scale': self.visualization_params['arrow_scale'].value(),
+                'f_max': self.visualization_params['f_max'].value()
+            }
+
+            displacement_results = self.data_manager.displacement_results
+            downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
+
+            self.force_results['parameters'] = {
+                'young_modulus': self.young_modulus,
+                'poisson_ratio': self.poisson_ratio,
+                'gel_height': self.gel_height,
+                'pixel_size': self._pixel_size,
+                'regularization': self.regularization,
+                'mesh_size': self.mesh_size,
+                'lanczos_exp': self.lanczos_exp,
+                'downscale_factor': downscale_factor,
+                'visualization': visualization_params
+            }
+
+            # Handle final results
+            self._handle_force_results(self.force_results)
+
+            # Clean up
+            self.is_analysis_running = False
+            self._set_controls_enabled(True)
+            self.current_frame = 0
+            self.total_frames = 0
+            self.flows = None
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.is_analysis_running = False
+            self._set_controls_enabled(True)
+
+    def _handle_error(self, error):
+        """Handle errors during calculation."""
+        error_message = str(error)
+        self._update_status(f"Error: {error_message}", 0)
+
+        # Reset analysis state
+        self.is_analysis_running = False
+        self._set_controls_enabled(True)
+
+        # Clean up calculation state
+        self.current_frame = 0
+        self.total_frames = 0
+        self.flows = None
+
+        # Show error dialog
+        QMessageBox.critical(
+            self,
+            "Error",
+            f"An error occurred during calculation:\n{error_message}"
+        )
+
+    def _update_ui_state(self):
+        """Update UI elements based on current state."""
+        # Check displacement results availability
+        has_displacement = False
+        if hasattr(self.data_manager, 'displacement_results'):
+            results = self.data_manager.displacement_results
+            if results and isinstance(results, dict) and 'flows' in results:
+                flows = results['flows']
+                try:
+                    # Convert to numpy array if it isn't already
+                    if not isinstance(flows, np.ndarray):
+                        flows = np.array(flows)
+                    self.displacement_status.setText(f"Displacement data: {flows.shape}")
+                    has_displacement = True  # Set to True only if we successfully validated the data
+                except Exception as e:
+                    self.displacement_status.setText(f"Displacement data: Error ({str(e)})")
+            else:
+                self.displacement_status.setText("Displacement data: Not loaded")
+        else:
+            self.displacement_status.setText("Displacement data: Not loaded")
+
+        # Check force results
+        if hasattr(self.data_manager, 'force_results') and self.data_manager.force_results is not None:
+            results = self.data_manager.force_results
+            if isinstance(results, dict) and 'tx' in results and 'ty' in results:
+                try:
+                    shape = results['tx'].shape
+                    if len(shape) > 0:  # Check if shape is not empty
+                        self.force_status.setText(f"Force results: {shape}")
+                    else:
+                        self.force_status.setText("Force results: Invalid shape")
+                except Exception as e:
+                    self.force_status.setText(f"Force results: Error ({str(e)})")
+            else:
+                self.force_status.setText("Force results: Not loaded")
+        else:
+            self.force_status.setText("Force results: Not loaded")
+
+        # Update button states based on data availability and analysis state
+        if self.is_analysis_running:
+            # If analysis is running, disable the buttons regardless of data availability
+            self.calculate_btn.setEnabled(False)
+            self.preview_btn.setEnabled(False)
+            self.status_label.setText("Analysis in progress...")
+        else:
+            # If no analysis is running, enable buttons if we have valid displacement data
+            self.calculate_btn.setEnabled(has_displacement)
+            self.preview_btn.setEnabled(has_displacement)
+
+            if has_displacement:
+                self.status_label.setText("Ready for force calculation")
+            else:
+                self.status_label.setText("Missing required displacement data")
+
+    def _set_controls_enabled(self, enabled: bool):
+        """Enable or disable all registered controls."""
+        self.is_analysis_running = not enabled
+
+        # Only update controls if they're registered
+        if hasattr(self, '_controls'):
+            for control in self._controls:
+                if control in [self.calculate_btn, self.preview_btn]:
+                    # Skip these buttons as they're handled in _update_ui_state
+                    continue
+                control.setEnabled(enabled)
+
+        # Update UI state to handle the calculation buttons
+        self._update_ui_state()
+
+    def preview_force(self):
+        """Preview force calculation on current frame."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating forces...", 0)
+
+            # Initialize calculator
+            self._initialize_calculator()
+
+            # Get current frame data
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            current_frame = self.viewer.dims.current_step[0]
+            flow = flows[current_frame]
+
+            # Get spatial coordinates
+            x = np.arange(flow.shape[1])
+            y = np.arange(flow.shape[0])
+
+            # Create and start worker
+            worker = self.calculator.calculate_traction(
+                x=x,
+                y=y,
+                u_data=flow[..., 0],
+                v_data=flow[..., 1],
+                dx=self._pixel_size,
+                set_lam=self.regularization
+            )
+
+            # Connect worker signals
+            worker.returned.connect(self._handle_preview_results)
+            worker.finished.connect(lambda: self._set_controls_enabled(True))
+            worker.errored.connect(self._handle_error)
+
+            # Start the worker
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self._set_controls_enabled(True)
+
+    def _handle_preview_results(self, results):
+        """Handle the preview calculation results."""
+        try:
+            # Unpack results
+            (_, _), fnorm, f, urec, u, energy, force, _, _ = results
+
+            # Get current visualization parameters
+            vector_stride = self.visualization_params['vector_stride'].value()
+            arrow_scale = self.visualization_params['arrow_scale'].value()
+            f_max = self.visualization_params['f_max'].value()
+
+            # Update visualization
+            self.visualization_manager.visualize_force_preview(
+                f[0], f[1],
+                f_max=f_max,
+                vector_stride=vector_stride,
+                arrow_scale=arrow_scale,
+                downscale_factor=self.data_manager.displacement_results.get('parameters', {}).get('downscale_factor', 1)
+            )
+
+            # Handle layer visibility and ordering
+            self._handle_visualization_layers()
+
+            # Update colorbar
+            self.colorbar_manager.update_limits(0, f_max)
+
+            # Show statistics
+            magnitude = np.sqrt(f[0] ** 2 + f[1] ** 2)
+            self._update_status(
+                f"Preview statistics:\n"
+                f"Max force: {np.max(magnitude):.2f} Pa\n"
+                f"Mean force: {np.mean(magnitude):.2f} Pa\n"
+                f"Median force: {np.median(magnitude):.2f} Pa\n"
+                f"Energy: {energy:.2e} J\n"
+                f"Total force: {force:.2e} N",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self._set_controls_enabled(True)
+
+    def _start_next_frame(self):
+        """Start calculation for next frame if available."""
+        try:
+            self.current_frame += 1
+
+            if self.current_frame < self.total_frames:
+                # Start next frame calculation
+                shape = self.flows[0].shape[:-1]
+                x = np.arange(shape[1])
+                y = np.arange(shape[0])
+
+                worker = self.calculator.calculate_traction(
+                    x=x,
+                    y=y,
+                    u_data=self.flows[self.current_frame][..., 0],
+                    v_data=self.flows[self.current_frame][..., 1],
+                    dx=self._pixel_size,
+                    set_lam=self.regularization
+                )
+
+                worker.returned.connect(self._handle_force_frame)
+                worker.finished.connect(self._start_next_frame)
+                worker.errored.connect(self._handle_error)
+
+                worker.start()
+            else:
+                # All frames complete, finalize results
+                self._finalize_force_results()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self._set_controls_enabled(True)
+
+    def _update_status(self, message: str, progress: Optional[int] = None):
+        """Update status message and progress bar."""
+        self.status_label.setText(message)
+        if progress is not None:
+            self.progress_bar.setValue(progress)
+
+    def _register_controls(self):
+        """Register all controls with the base widget."""
+        controls = [
+                       self.young_spin,
+                       self.poisson_spin,
+                       self.height_spin,
+                       self.lanczos_exp_spin,
+                       self.regularization_spin,
+                       self.calculate_btn,
+                       self.preview_btn,
+                       self.reset_params_btn,
+                       self.save_force_btn,
+                       self.load_force_btn,
+                       self.clear_data_btn,
+                       self.progress_bar,
+                       self.status_label,
+                       self.displacement_status,
+                       self.force_status,
+                       self.gcv_button,
+                       self.auto_gcv_checkbox
+                   ] + list(self.visualization_params.values())
+
+        for control in controls:
+            self.register_control(control)
 
     def _create_material_params_group(self) -> QGroupBox:
         """Create the material parameters group."""
@@ -356,163 +746,6 @@ class FTTCWidget(BaseAnalysisWidget):
             import traceback
             traceback.print_exc()
 
-    def _update_ui_state(self):
-        """Update UI elements based on current state."""
-        # Check displacement results
-        if hasattr(self.data_manager, 'displacement_results'):
-            results = self.data_manager.displacement_results
-            if results and isinstance(results, dict) and 'flows' in results:
-                flows = results['flows']
-                try:
-                    # Convert to numpy array if it isn't already
-                    if not isinstance(flows, np.ndarray):
-                        flows = np.array(flows)
-                    self.displacement_status.setText(f"Displacement data: {flows.shape}")
-                except Exception as e:
-                    self.displacement_status.setText(f"Displacement data: Error ({str(e)})")
-            else:
-                self.displacement_status.setText("Displacement data: Not loaded")
-        else:
-            self.displacement_status.setText("Displacement data: Not loaded")
-
-        # Check force results
-        if hasattr(self.data_manager, 'force_results') and self.data_manager.force_results is not None:
-            results = self.data_manager.force_results
-            if isinstance(results, dict) and 'tx' in results and 'ty' in results:
-                try:
-                    shape = results['tx'].shape
-                    if len(shape) > 0:  # Check if shape is not empty
-                        self.force_status.setText(f"Force results: {shape}")
-                    else:
-                        self.force_status.setText("Force results: Invalid shape")
-                except Exception as e:
-                    self.force_status.setText(f"Force results: Error ({str(e)})")
-            else:
-                self.force_status.setText("Force results: Not loaded")
-        else:
-            self.force_status.setText("Force results: Not loaded")
-
-        # Update button states based on data availability
-        has_displacement = (
-                hasattr(self.data_manager, 'displacement_results') and
-                self.data_manager.displacement_results is not None
-        )
-
-        self.calculate_btn.setEnabled(has_displacement)
-        self.preview_btn.setEnabled(has_displacement)
-
-        if not has_displacement:
-            self.status_label.setText("Missing required displacement data")
-        else:
-            self.status_label.setText("Ready for force calculation")
-
-    def calculate_forces(self):
-        """Calculate traction forces using the FTTC calculator."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating forces...", 0)
-
-            # Get displacement data
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
-            num_frames = len(flows)
-
-            # Initialize calculator with current parameters
-            self._initialize_calculator()
-
-            # Initialize result arrays
-            force_results = {
-                'tx': [],
-                'ty': []
-            }
-
-            # Get spatial coordinates
-            shape = flows[0].shape[:-1]  # Exclude channel dimension
-            x = np.arange(shape[1])  # Width
-            y = np.arange(shape[0])  # Height
-
-            # Process each frame
-            for i, flow in enumerate(flows):
-                progress = (i + 1) / num_frames * 100
-                self._update_status(f"Processing frame {i + 1}/{num_frames}...", progress)
-
-                # Extract u and v components
-                u_data = flow[..., 0]  # x displacement
-                v_data = flow[..., 1]  # y displacement
-
-                # If auto-GCV is enabled, calculate optimal regularization for this frame
-                if self.auto_gcv_checkbox.isChecked():
-                    xx, yy = np.meshgrid(x, y, indexing='ij')
-                    pos0 = np.array([xx.flatten(), yy.flatten()])
-                    vec0 = np.array([
-                        u_data.flatten() * self._pixel_size,
-                        v_data.flatten() * self._pixel_size
-                    ])
-                    self.regularization = self.calculator._find_regularization(pos0, vec0)
-                    self._update_status(
-                        f"Frame {i + 1}: Using GCV-optimized regularization {self.regularization:.2e}",
-                        progress
-                    )
-
-                # Calculate forces using FTTC
-                (_, _), _, f, _, _, energy, force, _, _ = self.calculator.calculate_traction(
-                    x=x,
-                    y=y,
-                    u_data=u_data,
-                    v_data=v_data,
-                    dx=self._pixel_size,
-                    set_lam=self.regularization
-                )
-
-                # Store force components
-                force_results['tx'].append(f[0])
-                force_results['ty'].append(f[1])
-
-                # Log energy and total force for debugging
-                self._update_status(
-                    f"Frame {i + 1} - Energy: {energy:.2e} J, Total Force: {force:.2e} N",
-                    progress
-                )
-
-            # Convert lists to arrays
-            force_results['tx'] = np.stack(force_results['tx'])
-            force_results['ty'] = np.stack(force_results['ty'])
-
-            # Store calculation parameters
-            visualization_params = {
-                'vector_stride': self.visualization_params['vector_stride'].value(),
-                'arrow_scale': self.visualization_params['arrow_scale'].value(),
-                'f_max': self.visualization_params['f_max'].value()
-            }
-
-            force_results['parameters'] = {
-                'young_modulus': self.young_modulus,
-                'poisson_ratio': self.poisson_ratio,
-                'gel_height': self.gel_height,
-                'pixel_size': self._pixel_size,
-                'regularization': self.regularization,
-                'mesh_size': self.mesh_size,
-                'lanczos_exp': self.lanczos_exp,
-                'downscale_factor': downscale_factor,
-                'visualization': visualization_params
-            }
-
-            # Handle the results
-            self._handle_force_results(force_results)
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Force calculation failed",
-                details=str(e),
-                recovery_hint="Check input data and parameters"
-            ))
-        finally:
-            self._set_controls_enabled(True)
-
     def _create_data_status_group(self) -> QGroupBox:
         """Create the data status group."""
         group = QGroupBox("Data Status")
@@ -622,132 +855,6 @@ class FTTCWidget(BaseAnalysisWidget):
         self.load_force_btn.clicked.connect(self._load_force_data)
         self.reset_params_btn.clicked.connect(self.reset_parameters)
         self.clear_data_btn.clicked.connect(self._clear_data)  # Add clear data connection
-
-    def _register_controls(self):
-        """Register all controls with the base widget."""
-        controls = [
-                       self.young_spin,
-                       self.poisson_spin,
-                       self.height_spin,
-                       self.lanczos_exp_spin,
-                       self.regularization_spin,
-                       self.calculate_btn,
-                       self.preview_btn,
-                       self.reset_params_btn,
-                       self.save_force_btn,
-                       self.load_force_btn,
-                       self.clear_data_btn,  # Add clear data button
-                       self.progress_bar,
-                       self.status_label,
-                       self.displacement_status,  # Add status labels
-                       self.force_status,
-                       self.gcv_button,
-                       self.auto_gcv_checkbox
-                   ] + list(self.visualization_params.values())
-
-        for control in controls:
-            self.register_control(control)
-
-    def preview_force(self):
-        """Preview force calculation on current frame."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating forces...", 0)
-
-            # Make sure parameters are up to date
-            self._update_parameters()
-
-            # Get displacement data and parameters
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
-
-            # Get current frame index
-            current_frame = self.viewer.dims.current_step[0]
-            if current_frame >= len(flows):
-                current_frame = 0
-
-            # Get flow for current frame
-            flow = flows[current_frame]
-
-            # Extract displacement components
-            u_data = flow[..., 0]  # x displacement
-            v_data = flow[..., 1]  # y displacement
-
-            x = np.arange(u_data.shape[1])
-            y = np.arange(u_data.shape[0])
-
-            # Make sure we have a valid pixel size
-            if self._pixel_size is None:
-                disp_params = displacement_results.get('parameters', {})
-                base_pixel_size = disp_params.get('pixel_size')
-                if base_pixel_size is not None:
-                    self._pixel_size = base_pixel_size * downscale_factor
-                else:
-                    raise ValueError("No pixel size available from displacement data")
-
-            # Initialize calculator with current parameters
-            # Convert gel height from μm pixels
-            gel_height_p = None if self.gel_height is None else self.gel_height / self.pixel_size
-
-            self.calculator = FTTC(
-                E=self.young_modulus,
-                nu=self.poisson_ratio,
-                mesh_size=self.mesh_size,
-                lanczos_exp=self.lanczos_exp,
-                gel_height=gel_height_p
-            )
-
-            # Calculate forces for current frame
-            xy, fnorm, f, urec, u, energy, force, Ftf, Fturec = self.calculator.calculate_traction(
-                x=x,
-                y=y,
-                u_data=u_data,
-                v_data=v_data,
-                dx=self._pixel_size,
-                set_lam=self.regularization
-            )
-
-            # Get current visualization parameters
-            vector_stride = self.visualization_params['vector_stride'].value()
-            arrow_scale = self.visualization_params['arrow_scale'].value()
-            f_max = self.visualization_params['f_max'].value()
-
-            # Update visualization
-            self.visualization_manager.visualize_force_preview(
-                f[0], f[1],
-                f_max=f_max,
-                vector_stride=vector_stride,
-                arrow_scale=arrow_scale,
-                downscale_factor=downscale_factor
-            )
-            self._handle_visualization_layers()
-
-            # Update colorbar
-            self.colorbar_manager.update_limits(0, f_max)
-
-            # Show statistics and calculation results
-            self._update_status(
-                f"Preview statistics:\n"
-                f"Max force: {np.max(fnorm):.2f} Pa\n"
-                f"Mean force: {np.mean(fnorm):.2f} Pa\n"
-                f"Median force: {np.median(fnorm):.2f} Pa\n"
-                f"Energy: {energy:.2e} J\n"
-                f"Total force: {force:.2e} N",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Force preview failed",
-                details=str(e),
-                recovery_hint="Check input data and parameters"
-            ))
-        finally:
-            self._set_controls_enabled(True)
 
     def _update_parameters(self):
         """Update parameters from UI controls and data manager."""
@@ -955,17 +1062,6 @@ class FTTCWidget(BaseAnalysisWidget):
             return False
 
         return True
-
-    def _update_status(self, message: str, progress: Optional[int] = None):
-        """Update status message and progress bar."""
-        self.status_label.setText(message)
-        if progress is not None:
-            self.progress_bar.setValue(progress)
-
-    def _set_controls_enabled(self, enabled: bool):
-        """Enable or disable all registered controls."""
-        for control in self._controls:
-            control.setEnabled(enabled)
 
     def _save_force_data(self):
         """Save force data to files."""

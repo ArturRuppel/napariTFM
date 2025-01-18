@@ -24,6 +24,7 @@ Paper references:
 
 import time
 from typing import Tuple, Optional
+from napari.qt.threading import thread_worker
 
 from scipy import optimize
 
@@ -41,6 +42,7 @@ class FTTC:
         self.timing_stats = {}
         self.detailed_timing = {}
 
+    @thread_worker
     def calculate_traction(self, x: np.ndarray, y: np.ndarray,
                            u_data: np.ndarray, v_data: np.ndarray,
                            dx: float, set_lam: Optional[float] = None) -> Tuple:
