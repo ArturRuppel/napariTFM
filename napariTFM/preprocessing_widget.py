@@ -94,6 +94,222 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.processing_failed.emit(str(e))
             self._set_controls_enabled(True)
 
+    def _create_load_group(self):
+        """Create the data loading group."""
+        load_group = QGroupBox("Data")
+        load_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        load_layout = QVBoxLayout()
+        load_layout.setSpacing(4)
+
+        # Initialize buttons and status labels
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_beads_btn.setToolTip("Load a time series of bead images from the active layer in napari")
+
+        self.load_reference_btn = QPushButton("Load Reference Image")
+        self.load_reference_btn.setToolTip("Load a single reference image for registration from the active layer")
+
+        self.load_cells_btn = QPushButton("Load Cell Stack")
+        self.load_cells_btn.setToolTip("Load a time series of cell images from the active layer")
+
+        self.clear_data_btn = QPushButton("Clear All Data")
+        self.clear_data_btn.setToolTip("Remove all loaded data and reset the widget")
+        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
+
+        self.bead_status = QLabel("Not loaded")
+        self.reference_status = QLabel("Not loaded")
+        self.cell_status = QLabel("Not loaded")
+
+        # Add widgets with their status labels
+        for btn, label in [
+            (self.load_beads_btn, self.bead_status),
+            (self.load_reference_btn, self.reference_status),
+            (self.load_cells_btn, self.cell_status)
+        ]:
+            btn_layout = QHBoxLayout()
+            btn_layout.addWidget(btn)
+            btn_layout.addWidget(label)
+            load_layout.addLayout(btn_layout)
+
+        # Add clear button at the bottom
+        load_layout.addWidget(self.clear_data_btn)
+
+        load_group.setLayout(load_layout)
+        return load_group
+
+    def _create_preview_selection_group(self):
+        """Create the preview selection group."""
+        preview_select_group = QGroupBox("Preview Data Type")
+        preview_select_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        preview_layout = QHBoxLayout()
+
+        self.bead_radio = QRadioButton("Bead Stack")
+        self.bead_radio.setToolTip("Preview preprocessing effects on bead images")
+
+        self.reference_radio = QRadioButton("Reference Image")
+        self.reference_radio.setToolTip("Preview preprocessing effects on the reference image")
+
+        self.cell_radio = QRadioButton("Cell Stack")
+        self.cell_radio.setToolTip("Preview preprocessing effects on cell images")
+
+        self.bead_radio.setChecked(True)
+
+        for radio in [self.bead_radio, self.reference_radio, self.cell_radio]:
+            preview_layout.addWidget(radio)
+
+        preview_select_group.setLayout(preview_layout)
+        return preview_select_group
+
+    def _create_intensity_range_group(self):
+        """Create the bead/reference parameters group with intensity range and filter controls."""
+        intensity_group = QGroupBox("Bead/Reference Parameters")
+        intensity_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        intensity_layout = QVBoxLayout()
+
+        # Add slider
+        self.intensity_slider = QRangeSlider(Qt.Horizontal)
+        self.intensity_slider.setToolTip("Adjust intensity range for contrast enhancement")
+        self.intensity_slider.setRange(0, 1000)  # Range 0-1000 for 0.1% steps
+        self.intensity_slider.setValue((0, 1000))
+        intensity_layout.addWidget(self.intensity_slider)
+
+        # Create spinboxes first
+        self.min_spinbox = QDoubleSpinBox()
+        self.min_spinbox.setToolTip("Set minimum intensity percentile (0-100%)")
+        self.max_spinbox = QDoubleSpinBox()
+        self.max_spinbox.setToolTip("Set maximum intensity percentile (0-100%)")
+
+        # Configure spinboxes with finer step size
+        for spinbox in [self.min_spinbox, self.max_spinbox]:
+            spinbox.setRange(0, 100)
+            spinbox.setDecimals(1)  # Show one decimal place
+            spinbox.setSingleStep(0.1)  # 0.1% steps
+
+        self.max_spinbox.setValue(100)
+
+        # Add spinboxes layout
+        spinbox_layout = QHBoxLayout()
+        spinbox_layout.addWidget(QLabel("Min %:"))
+        spinbox_layout.addWidget(self.min_spinbox)
+        spinbox_layout.addStretch()
+        spinbox_layout.addWidget(QLabel("Max %:"))
+        spinbox_layout.addWidget(self.max_spinbox)
+        intensity_layout.addLayout(spinbox_layout)
+
+        # Add Gaussian filter controls
+        self.gaussian_sigma_spin = QDoubleSpinBox()
+        self.gaussian_sigma_spin.setToolTip("Set Gaussian blur sigma (0 = disabled)")
+        sigma_layout = self._create_sigma_control(self.gaussian_sigma_spin)
+        intensity_layout.addLayout(sigma_layout)
+
+        intensity_group.setLayout(intensity_layout)
+        return intensity_group
+
+    def _create_registration_group(self):
+        """Create the registration group."""
+        registration_group = QGroupBox("Registration")
+        registration_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        registration_layout = QVBoxLayout()
+
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("Mode:"))
+        self.registration_mode_combo = QComboBox()
+        self.registration_mode_combo.setToolTip(
+            "Choose registration method:\n"
+            "- Translation: Correct for x-y shifts\n"
+            "- Rigid: Correct for rotation and translation\n"
+            "- No registration: Disable registration"
+        )
+        self.registration_mode_combo.addItems(['Translation', 'Rigid', 'No registration'])
+        self.registration_mode_combo.setCurrentText('Translation')
+        mode_layout.addWidget(self.registration_mode_combo)
+        mode_layout.addStretch()
+        registration_layout.addLayout(mode_layout)
+
+        self.registration_note = QLabel(
+            "Note: Registration will be performed relative to the reference image."
+        )
+        self.registration_note.setWordWrap(True)
+        registration_layout.addWidget(self.registration_note)
+
+        registration_group.setLayout(registration_layout)
+        return registration_group
+
+    def _create_preview_frame(self):
+        """Create the preview frame."""
+        preview_frame = QFrame()
+        preview_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        preview_layout = QHBoxLayout()
+        self.preview_check = QCheckBox("Show Preview")
+        self.preview_check.setToolTip("Toggle live preview of preprocessing effects")
+        preview_layout.addWidget(self.preview_check)
+        preview_layout.addStretch()
+        preview_frame.setLayout(preview_layout)
+        return preview_frame
+
+    def _create_action_buttons(self):
+        """Create the action buttons frame."""
+        button_frame = QFrame()
+        button_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        button_layout = QHBoxLayout()
+
+        # Create buttons
+        self.preprocess_btn = QPushButton("Run Preprocessing")
+        self.preprocess_btn.setToolTip("Apply preprocessing to all loaded data")
+
+        self.reset_btn = QPushButton("Reset Parameters")
+        self.reset_btn.setToolTip("Reset all parameters to default values")
+
+        self.save_btn = QPushButton("Save Preprocessed Data")
+        self.save_btn.setToolTip("Save preprocessed data as TIFF files with calibration metadata")
+        self.save_btn.setEnabled(False)
+
+        # Add buttons to layout
+        button_layout.addWidget(self.preprocess_btn)
+        button_layout.addWidget(self.reset_btn)
+        button_layout.addWidget(self.save_btn)
+
+        button_frame.setLayout(button_layout)
+        return button_frame
+
+    def _create_cell_params_group(self):
+        """Create the cell stack parameters group."""
+        cell_params_group = QGroupBox("Cell Stack Parameters")
+        cell_params_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        cell_params_layout = QVBoxLayout()
+
+        # Cell contrast enhancement
+        cell_intensity_layout = QVBoxLayout()
+        cell_intensity_layout.addWidget(QLabel("Contrast Enhancement"))
+
+        self.cell_intensity_slider = QRangeSlider(Qt.Horizontal)
+        self.cell_intensity_slider.setToolTip("Adjust intensity range for cell image contrast enhancement")
+        self.cell_intensity_slider.setRange(0, 1000)
+        self.cell_intensity_slider.setValue((0, 1000))
+        cell_intensity_layout.addWidget(self.cell_intensity_slider)
+
+        # Create cell spinboxes
+        self.cell_min_spinbox = QDoubleSpinBox()
+        self.cell_min_spinbox.setToolTip("Set minimum intensity percentile for cell images (0-100%)")
+        self.cell_max_spinbox = QDoubleSpinBox()
+        self.cell_max_spinbox.setToolTip("Set maximum intensity percentile for cell images (0-100%)")
+
+        spinbox_layout = self._create_range_spinboxes(
+            self.cell_min_spinbox,
+            self.cell_max_spinbox,
+            is_cell=True
+        )
+        cell_intensity_layout.addLayout(spinbox_layout)
+        cell_params_layout.addLayout(cell_intensity_layout)
+
+        # Cell gaussian blur
+        self.cell_gaussian_sigma_spin = QDoubleSpinBox()
+        self.cell_gaussian_sigma_spin.setToolTip("Set Gaussian blur sigma for cell images (0 = disabled)")
+        sigma_layout = self._create_sigma_control(self.cell_gaussian_sigma_spin)
+        cell_params_layout.addLayout(sigma_layout)
+
+        cell_params_group.setLayout(cell_params_layout)
+        return cell_params_group
+
     def _handle_progress(self, update_dict):
         """Handle progress updates from the worker"""
         progress = update_dict['progress']
@@ -165,47 +381,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.cell_gaussian_sigma_slider = slider
 
         return sigma_layout
-
-    def _create_intensity_range_group(self):
-        """Create the bead/reference parameters group with intensity range and filter controls."""
-        intensity_group = QGroupBox("Bead/Reference Parameters")
-        intensity_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        intensity_layout = QVBoxLayout()
-
-        # Add slider
-        self.intensity_slider = QRangeSlider(Qt.Horizontal)
-        self.intensity_slider.setRange(0, 1000)  # Range 0-1000 for 0.1% steps
-        self.intensity_slider.setValue((0, 1000))
-        intensity_layout.addWidget(self.intensity_slider)
-
-        # Create spinboxes first
-        self.min_spinbox = QDoubleSpinBox()
-        self.max_spinbox = QDoubleSpinBox()
-
-        # Configure spinboxes with finer step size
-        for spinbox in [self.min_spinbox, self.max_spinbox]:
-            spinbox.setRange(0, 100)
-            spinbox.setDecimals(1)  # Show one decimal place
-            spinbox.setSingleStep(0.1)  # 0.1% steps
-
-        self.max_spinbox.setValue(100)
-
-        # Add spinboxes layout
-        spinbox_layout = QHBoxLayout()
-        spinbox_layout.addWidget(QLabel("Min %:"))
-        spinbox_layout.addWidget(self.min_spinbox)
-        spinbox_layout.addStretch()
-        spinbox_layout.addWidget(QLabel("Max %:"))
-        spinbox_layout.addWidget(self.max_spinbox)
-        intensity_layout.addLayout(spinbox_layout)
-
-        # Add Gaussian filter controls
-        self.gaussian_sigma_spin = QDoubleSpinBox()
-        sigma_layout = self._create_sigma_control(self.gaussian_sigma_spin)
-        intensity_layout.addLayout(sigma_layout)
-
-        intensity_group.setLayout(intensity_layout)
-        return intensity_group
 
     def _setup_ui(self):
         """Set up the complete user interface for the preprocessing widget."""
@@ -294,30 +469,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 f"frame length = {frame_length:.3f} min"
             )
 
-    def _create_registration_group(self):
-        """Create the registration group."""
-        registration_group = QGroupBox("Registration")
-        registration_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        registration_layout = QVBoxLayout()
-
-        mode_layout = QHBoxLayout()
-        mode_layout.addWidget(QLabel("Mode:"))
-        self.registration_mode_combo = QComboBox()
-        self.registration_mode_combo.addItems(['Translation', 'Rigid', 'No registration'])
-        self.registration_mode_combo.setCurrentText('Translation')  # Default to Translation
-        mode_layout.addWidget(self.registration_mode_combo)
-        mode_layout.addStretch()
-        registration_layout.addLayout(mode_layout)
-
-        self.registration_note = QLabel(
-            "Note: Registration will be performed relative to the reference image."
-        )
-        self.registration_note.setWordWrap(True)
-        registration_layout.addWidget(self.registration_note)
-
-        registration_group.setLayout(registration_layout)
-        return registration_group
-
     def update_parameters(self):
         """Update preprocessing parameters from UI controls"""
         try:
@@ -396,75 +547,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._update_status("Parameters reset to defaults")
         self.update_parameters()
 
-    def _create_cell_params_group(self):
-        """Create the cell stack parameters group."""
-        cell_params_group = QGroupBox("Cell Stack Parameters")
-        cell_params_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        cell_params_layout = QVBoxLayout()
-
-        # Cell contrast enhancement
-        cell_intensity_layout = QVBoxLayout()
-        cell_intensity_layout.addWidget(QLabel("Contrast Enhancement"))
-
-        self.cell_intensity_slider = QRangeSlider(Qt.Horizontal)
-        self.cell_intensity_slider.setRange(0, 1000)
-        self.cell_intensity_slider.setValue((0, 1000))
-        cell_intensity_layout.addWidget(self.cell_intensity_slider)
-
-        # Create cell spinboxes
-        self.cell_min_spinbox = QDoubleSpinBox()
-        self.cell_max_spinbox = QDoubleSpinBox()
-
-        spinbox_layout = self._create_range_spinboxes(
-            self.cell_min_spinbox,
-            self.cell_max_spinbox,
-            is_cell=True
-        )
-        cell_intensity_layout.addLayout(spinbox_layout)
-        cell_params_layout.addLayout(cell_intensity_layout)
-
-        # Cell gaussian blur (no checkbox)
-        self.cell_gaussian_sigma_spin = QDoubleSpinBox()
-        sigma_layout = self._create_sigma_control(self.cell_gaussian_sigma_spin)
-        cell_params_layout.addLayout(sigma_layout)
-
-        cell_params_group.setLayout(cell_params_layout)
-        return cell_params_group
-
-    def _create_load_group(self):
-        """Create the data loading group."""
-        load_group = QGroupBox("Data")
-        load_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        load_layout = QVBoxLayout()
-        load_layout.setSpacing(4)
-
-        # Initialize buttons and status labels
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.load_reference_btn = QPushButton("Load Reference Image")
-        self.load_cells_btn = QPushButton("Load Cell Stack")
-        self.clear_data_btn = QPushButton("Clear All Data")
-        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
-
-        self.bead_status = QLabel("Not loaded")
-        self.reference_status = QLabel("Not loaded")
-        self.cell_status = QLabel("Not loaded")
-
-        # Add widgets with their status labels
-        for btn, label in [
-            (self.load_beads_btn, self.bead_status),
-            (self.load_reference_btn, self.reference_status),
-            (self.load_cells_btn, self.cell_status)
-        ]:
-            btn_layout = QHBoxLayout()
-            btn_layout.addWidget(btn)
-            btn_layout.addWidget(label)
-            load_layout.addLayout(btn_layout)
-
-        # Add clear button at the bottom
-        load_layout.addWidget(self.clear_data_btn)
-
-        load_group.setLayout(load_layout)
-        return load_group
 
     def _load_active_layer(self, data_type: str):
         """Load the currently active layer as the specified data type"""
@@ -767,54 +849,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         main_layout.setSpacing(8)
         main_layout.setContentsMargins(6, 6, 6, 6)
         return main_layout
-
-    def _create_preview_selection_group(self):
-        """Create the preview selection group."""
-        preview_select_group = QGroupBox("Preview Data Type")
-        preview_select_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        preview_layout = QHBoxLayout()
-
-        self.bead_radio = QRadioButton("Bead Stack")
-        self.reference_radio = QRadioButton("Reference Image")
-        self.cell_radio = QRadioButton("Cell Stack")
-        self.bead_radio.setChecked(True)
-
-        for radio in [self.bead_radio, self.reference_radio, self.cell_radio]:
-            preview_layout.addWidget(radio)
-
-        preview_select_group.setLayout(preview_layout)
-        return preview_select_group
-
-    def _create_preview_frame(self):
-        """Create the preview frame."""
-        preview_frame = QFrame()
-        preview_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        preview_layout = QHBoxLayout()
-        self.preview_check = QCheckBox("Show Preview")
-        preview_layout.addWidget(self.preview_check)
-        preview_layout.addStretch()
-        preview_frame.setLayout(preview_layout)
-        return preview_frame
-
-    def _create_action_buttons(self):
-        """Create the action buttons frame."""
-        button_frame = QFrame()
-        button_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        button_layout = QHBoxLayout()
-
-        # Create buttons
-        self.preprocess_btn = QPushButton("Run Preprocessing")
-        self.reset_btn = QPushButton("Reset Parameters")
-        self.save_btn = QPushButton("Save Preprocessed Data")
-        self.save_btn.setEnabled(False)  # Initially disabled
-
-        # Add buttons to layout
-        button_layout.addWidget(self.preprocess_btn)
-        button_layout.addWidget(self.reset_btn)
-        button_layout.addWidget(self.save_btn)
-
-        button_frame.setLayout(button_layout)
-        return button_frame
 
     def _create_status_frame(self):
         """Create the status and progress frame."""
