@@ -230,7 +230,7 @@ class VisualizationManager(ErrorHandlingMixin):
             display_flow = self._upscale_field(flow, downscale_factor)
 
             # Scale flow for visualization
-            flow_scaled = display_flow * arrow_scale
+            flow_scaled = display_flow * arrow_scale / d_max * 50
 
             # Add visualization layers
             with self.viewer.events.blocker_all():
@@ -313,7 +313,7 @@ class VisualizationManager(ErrorHandlingMixin):
                 magnitudes[i] = magnitude
 
                 # Calculate vector data
-                flow_scaled = display_flow * vis_params['arrow_scale']
+                flow_scaled = display_flow * vis_params['arrow_scale'] / vis_params['d_max'] * 50
                 vectors, colors = self._create_vector_visualization(
                     flow_scaled,
                     display_flow,

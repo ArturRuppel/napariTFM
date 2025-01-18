@@ -237,8 +237,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         arrow_layout = QHBoxLayout()
         arrow_layout.addWidget(QLabel("Arrow Scale:"))
         self.visualization_params['arrow_scale'] = QDoubleSpinBox()
-        self.visualization_params['arrow_scale'].setRange(0.1, 50.0)
-        self.visualization_params['arrow_scale'].setSingleStep(0.5)
+        self.visualization_params['arrow_scale'].setRange(0.1, 2.0)
+        self.visualization_params['arrow_scale'].setSingleStep(0.1)
         self.visualization_params['arrow_scale'].setValue(1.0)
         self.visualization_params['arrow_scale'].setToolTip(
             "Scale factor for arrow length in the visualization. Adjust to make displacement vectors more visible"
