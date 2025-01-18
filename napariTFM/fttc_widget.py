@@ -285,90 +285,6 @@ class FTTCWidget(BaseAnalysisWidget):
         finally:
             self._set_controls_enabled(True)
 
-    def _load_force_data(self):
-        """Load force data from files."""
-        try:
-            # Get file to load
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select Force Data File",
-                os.path.expanduser("~"),
-                "NumPy Files (*.npy)"
-            )
-
-            if file_path:
-                # Load the force data
-                force_data = np.load(file_path, allow_pickle=True).item()
-
-                # Convert force components to numpy arrays if they aren't already
-                tx = np.array(force_data['tx'])
-                ty = np.array(force_data['ty'])
-
-                parameters = force_data['parameters']
-
-                # Update UI parameters with loaded values
-                if 'youngs_modulus' in parameters:
-                    self.young_spin.setValue(parameters['youngs_modulus'])
-                if 'poisson_ratio' in parameters:
-                    self.poisson_spin.setValue(parameters['poisson_ratio'])
-                if 'gel_height' in parameters:
-                    self.height_spin.setValue(0 if parameters['gel_height'] is None
-                                              else parameters['gel_height'] * 1e6)  # Convert back to μm
-
-                if 'vector_stride' in parameters:
-                    self.visualization_params['vector_stride'].setValue(parameters['vector_stride'])
-                if 'arrow_scale' in parameters:
-                    self.visualization_params['arrow_scale'].setValue(parameters['arrow_scale'])
-                if 'f_max' in parameters:
-                    self.visualization_params['f_max'].setValue(parameters['f_max'])
-
-                # Create results dictionary
-                results = {
-                    'tx': tx,
-                    'ty': ty,
-                    'parameters': {
-                        'young_modulus': parameters['youngs_modulus'],
-                        'poisson_ratio': parameters['poisson_ratio'],
-                        'gel_height': None if parameters.get('gel_height') is None else parameters['gel_height'] * 1e6,
-                        'pixel_size': parameters['pixelsize'],
-                        'regularization': self.regularization,
-                        'mesh_size': self.mesh_size,
-                        'lanczos_exp': self.lanczos_exp,
-                        'downscale_factor': parameters.get('downscale_factor', 1),
-                        'visualization': {
-                            'vector_stride': parameters['vector_stride'],
-                            'arrow_scale': parameters['arrow_scale'],
-                            'f_max': parameters['f_max']
-                        }
-                    }
-                }
-
-                # Update data manager and visualization
-                self.data_manager.force_results = results
-                self.visualization_manager.visualize_force_results(
-                    results,
-                    downscale_factor=parameters.get('downscale_factor', 1)
-                )
-                self._handle_visualization_layers()
-
-                # Update colorbar with loaded f_max
-                self.colorbar_manager.update_limits(0, parameters['f_max'])
-
-                # Enable save button and emit results
-                self.save_force_btn.setEnabled(True)
-                self.force_calculated.emit(results)
-
-                self._update_status(f"Force data successfully loaded from:\n{file_path}", 100)
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to load force data: {str(e)}"
-            )
-            # Print the full error for debugging
-            import traceback
-            traceback.print_exc()
 
     def _create_material_params_group(self) -> QGroupBox:
         """Create the material parameters group."""
@@ -873,6 +789,8 @@ class FTTCWidget(BaseAnalysisWidget):
                         'poisson_ratio': float(results['parameters']['poisson_ratio']),
                         'gel_height': gel_height_m,
                         'pixelsize': float(results['parameters']['pixel_size']),
+                        'regularization': float(results['parameters']['regularization']),
+                        'lanczos_exp': int(results['parameters']['lanczos_exp']),
                         'downscale_factor': int(results['parameters'].get('downscale_factor', 1)),
                         'vector_stride': int(results['parameters']['visualization']['vector_stride']),
                         'arrow_scale': float(results['parameters']['visualization']['arrow_scale']),
@@ -892,6 +810,104 @@ class FTTCWidget(BaseAnalysisWidget):
                 f"Failed to save force data: {str(e)}"
             )
 
+    def _load_force_data(self):
+        """Load force data from files."""
+        try:
+            # Get file to load
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Force Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                # Load the force data
+                force_data = np.load(file_path, allow_pickle=True).item()
+
+                # Convert force components to numpy arrays if they aren't already
+                tx = np.array(force_data['tx'])
+                ty = np.array(force_data['ty'])
+
+                parameters = force_data['parameters']
+
+                # Update UI parameters with loaded values
+                # Material parameters
+                if 'youngs_modulus' in parameters:
+                    self.young_spin.setValue(parameters['youngs_modulus'])
+                if 'poisson_ratio' in parameters:
+                    self.poisson_spin.setValue(parameters['poisson_ratio'])
+                if 'gel_height' in parameters:
+                    # Convert from meters to micrometers if not None
+                    height_um = 0 if parameters['gel_height'] is None else parameters['gel_height'] * 1e6
+                    self.height_spin.setValue(height_um)
+                if 'lanczos_exp' in parameters:
+                    self.lanczos_exp_spin.setValue(parameters['lanczos_exp'])
+
+                # Calculation parameters
+                if 'regularization' in parameters:
+                    # Convert to log scale for the spin box
+                    log_reg = np.log10(parameters['regularization'])
+                    self.regularization_spin.setValue(log_reg)
+
+                # Visualization parameters
+                if 'vector_stride' in parameters:
+                    self.visualization_params['vector_stride'].setValue(parameters['vector_stride'])
+                if 'arrow_scale' in parameters:
+                    self.visualization_params['arrow_scale'].setValue(parameters['arrow_scale'])
+                if 'f_max' in parameters:
+                    self.visualization_params['f_max'].setValue(parameters['f_max'])
+
+                # Create results dictionary with proper parameter structure
+                results = {
+                    'tx': tx,
+                    'ty': ty,
+                    'parameters': {
+                        'young_modulus': parameters['youngs_modulus'],
+                        'poisson_ratio': parameters['poisson_ratio'],
+                        'gel_height': None if parameters.get('gel_height') is None else parameters['gel_height'] * 1e6,
+                        'pixel_size': parameters['pixelsize'],
+                        'regularization': parameters['regularization'],
+                        'mesh_size': self.mesh_size,
+                        'lanczos_exp': parameters['lanczos_exp'],
+                        'downscale_factor': parameters.get('downscale_factor', 1),
+                        'visualization': {
+                            'vector_stride': parameters['vector_stride'],
+                            'arrow_scale': parameters['arrow_scale'],
+                            'f_max': parameters['f_max']
+                        }
+                    }
+                }
+
+                # Update all parameters in the calculator
+                self._update_parameters()
+
+                # Update data manager and visualization
+                self.data_manager.force_results = results
+                self.visualization_manager.visualize_force_results(
+                    results,
+                    downscale_factor=parameters.get('downscale_factor', 1)
+                )
+                self._handle_visualization_layers()
+
+                # Update colorbar with loaded f_max
+                self.colorbar_manager.update_limits(0, parameters['f_max'])
+
+                # Enable save button and emit results
+                self.save_force_btn.setEnabled(True)
+                self.force_calculated.emit(results)
+
+                self._update_status(f"Force data successfully loaded from:\n{file_path}", 100)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load force data: {str(e)}"
+            )
+            # Print the full error for debugging
+            import traceback
+            traceback.print_exc()
     def _handle_visualization_layers(self):
         """Handle layer visibility and ordering for better force visualization."""
         from qtpy.QtCore import QTimer
