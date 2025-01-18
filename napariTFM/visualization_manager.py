@@ -36,6 +36,131 @@ class VisualizationManager(ErrorHandlingMixin):
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
 
+    def _on_frame_changed(self, event=None) -> None:
+        """Handle frame change events for both displacement and force visualizations."""
+        try:
+            current_frame = self.viewer.dims.current_step[0]
+
+            # Handle displacement vectors
+            if hasattr(self.data_manager, 'displacement_results'):
+                results = self.data_manager.displacement_results
+                if results and 'displacement_vector_cache' in results:
+                    cache = results['displacement_vector_cache']
+                    if (current_frame < len(cache['data']) and
+                            'displacement_vectors' in self._layers and
+                            self._layers['displacement_vectors'] is not None):
+                        with self.viewer.events.blocker_all():
+                            self._layers['displacement_vectors'].data = cache['data'][current_frame]
+                            self._layers['displacement_vectors'].edge_color = cache['colors'][current_frame]
+
+            # Handle force vectors
+            if hasattr(self.data_manager, 'force_vector_cache'):
+                cache = self.data_manager.force_vector_cache
+                if (current_frame < len(cache['data']) and
+                        'force_vectors' in self._layers and
+                        self._layers['force_vectors'] is not None):
+                    with self.viewer.events.blocker_all():
+                        self._layers['force_vectors'].data = cache['data'][current_frame]
+                        self._layers['force_vectors'].edge_color = cache['colors'][current_frame]
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to update frame visualization",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check vector cache and layer consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+
+    def visualize_displacement_results(
+            self,
+            results: Dict[str, Any],
+            downscale_factor: int = 1
+    ) -> None:
+        """Visualize displacement results for all frames."""
+        try:
+            flows = results['flows']
+            vis_params = results['visualization_params']
+
+            # Clear existing layers
+            self._clear_layers(['Displacement Magnitude', 'Displacement Vectors'])
+
+            # Create visualization stacks
+            num_frames = len(flows)
+            upscaled_shape = (
+                flows[0].shape[0] * downscale_factor,
+                flows[0].shape[1] * downscale_factor
+            )
+            magnitudes = np.zeros((num_frames, *upscaled_shape))
+
+            # Create vector cache
+            vector_cache = {
+                'data': [],
+                'colors': [],
+                'parameters': vis_params.copy(),
+                'original_resolution': flows[0].shape[:2]
+            }
+
+            # Process each frame
+            for i in range(num_frames):
+                display_flow = self._upscale_field(flows[i], downscale_factor)
+
+                # Calculate magnitude
+                magnitude = np.sqrt(np.sum(display_flow ** 2, axis=-1))
+                magnitudes[i] = magnitude
+
+                # Calculate vector data
+                flow_scaled = display_flow * vis_params['arrow_scale'] / vis_params['d_max'] * 50
+                vectors, colors = self._create_vector_visualization(
+                    flow_scaled,
+                    display_flow,
+                    vis_params['vector_stride'],
+                    vis_params['d_max']
+                )
+                vector_cache['data'].append(vectors)
+                vector_cache['colors'].append(colors)
+
+            # Store vector cache in results
+            results['displacement_vector_cache'] = vector_cache  # Changed from 'vector_cache' to 'displacement_vector_cache'
+
+            # Add visualization layers
+            with self.viewer.events.blocker_all():
+                self._layers['displacement_magnitude'] = self.viewer.add_image(
+                    magnitudes,
+                    name='Displacement Magnitude',
+                    colormap='viridis',
+                    blending='additive',
+                    contrast_limits=(0, vis_params['d_max']),
+                    visible=False
+                )
+
+                # Add initial vector layer
+                current_frame = self.viewer.dims.current_step[0]
+                if len(vector_cache['data'][current_frame]) > 0:
+                    self._layers['displacement_vectors'] = self.viewer.add_vectors(
+                        vector_cache['data'][current_frame],
+                        name='Displacement Vectors',
+                        edge_color=vector_cache['colors'][current_frame],
+                        edge_width=2,
+                        vector_style='arrow',
+                        blending='additive',
+                        length=1
+                    )
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to visualize displacement results",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Try adjusting visualization parameters or check data consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+            raise
+
     def _clear_displacement_callback(self):
         """Clear the existing displacement dims callback if it exists"""
         if self._displacement_dims_callback is not None:
@@ -276,105 +401,6 @@ class VisualizationManager(ErrorHandlingMixin):
             self.handle_error(error)
             raise
 
-    def visualize_displacement_results(
-            self,
-            results: Dict[str, Any],
-            downscale_factor: int = 1
-    ) -> None:
-        """Visualize displacement results for all frames."""
-        try:
-            flows = results['flows']
-            vis_params = results['visualization_params']
-
-            # Clear existing layers
-            self._clear_layers(['Displacement Magnitude', 'Displacement Vectors'])
-
-            # Create visualization stacks
-            num_frames = len(flows)
-            upscaled_shape = (
-                flows[0].shape[0] * downscale_factor,
-                flows[0].shape[1] * downscale_factor
-            )
-            magnitudes = np.zeros((num_frames, *upscaled_shape))
-
-            # Create vector cache
-            vector_cache = {
-                'data': [],
-                'colors': [],
-                'parameters': vis_params.copy(),
-                'original_resolution': flows[0].shape[:2]
-            }
-
-            # Process each frame
-            for i in range(num_frames):
-                display_flow = self._upscale_field(flows[i], downscale_factor)
-
-                # Calculate magnitude
-                magnitude = np.sqrt(np.sum(display_flow ** 2, axis=-1))
-                magnitudes[i] = magnitude
-
-                # Calculate vector data
-                flow_scaled = display_flow * vis_params['arrow_scale'] / vis_params['d_max'] * 50
-                vectors, colors = self._create_vector_visualization(
-                    flow_scaled,
-                    display_flow,
-                    vis_params['vector_stride'],
-                    vis_params['d_max']
-                )
-                vector_cache['data'].append(vectors)
-                vector_cache['colors'].append(colors)
-
-            # Store vector cache in results
-            results['displacement_vector_cache'] = vector_cache
-
-            # Add visualization layers
-            with self.viewer.events.blocker_all():
-                self._layers['displacement_magnitude'] = self.viewer.add_image(
-                    magnitudes,
-                    name='Displacement Magnitude',
-                    colormap='viridis',
-                    blending='additive',
-                    contrast_limits=(0, vis_params['d_max']),
-                    visible=False
-                )
-
-                # Add initial vector layer
-                current_frame = self.viewer.dims.current_step[0]
-                if len(vector_cache['data'][current_frame]) > 0:
-                    self._layers['displacement_vectors'] = self.viewer.add_vectors(
-                        vector_cache['data'][current_frame],
-                        name='Displacement Vectors',
-                        edge_color=vector_cache['colors'][current_frame],
-                        edge_width=2,
-                        vector_style='arrow',
-                        blending='additive',
-                        length=1
-                    )
-
-                    # Setup frame change callback
-                    def _on_displacement_dims_change(event=None):
-                        current_frame = self.viewer.dims.current_step[0]
-                        if (current_frame < len(vector_cache['data']) and
-                                'displacement_vectors' in self._layers and
-                                self._layers['displacement_vectors'] is not None):
-                            self._layers['displacement_vectors'].data = vector_cache['data'][current_frame]
-                            self._layers['displacement_vectors'].edge_color = vector_cache['colors'][current_frame]
-
-                    # Store and register the callback
-                    self._displacement_dims_callback = _on_displacement_dims_change
-                    self.viewer.dims.events.current_step.connect(self._displacement_dims_callback)
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to visualize displacement results",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Try adjusting visualization parameters or check data consistency",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
-            raise
 
     def visualize_force_preview(
             self,
@@ -769,35 +795,6 @@ class VisualizationManager(ErrorHandlingMixin):
             )
             self.handle_error(error)
             raise
-    def _on_frame_changed(self, event=None) -> None:
-        """Handle frame change events for both displacement and force visualizations."""
-        try:
-            current_frame = self.viewer.dims.current_step[0]
-
-            # Handle displacement vectors
-            if hasattr(self.data_manager, 'displacement_results'):
-                results = self.data_manager.displacement_results
-                if results and 'vector_cache' in results:
-                    cache = results['vector_cache']
-                    if current_frame < len(cache['data']):
-                        vector_layer = self._layers.get('vectors')
-                        if vector_layer is not None:
-                            with self.viewer.events.blocker_all():
-                                vector_layer.data = cache['data'][current_frame]
-                                vector_layer.edge_color = cache['colors'][current_frame]
-
-            # Handle force vectors
-            if hasattr(self.data_manager, 'force_vector_cache'):
-                cache = self.data_manager.force_vector_cache
-                if current_frame < len(cache['data']):
-                    vector_layer = self._layers.get('force_vectors')
-                    if vector_layer is not None:
-                        with self.viewer.events.blocker_all():
-                            vector_layer.data = cache['data'][current_frame]
-                            vector_layer.edge_color = cache['colors'][current_frame]
-
-        except Exception as e:
-            self.handle_error(f"Failed to update frame visualization: {str(e)}")
 
     def get_force_statistics(self, results: Dict[str, Any]) -> Dict[str, float]:
         """Calculate force statistics."""
