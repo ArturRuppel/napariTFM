@@ -60,6 +60,62 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
+    def _clear_data(self):
+        """Clear all displacement analysis data"""
+        try:
+            # Clear data from manager
+            self.data_manager.clear_displacement_data()
+
+            # Disable save button when data is cleared
+            self.save_displacement_btn.setEnabled(False)
+
+            # Update UI
+            self._update_ui_state()
+            self._update_status("All displacement analysis data cleared")
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def _create_action_buttons(self) -> QFrame:
+        """Create the action buttons frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
+
+        # Create 2x2 grid for buttons
+        button_grid = QHBoxLayout()
+
+        # Create left column (Preview and Save)
+        left_column = QVBoxLayout()
+        self.preview_btn = QPushButton("Preview Current Frame")
+        self.preview_btn.setToolTip("Calculate and visualize displacement for the current frame")
+
+        self.save_displacement_btn = QPushButton("Save Displacement")
+        self.save_displacement_btn.setToolTip("Save the current displacement analysis results to a file")
+        # Initialize save button as disabled
+        self.save_displacement_btn.setEnabled(False)
+
+        left_column.addWidget(self.preview_btn)
+        left_column.addWidget(self.save_displacement_btn)
+
+        # Create right column (Analyze and Load)
+        right_column = QVBoxLayout()
+        self.analyze_btn = QPushButton("Analyze All Frames")
+        self.analyze_btn.setToolTip("Calculate displacement for all frames in the sequence")
+
+        self.load_displacement_btn = QPushButton("Load Displacement")
+        self.load_displacement_btn.setToolTip("Load previously saved displacement analysis results")
+
+        right_column.addWidget(self.analyze_btn)
+        right_column.addWidget(self.load_displacement_btn)
+
+        # Add columns to grid
+        button_grid.addLayout(left_column)
+        button_grid.addLayout(right_column)
+
+        layout.addLayout(button_grid)
+        frame.setLayout(layout)
+        return frame
+
     def _handle_visualization_layers(self):
         """Handle layer visibility and ordering for better data visualization."""
         from qtpy.QtCore import QTimer
@@ -392,45 +448,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
-
-    def _create_action_buttons(self) -> QFrame:
-        """Create the action buttons frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        # Create 2x2 grid for buttons
-        button_grid = QHBoxLayout()
-
-        # Create left column (Preview and Save)
-        left_column = QVBoxLayout()
-        self.preview_btn = QPushButton("Preview Current Frame")
-        self.preview_btn.setToolTip("Calculate and visualize displacement for the current frame")
-
-        self.save_displacement_btn = QPushButton("Save Displacement")
-        self.save_displacement_btn.setToolTip("Save the current displacement analysis results to a file")
-        self.save_displacement_btn.setEnabled(False)
-
-        left_column.addWidget(self.preview_btn)
-        left_column.addWidget(self.save_displacement_btn)
-
-        # Create right column (Analyze and Load)
-        right_column = QVBoxLayout()
-        self.analyze_btn = QPushButton("Analyze All Frames")
-        self.analyze_btn.setToolTip("Calculate displacement for all frames in the sequence")
-
-        self.load_displacement_btn = QPushButton("Load Displacement")
-        self.load_displacement_btn.setToolTip("Load previously saved displacement analysis results")
-
-        right_column.addWidget(self.analyze_btn)
-        right_column.addWidget(self.load_displacement_btn)
-
-        # Add columns to grid
-        button_grid.addLayout(left_column)
-        button_grid.addLayout(right_column)
-
-        layout.addLayout(button_grid)
-        frame.setLayout(layout)
-        return frame
 
     def _create_visualization_parameters_group(self) -> QGroupBox:
         """Create the visualization parameters group."""
@@ -856,18 +873,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         except ValueError as e:
             QMessageBox.warning(self, "Error", str(e))
 
-    def _clear_data(self):
-        """Clear all displacement analysis data"""
-        try:
-            # Clear data from manager
-            self.data_manager.clear_displacement_data()
-
-            # Update UI
-            self._update_ui_state()
-            self._update_status("All displacement analysis data cleared")
-
-        except Exception as e:
-            self._handle_error(str(e))
 
     def _create_status_frame(self) -> QFrame:
         """Create the status and progress frame."""
