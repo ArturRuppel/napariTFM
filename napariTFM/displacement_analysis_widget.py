@@ -53,6 +53,264 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
+    def _handle_displacement_results(self, results):
+        """Handle the completed displacement analysis results."""
+        try:
+            # Update data manager
+            # Ensure flows is a numpy array
+            if 'flows' in results and not isinstance(results['flows'], np.ndarray):
+                results['flows'] = np.array(results['flows'])
+
+            self.data_manager.displacement_results = results
+
+            # Update visualization
+            self.visualization_manager.visualize_displacement_results(
+                results,
+                downscale_factor=results['parameters']['downscale_factor']
+            )
+
+            # Handle layer visibility and ordering
+            self._handle_visualization_layers()
+
+            # Update colorbar with current d_max
+            d_max = results['visualization_params']['d_max']
+            self.colorbar_manager.update_limits(0, d_max)
+
+            # Enable save button and emit results
+            self.save_displacement_btn.setEnabled(True)
+            self.displacement_calculated.emit(results)
+
+            # Update UI state to reflect new results
+            self._update_ui_state()
+
+            # Update status with statistics
+            stats = self.visualization_manager.get_displacement_statistics(results['flows'][0])
+            self._update_status(
+                f"Analysis complete\n"
+                f"Max displacement: {stats['max']:.2f} µm\n"
+                f"Mean displacement: {stats['mean']:.2f} µm\n"
+                f"Flow field resolution: {results['flow_shape']} (from {results['original_shape']})",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(str(e))
+            import traceback
+            traceback.print_exc()
+
+    def _update_ui_state(self):
+        """Update UI elements based on current state."""
+        # Check displacement results
+        if hasattr(self.data_manager, 'displacement_results'):
+            results = self.data_manager.displacement_results
+            if results and isinstance(results, dict) and 'flows' in results:
+                flows = results['flows']
+                try:
+                    # Convert to numpy array if it isn't already
+                    if not isinstance(flows, np.ndarray):
+                        flows = np.array(flows)
+                    self.displacement_status.setText(f"Displacement results: {flows.shape}")
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    self.displacement_status.setText(f"Displacement results: Error ({str(e)})")
+            else:
+                self.displacement_status.setText("Displacement results: Not loaded")
+        else:
+            self.displacement_status.setText("Displacement results: Not loaded")
+
+        # Only look at displacement input data
+        reference = self.data_manager.displacement_reference_image
+        bead_stack = self.data_manager.displacement_bead_stack
+
+        has_reference = reference is not None
+        has_beads = bead_stack is not None
+
+        # Update status labels with shape information if data exists
+        if has_reference:
+            self.reference_status.setText(f"Reference: {reference.shape}")
+        else:
+            self.reference_status.setText("Reference: Not loaded")
+
+        if has_beads:
+            self.bead_status.setText(f"Bead stack: {bead_stack.shape}")
+        else:
+            self.bead_status.setText("Bead stack: Not loaded")
+
+        can_analyze = has_beads and has_reference
+        self.analyze_btn.setEnabled(can_analyze)
+        self.preview_btn.setEnabled(can_analyze)
+
+        if not can_analyze:
+            missing = []
+            if not has_beads:
+                missing.append("bead stack")
+            if not has_reference:
+                missing.append("reference image")
+            self.status_label.setText(f"Missing required data: {', '.join(missing)}")
+        else:
+            self.status_label.setText("Ready for analysis")
+
+    def _load_displacement(self):
+        """Load displacement data from files."""
+        try:
+            # Get file path
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Displacement Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                # Load data using numpy
+                displacement_data = np.load(file_path, allow_pickle=True).item()
+                flows = np.array(displacement_data['flows'])
+                parameters = displacement_data['parameters']
+
+                # Update calibration in parent widget
+                if 'pixel_size' in parameters and 'frame_interval' in parameters:
+                    self._update_parent_calibration(
+                        parameters['pixel_size'],
+                        parameters['frame_interval']
+                    )
+
+                # Handle flow array reshaping if needed
+                if len(flows.shape) == 3:  # If flows is (frames, height*2, width)
+                    frames, height_doubled, width = flows.shape
+                    height = height_doubled // 2
+                    flows = flows.reshape(frames, 2, height, width).transpose(0, 2, 3, 1)
+
+                # Update optical flow parameters if available
+                if 'tvl1_params' in parameters:
+                    tvl1_params = parameters['tvl1_params']
+                    param_mapping = {
+                        'tau': 'tau',
+                        'lambda': 'lambda_',
+                        'theta': 'theta',
+                        'nscales': 'nscales',
+                        'warps': 'warps',
+                        'epsilon': 'epsilon',
+                        'inner_iterations': 'inner_iterations',
+                        'outer_iterations': 'outer_iterations',
+                        'scale_step': 'scale_step',
+                        'median_filtering': 'median_filtering'
+                    }
+
+                    for saved_name, ui_name in param_mapping.items():
+                        if saved_name in tvl1_params and ui_name in self.parameter_spins:
+                            self.parameter_spins[ui_name].setValue(tvl1_params[saved_name])
+
+                # Update other parameters
+                if 'downscale_factor' in parameters:
+                    self.parameter_spins['downscale_factor'].setValue(parameters['downscale_factor'])
+                if 'arrow_scale' in parameters:
+                    self.visualization_params['arrow_scale'].setValue(parameters['arrow_scale'])
+                if 'vector_stride' in parameters:
+                    self.visualization_params['vector_stride'].setValue(parameters['vector_stride'])
+                if 'd_max' in parameters:
+                    self.visualization_params['d_max'].setValue(parameters['d_max'])
+
+                # Update analyzer parameters
+                self.update_parameters()
+
+                # Create results dictionary with updated pixel size
+                results = {
+                    'flows': flows,
+                    'parameters': {
+                        'tvl1_params': tvl1_params,
+                        'downscale_factor': parameters.get('downscale_factor', 1),
+                        'pixel_size': self.pixel_size  # Use current pixel size
+                    },
+                    'visualization_params': {
+                        'd_max': parameters.get('d_max', 10.0),
+                        'vector_stride': parameters.get('vector_stride', 20),
+                        'arrow_scale': parameters.get('arrow_scale', 1.0)
+                    },
+                    'original_shape': flows.shape[1:3],
+                    'flow_shape': flows.shape[1:3],
+                    'units': 'micrometers'
+                }
+
+                # Update data manager and visualization
+                self.data_manager.displacement_results = results
+                self.visualization_manager.visualize_displacement_results(
+                    results,
+                    downscale_factor=parameters.get('downscale_factor', 1)
+                )
+
+                # Handle layer visibility and ordering
+                self._handle_visualization_layers()
+
+                # Update colorbar with loaded d_max
+                self.colorbar_manager.update_limits(0, parameters.get('d_max', 10.0))
+
+                # Enable save button
+                self.save_displacement_btn.setEnabled(True)
+
+                # Update UI state to show new data status
+                self._update_ui_state()
+
+                # Emit the displacement_calculated signal with the results
+                self.displacement_calculated.emit(results)
+
+                self._update_status(
+                    f"Displacement data successfully loaded from:\n"
+                    f"{file_path}\n"
+                    f"Pixel size: {self.pixel_size} µm\n"
+                    f"Frame interval: {self.frame_length} min",
+                    100
+                )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load displacement data: {str(e)}"
+            )
+            # Print the full error for debugging
+            import traceback
+            traceback.print_exc()
+
+    def _create_data_loading_group(self) -> QGroupBox:
+        """Create the data loading group."""
+        group = QGroupBox("Data")
+        layout = QVBoxLayout()
+
+        # Status labels stacked vertically
+        self.bead_status = QLabel("Bead stack: Not loaded")
+        self.reference_status = QLabel("Reference: Not loaded")
+        self.displacement_status = QLabel("Displacement results: Not loaded")
+
+        # Add all status labels first
+        layout.addWidget(self.bead_status)
+        layout.addWidget(self.reference_status)
+        layout.addWidget(self.displacement_status)
+
+        # Create horizontal layout for load buttons
+        button_row = QHBoxLayout()
+
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_beads_btn.setToolTip("Load the time series of bead images for displacement analysis")
+
+        self.load_reference_btn = QPushButton("Load Reference Image")
+        self.load_reference_btn.setToolTip("Load the reference (initial) bead image")
+
+        button_row.addWidget(self.load_beads_btn)
+        button_row.addWidget(self.load_reference_btn)
+
+        # Add button row to layout
+        layout.addLayout(button_row)
+
+        # Clear data button at the bottom
+        self.clear_data_btn = QPushButton("Clear All Data")
+        self.clear_data_btn.setToolTip("Clear all loaded data and analysis results")
+        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
+        layout.addWidget(self.clear_data_btn)
+
+        group.setLayout(layout)
+        return group
+
     def analyze_all_frames(self):
         """Analyze displacement for all frames using a thread worker."""
         try:
@@ -102,42 +360,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         progress = update_dict['progress']
         message = update_dict['message']
         self._update_status(message, int(progress))
-
-    def _handle_displacement_results(self, results):
-        """Handle the completed displacement analysis results."""
-        try:
-            # Update data manager
-            self.data_manager.displacement_results = results
-
-            # Update visualization
-            self.visualization_manager.visualize_displacement_results(
-                results,
-                downscale_factor=results['parameters']['downscale_factor']
-            )
-
-            # Handle layer visibility and ordering
-            self._handle_visualization_layers()
-
-            # Update colorbar with current d_max
-            d_max = results['visualization_params']['d_max']
-            self.colorbar_manager.update_limits(0, d_max)
-
-            # Enable save button and emit results
-            self.save_displacement_btn.setEnabled(True)
-            self.displacement_calculated.emit(results)
-
-            # Update status with statistics
-            stats = self.visualization_manager.get_displacement_statistics(results['flows'][0])
-            self._update_status(
-                f"Analysis complete\n"
-                f"Max displacement: {stats['max']:.2f} µm\n"
-                f"Mean displacement: {stats['mean']:.2f} µm\n"
-                f"Flow field resolution: {results['flow_shape']} (from {results['original_shape']})",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(str(e))
 
     def _clear_data(self):
         """Clear all displacement analysis data"""
@@ -224,7 +446,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 # Move magnitude above overlay but below vectors
                 if magnitude_index is not None:
                     self.viewer.layers.move(magnitude_index, -2)
-
 
         # Wait a brief moment for layers to be created
         QTimer.singleShot(10, update_visibility)
@@ -379,41 +600,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         layout.addWidget(flow_params_group)
         layout.addWidget(scaling_group)
         layout.addStretch()
-
-        group.setLayout(layout)
-        return group
-
-    def _create_data_loading_group(self) -> QGroupBox:
-        """Create the data loading group."""
-        group = QGroupBox("Data")
-        layout = QVBoxLayout()
-
-        # Load buttons and status labels
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.load_beads_btn.setToolTip("Load the time series of bead images for displacement analysis")
-
-        self.load_reference_btn = QPushButton("Load Reference Image")
-        self.load_reference_btn.setToolTip("Load the reference (initial) bead image")
-
-        self.clear_data_btn = QPushButton("Clear All Data")
-        self.clear_data_btn.setToolTip("Clear all loaded data and analysis results")
-        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
-
-        self.bead_status = QLabel("Not loaded")
-        self.reference_status = QLabel("Not loaded")
-
-        # Add with status labels
-        for btn, status in [
-            (self.load_beads_btn, self.bead_status),
-            (self.load_reference_btn, self.reference_status),
-        ]:
-            row = QHBoxLayout()
-            row.addWidget(btn)
-            row.addWidget(status)
-            layout.addLayout(row)
-
-        # Add clear button
-        layout.addWidget(self.clear_data_btn)
 
         group.setLayout(layout)
         return group
@@ -592,9 +778,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 # Save using numpy
                 np.save(save_path, displacement_data)
                 self._update_status(
-                    f"Displacement data successfully saved to:\n{save_path}\n"
-                    f"Pixel size: {self.pixel_size} µm\n"
-                    f"Frame interval: {self.frame_length} min",
+                    f"Displacement data successfully saved to:\n{save_path}\n",
                     100
                 )
 
@@ -604,124 +788,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 "Error",
                 f"Failed to save displacement data: {str(e)}"
             )
-
-    def _load_displacement(self):
-        """Load displacement data from files."""
-        try:
-            # Get file path
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select Displacement Data File",
-                os.path.expanduser("~"),
-                "NumPy Files (*.npy)"
-            )
-
-            if file_path:
-                # Load data using numpy
-                displacement_data = np.load(file_path, allow_pickle=True).item()
-                flows = np.array(displacement_data['flows'])
-                parameters = displacement_data['parameters']
-
-                # Update calibration in parent widget
-                if 'pixel_size' in parameters and 'frame_interval' in parameters:
-                    self._update_parent_calibration(
-                        parameters['pixel_size'],
-                        parameters['frame_interval']
-                    )
-
-                # Handle flow array reshaping if needed
-                if len(flows.shape) == 3:  # If flows is (frames, height*2, width)
-                    frames, height_doubled, width = flows.shape
-                    height = height_doubled // 2
-                    flows = flows.reshape(frames, 2, height, width).transpose(0, 2, 3, 1)
-
-                # Update optical flow parameters if available
-                if 'tvl1_params' in parameters:
-                    tvl1_params = parameters['tvl1_params']
-                    param_mapping = {
-                        'tau': 'tau',
-                        'lambda': 'lambda_',
-                        'theta': 'theta',
-                        'nscales': 'nscales',
-                        'warps': 'warps',
-                        'epsilon': 'epsilon',
-                        'inner_iterations': 'inner_iterations',
-                        'outer_iterations': 'outer_iterations',
-                        'scale_step': 'scale_step',
-                        'median_filtering': 'median_filtering'
-                    }
-
-                    for saved_name, ui_name in param_mapping.items():
-                        if saved_name in tvl1_params and ui_name in self.parameter_spins:
-                            self.parameter_spins[ui_name].setValue(tvl1_params[saved_name])
-
-                # Update other parameters
-                if 'downscale_factor' in parameters:
-                    self.parameter_spins['downscale_factor'].setValue(parameters['downscale_factor'])
-                if 'arrow_scale' in parameters:
-                    self.visualization_params['arrow_scale'].setValue(parameters['arrow_scale'])
-                if 'vector_stride' in parameters:
-                    self.visualization_params['vector_stride'].setValue(parameters['vector_stride'])
-                if 'd_max' in parameters:
-                    self.visualization_params['d_max'].setValue(parameters['d_max'])
-
-                # Update analyzer parameters
-                self.update_parameters()
-
-                # Create results dictionary with updated pixel size
-                results = {
-                    'flows': flows,
-                    'parameters': {
-                        'tvl1_params': tvl1_params,
-                        'downscale_factor': parameters.get('downscale_factor', 1),
-                        'pixel_size': self.pixel_size  # Use current pixel size
-                    },
-                    'visualization_params': {
-                        'd_max': parameters.get('d_max', 10.0),
-                        'vector_stride': parameters.get('vector_stride', 20),
-                        'arrow_scale': parameters.get('arrow_scale', 1.0)
-                    },
-                    'original_shape': flows.shape[1:3],
-                    'flow_shape': flows.shape[1:3],
-                    'units': 'micrometers'
-                }
-
-                # Update data manager and visualization
-                self.data_manager.displacement_results = results
-                self.visualization_manager.visualize_displacement_results(
-                    results,
-                    downscale_factor=parameters.get('downscale_factor', 1)
-                )
-
-                # Handle layer visibility and ordering
-                self._handle_visualization_layers()
-
-                # Update colorbar with loaded d_max
-                self.colorbar_manager.update_limits(0, parameters.get('d_max', 10.0))
-
-                # Enable save button
-                self.save_displacement_btn.setEnabled(True)
-
-                # Emit the displacement_calculated signal with the results
-                self.displacement_calculated.emit(results)
-
-                self._update_status(
-                    f"Displacement data successfully loaded from:\n"
-                    f"{file_path}\n"
-                    f"Pixel size: {self.pixel_size} µm\n"
-                    f"Frame interval: {self.frame_length} min",
-                    100
-                )
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to load displacement data: {str(e)}"
-            )
-            # Print the full error for debugging
-            import traceback
-            traceback.print_exc()
 
     def _update_parent_calibration(self, pixel_size: float, frame_interval: float):
         """Update calibration values in parent widget."""
@@ -768,40 +834,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         except ValueError as e:
             self._handle_error(str(e))
-
-    def _update_ui_state(self):
-        """Update UI elements based on current state."""
-        # Only look at displacement input data, ignore preprocessing
-        reference = self.data_manager.displacement_reference_image
-        bead_stack = self.data_manager.displacement_bead_stack
-
-        has_reference = reference is not None
-        has_beads = bead_stack is not None
-
-        # Update status labels with shape information if data exists
-        if has_reference:
-            self.reference_status.setText(f"Loaded: {reference.shape}")
-        else:
-            self.reference_status.setText("Not loaded")
-
-        if has_beads:
-            self.bead_status.setText(f"Loaded: {bead_stack.shape}")
-        else:
-            self.bead_status.setText("Not loaded")
-
-        can_analyze = has_beads and has_reference
-        self.analyze_btn.setEnabled(can_analyze)
-        self.preview_btn.setEnabled(can_analyze)
-
-        if not can_analyze:
-            missing = []
-            if not has_beads:
-                missing.append("bead stack")
-            if not has_reference:
-                missing.append("reference image")
-            self.status_label.setText(f"Missing required data: {', '.join(missing)}")
-        else:
-            self.status_label.setText("Ready for analysis")
 
     def _validate_input_data(self) -> bool:
         """Validate required input data is available."""
