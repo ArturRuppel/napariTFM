@@ -48,6 +48,105 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
+    def toggle_preview(self, enabled: bool):
+        """Toggle preview mode"""
+        try:
+            if enabled:
+                # Get current data type
+                if self.bead_radio.isChecked():
+                    data = self.data_manager.preprocessing_bead_stack
+                elif self.reference_radio.isChecked():
+                    data = self.data_manager.preprocessing_reference_image
+                else:
+                    data = self.data_manager.preprocessing_cell_stack
+
+                if data is None:
+                    raise ProcessingError(f"No {self.current_data_type} data available")
+
+                # Get current frame if data is a stack, handling both 2D and 3D cases
+                if data.ndim == 3:
+                    # For 3D data, ensure we're within bounds
+                    current_step = min(self.viewer.dims.current_step[0], data.shape[0] - 1)
+                    frame = data[current_step].copy()
+                else:
+                    # For 2D data, use as is
+                    frame = data.copy()
+
+                # Process the frame
+                processed_frame, frame_info = self.preprocessor.preprocess_frame(
+                    frame,
+                    is_cell=(self.current_data_type == 'cells')
+                )
+
+                # Update visualization through manager
+                self.visualization_manager.handle_preview(
+                    frame=processed_frame,
+                    enable=True,
+                    layer_name='Preview'
+                )
+
+                # Update status with frame information
+                info_text = (
+                    f"Preview - Original range: ({frame.min():.1f}, {frame.max():.1f})\n"
+                    f"Applied range: {frame_info['intensity_range']}\n"
+                    f"Mean: {frame_info['final_mean']:.1f}, Std: {frame_info['final_std']:.1f}"
+                )
+                self._update_status(info_text)
+
+            else:
+                # Disable preview through visualization manager
+                self.visualization_manager.handle_preview(
+                    frame=None,
+                    enable=False
+                )
+
+            self.preview_enabled = enabled
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.preview_check.setChecked(False)
+            self.preview_enabled = False
+
+    def _load_active_layer(self, data_type: str):
+        """Load the currently active layer as the specified data type"""
+        active_layer = self._get_active_image_layer()
+        if active_layer is None:
+            self._show_warning("No active image layer found")
+            return
+
+        try:
+            data = active_layer.data
+
+            # Handle data based on type
+            if data_type == 'beads':
+                # Convert 2D data to 3D with single frame
+                if data.ndim == 2:
+                    data = data[np.newaxis, ...]
+                elif data.ndim != 3:
+                    raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
+                self.data_manager.set_preprocessing_bead_stack(data)
+
+            elif data_type == 'reference':
+                if data.ndim != 2:
+                    raise ValueError("Reference image must be 2D (height, width)")
+                self.data_manager.set_preprocessing_reference_image(data)
+
+            elif data_type == 'cells':
+                # Convert 2D data to 3D with single frame
+                if data.ndim == 2:
+                    data = data[np.newaxis, ...]
+                elif data.ndim != 3:
+                    raise ValueError("Cell stack must be 2D or 3D (frames, height, width)")
+                self.data_manager.set_preprocessing_cell_stack(data)
+            else:
+                raise ValueError(f"Invalid data type: {data_type}")
+
+            self._update_ui_state()
+            self._update_status(f"Loaded {data_type} data: {data.shape}")
+
+        except Exception as e:
+            self._show_warning(str(e))
+
     def run_preprocessing(self):
         """Run preprocessing on all available data in a separate thread"""
         if self.preview_enabled:
@@ -560,29 +659,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._update_status("Parameters reset to defaults")
         self.update_parameters()
 
-    def _load_active_layer(self, data_type: str):
-        """Load the currently active layer as the specified data type"""
-        active_layer = self._get_active_image_layer()
-        if active_layer is None:
-            self._show_warning("No active image layer found")
-            return
-
-        try:
-            if data_type == 'beads':
-                self.data_manager.set_preprocessing_bead_stack(active_layer.data)
-            elif data_type == 'reference':
-                self.data_manager.set_preprocessing_reference_image(active_layer.data)
-            elif data_type == 'cells':
-                self.data_manager.set_preprocessing_cell_stack(active_layer.data)
-            else:
-                raise ValueError(f"Invalid data type: {data_type}")
-
-            self._update_ui_state()
-            self._update_status(f"Loaded {data_type} data: {active_layer.data.shape}")
-
-        except Exception as e:
-            self._show_warning(str(e))
-
     def _connect_signals(self):
         """Connect widget signals"""
         # Load button connections
@@ -638,63 +714,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(str(e))
-
-    def toggle_preview(self, enabled: bool):
-        """Toggle preview mode"""
-        try:
-            if enabled:
-                # Get current data type
-                if self.bead_radio.isChecked():
-                    data = self.data_manager.preprocessing_bead_stack
-                elif self.reference_radio.isChecked():
-                    data = self.data_manager.preprocessing_reference_image
-                else:
-                    data = self.data_manager.preprocessing_cell_stack
-
-                if data is None:
-                    raise ProcessingError(f"No {self.current_data_type} data available")
-
-                # Get current frame if data is a stack
-                if data.ndim == 3:
-                    current_step = self.viewer.dims.current_step[0]
-                    frame = data[current_step].copy()
-                else:
-                    frame = data.copy()
-
-                # Process the frame
-                processed_frame, frame_info = self.preprocessor.preprocess_frame(
-                    frame,
-                    is_cell=(self.current_data_type == 'cells')
-                )
-
-                # Update visualization through manager
-                self.visualization_manager.handle_preview(
-                    frame=processed_frame,
-                    enable=True,
-                    layer_name='Preview'
-                )
-
-                # Update status with frame information
-                info_text = (
-                    f"Preview - Original range: ({frame.min():.1f}, {frame.max():.1f})\n"
-                    f"Applied range: {frame_info['intensity_range']}\n"
-                    f"Mean: {frame_info['final_mean']:.1f}, Std: {frame_info['final_std']:.1f}"
-                )
-                self._update_status(info_text)
-
-            else:
-                # Disable preview through visualization manager
-                self.visualization_manager.handle_preview(
-                    frame=None,
-                    enable=False
-                )
-
-            self.preview_enabled = enabled
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.preview_check.setChecked(False)
-            self.preview_enabled = False
 
     def update_preview_frame(self):
         """Update the preview for the current frame"""

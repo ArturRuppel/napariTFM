@@ -128,11 +128,12 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             reference = self.data_manager.displacement_reference_image
             bead_stack = self.data_manager.displacement_bead_stack
 
-            # Get current frame
+            # Get current frame, handling both 2D and 3D cases
             if bead_stack.ndim == 2:
-                moving = bead_stack
+                moving = bead_stack  # Single frame case
             else:
-                current_frame = self.viewer.dims.current_step[0]
+                # Make sure we're using a valid frame index
+                current_frame = min(self.viewer.dims.current_step[0], bead_stack.shape[0] - 1)
                 moving = bead_stack[current_frame]
 
             # Calculate initial flow in pixels
@@ -184,7 +185,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
-
     def analyze_all_frames(self):
         """Analyze displacement for all frames."""
         try:
