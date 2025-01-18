@@ -241,7 +241,8 @@ class VisualizationManager(ErrorHandlingMixin):
                     name='Displacement Magnitude',
                     colormap='viridis',
                     blending='additive',
-                    contrast_limits=(0, d_max)
+                    contrast_limits=(0, d_max),
+                    visible=False
                 )
 
                 # Create vector data and add layer
@@ -333,7 +334,8 @@ class VisualizationManager(ErrorHandlingMixin):
                     name='Displacement Magnitude',
                     colormap='viridis',
                     blending='additive',
-                    contrast_limits=(0, vis_params['d_max'])
+                    contrast_limits=(0, vis_params['d_max']),
+                    visible=False
                 )
 
                 # Add initial vector layer
