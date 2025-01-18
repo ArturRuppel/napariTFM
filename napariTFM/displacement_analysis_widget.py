@@ -1,10 +1,12 @@
+import os
+
 import napari
 import numpy as np
 from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget,
     QSpinBox, QDoubleSpinBox, QPushButton, QFrame,
-    QProgressBar, QMessageBox, QSizePolicy
+    QProgressBar, QMessageBox, QSizePolicy, QFileDialog
 )
 
 from .base_widget import BaseAnalysisWidget
@@ -12,15 +14,6 @@ from .colorbar import ColorbarManager
 from .data_manager import DataManager
 from .displacement_analysis import DisplacementAnalyzer, TVL1Parameters
 from .visualization_manager import VisualizationManager
-
-from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget,
-    QSpinBox, QDoubleSpinBox, QPushButton, QFrame,
-    QProgressBar, QMessageBox, QSizePolicy, QFileDialog
-)
-from qtpy.QtCore import Signal, Qt
-import numpy as np
-import os
 
 
 class DisplacementAnalysisWidget(BaseAnalysisWidget):
@@ -207,16 +200,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         from qtpy.QtCore import QTimer
 
         def update_visibility():
-            # First check if we need to create bead overlay
-            has_overlay = any(layer.name == 'Bead Overlay' for layer in self.viewer.layers)
-            if not has_overlay and hasattr(self.data_manager, 'displacement_reference_image'):
-                reference = self.data_manager.displacement_reference_image
-                beads = self.data_manager.displacement_bead_stack
-                if reference is not None and beads is not None:
-                    self.visualization_manager.create_bead_overlay(beads, reference)
-
             # Then update layer visibility and order
-            overlay_index = None
             magnitude_index = None
             vectors_index = None
 
@@ -226,33 +210,21 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 layer.visible = False
 
                 # Keep track of indices and set visibility for our layers of interest
-                if layer.name == 'Bead Overlay':
+                if layer.name == 'Displacement Magnitude':
                     layer.visible = True
-                    overlay_index = i
-                elif layer.name == 'Displacement Magnitude':
-                    layer.visible = False
                     magnitude_index = i
                 elif layer.name == 'Displacement Vectors':
                     layer.visible = True
                     vectors_index = i
 
-            # Second pass: reorder layers if necessary
-            if overlay_index is not None:  # We have an overlay
-                # Calculate desired positions (overlay should be at bottom)
-                current_position = len(self.viewer.layers) - 1
-
                 # Move vectors to top if they exist
                 if vectors_index is not None:
-                    self.viewer.layers.move(vectors_index, current_position)
-                    current_position -= 1
+                    self.viewer.layers.move(vectors_index, -1)
 
                 # Move magnitude above overlay but below vectors
                 if magnitude_index is not None:
-                    self.viewer.layers.move(magnitude_index, current_position)
-                    current_position -= 1
+                    self.viewer.layers.move(magnitude_index, -2)
 
-                # Move overlay to desired position (bottom of our stack)
-                self.viewer.layers.move(overlay_index, current_position)
 
         # Wait a brief moment for layers to be created
         QTimer.singleShot(10, update_visibility)
@@ -720,6 +692,9 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                     results,
                     downscale_factor=parameters.get('downscale_factor', 1)
                 )
+
+                # Handle layer visibility and ordering
+                self._handle_visualization_layers()
 
                 # Update colorbar with loaded d_max
                 self.colorbar_manager.update_limits(0, parameters.get('d_max', 10.0))

@@ -20,6 +20,7 @@ class FTTCWidget(BaseAnalysisWidget):
     """Widget for calculating traction forces using FTTC method."""
 
     force_calculated = Signal(dict)
+
     def __init__(
             self,
             viewer: "napari.Viewer",
@@ -46,6 +47,328 @@ class FTTCWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._register_controls()
         self._update_ui_state()
+
+    def calculate_forces(self):
+        """Calculate traction forces using the FTTC calculator."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating forces...", 0)
+
+            # Get displacement data
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
+            num_frames = len(flows)
+
+            # Initialize calculator with current parameters
+            self._initialize_calculator()
+
+            # Initialize result arrays
+            force_results = {
+                'tx': [],
+                'ty': []
+            }
+
+            # Get spatial coordinates
+            shape = flows[0].shape[:-1]  # Exclude channel dimension
+            x = np.arange(shape[1])  # Width
+            y = np.arange(shape[0])  # Height
+
+            # Process each frame
+            for i, flow in enumerate(flows):
+                progress = (i + 1) / num_frames * 100
+                self._update_status(f"Processing frame {i + 1}/{num_frames}...", progress)
+
+                # Extract u and v components
+                u_data = flow[..., 0]  # x displacement
+                v_data = flow[..., 1]  # y displacement
+
+                # If auto-GCV is enabled, calculate optimal regularization for this frame
+                if self.auto_gcv_checkbox.isChecked():
+                    xx, yy = np.meshgrid(x, y, indexing='ij')
+                    pos0 = np.array([xx.flatten(), yy.flatten()])
+                    vec0 = np.array([
+                        u_data.flatten() * self._pixel_size,
+                        v_data.flatten() * self._pixel_size
+                    ])
+                    self.regularization = self.calculator._find_regularization(pos0, vec0)
+                    self._update_status(
+                        f"Frame {i + 1}: Using GCV-optimized regularization {self.regularization:.2e}",
+                        progress
+                    )
+
+                # Calculate forces using FTTC
+                (_, _), _, f, _, _, energy, force, _, _ = self.calculator.calculate_traction(
+                    x=x,
+                    y=y,
+                    u_data=u_data,
+                    v_data=v_data,
+                    dx=self._pixel_size,
+                    set_lam=self.regularization
+                )
+
+                # Store force components
+                force_results['tx'].append(f[0])
+                force_results['ty'].append(f[1])
+
+                # Log energy and total force for debugging
+                self._update_status(
+                    f"Frame {i + 1} - Energy: {energy:.2e} J, Total Force: {force:.2e} N",
+                    progress
+                )
+
+            # Convert lists to arrays
+            force_results['tx'] = np.stack(force_results['tx'])
+            force_results['ty'] = np.stack(force_results['ty'])
+
+            # Store calculation parameters
+            visualization_params = {
+                'vector_stride': self.visualization_params['vector_stride'].value(),
+                'arrow_scale': self.visualization_params['arrow_scale'].value(),
+                'f_max': self.visualization_params['f_max'].value()
+            }
+
+            force_results['parameters'] = {
+                'young_modulus': self.young_modulus,
+                'poisson_ratio': self.poisson_ratio,
+                'gel_height': self.gel_height,
+                'pixel_size': self._pixel_size,
+                'regularization': self.regularization,
+                'mesh_size': self.mesh_size,
+                'lanczos_exp': self.lanczos_exp,
+                'downscale_factor': downscale_factor,
+                'visualization': visualization_params
+            }
+
+            # Update data manager and visualization
+            self.data_manager.force_results = force_results
+            self.visualization_manager.visualize_force_results(
+                force_results,
+                downscale_factor=downscale_factor
+            )
+            self._handle_visualization_layers()
+
+            # Update colorbar
+            f_max = visualization_params['f_max']
+            if f_max is not None:
+                self.colorbar_manager.update_limits(0, f_max)
+
+            # Get and display statistics from last frame
+            magnitude = np.sqrt(force_results['tx'][-1] ** 2 + force_results['ty'][-1] ** 2)
+            stats = {
+                'mean_force': np.mean(magnitude),
+                'max_force': np.max(magnitude),
+                'median_force': np.median(magnitude)
+            }
+
+            stats_text = (
+                f"Mean force: {stats['mean_force']:.2f} Pa\n"
+                f"Max force: {stats['max_force']:.2f} Pa\n"
+                f"Median force: {stats['median_force']:.2f} Pa"
+            )
+            self._update_status(stats_text, 100)
+
+            # Enable save button and emit results
+            self.save_force_btn.setEnabled(True)
+            self.force_calculated.emit(force_results)
+
+        except Exception as e:
+            self._handle_error(self.create_error(
+                message="Force calculation failed",
+                details=str(e),
+                recovery_hint="Check input data and parameters"
+            ))
+        finally:
+            self._set_controls_enabled(True)
+
+    def preview_force(self):
+        """Preview force calculation on current frame."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating forces...", 0)
+
+            # Make sure parameters are up to date
+            self._update_parameters()
+
+            # Get displacement data and parameters
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
+
+            # Get current frame index
+            current_frame = self.viewer.dims.current_step[0]
+            if current_frame >= len(flows):
+                current_frame = 0
+
+            # Get flow for current frame
+            flow = flows[current_frame]
+
+            # Extract displacement components
+            u_data = flow[..., 0]  # x displacement
+            v_data = flow[..., 1]  # y displacement
+
+            x = np.arange(u_data.shape[1])
+            y = np.arange(u_data.shape[0])
+
+            # Make sure we have a valid pixel size
+            if self._pixel_size is None:
+                disp_params = displacement_results.get('parameters', {})
+                base_pixel_size = disp_params.get('pixel_size')
+                if base_pixel_size is not None:
+                    self._pixel_size = base_pixel_size * downscale_factor
+                else:
+                    raise ValueError("No pixel size available from displacement data")
+
+            # Initialize calculator with current parameters
+            # Convert gel height from μm to m if specified
+            gel_height_m = None if self.gel_height is None else self.gel_height * 1e-6
+
+            self.calculator = FTTC(
+                E=self.young_modulus,
+                nu=self.poisson_ratio,
+                mesh_size=self.mesh_size,
+                lanczos_exp=self.lanczos_exp,
+                gel_height=gel_height_m
+            )
+
+            # Calculate forces for current frame
+            xy, fnorm, f, urec, u, energy, force, Ftf, Fturec = self.calculator.calculate_traction(
+                x=x,
+                y=y,
+                u_data=u_data,
+                v_data=v_data,
+                dx=self._pixel_size,
+                set_lam=self.regularization
+            )
+
+            # Get current visualization parameters
+            vector_stride = self.visualization_params['vector_stride'].value()
+            arrow_scale = self.visualization_params['arrow_scale'].value()
+            f_max = self.visualization_params['f_max'].value()
+
+            # Update visualization
+            self.visualization_manager.visualize_force_preview(
+                f[0], f[1],
+                f_max=f_max,
+                vector_stride=vector_stride,
+                arrow_scale=arrow_scale,
+                downscale_factor=downscale_factor
+            )
+            self._handle_visualization_layers()
+
+            # Update colorbar
+            self.colorbar_manager.update_limits(0, f_max)
+
+            # Show statistics and calculation results
+            self._update_status(
+                f"Preview statistics:\n"
+                f"Max force: {np.max(fnorm):.2f} Pa\n"
+                f"Mean force: {np.mean(fnorm):.2f} Pa\n"
+                f"Median force: {np.median(fnorm):.2f} Pa\n"
+                f"Energy: {energy:.2e} J\n"
+                f"Total force: {force:.2e} N",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(self.create_error(
+                message="Force preview failed",
+                details=str(e),
+                recovery_hint="Check input data and parameters"
+            ))
+        finally:
+            self._set_controls_enabled(True)
+
+    def _load_force_data(self):
+        """Load force data from files."""
+        try:
+            # Get file to load
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Force Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                # Load the force data
+                force_data = np.load(file_path, allow_pickle=True).item()
+
+                # Convert force components to numpy arrays if they aren't already
+                tx = np.array(force_data['tx'])
+                ty = np.array(force_data['ty'])
+
+                parameters = force_data['parameters']
+
+                # Update UI parameters with loaded values
+                if 'youngs_modulus' in parameters:
+                    self.young_spin.setValue(parameters['youngs_modulus'])
+                if 'poisson_ratio' in parameters:
+                    self.poisson_spin.setValue(parameters['poisson_ratio'])
+                if 'gel_height' in parameters:
+                    self.height_spin.setValue(0 if parameters['gel_height'] is None
+                                              else parameters['gel_height'] * 1e6)  # Convert back to μm
+
+                if 'vector_stride' in parameters:
+                    self.visualization_params['vector_stride'].setValue(parameters['vector_stride'])
+                if 'arrow_scale' in parameters:
+                    self.visualization_params['arrow_scale'].setValue(parameters['arrow_scale'])
+                if 'f_max' in parameters:
+                    self.visualization_params['f_max'].setValue(parameters['f_max'])
+
+                # Create results dictionary
+                results = {
+                    'tx': tx,
+                    'ty': ty,
+                    'parameters': {
+                        'young_modulus': parameters['youngs_modulus'],
+                        'poisson_ratio': parameters['poisson_ratio'],
+                        'gel_height': None if parameters.get('gel_height') is None else parameters['gel_height'] * 1e6,
+                        'pixel_size': parameters['pixelsize'],
+                        'regularization': self.regularization,
+                        'mesh_size': self.mesh_size,
+                        'lanczos_exp': self.lanczos_exp,
+                        'downscale_factor': parameters.get('downscale_factor', 1),
+                        'visualization': {
+                            'vector_stride': parameters['vector_stride'],
+                            'arrow_scale': parameters['arrow_scale'],
+                            'f_max': parameters['f_max']
+                        }
+                    }
+                }
+
+                # Update data manager and visualization
+                self.data_manager.force_results = results
+                self.visualization_manager.visualize_force_results(
+                    results,
+                    downscale_factor=parameters.get('downscale_factor', 1)
+                )
+                self._handle_visualization_layers()
+
+                # Update colorbar with loaded f_max
+                self.colorbar_manager.update_limits(0, parameters['f_max'])
+
+                # Enable save button and emit results
+                self.save_force_btn.setEnabled(True)
+                self.force_calculated.emit(results)
+
+                self._update_status(f"Force data successfully loaded from:\n{file_path}", 100)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load force data: {str(e)}"
+            )
+            # Print the full error for debugging
+            import traceback
+            traceback.print_exc()
 
     def _create_material_params_group(self) -> QGroupBox:
         """Create the material parameters group."""
@@ -89,21 +412,21 @@ class FTTCWidget(BaseAnalysisWidget):
     def _register_controls(self):
         """Register all controls with the base widget."""
         controls = [
-            self.young_spin,
-            self.poisson_spin,
-            self.height_spin,
-            self.lanczos_exp_spin,
-            self.regularization_spin,
-            self.calculate_btn,
-            self.preview_btn,
-            self.reset_params_btn,
-            self.save_force_btn,
-            self.load_force_btn,
-            self.progress_bar,
-            self.status_label,
-            self.gcv_button,
-            self.auto_gcv_checkbox
-        ] + list(self.visualization_params.values())
+                       self.young_spin,
+                       self.poisson_spin,
+                       self.height_spin,
+                       self.lanczos_exp_spin,
+                       self.regularization_spin,
+                       self.calculate_btn,
+                       self.preview_btn,
+                       self.reset_params_btn,
+                       self.save_force_btn,
+                       self.load_force_btn,
+                       self.progress_bar,
+                       self.status_label,
+                       self.gcv_button,
+                       self.auto_gcv_checkbox
+                   ] + list(self.visualization_params.values())
 
         for control in controls:
             self.register_control(control)
@@ -230,7 +553,6 @@ class FTTCWidget(BaseAnalysisWidget):
         self.gcv_button.setEnabled(not is_checked)
         self.regularization_spin.setEnabled(not is_checked)
 
-
     def _load_parameters_to_ui(self, params: dict):
         """Load parameters from dictionary to UI controls."""
         try:
@@ -247,7 +569,6 @@ class FTTCWidget(BaseAnalysisWidget):
                 self.lanczos_exp_spin.setValue(params['lanczos_exp'])
             if 'regularization' in params:
                 self.regularization_spin.setValue(np.log10(params['regularization']))
-
 
             # Update visualization parameters if available
             vis_params = params.get('visualization', {})
@@ -424,241 +745,7 @@ class FTTCWidget(BaseAnalysisWidget):
             gel_height=gel_height_m
         )
 
-    def calculate_forces(self):
-        """Calculate traction forces using the FTTC calculator."""
-        try:
-            if not self._validate_input_data():
-                return
 
-            self._set_controls_enabled(False)
-            self._update_status("Calculating forces...", 0)
-
-            # Get displacement data
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
-            num_frames = len(flows)
-
-            # Initialize calculator with current parameters
-            self._initialize_calculator()
-
-            # Initialize result arrays
-            force_results = {
-                'tx': [],
-                'ty': []
-            }
-
-            # Get spatial coordinates
-            shape = flows[0].shape[:-1]  # Exclude channel dimension
-            x = np.arange(shape[1])  # Width
-            y = np.arange(shape[0])  # Height
-
-            # Process each frame
-            for i, flow in enumerate(flows):
-                progress = (i + 1) / num_frames * 100
-                self._update_status(f"Processing frame {i + 1}/{num_frames}...", progress)
-
-                # Extract u and v components
-                u_data = flow[..., 0]  # x displacement
-                v_data = flow[..., 1]  # y displacement
-
-                # If auto-GCV is enabled, calculate optimal regularization for this frame
-                if self.auto_gcv_checkbox.isChecked():
-                    xx, yy = np.meshgrid(x, y, indexing='ij')
-                    pos0 = np.array([xx.flatten(), yy.flatten()])
-                    vec0 = np.array([
-                        u_data.flatten() * self._pixel_size,
-                        v_data.flatten() * self._pixel_size
-                    ])
-                    self.regularization = self.calculator._find_regularization(pos0, vec0)
-                    self._update_status(
-                        f"Frame {i + 1}: Using GCV-optimized regularization {self.regularization:.2e}",
-                        progress
-                    )
-
-                # Calculate forces using FTTC
-                (_, _), _, f, _, _, energy, force, _, _ = self.calculator.calculate_traction(
-                    x=x,
-                    y=y,
-                    u_data=u_data,
-                    v_data=v_data,
-                    dx=self._pixel_size,
-                    set_lam=self.regularization
-                )
-
-                # Store force components
-                force_results['tx'].append(f[0])
-                force_results['ty'].append(f[1])
-
-                # Log energy and total force for debugging
-                self._update_status(
-                    f"Frame {i + 1} - Energy: {energy:.2e} J, Total Force: {force:.2e} N",
-                    progress
-                )
-
-            # Convert lists to arrays
-            force_results['tx'] = np.stack(force_results['tx'])
-            force_results['ty'] = np.stack(force_results['ty'])
-
-            # Store calculation parameters
-            visualization_params = {
-                'vector_stride': self.visualization_params['vector_stride'].value(),
-                'arrow_scale': self.visualization_params['arrow_scale'].value(),
-                'f_max': self.visualization_params['f_max'].value()
-            }
-
-            force_results['parameters'] = {
-                'young_modulus': self.young_modulus,
-                'poisson_ratio': self.poisson_ratio,
-                'gel_height': self.gel_height,
-                'pixel_size': self._pixel_size,
-                'regularization': self.regularization,
-                'mesh_size': self.mesh_size,
-                'lanczos_exp': self.lanczos_exp,
-                'downscale_factor': downscale_factor,  # Store downscale factor in parameters
-                'visualization': visualization_params
-            }
-
-            # Update data manager and visualization
-            self.data_manager.force_results = force_results
-            self.visualization_manager.visualize_force_results(
-                force_results,
-                # visualization_params,
-                downscale_factor=downscale_factor
-            )
-
-            # Update colorbar
-            f_max = visualization_params['f_max']
-            if f_max is not None:
-                self.colorbar_manager.update_limits(0, f_max)
-
-            # Get and display statistics from last frame
-            magnitude = np.sqrt(force_results['tx'][-1] ** 2 + force_results['ty'][-1] ** 2)
-            stats = {
-                'mean_force': np.mean(magnitude),
-                'max_force': np.max(magnitude),
-                'median_force': np.median(magnitude)
-            }
-
-            stats_text = (
-                f"Mean force: {stats['mean_force']:.2f} Pa\n"
-                f"Max force: {stats['max_force']:.2f} Pa\n"
-                f"Median force: {stats['median_force']:.2f} Pa"
-            )
-            self._update_status(stats_text, 100)
-
-            # Enable save button and emit results
-            self.save_force_btn.setEnabled(True)
-            self.force_calculated.emit(force_results)
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Force calculation failed",
-                details=str(e),
-                recovery_hint="Check input data and parameters"
-            ))
-        finally:
-            self._set_controls_enabled(True)
-
-    def preview_force(self):
-        """Preview force calculation on current frame."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating forces...", 0)
-
-            # Make sure parameters are up to date
-            self._update_parameters()
-
-            # Get displacement data and parameters
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
-
-            # Get current frame index
-            current_frame = self.viewer.dims.current_step[0]
-            if current_frame >= len(flows):
-                current_frame = 0
-
-            # Get flow for current frame
-            flow = flows[current_frame]
-
-            # Extract displacement components
-            u_data = flow[..., 0]  # x displacement
-            v_data = flow[..., 1]  # y displacement
-
-            x = np.arange(u_data.shape[1])
-            y = np.arange(u_data.shape[0])
-
-            # Make sure we have a valid pixel size
-            if self._pixel_size is None:
-                disp_params = displacement_results.get('parameters', {})
-                base_pixel_size = disp_params.get('pixel_size')
-                if base_pixel_size is not None:
-                    self._pixel_size = base_pixel_size * downscale_factor
-                else:
-                    raise ValueError("No pixel size available from displacement data")
-
-            # Initialize calculator with current parameters
-            # Convert gel height from μm to m if specified
-            gel_height_m = None if self.gel_height is None else self.gel_height * 1e-6
-
-            self.calculator = FTTC(
-                E=self.young_modulus,
-                nu=self.poisson_ratio,
-                mesh_size=self.mesh_size,
-                lanczos_exp=self.lanczos_exp,
-                gel_height=gel_height_m
-            )
-
-            # Calculate forces for current frame
-            xy, fnorm, f, urec, u, energy, force, Ftf, Fturec = self.calculator.calculate_traction(
-                x=x,
-                y=y,
-                u_data=u_data,
-                v_data=v_data,
-                dx=self._pixel_size,
-                set_lam=self.regularization
-            )
-
-            # Get current visualization parameters
-            vector_stride = self.visualization_params['vector_stride'].value()
-            arrow_scale = self.visualization_params['arrow_scale'].value()
-            f_max = self.visualization_params['f_max'].value()
-
-            # Update visualization
-            self.visualization_manager.visualize_force_preview(
-                f[0], f[1],
-                f_max=f_max,
-                vector_stride=vector_stride,
-                arrow_scale=arrow_scale,
-                downscale_factor=downscale_factor
-            )
-
-            # Update colorbar
-            self.colorbar_manager.update_limits(0, f_max)
-
-            # Show statistics and calculation results
-            self._update_status(
-                f"Preview statistics:\n"
-                f"Max force: {np.max(fnorm):.2f} Pa\n"
-                f"Mean force: {np.mean(fnorm):.2f} Pa\n"
-                f"Median force: {np.median(fnorm):.2f} Pa\n"
-                f"Energy: {energy:.2e} J\n"
-                f"Total force: {force:.2e} N",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Force preview failed",
-                details=str(e),
-                recovery_hint="Check input data and parameters"
-            ))
-        finally:
-            self._set_controls_enabled(True)
     def _set_regularization_with_gcv(self):
         """Handle GCV-based regularization parameter selection."""
         try:
@@ -806,88 +893,33 @@ class FTTCWidget(BaseAnalysisWidget):
                 f"Failed to save force data: {str(e)}"
             )
 
-    def _load_force_data(self):
-        """Load force data from files."""
-        try:
-            # Get file to load
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select Force Data File",
-                os.path.expanduser("~"),
-                "NumPy Files (*.npy)"
-            )
+    def _handle_visualization_layers(self):
+        """Handle layer visibility and ordering for better force visualization."""
+        from qtpy.QtCore import QTimer
 
-            if file_path:
-                # Load the force data
-                force_data = np.load(file_path, allow_pickle=True).item()
+        def update_visibility():
+            # Track indices and set initial visibility
+            magnitude_index = None
+            vectors_index = None
 
-                # Convert force components to numpy arrays if they aren't already
-                tx = np.array(force_data['tx'])
-                ty = np.array(force_data['ty'])
+            for i, layer in enumerate(self.viewer.layers):
+                # Hide all layers by default
+                layer.visible = False
 
-                parameters = force_data['parameters']
+                if layer.name == 'Force Magnitude':
+                    layer.visible = True  # Show magnitude by default for forces
+                    magnitude_index = i
+                elif layer.name == 'Force Vectors':
+                    layer.visible = True
+                    vectors_index = i
 
-                # Update UI parameters with loaded values
-                if 'youngs_modulus' in parameters:
-                    self.young_spin.setValue(parameters['youngs_modulus'])
-                if 'poisson_ratio' in parameters:
-                    self.poisson_spin.setValue(parameters['poisson_ratio'])
-                if 'gel_height' in parameters:
-                    self.height_spin.setValue(0 if parameters['gel_height'] is None
-                                              else parameters['gel_height'] * 1e6)  # Convert back to μm
+                # Move vectors to top if they exist
+                if vectors_index is not None:
+                    self.viewer.layers.move(vectors_index, -1)
 
-                if 'vector_stride' in parameters:
-                    self.visualization_params['vector_stride'].setValue(parameters['vector_stride'])
-                if 'arrow_scale' in parameters:
-                    self.visualization_params['arrow_scale'].setValue(parameters['arrow_scale'])
-                if 'f_max' in parameters:
-                    self.visualization_params['f_max'].setValue(parameters['f_max'])
+                # Move magnitude above overlay but below vectors
+                if magnitude_index is not None:
+                    self.viewer.layers.move(magnitude_index, -2)
 
-                # Create results dictionary
-                results = {
-                    'tx': tx,
-                    'ty': ty,
-                    'parameters': {
-                        'young_modulus': parameters['youngs_modulus'],
-                        'poisson_ratio': parameters['poisson_ratio'],
-                        'gel_height': None if parameters.get('gel_height') is None else parameters['gel_height'] * 1e6,
-                        'pixel_size': parameters['pixelsize'],
-                        'regularization': self.regularization,
-                        'mesh_size': self.mesh_size,
-                        'lanczos_exp': self.lanczos_exp,
-                        'downscale_factor': parameters.get('downscale_factor', 1),
-                        'visualization': {
-                            'vector_stride': parameters['vector_stride'],
-                            'arrow_scale': parameters['arrow_scale'],
-                            'f_max': parameters['f_max']
-                        }
-                    },
-                    'original_shape': tx.shape[1:],
-                    'units': 'Pascal'
-                }
-
-                # Update data manager and visualization
-                self.data_manager.force_results = results
-                self.visualization_manager.visualize_force_results(
-                    results,
-                    downscale_factor=parameters.get('downscale_factor', 1)
-                )
-
-                # Update colorbar with loaded f_max
-                self.colorbar_manager.update_limits(0, parameters['f_max'])
-
-                # Enable save button and emit results
-                self.save_force_btn.setEnabled(True)
-                self.force_calculated.emit(results)
-
-                self._update_status(f"Force data successfully loaded from:\n{file_path}", 100)
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to load force data: {str(e)}"
-            )
-            # Print the full error for debugging
-            import traceback
-            traceback.print_exc()
+        # Wait a brief moment for layers to be created
+        QTimer.singleShot(10, update_visibility)
