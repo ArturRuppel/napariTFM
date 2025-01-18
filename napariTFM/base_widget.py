@@ -5,6 +5,7 @@ from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTabWidget
 from qtpy.QtCore import Signal
 import napari
 import logging
+from napariTFM.visualization_manager import VisualizationManager
 
 logger = logging.getLogger(__name__)
 
