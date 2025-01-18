@@ -31,12 +31,13 @@ from napariTFM.fttc_numba_functions import *
 
 
 class FTTC:
-    def __init__(self, E: float, nu: float, mesh_size: int = 1, lanczos_exp: int = 1, gel_height: float = float('inf')):
+    def __init__(self, E: float, nu: float, mesh_size: int = 1, lanczos_exp: int = 1, gel_height: float = float('inf'), pixelsize: float = float(1e-6)):
         self.E = E
         self.nu = nu
         self.mesh_size = mesh_size
         self.lanczos_exp = lanczos_exp
-        self.gel_height = gel_height  # Added gel height parameter
+        self.gel_height = gel_height
+        self.pixelsize = pixelsize
         self.timing_stats = {}
         self.detailed_timing = {}
 

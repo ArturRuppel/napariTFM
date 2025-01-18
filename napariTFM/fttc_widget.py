@@ -508,15 +508,15 @@ class FTTCWidget(BaseAnalysisWidget):
                     raise ValueError("No pixel size available from displacement data")
 
             # Initialize calculator with current parameters
-            # Convert gel height from μm to m if specified
-            gel_height_m = None if self.gel_height is None else self.gel_height * 1e-6
+            # Convert gel height from μm pixels
+            gel_height_p = None if self.gel_height is None else self.gel_height / self.pixel_size
 
             self.calculator = FTTC(
                 E=self.young_modulus,
                 nu=self.poisson_ratio,
                 mesh_size=self.mesh_size,
                 lanczos_exp=self.lanczos_exp,
-                gel_height=gel_height_m
+                gel_height=gel_height_p
             )
 
             # Calculate forces for current frame
@@ -822,14 +822,14 @@ class FTTCWidget(BaseAnalysisWidget):
         self._update_parameters()
 
         # Convert gel height from μm to m if specified
-        gel_height_m = None if self.gel_height is None else self.gel_height * 1e-6
+        gel_height_p = None if self.gel_height is None else self.gel_height / self.pixel_size
 
         self.calculator = FTTC(
             E=self.young_modulus,
             nu=self.poisson_ratio,
             mesh_size=self.mesh_size,
             lanczos_exp=self.lanczos_exp,
-            gel_height=gel_height_m
+            gel_height=gel_height_p
         )
 
     def _set_regularization_with_gcv(self):
