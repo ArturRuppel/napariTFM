@@ -10,7 +10,7 @@ from qtpy.QtWidgets import (
 )
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QScrollArea, QWidget, QSizePolicy,
-    QRadioButton, QLabel, QFrame, QProgressBar, QFileDialog,
+    QRadioButton, QLabel, QFrame, QProgressBar, QFileDialog, QSlider,
     QDoubleSpinBox, QPushButton,
     QComboBox
 )
@@ -48,6 +48,66 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._setup_ui()
         self._connect_signals()
         self._update_ui_state()
+
+    def _register_controls(self):
+        """Register all controls with the base widget"""
+        controls = [
+            self.intensity_slider,
+            self.min_spinbox,
+            self.max_spinbox,
+            self.gaussian_sigma_spin,
+            self.gaussian_sigma_slider,  # Add new slider
+            self.registration_mode_combo,
+            self.preview_check,
+            self.preprocess_btn,
+            self.reset_btn,
+            self.bead_radio,
+            self.reference_radio,
+            self.cell_radio,
+            self.progress_bar,
+            self.status_label,
+            self.bead_status,
+            self.reference_status,
+            self.cell_status,
+            self.cell_intensity_slider,
+            self.cell_min_spinbox,
+            self.cell_max_spinbox,
+            self.cell_gaussian_sigma_spin,
+            self.cell_gaussian_sigma_slider,  # Add new cell slider
+            self.save_btn,
+        ]
+
+        for control in controls:
+            self.register_control(control)
+
+    def _create_sigma_control(self, sigma_spinbox):
+        """Create a layout with sigma control for Gaussian filter."""
+        sigma_layout = QHBoxLayout()
+        sigma_layout.addWidget(QLabel("Sigma:"))
+
+        # Create slider for Gaussian sigma
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, 100)  # Range 0-10.0 with 100 steps
+        slider.setValue(0)
+        slider.setTickPosition(QSlider.TicksBelow)
+        slider.setTickInterval(10)
+
+        # Configure spinbox
+        sigma_spinbox.setRange(0.0, 10.0)
+        sigma_spinbox.setValue(0.0)
+        sigma_spinbox.setSingleStep(0.1)
+
+        # Add both controls
+        sigma_layout.addWidget(sigma_spinbox)
+        sigma_layout.addWidget(slider, stretch=1)  # Give slider more space
+
+        # Store slider reference
+        if sigma_spinbox == self.gaussian_sigma_spin:
+            self.gaussian_sigma_slider = slider
+        else:
+            self.cell_gaussian_sigma_slider = slider
+
+        return sigma_layout
 
     def _create_intensity_range_group(self):
         """Create the bead/reference parameters group with intensity range and filter controls."""
@@ -117,19 +177,53 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         self._register_controls()
 
-    def _create_sigma_control(self, sigma_spinbox):
-        """Create a layout with sigma control for Gaussian filter."""
-        sigma_layout = QHBoxLayout()
-        sigma_layout.addWidget(QLabel("Sigma:"))
+    def _update_sigma_from_slider(self):
+        """Update sigma spinbox from slider value"""
+        slider_value = self.gaussian_sigma_slider.value()
+        sigma_value = slider_value / 10.0  # Convert 0-100 range to 0-10.0
 
-        sigma_spinbox.setRange(0.0, 10.0)  # Changed minimum to 0.0
-        sigma_spinbox.setValue(0.0)  # Default to 0.0 (no filter)
-        sigma_spinbox.setSingleStep(0.1)
+        # Update spinbox without triggering its signal
+        self.gaussian_sigma_spin.blockSignals(True)
+        self.gaussian_sigma_spin.setValue(sigma_value)
+        self.gaussian_sigma_spin.blockSignals(False)
 
-        sigma_layout.addWidget(sigma_spinbox)
-        sigma_layout.addStretch()
+        self.update_parameters()
 
-        return sigma_layout
+    def _update_slider_from_sigma(self):
+        """Update slider from sigma spinbox value"""
+        sigma_value = self.gaussian_sigma_spin.value()
+        slider_value = int(sigma_value * 10)  # Convert 0-10.0 range to 0-100
+
+        # Update slider without triggering its signal
+        self.gaussian_sigma_slider.blockSignals(True)
+        self.gaussian_sigma_slider.setValue(slider_value)
+        self.gaussian_sigma_slider.blockSignals(False)
+
+        self.update_parameters()
+
+    def _update_cell_sigma_from_slider(self):
+        """Update cell sigma spinbox from slider value"""
+        slider_value = self.cell_gaussian_sigma_slider.value()
+        sigma_value = slider_value / 10.0  # Convert 0-100 range to 0-10.0
+
+        # Update spinbox without triggering its signal
+        self.cell_gaussian_sigma_spin.blockSignals(True)
+        self.cell_gaussian_sigma_spin.setValue(sigma_value)
+        self.cell_gaussian_sigma_spin.blockSignals(False)
+
+        self.update_parameters()
+
+    def _update_cell_slider_from_sigma(self):
+        """Update cell slider from sigma spinbox value"""
+        sigma_value = self.cell_gaussian_sigma_spin.value()
+        slider_value = int(sigma_value * 10)  # Convert 0-10.0 range to 0-100
+
+        # Update slider without triggering its signal
+        self.cell_gaussian_sigma_slider.blockSignals(True)
+        self.cell_gaussian_sigma_slider.setValue(slider_value)
+        self.cell_gaussian_sigma_slider.blockSignals(False)
+
+        self.update_parameters()
 
     def _create_registration_group(self):
         """Create the registration group."""
@@ -219,6 +313,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Reset gaussian filters
         self.gaussian_sigma_spin.setValue(0.0)
         self.cell_gaussian_sigma_spin.setValue(0.0)
+
+        # Reset gaussian sliders
+        self.gaussian_sigma_slider.setValue(0)
+        self.cell_gaussian_sigma_slider.setValue(0)
+
+        self._update_status("Parameters reset to defaults")
+        self.update_parameters()
 
         # Reset registration
         self.registration_mode_combo.setCurrentText('Translation')
@@ -355,6 +456,12 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Save button connection
         self.save_btn.clicked.connect(self._save_preprocessed_data)
+
+        self.gaussian_sigma_slider.valueChanged.connect(self._update_sigma_from_slider)
+        self.gaussian_sigma_spin.valueChanged.connect(self._update_slider_from_sigma)
+
+        self.cell_gaussian_sigma_slider.valueChanged.connect(self._update_cell_sigma_from_slider)
+        self.cell_gaussian_sigma_spin.valueChanged.connect(self._update_cell_slider_from_sigma)
 
     def _clear_data(self):
         """Clear all preprocessing data"""
@@ -494,34 +601,42 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.reference_status.setText(f"Loaded: {ref_shape}" if ref_shape else "Not loaded")
         self.cell_status.setText(f"Loaded: {cell_shape}" if cell_shape else "Not loaded")
 
-        # Update registration controls
+        # Update registration note visibility based on data availability
         can_register = (
                 self.data_manager.preprocessing_bead_stack is not None and
                 self.data_manager.preprocessing_reference_image is not None
         )
-        self.registration_mode_combo.setEnabled(can_register)
-
-        # Show/hide registration note based on data availability
         self.registration_note.setVisible(not can_register)
 
-        # Update preview radio buttons
-        self.bead_radio.setEnabled(self.data_manager.preprocessing_bead_stack is not None)
-        self.reference_radio.setEnabled(self.data_manager.preprocessing_reference_image is not None)
-        self.cell_radio.setEnabled(self.data_manager.preprocessing_cell_stack is not None)
+        # Update preview radio buttons - always enabled
+        self.bead_radio.setEnabled(True)
+        self.reference_radio.setEnabled(True)
+        self.cell_radio.setEnabled(True)
 
-        # Update cell-specific controls
-        cell_data_loaded = self.data_manager.preprocessing_cell_stack is not None
-        self.cell_intensity_slider.setEnabled(cell_data_loaded)
-        self.cell_min_spinbox.setEnabled(cell_data_loaded)
-        self.cell_max_spinbox.setEnabled(cell_data_loaded)
-        self.cell_gaussian_sigma_spin.setEnabled(cell_data_loaded)
+        # Keep all parameter controls enabled
+        self.registration_mode_combo.setEnabled(True)
+        self.cell_intensity_slider.setEnabled(True)
+        self.cell_min_spinbox.setEnabled(True)
+        self.cell_max_spinbox.setEnabled(True)
+        self.cell_gaussian_sigma_spin.setEnabled(True)
+        self.cell_gaussian_sigma_slider.setEnabled(True)
+        self.gaussian_sigma_spin.setEnabled(True)
+        self.gaussian_sigma_slider.setEnabled(True)
+        self.intensity_slider.setEnabled(True)
+        self.min_spinbox.setEnabled(True)
+        self.max_spinbox.setEnabled(True)
 
-        # Enable preprocessing button if we have any data
+        # Enable preview checkbox only if we have any data
         has_data = any([
             self.data_manager.preprocessing_bead_stack is not None,
             self.data_manager.preprocessing_reference_image is not None,
             self.data_manager.preprocessing_cell_stack is not None
         ])
+        self.preview_check.setEnabled(has_data)
+        if not has_data and self.preview_check.isChecked():
+            self.preview_check.setChecked(False)
+
+        # Enable preprocessing button if we have any data
         self.preprocess_btn.setEnabled(has_data)
 
         # Update save button state
@@ -531,7 +646,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.data_manager.preprocessed_cell_stack is not None
         ])
         self.save_btn.setEnabled(has_preprocessed_data)
-
     def cleanup(self):
         """Clean up resources and event connections."""
         # Ensure preview is disabled
@@ -702,35 +816,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.cell_intensity_slider.blockSignals(False)
 
         self.update_parameters()
-
-    def _register_controls(self):
-        """Register all controls with the base widget"""
-        controls = [
-            self.intensity_slider,
-            self.min_spinbox,
-            self.max_spinbox,
-            self.gaussian_sigma_spin,
-            self.registration_mode_combo,
-            self.preview_check,
-            self.preprocess_btn,
-            self.reset_btn,
-            self.bead_radio,
-            self.reference_radio,
-            self.cell_radio,
-            self.progress_bar,
-            self.status_label,
-            self.bead_status,
-            self.reference_status,
-            self.cell_status,
-            self.cell_intensity_slider,
-            self.cell_min_spinbox,
-            self.cell_max_spinbox,
-            self.cell_gaussian_sigma_spin,
-            self.save_btn,
-        ]
-
-        for control in controls:
-            self.register_control(control)
 
     def _on_data_type_changed(self):
         """Handle data type selection change"""
