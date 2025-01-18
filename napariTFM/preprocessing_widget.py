@@ -1,6 +1,5 @@
 import os
-from typing import Optional
-
+import json
 import napari
 import numpy as np
 import tifffile
@@ -844,7 +843,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.update_preview_frame()
 
     def _save_preprocessed_data(self):
-        """Save preprocessed data to user-selected directory with calibration metadata."""
+        """Save preprocessed data to user-selected directory with ImageJ-compatible calibration metadata."""
         try:
             # Get directory from user
             save_dir = QFileDialog.getExistingDirectory(
@@ -876,24 +875,52 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
                 filepath = os.path.join(save_dir, filename)
 
-                # Prepare metadata dictionary
-                metadata = {
-                    'PhysicalSizeX': pixel_size,
-                    'PhysicalSizeXUnit': 'µm',
-                    'PhysicalSizeY': pixel_size,
-                    'PhysicalSizeYUnit': 'µm',
-                    'TimeIncrement': frame_length,
-                    'TimeIncrementUnit': 'min'
+                # Calculate scale (units per pixel)
+                scale = pixel_size  # µm/pixel
+
+                # Create ImageJ-compatible metadata
+                imagej_metadata = {
+                    'ImageJ': '1.53c',
+                    'spacing': scale,
+                    'unit': 'um',
+                    'frame_interval': frame_length,
+                    'frame_interval_unit': 'minute'
                 }
 
-                # Save with metadata using tifffile's ImageJ-compatible metadata
-                resolution = 1.0 / pixel_size  # pixels per µm
+                # For Z-stacks or time series, specify dimensions
+                if data.ndim > 2:
+                    imagej_metadata.update({
+                        'frames': data.shape[0],
+                        'slices': 1,
+                        'channels': 1
+                    })
+
+                # Create description for ImageJ
+                description = json.dumps({
+                    'Info': f'Scale: {scale} um/pixel, Frame interval: {frame_length} min',
+                    **imagej_metadata
+                })
+
+                # Original metadata preserved for compatibility
+                metadata = {
+                    'PhysicalSizeX': pixel_size,
+                    'PhysicalSizeXUnit': 'um',
+                    'PhysicalSizeY': pixel_size,
+                    'PhysicalSizeYUnit': 'um',
+                    'TimeIncrement': frame_length,
+                    'TimeIncrementUnit': 'min',
+                    **imagej_metadata
+                }
+
+                # Save with metadata using tifffile
                 tifffile.imwrite(
                     filepath,
                     data_16bit,
+                    imagej=True,
                     metadata=metadata,
-                    resolution=(resolution, resolution),  # X,Y resolution in pixels per unit
-                    resolutionunit='MICROMETER'  # Specify unit is micrometers
+                    description=description,
+                    resolution=(1 / scale, 1 / scale),  # resolution in pixels per unit
+                    photometric='minisblack'
                 )
                 return True
 
