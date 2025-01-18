@@ -320,6 +320,19 @@ class PreprocessingWidget(BaseAnalysisWidget):
         """Handle the final results from the worker"""
         # Update visualization through manager
         self.visualization_manager.update_preprocessing_visualization(results)
+
+        # Use Qt's single shot timer to ensure layers are created
+        from qtpy.QtCore import QTimer
+        def update_visibility():
+            # Hide all layers
+            for layer in self.viewer.layers:
+                layer.visible = False
+                if layer.name == 'Bead Overlay':  # Original layers
+                    layer.visible = True
+
+        # Wait a brief moment for layers to be created
+        QTimer.singleShot(100, update_visibility)
+
         self._update_status("Preprocessing complete", 100)
         self.preprocessing_completed.emit(results)
     def _register_controls(self):
@@ -546,7 +559,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         self._update_status("Parameters reset to defaults")
         self.update_parameters()
-
 
     def _load_active_layer(self, data_type: str):
         """Load the currently active layer as the specified data type"""
