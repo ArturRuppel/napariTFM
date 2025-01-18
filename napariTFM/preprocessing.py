@@ -1,55 +1,83 @@
-from dataclasses import dataclass
-from typing import Tuple, Optional, List, Dict
-import numpy as np
-import cv2
-from scipy.ndimage import gaussian_filter
 import logging
+from typing import Tuple, Optional, List, Dict
+
+import cv2
+import numpy as np
+from scipy.ndimage import gaussian_filter
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
 class PreprocessingParameters:
-    """Parameters for image preprocessing with relative intensity values"""
-    # Bead/Reference contrast enhancement
-    min_intensity_percentile: float = 0.0
-    max_intensity_percentile: float = 1.0
+    """Parameters for image preprocessing"""
 
-    # Cell contrast enhancement
-    cell_min_intensity_percentile: float = 0.0
-    cell_max_intensity_percentile: float = 1.0
-
-    # Bead/Reference gaussian filter
-    enable_gaussian_filter: bool = False
-    gaussian_sigma: float = 1.0
-
-    # Cell gaussian filter
-    enable_cell_gaussian_filter: bool = False
-    cell_gaussian_sigma: float = 1.0
-
-    # Registration parameters
-    enable_registration: bool = False
-    registration_mode: str = 'translation'  # 'translation' or 'rigid'
+    def __init__(
+            self,
+            min_intensity_percentile: float = 0.0,
+            max_intensity_percentile: float = 1.0,
+            enable_gaussian_filter: bool = False,
+            gaussian_sigma: float = 0.0,
+            cell_min_intensity_percentile: float = 0.0,
+            cell_max_intensity_percentile: float = 1.0,
+            enable_cell_gaussian_filter: bool = False,
+            cell_gaussian_sigma: float = 0.0,
+            enable_registration: bool = True,
+            registration_mode: str = 'translation'
+    ):
+        self.min_intensity_percentile = min_intensity_percentile
+        self.max_intensity_percentile = max_intensity_percentile
+        self.enable_gaussian_filter = enable_gaussian_filter
+        self.gaussian_sigma = gaussian_sigma
+        self.cell_min_intensity_percentile = cell_min_intensity_percentile
+        self.cell_max_intensity_percentile = cell_max_intensity_percentile
+        self.enable_cell_gaussian_filter = enable_cell_gaussian_filter
+        self.cell_gaussian_sigma = cell_gaussian_sigma
+        self.enable_registration = enable_registration
+        self.registration_mode = registration_mode.lower()
 
     def validate(self):
         """Validate parameter values"""
+        # Validate intensity percentiles
         if not 0 <= self.min_intensity_percentile < self.max_intensity_percentile <= 1:
-            raise ValueError("Intensity percentiles must be between 0 and 1")
+            raise ValueError("Invalid intensity percentile range")
+
         if not 0 <= self.cell_min_intensity_percentile < self.cell_max_intensity_percentile <= 1:
-            raise ValueError("Cell intensity percentiles must be between 0 and 1")
-        if self.gaussian_sigma <= 0:
-            raise ValueError("Gaussian sigma must be positive")
-        if self.cell_gaussian_sigma <= 0:
-            raise ValueError("Cell gaussian sigma must be positive")
-        if self.registration_mode not in ['translation', 'rigid']:
-            raise ValueError("Invalid registration mode")
+            raise ValueError("Invalid cell intensity percentile range")
 
-class RegistrationResult:
-    """Stores registration transformation matrices"""
+        # Validate gaussian sigma values - allow 0 for "no filter"
+        if self.enable_gaussian_filter and self.gaussian_sigma < 0:
+            raise ValueError("Gaussian sigma must be non-negative")
 
-    def __init__(self, num_frames: int):
-        self.matrices = [np.eye(3) for _ in range(num_frames)]
-        self.reference_image = None
+        if self.enable_cell_gaussian_filter and self.cell_gaussian_sigma < 0:
+            raise ValueError("Cell gaussian sigma must be non-negative")
+
+        # Validate registration mode
+        if self.registration_mode not in ['translation', 'rigid', 'no registration']:
+            raise ValueError(f"Invalid registration mode: {self.registration_mode}")
+
+    def __str__(self):
+        """String representation of parameters"""
+        return (
+            f"PreprocessingParameters(\n"
+            f"  min_intensity_percentile={self.min_intensity_percentile},\n"
+            f"  max_intensity_percentile={self.max_intensity_percentile},\n"
+            f"  enable_gaussian_filter={self.enable_gaussian_filter},\n"
+            f"  gaussian_sigma={self.gaussian_sigma},\n"
+            f"  cell_min_intensity_percentile={self.cell_min_intensity_percentile},\n"
+            f"  cell_max_intensity_percentile={self.cell_max_intensity_percentile},\n"
+            f"  enable_cell_gaussian_filter={self.enable_cell_gaussian_filter},\n"
+            f"  cell_gaussian_sigma={self.cell_gaussian_sigma},\n"
+            f"  enable_registration={self.enable_registration},\n"
+            f"  registration_mode={self.registration_mode}\n"
+            f")"
+        )
+
+# class RegistrationResult:
+#     """Stores registration transformation matrices"""
+#
+#     def __init__(self, num_frames: int):
+#         self.matrices = [np.eye(3) for _ in range(num_frames)]
+#         self.reference_image = None
 
 
 class ImagePreprocessor:
