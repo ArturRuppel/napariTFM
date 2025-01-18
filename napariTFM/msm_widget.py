@@ -21,12 +21,12 @@ class MSMWidget(BaseAnalysisWidget):
 
     # Define algorithm choices as a class variable
     MESH_ALGORITHMS = {
-        "Frontal-Del.": 6,      # Shortened from "Frontal-Delaunay"
+        "Frontal-Del.": 6,  # Shortened from "Frontal-Delaunay"
         "Delaunay": 5,
         "MeshAdapt": 1,
-        "BAMG": 7,             # Shortened from "BAMG (experimental)"
-        "FD Quads": 8,         # Shortened from "FD for Quads (experimental)"
-        "Para. Pack": 9        # Shortened from "Parallelogram Packing (experimental)"
+        "BAMG": 7,  # Shortened from "BAMG (experimental)"
+        "FD Quads": 8,  # Shortened from "FD for Quads (experimental)"
+        "Para. Pack": 9  # Shortened from "Parallelogram Packing (experimental)"
     }
 
     # Create a mapping for full names to show in tooltips
@@ -153,6 +153,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
+
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame with compact layout."""
         frame = QFrame()
@@ -195,7 +196,6 @@ class MSMWidget(BaseAnalysisWidget):
         """Update analysis parameters."""
         try:
             # Get current parameters from UI
-            pixelsize = self.parameter_spins['pixelsize'].value()
             sigma = self.parameter_spins['sigma'].value()
             density_factor = self.parameter_spins['density_factor'].value()
             algorithm_name = self.parameter_spins['algorithm'].currentText()
@@ -217,7 +217,6 @@ class MSMWidget(BaseAnalysisWidget):
                 # Create new analyzer with current parameters
                 self.analyzer = MonolayerStressMicroscopy(
                     mask=self.current_mask[0],
-                    pixelsize=pixelsize,
                     sigma=sigma,
                     youngs_modulus=1.0  # Fixed value as per new API
                 )
