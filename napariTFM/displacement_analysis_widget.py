@@ -38,7 +38,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.parameter_spins = {}
         self.visualization_params = {}
 
-        # Store default parameter values
+        # Store default parameter values (removed pixel_size)
         self.default_parameters = {
             'tau': 0.25,
             'lambda_': 0.4,
@@ -51,7 +51,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             'scale_step': 0.5,
             'median_filtering': 5,
             'downscale_factor': 1,
-            'pixel_size': 1.0,
             'vector_stride': 20,
             'arrow_scale': 1.0,
             'd_max': 10.0
@@ -60,39 +59,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self._setup_ui()
         self._connect_signals()
         self._update_ui_state()
-
-    def _create_data_loading_group(self) -> QGroupBox:
-        """Create the data loading group."""
-        group = QGroupBox("Data")
-        layout = QVBoxLayout()
-
-        # Load buttons and status labels
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.load_reference_btn = QPushButton("Load Reference Image")
-        self.clear_data_btn = QPushButton("Clear All Data")
-        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
-
-
-        self.bead_status = QLabel("Not loaded")
-        self.reference_status = QLabel("Not loaded")
-
-        # Add with status labels
-        for btn, status in [
-            (self.load_beads_btn, self.bead_status),
-            (self.load_reference_btn, self.reference_status),
-        ]:
-            row = QHBoxLayout()
-            row.addWidget(btn)
-            row.addWidget(status)
-            layout.addLayout(row)
-
-
-
-        # Add clear button
-        layout.addWidget(self.clear_data_btn)
-
-        group.setLayout(layout)
-        return group
 
     def _create_parameters_group(self) -> QGroupBox:
         """Create the analysis parameters group."""
@@ -138,8 +104,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             row.addWidget(spin)
             flow_params_layout.addLayout(row)
 
-        # Add scaling parameters
-        # Downscale factor
+        # Add scaling parameters - downscale factor only
         downscale_row = QHBoxLayout()
         downscale_row.addWidget(QLabel("Local Averaging Factor:"))
         downscale_spin = QSpinBox()
@@ -151,25 +116,201 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         downscale_row.addWidget(downscale_spin)
         scaling_layout.addLayout(downscale_row)
 
-        # Pixel size
-        pixel_size_row = QHBoxLayout()
-        pixel_size_row.addWidget(QLabel("Pixel Size (µm):"))
-        pixel_size_spin = QDoubleSpinBox()
-        pixel_size_spin.setRange(0.01, 100.0)
-        pixel_size_spin.setSingleStep(0.01)
-        pixel_size_spin.setValue(1.0)
-        pixel_size_spin.setDecimals(3)
-        pixel_size_spin.setToolTip("Size of one pixel in micrometers")
-        self.parameter_spins['pixel_size'] = pixel_size_spin
-        pixel_size_row.addWidget(pixel_size_spin)
-        scaling_layout.addLayout(pixel_size_row)
-
         flow_params_group.setLayout(flow_params_layout)
         scaling_group.setLayout(scaling_layout)
 
         layout.addWidget(flow_params_group)
         layout.addWidget(scaling_group)
         layout.addStretch()
+
+        group.setLayout(layout)
+        return group
+
+    def analyze_all_frames(self):
+        """Analyze displacement for all frames."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Starting analysis...", 0)
+
+            # Get parameters
+            vis_params = {
+                'd_max': self.visualization_params['d_max'].value(),
+                'vector_stride': self.visualization_params['vector_stride'].value(),
+                'arrow_scale': self.visualization_params['arrow_scale'].value()
+            }
+            downscale_factor = self.parameter_spins['downscale_factor'].value()
+            pixel_size = self.pixel_size  # Get from parent widget
+
+            reference = self.data_manager.displacement_reference_image
+            bead_stack = self.data_manager.displacement_bead_stack
+            total_frames = len(bead_stack)
+
+            # Process all frames
+            flows = []
+            for i in range(total_frames):
+                frame_progress = (i + 1) / total_frames * 100
+                self._update_status(
+                    f"Processing frame {i + 1}/{total_frames}...\n"
+                    f"Computing optical flow...",
+                    frame_progress * 0.4
+                )
+
+                # Calculate flow in pixels
+                flow_pixels = self.analyzer.calculate_flow(reference, bead_stack[i])
+
+                # Downscale if requested
+                if downscale_factor > 1:
+                    self._update_status(
+                        f"Processing frame {i + 1}/{total_frames}...\n"
+                        f"Downscaling flow field...",
+                        frame_progress * 0.8
+                    )
+                    flow_pixels = self.analyzer.downscale_flow(flow_pixels, downscale_factor)
+
+                # Convert to micrometers and store
+                flow_microns = flow_pixels * pixel_size
+                flows.append(flow_microns)
+
+            # Package results
+            results = {
+                'flows': flows,
+                'parameters': {
+                    'tvl1_params': self.analyzer.params,
+                    'downscale_factor': downscale_factor,
+                    'pixel_size': pixel_size
+                },
+                'visualization_params': vis_params,
+                'original_shape': reference.shape,
+                'flow_shape': flows[0].shape[:2],
+                'units': 'micrometers'
+            }
+
+            # Update visualization
+            self.data_manager.displacement_results = results
+            self.visualization_manager.visualize_displacement_results(
+                results,
+                downscale_factor=downscale_factor
+            )
+
+            # Update colorbar with current d_max
+            d_max = self.visualization_params['d_max'].value()
+            self.colorbar_manager.update_limits(0, d_max)
+
+            # Enable save button and emit results
+            self.save_displacement_btn.setEnabled(True)
+            self.displacement_calculated.emit(results)
+
+            # Update status with statistics
+            stats = self.visualization_manager.get_displacement_statistics(flows[0])
+            self._update_status(
+                f"Analysis complete\n"
+                f"Max displacement: {stats['max']:.2f} µm\n"
+                f"Mean displacement: {stats['mean']:.2f} µm\n"
+                f"Flow field resolution: {flows[0].shape[:2]} (from {reference.shape})",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self._set_controls_enabled(True)
+
+    def preview_displacement(self):
+        """Preview displacement calculation on current frame."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating displacement...", 0)
+
+            # Get reference and bead data
+            reference = self.data_manager.displacement_reference_image
+            bead_stack = self.data_manager.displacement_bead_stack
+
+            # Get current frame
+            if bead_stack.ndim == 2:
+                moving = bead_stack
+            else:
+                current_frame = self.viewer.dims.current_step[0]
+                moving = bead_stack[current_frame]
+
+            # Calculate initial flow in pixels
+            flow_pixels = self.analyzer.calculate_flow(reference, moving)
+
+            # Apply downscaling if factor > 1
+            downscale_factor = self.parameter_spins['downscale_factor'].value()
+            if downscale_factor > 1:
+                flow_pixels = self.analyzer.downscale_flow(flow_pixels, downscale_factor)
+
+            # Convert flow to micrometers using pixel size from parent widget
+            pixel_size = self.pixel_size
+            self.current_flow = flow_pixels * pixel_size
+
+            # Get visualization parameters
+            vis_params = {
+                'd_max': self.visualization_params['d_max'].value(),
+                'vector_stride': self.visualization_params['vector_stride'].value(),
+                'arrow_scale': self.visualization_params['arrow_scale'].value()
+            }
+
+            # Update visualization
+            self.visualization_manager.visualize_displacement_preview(
+                self.current_flow,
+                vis_params['d_max'],
+                vis_params['vector_stride'],
+                vis_params['arrow_scale'],
+                downscale_factor=downscale_factor
+            )
+
+            # Update colorbar
+            self.colorbar_manager.update_limits(0, vis_params['d_max'])
+
+            # Update status with statistics
+            stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
+            original_shape = reference.shape
+            downscaled_shape = self.current_flow.shape[:2]
+            self._update_status(
+                f"Max displacement: {stats['max']:.2f} µm\n"
+                f"Mean displacement: {stats['mean']:.2f} µm\n"
+                f"Flow field resolution: {downscaled_shape} \n(from {original_shape})",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self._set_controls_enabled(True)
+
+    def _create_data_loading_group(self) -> QGroupBox:
+        """Create the data loading group."""
+        group = QGroupBox("Data")
+        layout = QVBoxLayout()
+
+        # Load buttons and status labels
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_reference_btn = QPushButton("Load Reference Image")
+        self.clear_data_btn = QPushButton("Clear All Data")
+        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
+
+        self.bead_status = QLabel("Not loaded")
+        self.reference_status = QLabel("Not loaded")
+
+        # Add with status labels
+        for btn, status in [
+            (self.load_beads_btn, self.bead_status),
+            (self.load_reference_btn, self.reference_status),
+        ]:
+            row = QHBoxLayout()
+            row.addWidget(btn)
+            row.addWidget(status)
+            layout.addLayout(row)
+
+        # Add clear button
+        layout.addWidget(self.clear_data_btn)
 
         group.setLayout(layout)
         return group
@@ -283,97 +424,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.update_parameters()
         self._update_status("Parameters have been reset to default values")
 
-    def analyze_all_frames(self):
-        """Analyze displacement for all frames."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Starting analysis...", 0)
-
-            # Get parameters
-            vis_params = {
-                'd_max': self.visualization_params['d_max'].value(),
-                'vector_stride': self.visualization_params['vector_stride'].value(),
-                'arrow_scale': self.visualization_params['arrow_scale'].value()
-            }
-            downscale_factor = self.parameter_spins['downscale_factor'].value()
-            pixel_size = self.parameter_spins['pixel_size'].value()
-
-            reference = self.data_manager.displacement_reference_image
-            bead_stack = self.data_manager.displacement_bead_stack
-            total_frames = len(bead_stack)
-
-            # Process all frames
-            flows = []
-            for i in range(total_frames):
-                frame_progress = (i + 1) / total_frames * 100
-                self._update_status(
-                    f"Processing frame {i + 1}/{total_frames}...\n"
-                    f"Computing optical flow...",
-                    frame_progress * 0.4
-                )
-
-                # Calculate flow in pixels
-                flow_pixels = self.analyzer.calculate_flow(reference, bead_stack[i])
-
-                # Downscale if requested
-                if downscale_factor > 1:
-                    self._update_status(
-                        f"Processing frame {i + 1}/{total_frames}...\n"
-                        f"Downscaling flow field...",
-                        frame_progress * 0.8
-                    )
-                    flow_pixels = self.analyzer.downscale_flow(flow_pixels, downscale_factor)
-
-                # Convert to micrometers and store
-                flow_microns = flow_pixels * pixel_size
-                flows.append(flow_microns)
-
-            # Package results
-            results = {
-                'flows': flows,
-                'parameters': {
-                    'tvl1_params': self.analyzer.params,
-                    'downscale_factor': downscale_factor,
-                    'pixel_size': pixel_size
-                },
-                'visualization_params': vis_params,
-                'original_shape': reference.shape,
-                'flow_shape': flows[0].shape[:2],
-                'units': 'micrometers'
-            }
-
-            # Update visualization
-            self.data_manager.displacement_results = results
-            self.visualization_manager.visualize_displacement_results(
-                results,
-                downscale_factor=downscale_factor
-            )
-
-            # Update colorbar with current d_max
-            d_max = self.visualization_params['d_max'].value()
-            self.colorbar_manager.update_limits(0, d_max)
-
-            # Enable save button and emit results
-            self.save_displacement_btn.setEnabled(True)
-            self.displacement_calculated.emit(results)
-
-            # Update status with statistics
-            stats = self.visualization_manager.get_displacement_statistics(flows[0])
-            self._update_status(
-                f"Analysis complete\n"
-                f"Max displacement: {stats['max']:.2f} µm\n"
-                f"Mean displacement: {stats['mean']:.2f} µm\n"
-                f"Flow field resolution: {flows[0].shape[:2]} (from {reference.shape})",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self._set_controls_enabled(True)
     def _save_displacement(self):
         """Save displacement data to files."""
         if not hasattr(self.data_manager, 'displacement_results') or not self.data_manager.displacement_results:
@@ -381,32 +431,54 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             return
 
         try:
-            # Get directory to save files
-            save_dir = QFileDialog.getExistingDirectory(
+            # Get file path
+            save_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Select Directory to Save Displacement Data",
-                os.path.expanduser("~")
+                "Save Displacement Data",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
             )
 
-            if save_dir:
+            if save_path:
+                # Get current parameters from UI
+                tvl1_params = {
+                    'tau': self.parameter_spins['tau'].value(),
+                    'lambda': self.parameter_spins['lambda_'].value(),
+                    'theta': self.parameter_spins['theta'].value(),
+                    'nscales': self.parameter_spins['nscales'].value(),
+                    'warps': self.parameter_spins['warps'].value(),
+                    'epsilon': self.parameter_spins['epsilon'].value(),
+                    'inner_iterations': self.parameter_spins['inner_iterations'].value(),
+                    'outer_iterations': self.parameter_spins['outer_iterations'].value(),
+                    'scale_step': self.parameter_spins['scale_step'].value(),
+                    'median_filtering': self.parameter_spins['median_filtering'].value()
+                }
+
                 results = self.data_manager.displacement_results
                 flows = np.array(results['flows'])
 
-                displacement_results = {
+                # Package everything into a single dictionary
+                displacement_data = {
                     'flows': flows,
                     'parameters': {
-                        'pixelsize': results['parameters']['pixel_size'],
-                        'downscale_factor': results['parameters']['downscale_factor'],
-                        'arrow_scale': results['visualization_params']['arrow_scale'],
-                        'vector_stride': results['visualization_params']['vector_stride'],
-                        'd_max': results['visualization_params']['d_max']
+                        'tvl1_params': tvl1_params,
+                        'pixel_size': self.pixel_size,
+                        'frame_interval': self.frame_length,  # Added frame interval
+                        'downscale_factor': self.parameter_spins['downscale_factor'].value(),
+                        'arrow_scale': self.visualization_params['arrow_scale'].value(),
+                        'vector_stride': self.visualization_params['vector_stride'].value(),
+                        'd_max': self.visualization_params['d_max'].value()
                     }
                 }
 
-                # Save files
-                np.save(os.path.join(save_dir, 'displacement.npy'), displacement_results)
-
-                self._update_status(f"Displacement data successfully saved to:\n{save_dir}", 100)
+                # Save using numpy
+                np.save(save_path, displacement_data)
+                self._update_status(
+                    f"Displacement data successfully saved to:\n{save_path}\n"
+                    f"Pixel size: {self.pixel_size} µm\n"
+                    f"Frame interval: {self.frame_length} min",
+                    100
+                )
 
         except Exception as e:
             QMessageBox.critical(
@@ -418,7 +490,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     def _load_displacement(self):
         """Load displacement data from files."""
         try:
-            # Get file to load
+            # Get file path
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
                 "Select Displacement Data File",
@@ -427,22 +499,45 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             )
 
             if file_path:
-                # Load the displacement data
+                # Load data using numpy
                 displacement_data = np.load(file_path, allow_pickle=True).item()
-
-                # Convert flows to numpy array if it isn't already
                 flows = np.array(displacement_data['flows'])
+                parameters = displacement_data['parameters']
+
+                # Update calibration in parent widget
+                if 'pixel_size' in parameters and 'frame_interval' in parameters:
+                    self._update_parent_calibration(
+                        parameters['pixel_size'],
+                        parameters['frame_interval']
+                    )
+
+                # Handle flow array reshaping if needed
                 if len(flows.shape) == 3:  # If flows is (frames, height*2, width)
                     frames, height_doubled, width = flows.shape
                     height = height_doubled // 2
-                    # Reshape to (frames, height, width, 2)
                     flows = flows.reshape(frames, 2, height, width).transpose(0, 2, 3, 1)
 
-                parameters = displacement_data['parameters']
+                # Update optical flow parameters if available
+                if 'tvl1_params' in parameters:
+                    tvl1_params = parameters['tvl1_params']
+                    param_mapping = {
+                        'tau': 'tau',
+                        'lambda': 'lambda_',
+                        'theta': 'theta',
+                        'nscales': 'nscales',
+                        'warps': 'warps',
+                        'epsilon': 'epsilon',
+                        'inner_iterations': 'inner_iterations',
+                        'outer_iterations': 'outer_iterations',
+                        'scale_step': 'scale_step',
+                        'median_filtering': 'median_filtering'
+                    }
 
-                # Update UI parameters with loaded values
-                if 'pixelsize' in parameters:
-                    self.parameter_spins['pixel_size'].setValue(parameters['pixelsize'])
+                    for saved_name, ui_name in param_mapping.items():
+                        if saved_name in tvl1_params and ui_name in self.parameter_spins:
+                            self.parameter_spins[ui_name].setValue(tvl1_params[saved_name])
+
+                # Update other parameters
                 if 'downscale_factor' in parameters:
                     self.parameter_spins['downscale_factor'].setValue(parameters['downscale_factor'])
                 if 'arrow_scale' in parameters:
@@ -452,18 +547,21 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 if 'd_max' in parameters:
                     self.visualization_params['d_max'].setValue(parameters['d_max'])
 
-                # Create results dictionary
+                # Update analyzer parameters
+                self.update_parameters()
+
+                # Create results dictionary with updated pixel size
                 results = {
                     'flows': flows,
                     'parameters': {
-                        'tvl1_params': self.analyzer.params,
-                        'downscale_factor': parameters['downscale_factor'],
-                        'pixel_size': parameters['pixelsize']
+                        'tvl1_params': tvl1_params,
+                        'downscale_factor': parameters.get('downscale_factor', 1),
+                        'pixel_size': self.pixel_size  # Use current pixel size
                     },
                     'visualization_params': {
-                        'd_max': parameters['d_max'],
-                        'vector_stride': parameters['vector_stride'],
-                        'arrow_scale': parameters['arrow_scale']
+                        'd_max': parameters.get('d_max', 10.0),
+                        'vector_stride': parameters.get('vector_stride', 20),
+                        'arrow_scale': parameters.get('arrow_scale', 1.0)
                     },
                     'original_shape': flows.shape[1:3],
                     'flow_shape': flows.shape[1:3],
@@ -474,11 +572,11 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 self.data_manager.displacement_results = results
                 self.visualization_manager.visualize_displacement_results(
                     results,
-                    downscale_factor=parameters['downscale_factor']
+                    downscale_factor=parameters.get('downscale_factor', 1)
                 )
 
                 # Update colorbar with loaded d_max
-                self.colorbar_manager.update_limits(0, parameters['d_max'])
+                self.colorbar_manager.update_limits(0, parameters.get('d_max', 10.0))
 
                 # Enable save button
                 self.save_displacement_btn.setEnabled(True)
@@ -486,7 +584,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 # Emit the displacement_calculated signal with the results
                 self.displacement_calculated.emit(results)
 
-                self._update_status(f"Displacement data successfully loaded from:\n{file_path}", 100)
+                self._update_status(
+                    f"Displacement data successfully loaded from:\n"
+                    f"{file_path}\n"
+                    f"Pixel size: {self.pixel_size} µm\n"
+                    f"Frame interval: {self.frame_length} min",
+                    100
+                )
 
         except Exception as e:
             QMessageBox.critical(
@@ -497,6 +601,26 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             # Print the full error for debugging
             import traceback
             traceback.print_exc()
+
+    def _update_parent_calibration(self, pixel_size: float, frame_interval: float):
+        """Update calibration values in parent widget."""
+        try:
+            # Find parent widget instance (napariTFMWidget)
+            parent = self
+            while parent is not None:
+                if hasattr(parent, 'pixel_spin') and hasattr(parent, 'frame_spin'):
+                    break
+                parent = parent.parent()
+
+            if parent is not None:
+                # Update calibration values
+                parent.pixel_spin.setValue(pixel_size)
+                parent.frame_spin.setValue(frame_interval)
+            else:
+                self._update_status("Warning: Could not update calibration in parent widget", 100)
+
+        except Exception as e:
+            self._handle_error(f"Failed to update calibration: {str(e)}")
     def _on_displacement_completed(self, results):
         """Handle completion of displacement analysis"""
         super()._on_displacement_completed(results)
@@ -522,82 +646,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         except ValueError as e:
             self._handle_error(str(e))
-
-    def preview_displacement(self):
-        """Preview displacement calculation on current frame."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating displacement...", 0)
-
-            # Get reference and bead data
-            reference = self.data_manager.displacement_reference_image
-            bead_stack = self.data_manager.displacement_bead_stack
-
-            # Safely determine current frame
-            if bead_stack.ndim == 2:
-                # Handle 2D case
-                moving = bead_stack
-            else:
-                # Handle 3D case
-                if len(self.viewer.dims.current_step) > 0:
-                    current_frame = self.viewer.dims.current_step[0]
-                    # Ensure frame index is valid
-                    if current_frame >= bead_stack.shape[0]:
-                        current_frame = 0
-                else:
-                    current_frame = 0
-                moving = bead_stack[current_frame]
-
-            # Calculate initial flow in pixels
-            flow_pixels = self.analyzer.calculate_flow(reference, moving)
-
-            # Apply downscaling if factor > 1
-            downscale_factor = self.parameter_spins['downscale_factor'].value()
-            if downscale_factor > 1:
-                flow_pixels = self.analyzer.downscale_flow(flow_pixels, downscale_factor)
-
-            # Convert flow to micrometers
-            pixel_size = self.parameter_spins['pixel_size'].value()
-            self.current_flow = flow_pixels * pixel_size
-
-            # Get visualization parameters
-            vis_params = {
-                'd_max': self.visualization_params['d_max'].value(),
-                'vector_stride': self.visualization_params['vector_stride'].value(),
-                'arrow_scale': self.visualization_params['arrow_scale'].value()
-            }
-
-            # Update visualization through visualization manager
-            self.visualization_manager.visualize_displacement_preview(
-                self.current_flow,  # Already in µm
-                vis_params['d_max'],
-                vis_params['vector_stride'],
-                vis_params['arrow_scale'],
-                downscale_factor=downscale_factor
-            )
-
-            # Update colorbar with current d_max
-            d_max = self.visualization_params['d_max'].value()
-            self.colorbar_manager.update_limits(0, d_max)
-
-            # Update status with displacement statistics
-            stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
-            original_shape = reference.shape
-            downscaled_shape = self.current_flow.shape[:2]
-            self._update_status(
-                f"Max displacement: {stats['max']:.2f} µm\n"
-                f"Mean displacement: {stats['mean']:.2f} µm\n"
-                f"Flow field resolution: {downscaled_shape} \n(from {original_shape})",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self._set_controls_enabled(True)
 
     def _create_visualization_parameters_group(self) -> QGroupBox:
         """Create the visualization parameters group."""
