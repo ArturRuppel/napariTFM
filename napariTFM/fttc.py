@@ -130,13 +130,16 @@ class FTTC:
                      pix_per_mu: float, lam: float,
                      i_max: Optional[int] = None,
                      j_max: Optional[int] = None) -> Tuple:
-        """Core TFM calculation with detailed timing"""
+        """Core TFM calculation with shape matching to input"""
 
+        # Store original input dimensions
+        original_shape = (int(np.sqrt(vec0.shape[1])), int(np.sqrt(vec0.shape[1])))
+
+        # Original TFM calculation
         grid_mat, u, i_max, j_max, i_bound_size, j_bound_size = self._interp_vec2grid(
             pos0, vec0, i_max=i_max, j_max=j_max)
 
         kx, ky, lanczosx, lanczosy = self._calculate_fourier_modes(i_max, j_max)
-
         GFt = self._calculate_greens_function(kx, ky)
 
         G_inv = calculate_traction_2d(GFt, lam ** 2)
@@ -155,6 +158,31 @@ class FTTC:
 
         x = np.reshape(pos[0], (i_max, j_max)).T / pix_per_mu
         y = np.reshape(pos[1], (i_max, j_max)).T / pix_per_mu
+
+        # Pad output arrays to match input dimensions
+        def pad_to_shape(arr, target_shape):
+            if isinstance(arr, np.ndarray):
+                current_shape = arr.shape
+                if len(current_shape) == 2:
+                    pad_width = [(0, target_shape[0] - current_shape[0]),
+                                 (0, target_shape[1] - current_shape[1])]
+                    return np.pad(arr, pad_width, mode='constant', constant_values=0)
+                elif len(current_shape) == 3:  # For arrays like f with components
+                    pad_width = [(0, 0),  # Don't pad the components dimension
+                                 (0, target_shape[0] - current_shape[1]),
+                                 (0, target_shape[1] - current_shape[2])]
+                    return np.pad(arr, pad_width, mode='constant', constant_values=0)
+            return arr
+
+        # Pad relevant outputs
+        fnorm = pad_to_shape(fnorm, original_shape)
+        f = pad_to_shape(f, original_shape)
+        urec = pad_to_shape(urec, original_shape)
+
+        # Create padded coordinate grids to match dimensions
+        x_full = np.linspace(x[0, 0], x[-1, -1], original_shape[1])
+        y_full = np.linspace(y[0, 0], y[-1, -1], original_shape[0])
+        x, y = np.meshgrid(x_full, y_full)
 
         return (x, y), fnorm, f, urec, u, energy, force, Ftf, Fturec
 
