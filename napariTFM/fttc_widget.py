@@ -863,8 +863,6 @@ class FTTCWidget(BaseAnalysisWidget):
                 else:
                     gel_height_m = None
 
-                # Safely get downscale factor
-                downscale_factor = results['parameters'].get('downscale_factor', 1)
 
                 # Structure the data to match batch script format
                 force_results = {
@@ -874,7 +872,8 @@ class FTTCWidget(BaseAnalysisWidget):
                         'youngs_modulus': float(results['parameters']['young_modulus']),
                         'poisson_ratio': float(results['parameters']['poisson_ratio']),
                         'gel_height': gel_height_m,
-                        'pixelsize': float(results['parameters']['pixel_size'] * downscale_factor),
+                        'pixelsize': float(results['parameters']['pixel_size']),
+                        'downscale_factor': int(results['parameters'].get('downscale_factor', 1)),
                         'vector_stride': int(results['parameters']['visualization']['vector_stride']),
                         'arrow_scale': float(results['parameters']['visualization']['arrow_scale']),
                         'f_max': float(results['parameters']['visualization']['f_max'])
