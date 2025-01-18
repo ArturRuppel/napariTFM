@@ -155,7 +155,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 self._update_status(
                     f"Processing frame {i + 1}/{total_frames}...\n"
                     f"Computing optical flow...",
-                    frame_progress * 0.4
+                    frame_progress
                 )
 
                 # Calculate flow in pixels
@@ -163,11 +163,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
                 # Downscale if requested
                 if downscale_factor > 1:
-                    self._update_status(
-                        f"Processing frame {i + 1}/{total_frames}...\n"
-                        f"Downscaling flow field...",
-                        frame_progress * 0.8
-                    )
                     flow_pixels = self.analyzer.downscale_flow(flow_pixels, downscale_factor)
 
                 # Convert to micrometers and store
