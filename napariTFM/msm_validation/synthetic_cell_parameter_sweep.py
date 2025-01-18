@@ -118,7 +118,7 @@ def parameter_sweep():
             'youngs_modulus': E
         }
         for df in [0.005, 0.01, 0.05]  # Mesh density factors
-        for algo in [1, 2, 4, 5, 6]  # Different meshing algorithms
+        for algo in [1, 5, 6, 7, 8, 9]  # Different meshing algorithms
         for opt in [True, False]  # Optimization settings
         for E in [1]  # Young's modulus values
     ]
