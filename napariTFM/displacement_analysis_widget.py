@@ -67,6 +67,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         # Add reset parameters button at the top
         self.reset_params_btn = QPushButton("Reset Parameters")
+        self.reset_params_btn.setToolTip("Reset all parameters to their default values")
         layout.addWidget(self.reset_params_btn)
 
         # Create sections for better organization
@@ -76,22 +77,32 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         scaling_group = QGroupBox("Scaling Parameters")
         scaling_layout = QVBoxLayout()
 
-        # Define core optical flow parameters
+        # Define core optical flow parameters with tooltips
         flow_params = [
-            ("tau", "Tau:", 0.01, 1.0, 0.01, 0.25),
-            ("lambda_", "Lambda:", 0.01, 1.0, 0.01, 0.4),
-            ("theta", "Theta:", 0.1, 1.0, 0.1, 0.3),
-            ("nscales", "Pyramid Scales:", 1, 10, 1, 3),
-            ("warps", "Warps:", 1, 10, 1, 3),
-            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001, 0.01),
-            ("inner_iterations", "Inner Iterations:", 1, 50, 1, 15),
-            ("outer_iterations", "Outer Iterations:", 1, 20, 1, 5),
-            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01, 0.5),
-            ("median_filtering", "Median Filter Size:", 1, 9, 2, 5),
+            ("tau", "Tau:", 0.01, 1.0, 0.01, 0.25,
+             "Time step for optical flow computation. Lower values give more accurate but slower results"),
+            ("lambda_", "Lambda:", 0.01, 1.0, 0.01, 0.4,
+             "Regularization parameter. Higher values produce smoother flow fields"),
+            ("theta", "Theta:", 0.1, 1.0, 0.1, 0.3,
+             "Weight parameter for the divergence term. Controls flow field smoothness"),
+            ("nscales", "Pyramid Scales:", 1, 10, 1, 3,
+             "Number of pyramid levels. More levels handle larger displacements but increase computation time"),
+            ("warps", "Warps:", 1, 10, 1, 3,
+             "Number of warping steps per scale. More warps increase accuracy for large displacements"),
+            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001, 0.01,
+             "Stopping criterion threshold. Lower values give more precise results but longer computation times"),
+            ("inner_iterations", "Inner Iterations:", 1, 50, 1, 15,
+             "Maximum number of inner iterations. More iterations improve accuracy but increase computation time"),
+            ("outer_iterations", "Outer Iterations:", 1, 20, 1, 5,
+             "Maximum number of outer iterations. More iterations improve accuracy but increase computation time"),
+            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01, 0.5,
+             "Scale factor between pyramid levels. Lower values create more pyramid levels"),
+            ("median_filtering", "Median Filter Size:", 1, 9, 2, 5,
+             "Size of median filter for post-processing. Larger values remove more noise but may lose detail"),
         ]
 
-        # Add optical flow parameters
-        for param_name, label, min_val, max_val, step, default in flow_params:
+        # Add optical flow parameters with tooltips
+        for param_name, label, min_val, max_val, step, default, tooltip in flow_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
 
@@ -99,19 +110,25 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             spin.setRange(min_val, max_val)
             spin.setSingleStep(step)
             spin.setValue(default)
+            spin.setToolTip(tooltip)
 
             self.parameter_spins[param_name] = spin
             row.addWidget(spin)
             flow_params_layout.addLayout(row)
 
-        # Add scaling parameters - downscale factor only
+        # Add downscale factor to scaling parameters
         downscale_row = QHBoxLayout()
         downscale_row.addWidget(QLabel("Local Averaging Factor:"))
         downscale_spin = QSpinBox()
         downscale_spin.setRange(1, 10)
         downscale_spin.setSingleStep(1)
         downscale_spin.setValue(1)
-        downscale_spin.setToolTip("Factor for spatial averaging of displacement field (1 = no averaging)")
+        downscale_spin.setToolTip(
+            "Factor for spatial averaging of displacement field.\n"
+            "1 = no averaging (full resolution)\n"
+            "Higher values reduce resolution but improve signal-to-noise ratio\n"
+            "and reduce computational cost for subsequent steps."
+        )
         self.parameter_spins['downscale_factor'] = downscale_spin
         downscale_row.addWidget(downscale_spin)
         scaling_layout.addLayout(downscale_row)
@@ -122,6 +139,125 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         layout.addWidget(flow_params_group)
         layout.addWidget(scaling_group)
         layout.addStretch()
+
+        group.setLayout(layout)
+        return group
+    def _create_data_loading_group(self) -> QGroupBox:
+        """Create the data loading group."""
+        group = QGroupBox("Data")
+        layout = QVBoxLayout()
+
+        # Load buttons and status labels
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_beads_btn.setToolTip("Load the time series of bead images for displacement analysis")
+
+        self.load_reference_btn = QPushButton("Load Reference Image")
+        self.load_reference_btn.setToolTip("Load the reference (initial) bead image")
+
+        self.clear_data_btn = QPushButton("Clear All Data")
+        self.clear_data_btn.setToolTip("Clear all loaded data and analysis results")
+        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
+
+        self.bead_status = QLabel("Not loaded")
+        self.reference_status = QLabel("Not loaded")
+
+        # Add with status labels
+        for btn, status in [
+            (self.load_beads_btn, self.bead_status),
+            (self.load_reference_btn, self.reference_status),
+        ]:
+            row = QHBoxLayout()
+            row.addWidget(btn)
+            row.addWidget(status)
+            layout.addLayout(row)
+
+        # Add clear button
+        layout.addWidget(self.clear_data_btn)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_action_buttons(self) -> QFrame:
+        """Create the action buttons frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
+
+        # Create 2x2 grid for buttons
+        button_grid = QHBoxLayout()
+
+        # Create left column (Preview and Save)
+        left_column = QVBoxLayout()
+        self.preview_btn = QPushButton("Preview Current Frame")
+        self.preview_btn.setToolTip("Calculate and visualize displacement for the current frame")
+
+        self.save_displacement_btn = QPushButton("Save Displacement")
+        self.save_displacement_btn.setToolTip("Save the current displacement analysis results to a file")
+        self.save_displacement_btn.setEnabled(False)
+
+        left_column.addWidget(self.preview_btn)
+        left_column.addWidget(self.save_displacement_btn)
+
+        # Create right column (Analyze and Load)
+        right_column = QVBoxLayout()
+        self.analyze_btn = QPushButton("Analyze All Frames")
+        self.analyze_btn.setToolTip("Calculate displacement for all frames in the sequence")
+
+        self.load_displacement_btn = QPushButton("Load Displacement")
+        self.load_displacement_btn.setToolTip("Load previously saved displacement analysis results")
+
+        right_column.addWidget(self.analyze_btn)
+        right_column.addWidget(self.load_displacement_btn)
+
+        # Add columns to grid
+        button_grid.addLayout(left_column)
+        button_grid.addLayout(right_column)
+
+        layout.addLayout(button_grid)
+        frame.setLayout(layout)
+        return frame
+
+    def _create_visualization_parameters_group(self) -> QGroupBox:
+        """Create the visualization parameters group."""
+        group = QGroupBox("Visualization Parameters")
+        layout = QVBoxLayout()
+
+        # Vector stride
+        stride_layout = QHBoxLayout()
+        stride_layout.addWidget(QLabel("Vector Stride:"))
+        self.visualization_params['vector_stride'] = QSpinBox()
+        self.visualization_params['vector_stride'].setRange(1, 100)
+        self.visualization_params['vector_stride'].setValue(20)
+        self.visualization_params['vector_stride'].setToolTip(
+            "Display every nth vector in the visualization. Higher values show fewer vectors but improve clarity"
+        )
+        stride_layout.addWidget(self.visualization_params['vector_stride'])
+        layout.addLayout(stride_layout)
+
+        # Arrow scale
+        arrow_layout = QHBoxLayout()
+        arrow_layout.addWidget(QLabel("Arrow Scale:"))
+        self.visualization_params['arrow_scale'] = QDoubleSpinBox()
+        self.visualization_params['arrow_scale'].setRange(0.1, 50.0)
+        self.visualization_params['arrow_scale'].setSingleStep(0.5)
+        self.visualization_params['arrow_scale'].setValue(1.0)
+        self.visualization_params['arrow_scale'].setToolTip(
+            "Scale factor for arrow length in the visualization. Adjust to make displacement vectors more visible"
+        )
+        arrow_layout.addWidget(self.visualization_params['arrow_scale'])
+        layout.addLayout(arrow_layout)
+
+        # Maximum displacement (now in µm)
+        dmax_layout = QHBoxLayout()
+        dmax_layout.addWidget(QLabel("Max Displacement (µm):"))
+        self.visualization_params['d_max'] = QDoubleSpinBox()
+        self.visualization_params['d_max'].setRange(0.1, 200.0)
+        self.visualization_params['d_max'].setSingleStep(1.0)
+        self.visualization_params['d_max'].setValue(10.0)
+        self.visualization_params['d_max'].setToolTip(
+            "Maximum displacement value for color scaling (in µm). Adjust to optimize the color range of the visualization"
+        )
+        dmax_layout.addWidget(self.visualization_params['d_max'])
+        layout.addLayout(dmax_layout)
 
         group.setLayout(layout)
         return group
@@ -279,67 +415,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self._set_controls_enabled(True)
-
-    def _create_data_loading_group(self) -> QGroupBox:
-        """Create the data loading group."""
-        group = QGroupBox("Data")
-        layout = QVBoxLayout()
-
-        # Load buttons and status labels
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.load_reference_btn = QPushButton("Load Reference Image")
-        self.clear_data_btn = QPushButton("Clear All Data")
-        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
-
-        self.bead_status = QLabel("Not loaded")
-        self.reference_status = QLabel("Not loaded")
-
-        # Add with status labels
-        for btn, status in [
-            (self.load_beads_btn, self.bead_status),
-            (self.load_reference_btn, self.reference_status),
-        ]:
-            row = QHBoxLayout()
-            row.addWidget(btn)
-            row.addWidget(status)
-            layout.addLayout(row)
-
-        # Add clear button
-        layout.addWidget(self.clear_data_btn)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_action_buttons(self) -> QFrame:
-        """Create the action buttons frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        # Create 2x2 grid for buttons
-        button_grid = QHBoxLayout()
-
-        # Create left column (Preview and Save)
-        left_column = QVBoxLayout()
-        self.preview_btn = QPushButton("Preview Current Frame")
-        self.save_displacement_btn = QPushButton("Save Displacement")
-        self.save_displacement_btn.setEnabled(False)
-        left_column.addWidget(self.preview_btn)
-        left_column.addWidget(self.save_displacement_btn)
-
-        # Create right column (Analyze and Load)
-        right_column = QVBoxLayout()
-        self.analyze_btn = QPushButton("Analyze All Frames")
-        self.load_displacement_btn = QPushButton("Load Displacement")
-        right_column.addWidget(self.analyze_btn)
-        right_column.addWidget(self.load_displacement_btn)
-
-        # Add columns to grid
-        button_grid.addLayout(left_column)
-        button_grid.addLayout(right_column)
-
-        layout.addLayout(button_grid)
-        frame.setLayout(layout)
-        return frame
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -616,6 +691,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(f"Failed to update calibration: {str(e)}")
+
     def _on_displacement_completed(self, results):
         """Handle completion of displacement analysis"""
         super()._on_displacement_completed(results)
@@ -641,46 +717,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         except ValueError as e:
             self._handle_error(str(e))
-
-    def _create_visualization_parameters_group(self) -> QGroupBox:
-        """Create the visualization parameters group."""
-        group = QGroupBox("Visualization Parameters")
-        layout = QVBoxLayout()
-
-        # Vector stride
-        stride_layout = QHBoxLayout()
-        stride_layout.addWidget(QLabel("Vector Stride:"))
-        self.visualization_params['vector_stride'] = QSpinBox()
-        self.visualization_params['vector_stride'].setRange(1, 100)
-        self.visualization_params['vector_stride'].setValue(20)
-        self.visualization_params['vector_stride'].setToolTip("Display every nth vector")
-        stride_layout.addWidget(self.visualization_params['vector_stride'])
-        layout.addLayout(stride_layout)
-
-        # Arrow scale
-        arrow_layout = QHBoxLayout()
-        arrow_layout.addWidget(QLabel("Arrow Scale:"))
-        self.visualization_params['arrow_scale'] = QDoubleSpinBox()
-        self.visualization_params['arrow_scale'].setRange(0.1, 50.0)
-        self.visualization_params['arrow_scale'].setSingleStep(0.5)
-        self.visualization_params['arrow_scale'].setValue(1.0)
-        self.visualization_params['arrow_scale'].setToolTip("Scale factor for arrow length")
-        arrow_layout.addWidget(self.visualization_params['arrow_scale'])
-        layout.addLayout(arrow_layout)
-
-        # Maximum displacement (now in µm)
-        dmax_layout = QHBoxLayout()
-        dmax_layout.addWidget(QLabel("Max Displacement (µm):"))
-        self.visualization_params['d_max'] = QDoubleSpinBox()
-        self.visualization_params['d_max'].setRange(0.1, 200.0)
-        self.visualization_params['d_max'].setSingleStep(1.0)
-        self.visualization_params['d_max'].setValue(10.0)
-        self.visualization_params['d_max'].setToolTip("Maximum displacement for color scaling (in µm)")
-        dmax_layout.addWidget(self.visualization_params['d_max'])
-        layout.addLayout(dmax_layout)
-
-        group.setLayout(layout)
-        return group
 
     def _update_ui_state(self):
         """Update UI elements based on current state."""
