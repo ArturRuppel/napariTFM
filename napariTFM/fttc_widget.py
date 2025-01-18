@@ -48,6 +48,182 @@ class FTTCWidget(BaseAnalysisWidget):
         self._register_controls()
         self._update_ui_state()
 
+    def _handle_force_results(self, force_results):
+        """Handle the completed force calculation results."""
+        try:
+            if not isinstance(force_results, dict):
+                return
+
+            # Update data manager and visualization
+            self.data_manager.force_results = force_results
+            self.visualization_manager.visualize_force_results(
+                force_results,
+                downscale_factor=force_results['parameters'].get('downscale_factor', 1)
+            )
+            self._handle_visualization_layers()
+
+            # Update colorbar
+            f_max = force_results['parameters']['visualization']['f_max']
+            if f_max is not None:
+                self.colorbar_manager.update_limits(0, f_max)
+
+            # Get and display statistics from last frame
+            magnitude = np.sqrt(force_results['tx'][-1] ** 2 + force_results['ty'][-1] ** 2)
+            stats = {
+                'mean_force': np.mean(magnitude),
+                'max_force': np.max(magnitude),
+                'median_force': np.median(magnitude)
+            }
+
+            stats_text = (
+                f"Mean force: {stats['mean_force']:.2f} Pa\n"
+                f"Max force: {stats['max_force']:.2f} Pa\n"
+                f"Median force: {stats['median_force']:.2f} Pa"
+            )
+            self._update_status(stats_text, 100)
+
+            # Enable save button and emit results
+            self.save_force_btn.setEnabled(True)
+            self.force_calculated.emit(force_results)
+
+            # Update UI state to show new data status
+            self._update_ui_state()
+
+        except Exception as e:
+            self._handle_error(self.create_error(
+                message="Force calculation failed",
+                details=str(e),
+                recovery_hint="Check input data and parameters"
+            ))
+
+    def _load_force_data(self):
+        """Load force data from files."""
+        try:
+            # Get file path
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Force Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                # Load the force data
+                force_data = np.load(file_path, allow_pickle=True).item()
+
+                # Convert force components to numpy arrays if they aren't already
+                tx = np.array(force_data['tx'])
+                ty = np.array(force_data['ty'])
+
+                parameters = force_data['parameters']
+
+                # Update UI parameters with loaded values
+                self._load_parameters_to_ui(parameters)
+
+                # Create results dictionary with proper parameter structure
+                results = {
+                    'tx': tx,
+                    'ty': ty,
+                    'parameters': {
+                        'young_modulus': parameters['youngs_modulus'],
+                        'poisson_ratio': parameters['poisson_ratio'],
+                        'gel_height': None if parameters.get('gel_height') is None else parameters['gel_height'] * 1e6,
+                        'pixel_size': parameters['pixelsize'],
+                        'regularization': parameters['regularization'],
+                        'mesh_size': self.mesh_size,
+                        'lanczos_exp': parameters['lanczos_exp'],
+                        'downscale_factor': parameters.get('downscale_factor', 1),
+                        'visualization': {
+                            'vector_stride': parameters['vector_stride'],
+                            'arrow_scale': parameters['arrow_scale'],
+                            'f_max': parameters['f_max']
+                        }
+                    }
+                }
+
+                # Update all parameters in the calculator
+                self._update_parameters()
+
+                # Update data manager and visualization
+                self.data_manager.force_results = results
+                self.visualization_manager.visualize_force_results(
+                    results,
+                    downscale_factor=parameters.get('downscale_factor', 1)
+                )
+                self._handle_visualization_layers()
+
+                # Update colorbar with loaded f_max
+                self.colorbar_manager.update_limits(0, parameters['f_max'])
+
+                # Enable save button and emit results
+                self.save_force_btn.setEnabled(True)
+                self.force_calculated.emit(results)
+
+                # Update UI state to show new data status
+                self._update_ui_state()
+
+                self._update_status(f"Force data successfully loaded from:\n{file_path}", 100)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load force data: {str(e)}"
+            )
+            # Print the full error for debugging
+            import traceback
+            traceback.print_exc()
+
+    def _update_ui_state(self):
+        """Update UI elements based on current state."""
+        # Check displacement results
+        if hasattr(self.data_manager, 'displacement_results'):
+            results = self.data_manager.displacement_results
+            if results and isinstance(results, dict) and 'flows' in results:
+                flows = results['flows']
+                try:
+                    # Convert to numpy array if it isn't already
+                    if not isinstance(flows, np.ndarray):
+                        flows = np.array(flows)
+                    self.displacement_status.setText(f"Displacement data: {flows.shape}")
+                except Exception as e:
+                    self.displacement_status.setText(f"Displacement data: Error ({str(e)})")
+            else:
+                self.displacement_status.setText("Displacement data: Not loaded")
+        else:
+            self.displacement_status.setText("Displacement data: Not loaded")
+
+        # Check force results
+        if hasattr(self.data_manager, 'force_results') and self.data_manager.force_results is not None:
+            results = self.data_manager.force_results
+            if isinstance(results, dict) and 'tx' in results and 'ty' in results:
+                try:
+                    shape = results['tx'].shape
+                    if len(shape) > 0:  # Check if shape is not empty
+                        self.force_status.setText(f"Force results: {shape}")
+                    else:
+                        self.force_status.setText("Force results: Invalid shape")
+                except Exception as e:
+                    self.force_status.setText(f"Force results: Error ({str(e)})")
+            else:
+                self.force_status.setText("Force results: Not loaded")
+        else:
+            self.force_status.setText("Force results: Not loaded")
+
+        # Update button states based on data availability
+        has_displacement = (
+                hasattr(self.data_manager, 'displacement_results') and
+                self.data_manager.displacement_results is not None
+        )
+
+        self.calculate_btn.setEnabled(has_displacement)
+        self.preview_btn.setEnabled(has_displacement)
+
+        if not has_displacement:
+            self.status_label.setText("Missing required displacement data")
+        else:
+            self.status_label.setText("Ready for force calculation")
+
     def calculate_forces(self):
         """Calculate traction forces using the FTTC calculator."""
         try:
@@ -143,37 +319,8 @@ class FTTCWidget(BaseAnalysisWidget):
                 'visualization': visualization_params
             }
 
-            # Update data manager and visualization
-            self.data_manager.force_results = force_results
-            self.visualization_manager.visualize_force_results(
-                force_results,
-                downscale_factor=downscale_factor
-            )
-            self._handle_visualization_layers()
-
-            # Update colorbar
-            f_max = visualization_params['f_max']
-            if f_max is not None:
-                self.colorbar_manager.update_limits(0, f_max)
-
-            # Get and display statistics from last frame
-            magnitude = np.sqrt(force_results['tx'][-1] ** 2 + force_results['ty'][-1] ** 2)
-            stats = {
-                'mean_force': np.mean(magnitude),
-                'max_force': np.max(magnitude),
-                'median_force': np.median(magnitude)
-            }
-
-            stats_text = (
-                f"Mean force: {stats['mean_force']:.2f} Pa\n"
-                f"Max force: {stats['max_force']:.2f} Pa\n"
-                f"Median force: {stats['median_force']:.2f} Pa"
-            )
-            self._update_status(stats_text, 100)
-
-            # Enable save button and emit results
-            self.save_force_btn.setEnabled(True)
-            self.force_calculated.emit(force_results)
+            # Handle the results
+            self._handle_force_results(force_results)
 
         except Exception as e:
             self._handle_error(self.create_error(
@@ -183,6 +330,141 @@ class FTTCWidget(BaseAnalysisWidget):
             ))
         finally:
             self._set_controls_enabled(True)
+
+    def _create_data_status_group(self) -> QGroupBox:
+        """Create the data status group."""
+        group = QGroupBox("Data Status")
+        layout = QVBoxLayout()
+
+        # Status labels stacked vertically
+        self.displacement_status = QLabel("Displacement data: Not loaded")
+        self.force_status = QLabel("Force results: Not loaded")
+
+        # Add status labels
+        layout.addWidget(self.displacement_status)
+        layout.addWidget(self.force_status)
+
+        # Add clear data button
+        self.clear_data_btn = QPushButton("Clear All Data")
+        self.clear_data_btn.setToolTip("Clear all loaded data and force calculation results")
+        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
+        layout.addWidget(self.clear_data_btn)
+
+        group.setLayout(layout)
+        return group
+
+    def _clear_data(self):
+        """Clear all force calculation and displacement data"""
+        try:
+            # Clear force results
+            if hasattr(self.data_manager, 'force_results'):
+                self.data_manager.force_results = None
+
+            # Clear displacement results
+            if hasattr(self.data_manager, 'displacement_results'):
+                self.data_manager.displacement_results = None
+
+
+            # Disable save button when data is cleared
+            self.save_force_btn.setEnabled(False)
+
+            # Update UI
+            self._update_ui_state()
+            self._update_status("All data cleared")
+
+        except Exception as e:
+            self._handle_error(str(e))
+    def _setup_ui(self):
+        """Set up the user interface."""
+        main_layout = QHBoxLayout()
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create colorbar container
+        colorbar_container = QWidget()
+        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        colorbar_layout = QVBoxLayout()
+        colorbar_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Create colorbar
+        colorbar_group = self.create_colorbar_widget(
+            colormap_name='inferno',
+            label="Force (Pa)",
+            clim=(1000, 0),
+            colorbar_manager=self.colorbar_manager
+        )
+        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        colorbar_layout.addStretch()
+        colorbar_container.setLayout(colorbar_layout)
+        main_layout.addWidget(colorbar_container)
+
+        # Right side container
+        right_container = QWidget()
+        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Add parameter groups
+        right_layout.addWidget(self._create_data_status_group())  # Add the new data status group
+        right_layout.addWidget(self._create_material_params_group())
+        right_layout.addWidget(self._create_calculation_params_group())
+        right_layout.addWidget(self._create_visualization_parameters_group())
+        right_layout.addWidget(self._create_action_buttons())
+        right_layout.addWidget(self._create_status_frame())
+        right_layout.addStretch()
+
+        right_container.setLayout(right_layout)
+        right_container.setFixedWidth(350)
+
+        main_layout.addWidget(right_container)
+        main_layout.addStretch(1)
+
+        self.setLayout(main_layout)
+
+    def _connect_signals(self):
+        """Connect all widget signals."""
+        # Parameter updates
+        self.young_spin.valueChanged.connect(self._update_parameters)
+        self.poisson_spin.valueChanged.connect(self._update_parameters)
+        self.height_spin.valueChanged.connect(self._update_parameters)
+        self.lanczos_exp_spin.valueChanged.connect(self._update_parameters)
+        self.regularization_spin.valueChanged.connect(self._update_parameters)
+
+        # Action buttons
+        self.calculate_btn.clicked.connect(self.calculate_forces)
+        self.preview_btn.clicked.connect(self.preview_force)
+        self.save_force_btn.clicked.connect(self._save_force_data)
+        self.load_force_btn.clicked.connect(self._load_force_data)
+        self.reset_params_btn.clicked.connect(self.reset_parameters)
+        self.clear_data_btn.clicked.connect(self._clear_data)  # Add clear data connection
+
+    def _register_controls(self):
+        """Register all controls with the base widget."""
+        controls = [
+                       self.young_spin,
+                       self.poisson_spin,
+                       self.height_spin,
+                       self.lanczos_exp_spin,
+                       self.regularization_spin,
+                       self.calculate_btn,
+                       self.preview_btn,
+                       self.reset_params_btn,
+                       self.save_force_btn,
+                       self.load_force_btn,
+                       self.clear_data_btn,  # Add clear data button
+                       self.progress_bar,
+                       self.status_label,
+                       self.displacement_status,  # Add status labels
+                       self.force_status,
+                       self.gcv_button,
+                       self.auto_gcv_checkbox
+                   ] + list(self.visualization_params.values())
+
+        for control in controls:
+            self.register_control(control)
 
     def preview_force(self):
         """Preview force calculation on current frame."""
@@ -324,44 +606,6 @@ class FTTCWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
-    def _register_controls(self):
-        """Register all controls with the base widget."""
-        controls = [
-                       self.young_spin,
-                       self.poisson_spin,
-                       self.height_spin,
-                       self.lanczos_exp_spin,
-                       self.regularization_spin,
-                       self.calculate_btn,
-                       self.preview_btn,
-                       self.reset_params_btn,
-                       self.save_force_btn,
-                       self.load_force_btn,
-                       self.progress_bar,
-                       self.status_label,
-                       self.gcv_button,
-                       self.auto_gcv_checkbox
-                   ] + list(self.visualization_params.values())
-
-        for control in controls:
-            self.register_control(control)
-
-    def _connect_signals(self):
-        """Connect all widget signals."""
-        # Parameter updates
-        self.young_spin.valueChanged.connect(self._update_parameters)
-        self.poisson_spin.valueChanged.connect(self._update_parameters)
-        self.height_spin.valueChanged.connect(self._update_parameters)
-        self.lanczos_exp_spin.valueChanged.connect(self._update_parameters)
-        self.regularization_spin.valueChanged.connect(self._update_parameters)
-
-        # Action buttons
-        self.calculate_btn.clicked.connect(self.calculate_forces)
-        self.preview_btn.clicked.connect(self.preview_force)
-        self.save_force_btn.clicked.connect(self._save_force_data)
-        self.load_force_btn.clicked.connect(self._load_force_data)
-        self.reset_params_btn.clicked.connect(self.reset_parameters)
-
     def _update_parameters(self):
         """Update parameters from UI controls and data manager."""
         # Update basic parameters
@@ -401,29 +645,6 @@ class FTTCWidget(BaseAnalysisWidget):
         self.visualization_params['f_max'].setValue(1000.0)
 
         self._update_status("Parameters reset to defaults")
-
-    def _update_ui_state(self):
-        """Update UI elements based on current state."""
-        # Check if required data is available
-        has_required_data = self._validate_input_data()
-
-        # Update button states
-        self.calculate_btn.setEnabled(has_required_data)
-        self.preview_btn.setEnabled(has_required_data)
-
-        if has_required_data:
-            # Display current pixel size in status
-            disp_params = self.data_manager.displacement_results.get('parameters', {})
-            base_pixel_size = disp_params.get('pixel_size')
-            downscale_factor = disp_params.get('downscale_factor', 1)
-            if base_pixel_size is not None:
-                effective_pixel_size = base_pixel_size * downscale_factor
-                self._update_status(
-                    f"Current pixel size: {effective_pixel_size:.3f} μm\n"
-                    f"(Base: {base_pixel_size:.3f} μm, Downscale: {downscale_factor}x)"
-                )
-        else:
-            self._update_status("Required displacement data not available")
 
     def _create_calculation_params_group(self) -> QGroupBox:
         """Create the calculation parameters group."""
@@ -582,55 +803,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
         frame.setLayout(layout)
         return frame
-
-    def _setup_ui(self):
-        """Set up the user interface."""
-        main_layout = QHBoxLayout()
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Create colorbar container
-        colorbar_container = QWidget()
-        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Create colorbar
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='inferno',
-            label="Force (Pa)",
-            clim=(1000, 0),
-            colorbar_manager=self.colorbar_manager
-        )
-        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        colorbar_layout.addStretch()
-        colorbar_container.setLayout(colorbar_layout)
-        main_layout.addWidget(colorbar_container)
-
-        # Right side container
-        right_container = QWidget()
-        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        right_layout = QVBoxLayout()
-        right_layout.setSpacing(8)
-        right_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Add parameter groups
-        right_layout.addWidget(self._create_material_params_group())
-        right_layout.addWidget(self._create_calculation_params_group())
-        right_layout.addWidget(self._create_visualization_parameters_group())
-        right_layout.addWidget(self._create_action_buttons())
-        right_layout.addWidget(self._create_status_frame())
-        right_layout.addStretch()
-
-        right_container.setLayout(right_layout)
-        right_container.setFixedWidth(350)
-
-        main_layout.addWidget(right_container)
-        main_layout.addStretch(1)
-
-        self.setLayout(main_layout)
 
     def cleanup(self):
         """Clean up resources."""
@@ -807,105 +979,6 @@ class FTTCWidget(BaseAnalysisWidget):
                 "Error",
                 f"Failed to save force data: {str(e)}"
             )
-
-    def _load_force_data(self):
-        """Load force data from files."""
-        try:
-            # Get file to load
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select Force Data File",
-                os.path.expanduser("~"),
-                "NumPy Files (*.npy)"
-            )
-
-            if file_path:
-                # Load the force data
-                force_data = np.load(file_path, allow_pickle=True).item()
-
-                # Convert force components to numpy arrays if they aren't already
-                tx = np.array(force_data['tx'])
-                ty = np.array(force_data['ty'])
-
-                parameters = force_data['parameters']
-
-                # Update UI parameters with loaded values
-                # Material parameters
-                if 'youngs_modulus' in parameters:
-                    self.young_spin.setValue(parameters['youngs_modulus'])
-                if 'poisson_ratio' in parameters:
-                    self.poisson_spin.setValue(parameters['poisson_ratio'])
-                if 'gel_height' in parameters:
-                    # Convert from meters to micrometers if not None
-                    height_um = 0 if parameters['gel_height'] is None else parameters['gel_height'] * 1e6
-                    self.height_spin.setValue(height_um)
-                if 'lanczos_exp' in parameters:
-                    self.lanczos_exp_spin.setValue(parameters['lanczos_exp'])
-
-                # Calculation parameters
-                if 'regularization' in parameters:
-                    # Convert to log scale for the spin box
-                    log_reg = np.log10(parameters['regularization'])
-                    self.regularization_spin.setValue(log_reg)
-
-                # Visualization parameters
-                if 'vector_stride' in parameters:
-                    self.visualization_params['vector_stride'].setValue(parameters['vector_stride'])
-                if 'arrow_scale' in parameters:
-                    self.visualization_params['arrow_scale'].setValue(parameters['arrow_scale'])
-                if 'f_max' in parameters:
-                    self.visualization_params['f_max'].setValue(parameters['f_max'])
-
-                # Create results dictionary with proper parameter structure
-                results = {
-                    'tx': tx,
-                    'ty': ty,
-                    'parameters': {
-                        'young_modulus': parameters['youngs_modulus'],
-                        'poisson_ratio': parameters['poisson_ratio'],
-                        'gel_height': None if parameters.get('gel_height') is None else parameters['gel_height'] * 1e6,
-                        'pixel_size': parameters['pixelsize'],
-                        'regularization': parameters['regularization'],
-                        'mesh_size': self.mesh_size,
-                        'lanczos_exp': parameters['lanczos_exp'],
-                        'downscale_factor': parameters.get('downscale_factor', 1),
-                        'visualization': {
-                            'vector_stride': parameters['vector_stride'],
-                            'arrow_scale': parameters['arrow_scale'],
-                            'f_max': parameters['f_max']
-                        }
-                    }
-                }
-
-                # Update all parameters in the calculator
-                self._update_parameters()
-
-                # Update data manager and visualization
-                self.data_manager.force_results = results
-                self.visualization_manager.visualize_force_results(
-                    results,
-                    downscale_factor=parameters.get('downscale_factor', 1)
-                )
-                self._handle_visualization_layers()
-
-                # Update colorbar with loaded f_max
-                self.colorbar_manager.update_limits(0, parameters['f_max'])
-
-                # Enable save button and emit results
-                self.save_force_btn.setEnabled(True)
-                self.force_calculated.emit(results)
-
-                self._update_status(f"Force data successfully loaded from:\n{file_path}", 100)
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to load force data: {str(e)}"
-            )
-            # Print the full error for debugging
-            import traceback
-            traceback.print_exc()
 
     def _handle_visualization_layers(self):
         """Handle layer visibility and ordering for better force visualization."""
