@@ -38,7 +38,7 @@ from scipy.sparse.linalg import lsqr
 from skimage.measure import regionprops
 
 from napariTFM.mesh_generator import MeshParameters, MeshGenerator
-from napariTFM.msm_numba_methods import *
+from napariTFM.msm_numba_functions import *
 
 
 def timer_decorator(func):

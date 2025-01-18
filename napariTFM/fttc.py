@@ -23,84 +23,11 @@ Paper references:
 """
 
 import time
-from functools import wraps
 from typing import Tuple, Optional
 
-import numpy as np
-from matplotlib import pyplot as plt
-from numba import njit
 from scipy import optimize
 
-
-def timer_decorator(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if not hasattr(wrapper, 'detailed_timing'):
-            wrapper.detailed_timing = {}
-
-        start_time = time.perf_counter()
-        result = func(*args, **kwargs)
-        end_time = time.perf_counter()
-
-        operation_name = func.__name__
-        if operation_name not in wrapper.detailed_timing:
-            wrapper.detailed_timing[operation_name] = []
-        wrapper.detailed_timing[operation_name].append(end_time - start_time)
-
-        return result
-
-    return wrapper
-@njit(cache=True)
-def _calculate_2x2_inv(U):
-    """Calculates inverse of 2x2 matrix"""
-    U_inv = np.empty((2, 2), dtype=np.complex128)
-    detU = U[0, 0] * U[1, 1] - U[0, 1] * U[1, 0]
-    invdetU = 1.0 / detU
-    U_inv[0, 0] = invdetU * U[1, 1]
-    U_inv[0, 1] = -invdetU * U[0, 1]
-    U_inv[1, 0] = -invdetU * U[1, 0]
-    U_inv[1, 1] = invdetU * U[0, 0]
-    return U_inv
-
-@njit(cache=True)
-def _blkmul_adj(mat: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """Calculate (mat.H) @ v"""
-    a, b, c = mat.shape
-    assert ((a * b,) == v.shape)
-    assert (a >= 1)
-    MT0 = mat[0].T.conjugate()
-    out0 = MT0 @ v[:c]
-    out = np.empty(a * c, dtype=out0.dtype)
-    out[:c] = out0
-    for i in range(1, a):
-        MT = mat[i].T.conjugate()
-        out[i * c:i * c + c] = MT @ v[i * b:i * b + b]
-    return out
-
-@timer_decorator
-@njit(cache=True)
-def _calculate_traction_2d(FtGmn, L):
-    """Calculates Tikhonov regularized inverse of FTGmn"""
-    M = len(FtGmn[0, 0])
-    N = len(FtGmn[0, 0, 0])
-
-    FtGmnInv = np.empty((2, 2, M, N), dtype=np.complex128)
-    Tikh = np.zeros((2, 2), dtype=np.complex128)
-    Tikh[0, 0] = L
-    Tikh[1, 1] = L
-
-    GG = np.empty((2, 2), dtype=np.complex128)
-    for i in range(M):
-        for j in range(N):
-            GG[0, 0] = FtGmn[0, 0, i, j]
-            GG[0, 1] = FtGmn[0, 1, i, j]
-            GG[1, 0] = FtGmn[1, 0, i, j]
-            GG[1, 1] = FtGmn[1, 1, i, j]
-
-            FtGmnInv[:, :, i, j] = np.dot(
-                _calculate_2x2_inv(np.dot(GG.T, GG) + Tikh), GG.T
-            )
-    return FtGmnInv
+from napariTFM.fttc_numba_functions import *
 
 
 class FTTC:
@@ -113,7 +40,6 @@ class FTTC:
         self.timing_stats = {}
         self.detailed_timing = {}
 
-    @timer_decorator
     def calculate_traction(self, x: np.ndarray, y: np.ndarray,
                            u_data: np.ndarray, v_data: np.ndarray,
                            dx: float, set_lam: Optional[float] = None) -> Tuple:
@@ -199,97 +125,38 @@ class FTTC:
             return GFt
 
         return GFt_std
-    def _time_operation(self, operation_name):
-        """Context manager for timing operations"""
 
-        class TimerContext:
-            def __init__(self, fttc_instance, op_name):
-                self.fttc_instance = fttc_instance
-                self.op_name = op_name
-
-            def __enter__(self):
-                self.start_time = time.perf_counter()
-                return self
-
-            def __exit__(self, exc_type, exc_val, exc_tb):
-                end_time = time.perf_counter()
-                if self.op_name not in self.fttc_instance.detailed_timing:
-                    self.fttc_instance.detailed_timing[self.op_name] = []
-                self.fttc_instance.detailed_timing[self.op_name].append(end_time - self.start_time)
-
-        return TimerContext(self, operation_name)
-
-    @timer_decorator
     def _perform_tfm(self, pos0: np.ndarray, vec0: np.ndarray,
                      pix_per_mu: float, lam: float,
                      i_max: Optional[int] = None,
                      j_max: Optional[int] = None) -> Tuple:
         """Core TFM calculation with detailed timing"""
 
-        with self._time_operation("grid_interpolation"):
-            grid_mat, u, i_max, j_max, i_bound_size, j_bound_size = self._interp_vec2grid(
-                pos0, vec0, i_max=i_max, j_max=j_max)
+        grid_mat, u, i_max, j_max, i_bound_size, j_bound_size = self._interp_vec2grid(
+            pos0, vec0, i_max=i_max, j_max=j_max)
 
-        with self._time_operation("fourier_modes"):
-            kx, ky, lanczosx, lanczosy = self._calculate_fourier_modes(i_max, j_max)
+        kx, ky, lanczosx, lanczosy = self._calculate_fourier_modes(i_max, j_max)
 
-        with self._time_operation("greens_function"):
-            GFt = self._calculate_greens_function(kx, ky)
+        GFt = self._calculate_greens_function(kx, ky)
 
-        with self._time_operation("matrix_inversion"):
-            G_inv = _calculate_traction_2d(GFt, lam ** 2)
-            G_inv_xx = G_inv[0, 0]
-            G_inv_xy = G_inv[0, 1]
-            G_inv_yy = G_inv[1, 1]
+        G_inv = calculate_traction_2d(GFt, lam ** 2)
+        G_inv_xx = G_inv[0, 0]
+        G_inv_xy = G_inv[0, 1]
+        G_inv_yy = G_inv[1, 1]
 
-        with self._time_operation("fourier_tfm"):
-            Ftfx, Ftfy = self._reg_fourier_TFM_L2(u, G_inv_xx, G_inv_xy, G_inv_yy)
-            Ftf = np.array([Ftfx, Ftfy])
+        Ftfx, Ftfy = self._reg_fourier_TFM_L2(u, G_inv_xx, G_inv_xy, G_inv_yy)
+        Ftf = np.array([Ftfx, Ftfy])
 
-        with self._time_operation("displacement_reconstruction"):
-            urec, Fturec = self._reconstruct_displacement(GFt, Ftfx, Ftfy, lanczosx, lanczosy)
+        urec, Fturec = self._reconstruct_displacement(GFt, Ftfx, Ftfy, lanczosx, lanczosy)
 
-        with self._time_operation("stress_calculation"):
-            pos, vec, fnorm, f, energy, force = self._calculate_stress_field(
-                Ftfx, Ftfy, lanczosx, lanczosy, grid_mat, u, i_max, j_max,
-                i_bound_size, j_bound_size, pix_per_mu)
+        pos, vec, fnorm, f, energy, force = self._calculate_stress_field(
+            Ftfx, Ftfy, lanczosx, lanczosy, grid_mat, u, i_max, j_max,
+            i_bound_size, j_bound_size, pix_per_mu)
 
         x = np.reshape(pos[0], (i_max, j_max)).T / pix_per_mu
         y = np.reshape(pos[1], (i_max, j_max)).T / pix_per_mu
 
         return (x, y), fnorm, f, urec, u, energy, force, Ftf, Fturec
-
-    def get_detailed_timing(self):
-        """Get a summary of detailed timing statistics"""
-        summary = {}
-        for operation, times in self.detailed_timing.items():
-            summary[operation] = {
-                'mean': np.mean(times),
-                'min': np.min(times),
-                'max': np.max(times),
-                'total': np.sum(times),
-                'calls': len(times)
-            }
-        return summary
-
-    def _update_timing_stats(self, func_name: str, time_taken: float):
-        """Update timing statistics for a given function"""
-        if func_name not in self.timing_stats:
-            self.timing_stats[func_name] = []
-        self.timing_stats[func_name].append(time_taken)
-
-    def get_timing_summary(self):
-        """Get a summary of timing statistics"""
-        summary = {}
-        for func_name, times in self.timing_stats.items():
-            summary[func_name] = {
-                'mean': np.mean(times),
-                'min': np.min(times),
-                'max': np.max(times),
-                'total': np.sum(times),
-                'calls': len(times)
-            }
-        return summary
 
     @staticmethod
     def _gcvfun(lmbda, s2, beta, delta0, mn):
@@ -302,7 +169,7 @@ class FTTC:
                        lambdarange: np.ndarray, plot: bool = False) -> Tuple[float, float, np.ndarray, np.ndarray]:
         """Calculate generalized cross validation"""
         npoints = lambdarange.size
-        beta = _blkmul_adj(U, b)
+        beta = blkmul_adj(U, b)
 
         reg_param = np.copy(lambdarange)
         G = np.zeros(npoints)
@@ -334,7 +201,6 @@ class FTTC:
 
         return float(reg_min), float(minG), G, reg_param
 
-    @timer_decorator
     def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray) -> float:
         """Find optimal regularization parameter using GCV"""
         lamguess = 0.2 / self.E
@@ -364,7 +230,6 @@ class FTTC:
 
         return U_h, s_h.flatten(), Ftu.flatten()
 
-    @timer_decorator
     def _interp_vec2grid(self, pos: np.ndarray, vec: np.ndarray,
                          i_max: Optional[int] = None, j_max: Optional[int] = None):
         """Highly optimized interpolation using KD-tree based approach"""
@@ -434,35 +299,6 @@ class FTTC:
 
         return grid_mat, u, i_max, j_max, 0, 0
 
-    def _extrapolate_u(self, grid_mat: np.ndarray, u: np.ndarray) -> np.ndarray:
-        """Optimized extrapolation of NaN values"""
-        # Only process if there are NaN values
-        if not np.any(np.isnan(u)):
-            return u
-
-        grid_positions = np.array([grid_mat[0].flatten(), grid_mat[1].flatten()]).T
-
-        for component in range(2):
-            nan_mask = np.isnan(u[component].flatten())
-            if not np.any(nan_mask):
-                continue
-
-            valid_pos = grid_positions[~nan_mask]
-            invalid_pos = grid_positions[nan_mask]
-            valid_values = u[component].flatten()[~nan_mask]
-
-            try:
-                # Try faster RBF interpolation first
-                from scipy.interpolate import RBFInterpolator
-                rbf = RBFInterpolator(valid_pos, valid_values, kernel='thin_plate_spline')
-                u[component].flat[nan_mask] = rbf(invalid_pos)
-            except Exception:
-                # Fall back to simpler interpolation if RBF fails
-                from scipy.interpolate import NearestNDInterpolator
-                nn = NearestNDInterpolator(valid_pos, valid_values)
-                u[component].flat[nan_mask] = nn(invalid_pos)
-
-        return u
 
     def _calculate_fourier_modes(self, i_max: int, j_max: int):
         """Calculate Fourier modes and Lanczos filter"""
@@ -549,66 +385,5 @@ class FTTC:
         unit_factor = self.mesh_size / pix_per_mu * 1e-6
         total_force = unit_factor ** 2 * np.sum(fnorm)
         return total_force
-
-if __name__ == "__main__":
-    # Load input displacement data
-    u_data = np.load("C:/Users/aruppel/Desktop/test/d_x.npy")[0,:,:]*10
-    v_data = np.load("C:/Users/aruppel/Desktop/test/d_y.npy")[0,:,:]*10
-
-    # Define sample parameters
-    E = 1e5  # Young's modulus in Pa
-    nu = 0.5  # Poisson ratio
-    mesh_size = 1  # pixels per mesh point
-    lanczos_exp = 1
-
-    # Generate spatial coordinates
-    x = np.arange(u_data.shape[1])
-    y = np.arange(u_data.shape[0])
-    dx = x[1] - x[0]  # Pixel size
-    dx=0.1
-
-    # Initialize FTTC calculator
-    calculator = FTTC(E=E, nu=nu, mesh_size=mesh_size, lanczos_exp=lanczos_exp, gel_height=10e-6)
-
-    # Perform FTTC
-    xy, fnorm, f, urec, u, energy, force, Ftf, Fturec = calculator.calculate_traction(
-        x, y, u_data, v_data, dx
-    )
-
-    # Print timing statistics
-    print("\nTiming Statistics:")
-    print("-" * 40)
-    timing_stats = calculator.get_timing_summary()
-    for operation, stats in timing_stats.items():
-        print(f"{operation}:")
-        print(f"  Mean: {stats['mean']:.4f} seconds")
-        print(f"  Min:  {stats['min']:.4f} seconds")
-        print(f"  Max:  {stats['max']:.4f} seconds")
-        print(f"  Total: {stats['total']:.4f} seconds")
-        print(f"  Calls: {stats['calls']}")
-        print()
-
-    print("\nDetailed TFM Timing:")
-    print("-" * 40)
-    detailed_timing = calculator.get_detailed_timing()
-    for operation, stats in detailed_timing.items():
-        print(f"{operation}:")
-        print(f"  Mean: {stats['mean']:.4f} seconds")
-        print(f"  Min:  {stats['min']:.4f} seconds")
-        print(f"  Max:  {stats['max']:.4f} seconds")
-        print(f"  Total: {stats['total']:.4f} seconds")
-        print(f"  Calls: {stats['calls']}")
-        print()
-
-    # Access results
-    traction_x = f[0]
-    traction_y = f[1]
-    traction_mag = fnorm
-
-    print(f'Energy: {energy:.3e} J')
-    print(f'Total force: {force:.3e} N')
-
-    plt.imshow(traction_y)
-    plt.show()
 
 
