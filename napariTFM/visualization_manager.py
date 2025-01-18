@@ -435,7 +435,7 @@ class VisualizationManager(ErrorHandlingMixin):
                 )
 
                 # Create vector data and add layer
-                force_scaled = display_force * arrow_scale / 1000
+                force_scaled = display_force * arrow_scale / f_max * 50
                 vectors, colors = self._create_vector_visualization(
                     force_scaled,
                     display_force,
@@ -519,7 +519,7 @@ class VisualizationManager(ErrorHandlingMixin):
                 magnitude_stack[frame_idx] = np.clip(magnitude, 0, f_max)
 
                 # Calculate vectors
-                force_scaled = display_force * arrow_scale / 1000
+                force_scaled = display_force * arrow_scale / f_max * 50
                 vectors, colors = self._create_vector_visualization(
                     force_scaled,
                     display_force,
