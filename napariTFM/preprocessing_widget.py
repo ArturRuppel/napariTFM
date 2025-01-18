@@ -48,6 +48,64 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
+    def run_preprocessing(self):
+        """Run preprocessing on all available data in a separate thread"""
+        if self.preview_enabled:
+            self.preview_check.setChecked(False)
+
+        try:
+            self._set_controls_enabled(False)
+            self._update_status("Starting preprocessing...", 0)
+
+            # Get parameters
+            params = PreprocessingParameters(
+                min_intensity_percentile=self.min_spinbox.value() / 100,
+                max_intensity_percentile=self.max_spinbox.value() / 100,
+                enable_gaussian_filter=self.gaussian_sigma_spin.value() > 0,
+                gaussian_sigma=self.gaussian_sigma_spin.value(),
+                cell_min_intensity_percentile=self.cell_min_spinbox.value() / 100,
+                cell_max_intensity_percentile=self.cell_max_spinbox.value() / 100,
+                enable_cell_gaussian_filter=self.cell_gaussian_sigma_spin.value() > 0,
+                cell_gaussian_sigma=self.cell_gaussian_sigma_spin.value(),
+                enable_registration=self.registration_mode_combo.currentText().lower() != 'no registration',
+                registration_mode=self.registration_mode_combo.currentText().lower()
+            )
+
+            self.preprocessor.update_parameters(params)
+
+            # Create and start worker
+            worker = self.preprocessor.preprocess_all(
+                bead_stack=self.data_manager.preprocessing_bead_stack,
+                reference_image=self.data_manager.preprocessing_reference_image,
+                cell_stack=self.data_manager.preprocessing_cell_stack,
+            )
+
+            # Connect signals
+            worker.yielded.connect(self._handle_progress)
+            worker.returned.connect(self._handle_results)
+            worker.finished.connect(lambda: self._set_controls_enabled(True))
+            worker.errored.connect(self._handle_error)
+
+            # Start the worker
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.processing_failed.emit(str(e))
+            self._set_controls_enabled(True)
+
+    def _handle_progress(self, update_dict):
+        """Handle progress updates from the worker"""
+        progress = update_dict['progress']
+        message = update_dict['message']
+        self._update_status(message, int(progress))
+
+    def _handle_results(self, results):
+        """Handle the final results from the worker"""
+        # Update visualization through manager
+        self.visualization_manager.update_preprocessing_visualization(results)
+        self._update_status("Preprocessing complete", 100)
+        self.preprocessing_completed.emit(results)
     def _register_controls(self):
         """Register all controls with the base widget"""
         controls = [
@@ -555,51 +613,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(str(e))
-
-    def run_preprocessing(self):
-        """Run preprocessing on all available data"""
-        if self.preview_enabled:
-            self.preview_check.setChecked(False)
-
-        try:
-            self._set_controls_enabled(False)
-            self._update_status("Starting preprocessing...", 0)
-
-            # Get parameters - modified to use sigma values instead of checkboxes
-            params = PreprocessingParameters(
-                min_intensity_percentile=self.min_spinbox.value() / 100,
-                max_intensity_percentile=self.max_spinbox.value() / 100,
-                enable_gaussian_filter=self.gaussian_sigma_spin.value() > 0,
-                gaussian_sigma=self.gaussian_sigma_spin.value(),
-                cell_min_intensity_percentile=self.cell_min_spinbox.value() / 100,
-                cell_max_intensity_percentile=self.cell_max_spinbox.value() / 100,
-                enable_cell_gaussian_filter=self.cell_gaussian_sigma_spin.value() > 0,
-                cell_gaussian_sigma=self.cell_gaussian_sigma_spin.value(),
-                enable_registration=self.registration_mode_combo.currentText().lower() != 'no registration',
-                registration_mode=self.registration_mode_combo.currentText().lower()
-            )
-
-            self.preprocessor.update_parameters(params)
-
-            # Process all data with progress updates
-            results = self.preprocessor.preprocess_all(
-                bead_stack=self.data_manager.preprocessing_bead_stack,
-                reference_image=self.data_manager.preprocessing_reference_image,
-                cell_stack=self.data_manager.preprocessing_cell_stack,
-                progress_callback=lambda progress, message: self._update_status(message, int(progress))
-            )
-
-            # Update visualization through manager
-            self.visualization_manager.update_preprocessing_visualization(results)
-
-            self._update_status("Preprocessing complete", 100)
-            self.preprocessing_completed.emit(results)
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.processing_failed.emit(str(e))
-        finally:
-            self._set_controls_enabled(True)
 
     def _update_ui_state(self):
         """Update UI elements based on available data and current state"""

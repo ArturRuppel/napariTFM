@@ -1,5 +1,6 @@
 import logging
 from typing import Tuple, Optional, List, Dict
+from napari.qt.threading import thread_worker
 
 import cv2
 import numpy as np
@@ -72,12 +73,6 @@ class PreprocessingParameters:
             f")"
         )
 
-# class RegistrationResult:
-#     """Stores registration transformation matrices"""
-#
-#     def __init__(self, num_frames: int):
-#         self.matrices = [np.eye(3) for _ in range(num_frames)]
-#         self.reference_image = None
 
 
 class ImagePreprocessor:
@@ -182,20 +177,19 @@ class ImagePreprocessor:
 
         return processed, info
 
+    @thread_worker
     def preprocess_all(
             self,
             bead_stack: Optional[np.ndarray] = None,
             reference_image: Optional[np.ndarray] = None,
             cell_stack: Optional[np.ndarray] = None,
-            progress_callback: Optional[callable] = None
     ) -> Dict[str, Tuple[np.ndarray, List[Dict]]]:
-        """Preprocess all available data."""
+        """Preprocess all available data in a separate thread."""
         results = {}
         self.transform_matrices = []
 
         # Calculate total steps for progress
         total_steps = 0
-        current_step = 0
         if reference_image is not None:
             total_steps += 1
         if bead_stack is not None:
@@ -203,11 +197,15 @@ class ImagePreprocessor:
         if cell_stack is not None:
             total_steps += len(cell_stack)
 
+        current_step = 0
+
         # Process reference image first if provided
         processed_ref = None
         if reference_image is not None:
-            if progress_callback:
-                progress_callback(current_step / total_steps * 100, "Processing reference image...")
+            # Yield progress
+            yield {'progress': current_step / total_steps * 100,
+                   'message': "Processing reference image..."}
+
             processed_ref, ref_info = self.preprocess_frame(reference_image)
             results['reference'] = (processed_ref, [ref_info])
             current_step += 1
@@ -216,15 +214,11 @@ class ImagePreprocessor:
         if bead_stack is not None:
             processed_stack = np.zeros_like(bead_stack, dtype=float)
             info_list = []
-            self.transform_matrices = []
 
             for i in range(bead_stack.shape[0]):
-                print(f'Processing frame {i + 1}/{bead_stack.shape[0]}')
-                if progress_callback:
-                    progress_callback(
-                        current_step / total_steps * 100,
-                        f"Processing bead frame {i + 1}/{bead_stack.shape[0]}..."
-                    )
+                # Yield progress for each frame
+                yield {'progress': current_step / total_steps * 100,
+                       'message': f"Processing bead frame {i + 1}/{bead_stack.shape[0]}..."}
 
                 # Get preprocessed frame without registration first
                 frame, frame_info = self.preprocess_frame(
@@ -253,11 +247,9 @@ class ImagePreprocessor:
             info_list = []
 
             for i in range(cell_stack.shape[0]):
-                if progress_callback:
-                    progress_callback(
-                        current_step / total_steps * 100,
-                        f"Processing cell frame {i + 1}/{cell_stack.shape[0]}..."
-                    )
+                # Yield progress for each frame
+                yield {'progress': current_step / total_steps * 100,
+                       'message': f"Processing cell frame {i + 1}/{cell_stack.shape[0]}..."}
 
                 # Preprocess cell frame
                 processed_frame, frame_info = self.preprocess_frame(
@@ -282,8 +274,8 @@ class ImagePreprocessor:
 
             results['cells'] = (processed_cells, info_list)
 
-        if progress_callback:
-            progress_callback(100, "Preprocessing complete")
+        # Final progress update
+        yield {'progress': 100, 'message': "Preprocessing complete"}
 
         return results
 
