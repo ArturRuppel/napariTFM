@@ -660,7 +660,7 @@ class FTTCWidget(BaseAnalysisWidget):
             gel_height=gel_height_m
         )
 
-    def _set_regulariation_with_gcv(self):
+    def _set_regularization_with_gcv(self):
         """Handle GCV-based regularization parameter selection."""
         try:
             if not self._validate_input_data():
