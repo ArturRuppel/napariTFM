@@ -589,16 +589,9 @@ class VisualizationManager(ErrorHandlingMixin):
             self,
             stress_tensor: np.ndarray,
             max_stress: float,
+            downscale_factor: int = 1
     ) -> None:
-        """Visualize stress tensor components for a single frame with proper scaling.
-
-        Parameters
-        ----------
-        stress_tensor : np.ndarray
-            4D array with shape (height, width, 2, 2) containing stress tensor components
-        max_stress : float
-            Maximum stress value for colormap scaling
-        """
+        """Visualize stress tensor components for a single frame."""
         try:
             # Clear existing layers
             self._clear_layers([
@@ -607,11 +600,6 @@ class VisualizationManager(ErrorHandlingMixin):
                 'Shear Stress',
                 'Average Normal Stress'
             ])
-
-            # Get downscale factor from displacement results if available
-            downscale_factor = 1
-            if self.data_manager.displacement_results is not None:
-                downscale_factor = self.data_manager.displacement_results.get('parameters', {}).get('downscale_factor', 1)
 
             # Function to upscale stress components
             def upscale_component(component):
@@ -625,11 +613,11 @@ class VisualizationManager(ErrorHandlingMixin):
                 return component
 
             # Extract and upscale stress components
-            sigma_xx = upscale_component(stress_tensor[..., 0, 0]) * 1e3 # convert to mN/m
-            sigma_yy = upscale_component(stress_tensor[..., 1, 1]) * 1e3 # convert to mN/m
-            sigma_xy = upscale_component(stress_tensor[..., 0, 1]) * 1e3 # convert to mN/m
+            sigma_xx = upscale_component(stress_tensor[..., 0, 0]) * 1e3  # convert to mN/m
+            sigma_yy = upscale_component(stress_tensor[..., 1, 1]) * 1e3  # convert to mN/m
+            sigma_xy = upscale_component(stress_tensor[..., 0, 1]) * 1e3  # convert to mN/m
 
-            # Calculate average normal stress
+            # Calculate average normal stress after upscaling
             sigma_normal = (sigma_xx + sigma_yy) / 2
 
             # Add visualization layers
@@ -658,7 +646,7 @@ class VisualizationManager(ErrorHandlingMixin):
                     name='Shear Stress',
                     colormap='seismic',
                     blending='additive',
-                    contrast_limits=(-max_stress, max_stress)  # Shear typically smaller
+                    contrast_limits=(-max_stress, max_stress)
                 )
 
                 # Average normal stress
@@ -687,15 +675,7 @@ class VisualizationManager(ErrorHandlingMixin):
             results: Dict[str, Any],
             max_stress: Optional[float] = None
     ) -> None:
-        """Visualize stress results for all frames.
-
-        Parameters
-        ----------
-        results : Dict[str, Any]
-            Dictionary containing stress tensor results and parameters
-        max_stress : Optional[float]
-            Maximum stress value for colormap scaling
-        """
+        """Visualize stress results for all frames."""
         try:
             # Clear existing layers
             self._clear_layers([
@@ -708,13 +688,12 @@ class VisualizationManager(ErrorHandlingMixin):
             # Get the stress tensor stack
             stress_tensor = results['stress_tensor']
 
+            # Get parameters
             if max_stress is None:
                 max_stress = results.get('parameters', {}).get('max_stress', 1.0)
 
-            # Get downscale factor from displacement results if available
-            downscale_factor = 1
-            if self.data_manager.displacement_results is not None:
-                downscale_factor = self.data_manager.displacement_results.get('parameters', {}).get('downscale_factor', 1)
+            # Get downscale factor from parameters
+            downscale_factor = results.get('parameters', {}).get('downscale_factor', 1)
 
             # Function to upscale stress components
             def upscale_component(component):
@@ -743,7 +722,7 @@ class VisualizationManager(ErrorHandlingMixin):
             sigma_yy = upscale_component(stress_tensor[..., 1, 1]) * 1e3  # convert to mN/m
             sigma_xy = upscale_component(stress_tensor[..., 0, 1]) * 1e3  # convert to mN/m
 
-            # Calculate average normal stress
+            # Calculate average normal stress after upscaling
             sigma_normal = (sigma_xx + sigma_yy) / 2
 
             # Add visualization layers
@@ -772,7 +751,7 @@ class VisualizationManager(ErrorHandlingMixin):
                     name='Shear Stress',
                     colormap='seismic',
                     blending='additive',
-                    contrast_limits=(-max_stress, max_stress)  # Shear typically smaller
+                    contrast_limits=(-max_stress, max_stress)
                 )
 
                 # Average normal stress
@@ -795,7 +774,6 @@ class VisualizationManager(ErrorHandlingMixin):
             )
             self.handle_error(error)
             raise
-
     def get_force_statistics(self, results: Dict[str, Any]) -> Dict[str, float]:
         """Calculate force statistics."""
         try:
