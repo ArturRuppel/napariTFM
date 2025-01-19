@@ -398,6 +398,7 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to analyze frames: {str(e)}")
             self.progress_bar.setValue(0)
+
     def _update_parameters(self):
         """Update analysis parameters."""
         try:
@@ -807,24 +808,39 @@ class MSMWidget(BaseAnalysisWidget):
             return
 
         try:
-            # Get directory to save files
-            save_dir = QFileDialog.getExistingDirectory(
+            # Get file path to save
+            file_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Select Directory to Save Stress Tensor Data",
-                os.path.expanduser("~")
+                "Save Stress Tensor Data",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
             )
 
-            if save_dir:
-                # Package results with all necessary parameters - matching batch analyzer structure
+            if file_path:
+                # Add .npy extension if not present
+                if not file_path.endswith('.npy'):
+                    file_path += '.npy'
+
+                # Get the algorithm name from its ID
+                algorithm_id = self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()]
+
+                # Get Young's modulus safely - default to 1.0 if analyzer is not initialized
+                youngs_modulus = getattr(self.analyzer, 'E', 1.0)
+
+                # Package results with all necessary parameters
                 stress_results = {
                     'stress_tensor': self.data_manager.stress_results['stress_tensor'],
+                    'condition_numbers': self.data_manager.stress_results.get('condition_numbers'),
+                    'residuals': self.data_manager.stress_results.get('residuals'),
                     'parameters': {
-                        'pixelsize': self.parameter_spins['pixelsize'].value(),
-                        'youngs_modulus': self.analyzer.E,
-                        'poisson_ratio': self.parameter_spins['sigma'].value(),  # Use poisson_ratio as key
-                        'target_nodes': self.parameter_spins['target_nodes'].value(),
-                        'boundary_refinement': self.parameter_spins['boundary_refinement'].value(),
-                        'gradient_refinement': self.parameter_spins['gradient_refinement'].value(),
+                        'pixel_size': self._pixelsize,
+                        'downscale_factor': self._downscale_factor,
+                        'youngs_modulus': youngs_modulus,
+                        'sigma': self.parameter_spins['sigma'].value(),
+                        'density_factor': self.parameter_spins['density_factor'].value(),
+                        'algorithm': algorithm_id,
+                        'algorithm_name': self.parameter_spins['algorithm'].currentText(),
+                        'use_optimization': self.parameter_spins['use_optimization'].isChecked(),
                         'max_stress': self.parameter_spins['max_stress'].value(),
                         'dilation': self.parameter_spins['dilation'].value(),
                         'smoothing_sigma': self.parameter_spins['smoothing_sigma'].value()
@@ -832,9 +848,9 @@ class MSMWidget(BaseAnalysisWidget):
                 }
 
                 # Save file
-                np.save(os.path.join(save_dir, 'stress_tensor.npy'), stress_results)
+                np.save(file_path, stress_results)
 
-                self._update_status(f"Stress tensor data successfully saved to:\n{save_dir}", 100)
+                self._update_status(f"Stress tensor data successfully saved to:\n{file_path}", 100)
 
         except Exception as e:
             QMessageBox.critical(
@@ -865,18 +881,20 @@ class MSMWidget(BaseAnalysisWidget):
 
                 parameters = stress_data['parameters']
 
-                # Extract poisson ratio - expecting 'poisson_ratio' from batch analyzer
-                if 'poisson_ratio' not in parameters:
-                    raise ValueError("Required parameter 'poisson_ratio' not found in file")
-
-                poisson_ratio = parameters['poisson_ratio']
+                # Extract algorithm name from ID if saved in old format
+                algorithm_name = parameters.get('algorithm_name')
+                if algorithm_name is None:
+                    # Find algorithm name by ID
+                    algorithm_id = parameters['algorithm']
+                    algorithm_name = next(
+                        (name for name, id in self.MESH_ALGORITHMS.items() if id == algorithm_id),
+                        'Frontal-Del.'  # Default if not found
+                    )
 
                 # Update UI parameters with loaded values
                 parameter_mapping = {
-                    'pixelsize': 'pixelsize',
-                    'target_nodes': 'target_nodes',
-                    'boundary_refinement': 'boundary_refinement',
-                    'gradient_refinement': 'gradient_refinement',
+                    'sigma': 'sigma',
+                    'density_factor': 'density_factor',
                     'max_stress': 'max_stress',
                     'dilation': 'dilation',
                     'smoothing_sigma': 'smoothing_sigma'
@@ -886,18 +904,20 @@ class MSMWidget(BaseAnalysisWidget):
                     if param_name in parameters:
                         self.parameter_spins[spin_name].setValue(parameters[param_name])
 
-                # Update sigma spinbox with the loaded Poisson ratio
-                self.parameter_spins['sigma'].setValue(poisson_ratio)
+                # Update algorithm combobox
+                self.parameter_spins['algorithm'].setCurrentText(algorithm_name)
+
+                # Update optimization checkbox
+                if 'use_optimization' in parameters:
+                    self.parameter_spins['use_optimization'].setChecked(parameters['use_optimization'])
+
+                # Store pixel size and downscale factor
+                self._pixelsize = parameters['pixel_size']
+                self._downscale_factor = parameters['downscale_factor']
 
                 # Update analyzer with loaded parameters
-                self.analyzer = MonolayerStressMicroscopy(
-                    pixelsize=parameters['pixel_size'] * parameters['downscale_factor'],
-                    sigma=poisson_ratio,
-                    youngs_modulus=parameters['youngs_modulus'],
-                    target_nodes=parameters['target_nodes'],
-                    boundary_refinement=parameters['boundary_refinement'],
-                    gradient_refinement=parameters['gradient_refinement']
-                )
+                if self.current_mask is not None:
+                    self._update_parameters()
 
                 # Update data manager and visualization
                 self.data_manager.stress_results = stress_data
