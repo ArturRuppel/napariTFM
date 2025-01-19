@@ -371,6 +371,7 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to analyze frames: {str(e)}")
             self.progress_bar.setValue(0)
+
     def _update_parameters(self):
         """Update analysis parameters."""
         try:
@@ -598,9 +599,9 @@ class MSMWidget(BaseAnalysisWidget):
             target_shape = None
             downscale_factor = 1
 
-            # Get downscale factor from displacement results if available
-            if self.data_manager.displacement_results is not None:
-                downscale_factor = self.data_manager.displacement_results.get('parameters', {}).get('downscale_factor', 1)
+            # Get downscale factor from class variables
+            if self._downscale_factor is not None:
+                downscale_factor = self._downscale_factor
 
             # Get target shape from force results if available
             if self.data_manager.force_results is not None:
@@ -611,6 +612,17 @@ class MSMWidget(BaseAnalysisWidget):
             if target_shape is not None and current_mask.shape != target_shape:
                 from skimage.transform import resize
                 current_mask = resize(current_mask.astype(float), target_shape, order=0) > 0.5
+
+            # Initialize mesh parameters
+            mesh_params = MeshParameters(
+                mask=current_mask,
+                density_factor=self.parameter_spins['density_factor'].value(),
+                algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
+                use_optimization=self.parameter_spins['use_optimization'].isChecked()
+            )
+
+            # Initialize mesh generator
+            self.mesh_generator = MeshGenerator(mesh_params)
 
             # Update parameters to ensure mesh generator is initialized
             self._update_parameters()
@@ -762,7 +774,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         frame.setLayout(layout)
         return frame
-
 
     def _save_stress_tensor(self):
         """Save stress tensor data to files."""
