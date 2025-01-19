@@ -114,13 +114,6 @@ class MSMWidget(BaseAnalysisWidget):
                 # Fill holes
                 filled_mask = ndimage.binary_fill_holes(mask)
 
-                # Get largest connected component
-                labels, num_features = ndimage.label(filled_mask)
-                if num_features > 0:
-                    sizes = ndimage.sum(filled_mask, labels, range(1, num_features + 1))
-                    largest_feature = np.argmax(sizes) + 1
-                    filled_mask = labels == largest_feature
-
                 # Smoothing
                 if smoothing_sigma > 0:
                     float_mask = filled_mask.astype(float)
@@ -133,13 +126,22 @@ class MSMWidget(BaseAnalysisWidget):
                 # Dilation
                 if dilation > 0:
                     struct = ndimage.generate_binary_structure(2, 2)
-                    final_mask = ndimage.binary_dilation(
+                    dilated_mask = ndimage.binary_dilation(
                         smoothed_mask,
                         structure=struct,
                         iterations=dilation
                     )
                 else:
-                    final_mask = smoothed_mask
+                    dilated_mask = smoothed_mask
+
+                # Get largest connected component last
+                labels, num_features = ndimage.label(dilated_mask)
+                if num_features > 0:
+                    sizes = ndimage.sum(dilated_mask, labels, range(1, num_features + 1))
+                    largest_feature = np.argmax(sizes) + 1
+                    final_mask = labels == largest_feature
+                else:
+                    final_mask = dilated_mask
 
                 mask_stack[frame] = final_mask
 
@@ -221,20 +223,29 @@ class MSMWidget(BaseAnalysisWidget):
             ty = self.data_manager.force_results['ty'][current_frame]
 
             # Get downscale factor from force results
-            downscale_factor = self.data_manager.force_results.get('parameters', {}).get('downscale_factor', 1)
+            params = self.data_manager.force_results.get('parameters', {})
+            downscale_factor = params.get('downscale_factor', 1)
 
             # Ensure mask matches force data shape
             current_mask = self.current_mask[current_frame]
             if current_mask.shape != tx.shape:
-                current_mask = self.visualization_manager._upscale_field(
+                from skimage.transform import resize
+                current_mask = resize(
                     current_mask.astype(float),
-                    downscale_factor
+                    tx.shape,
+                    order=0,
+                    preserve_range=True,
+                    anti_aliasing=False
                 ) > 0.5
 
             # Create new analyzer instance with current frame's mask
+            pixel_size = params.get('pixel_size', self._pixelsize)
+            if pixel_size is None:
+                raise ValueError("Pixel size not available in force results")
+
             self.analyzer = MonolayerStressMicroscopy(
-                mask=current_mask,
-                pixelsize=self._pixelsize * downscale_factor * 1e-6,
+                mask=current_mask,  # Use resized mask
+                pixelsize=pixel_size * downscale_factor * 1e-6,  # Convert to meters
                 sigma=self.parameter_spins['sigma'].value(),
                 youngs_modulus=1.0,
                 density_factor=self.parameter_spins['density_factor'].value(),
@@ -281,13 +292,17 @@ class MSMWidget(BaseAnalysisWidget):
             if self.data_manager.force_results is None:
                 raise ValueError("No force data available. Please calculate forces first.")
 
-            # Get force data
+            # Get force data and parameters
             tx = self.data_manager.force_results['tx']
             ty = self.data_manager.force_results['ty']
-            num_frames = len(tx)
+            params = self.data_manager.force_results.get('parameters', {})
+            downscale_factor = params.get('downscale_factor', 1)
+            pixel_size = params.get('pixel_size')
 
-            # Get downscale factor from force results
-            downscale_factor = self.data_manager.force_results.get('parameters', {}).get('downscale_factor', 1)
+            if pixel_size is None:
+                raise ValueError("Pixel size not available in force results")
+
+            num_frames = len(tx)
 
             # Initialize results storage
             stress_results = []
@@ -305,10 +320,22 @@ class MSMWidget(BaseAnalysisWidget):
                 current_tx = tx[frame]
                 current_ty = ty[frame]
 
+                # Ensure mask matches force data shape
+                current_mask = self.current_mask[frame]
+                if current_mask.shape != current_tx.shape:
+                    from skimage.transform import resize
+                    current_mask = resize(
+                        current_mask.astype(float),
+                        current_tx.shape,
+                        order=0,
+                        preserve_range=True,
+                        anti_aliasing=False
+                    ) > 0.5
+
                 # Update analyzer with current frame's mask
                 self.analyzer = MonolayerStressMicroscopy(
-                    mask=self.current_mask[frame],
-                    pixelsize=self._pixelsize * downscale_factor * 1e-6,
+                    mask=current_mask,
+                    pixelsize=pixel_size * downscale_factor * 1e-6,  # Convert to meters
                     sigma=self.parameter_spins['sigma'].value(),
                     youngs_modulus=1.0,
                     density_factor=self.parameter_spins['density_factor'].value(),
@@ -337,14 +364,14 @@ class MSMWidget(BaseAnalysisWidget):
                 'condition_numbers': np.array(condition_numbers) if condition_numbers else None,
                 'residuals': np.array(residuals) if residuals else None,
                 'parameters': {
-                    'pixelsize': self._pixelsize * downscale_factor * 1e-6,
+                    'pixel_size': pixel_size,
                     'youngs_modulus': self.analyzer.E,
                     'poisson_ratio': self.analyzer.sigma,
                     'density_factor': self.parameter_spins['density_factor'].value(),
                     'algorithm': self.parameter_spins['algorithm'].currentText(),
                     'use_optimization': self.parameter_spins['use_optimization'].isChecked(),
                     'max_stress': max_stress,
-                    'downscale_factor': downscale_factor  # Add downscale factor to parameters
+                    'downscale_factor': downscale_factor
                 }
             }
 
@@ -371,7 +398,6 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to analyze frames: {str(e)}")
             self.progress_bar.setValue(0)
-
     def _update_parameters(self):
         """Update analysis parameters."""
         try:
@@ -438,9 +464,9 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Mesh generation parameters
         mesh_params = [
-            ("dilation", "Mask Dilation (px):", 0, 50, 1, 0,
+            ("dilation", "Mask Dilation (px):", 0, 50, 1, 10,
              "Number of pixels to dilate the mask. Higher values create a larger boundary around the cell."),
-            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 1.0,
+            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 10,
              "Gaussian smoothing sigma for the mask boundary. Higher values create smoother boundaries."),
             ("density_factor", "Density Factor:", 0.001, 0.1, 0.001, 0.025,
              "Controls mesh density. Lower values create finer meshes with more elements."),
@@ -595,6 +621,8 @@ class MSMWidget(BaseAnalysisWidget):
             current_frame = self.viewer.dims.current_step[0]
             current_mask = self.current_mask[current_frame]
 
+            self._update_parameters()
+
             # Get force data shape and downscale factor
             target_shape = None
             downscale_factor = 1
@@ -623,9 +651,6 @@ class MSMWidget(BaseAnalysisWidget):
 
             # Initialize mesh generator
             self.mesh_generator = MeshGenerator(mesh_params)
-
-            # Update parameters to ensure mesh generator is initialized
-            self._update_parameters()
 
             self._update_status("Generating mesh...", 20)
 
