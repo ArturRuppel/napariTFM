@@ -68,9 +68,11 @@ class MSMWidget(BaseAnalysisWidget):
 
             # Check if force data is available and get target shape
             target_shape = None
+            downscale_factor = 1
             if self.data_manager.force_results is not None:
                 tx = self.data_manager.force_results['tx'][0]  # Use first frame
                 target_shape = tx.shape
+                downscale_factor = self.data_manager.force_results.get('parameters', {}).get('downscale_factor', 1)
             else:
                 # Show warning dialog
                 from qtpy.QtWidgets import QMessageBox
@@ -96,6 +98,7 @@ class MSMWidget(BaseAnalysisWidget):
 
             # Process the image stack
             from scipy import ndimage
+            from skimage.transform import resize
 
             cell_stack = active_layer.data
             if cell_stack.ndim == 2:
@@ -140,9 +143,8 @@ class MSMWidget(BaseAnalysisWidget):
 
                 mask_stack[frame] = final_mask
 
-            # Resize entire stack if target shape is available
+            # First resize to match force data resolution if target shape exists
             if target_shape is not None and mask_stack.shape[1:] != target_shape:
-                from skimage.transform import resize
                 resized_stack = np.zeros((mask_stack.shape[0], *target_shape), dtype=bool)
                 for frame in range(mask_stack.shape[0]):
                     resized_stack[frame] = resize(
@@ -154,17 +156,31 @@ class MSMWidget(BaseAnalysisWidget):
                     ) > 0.5
                 mask_stack = resized_stack
 
-            # Store the mask
+            # Store the mask at the force data resolution
             self.current_mask = mask_stack
 
-            # Add visualization layer - resize for display if needed
+            # Create visualization mask (potentially upscaled)
+            vis_mask = mask_stack.copy()
+            if downscale_factor > 1:
+                vis_shape = (mask_stack.shape[1] * downscale_factor,
+                             mask_stack.shape[2] * downscale_factor)
+                upscaled_stack = np.zeros((mask_stack.shape[0], *vis_shape), dtype=bool)
+                for frame in range(mask_stack.shape[0]):
+                    upscaled_stack[frame] = resize(
+                        mask_stack[frame].astype(float),
+                        vis_shape,
+                        order=0,
+                        preserve_range=True,
+                        anti_aliasing=False
+                    ) > 0.5
+                vis_mask = upscaled_stack
+
+            # Add visualization layer
             if 'Cell Mask' in self.viewer.layers:
                 self.viewer.layers.remove('Cell Mask')
 
-            # For visualization, we might want to show at the original size
-            # or at the force data size depending on your needs
             self.viewer.add_labels(
-                self.current_mask.astype(np.uint8),
+                vis_mask.astype(np.uint8),
                 name='Cell Mask',
                 visible=True,
                 opacity=0.5,
@@ -173,8 +189,11 @@ class MSMWidget(BaseAnalysisWidget):
             # Update status
             num_frames = self.current_mask.shape[0]
             shape_info = f"{self.current_mask.shape[1]}x{self.current_mask.shape[2]}"
+            vis_shape_info = f"{vis_mask.shape[1]}x{vis_mask.shape[2]}"
             self.status_label.setText(
-                f"Successfully created masks for {num_frames} frames at {shape_info}"
+                f"Successfully created masks for {num_frames} frames\n"
+                f"Data resolution: {shape_info}\n"
+                f"Display resolution: {vis_shape_info}"
             )
             self.progress_bar.setValue(100)
 
@@ -184,6 +203,67 @@ class MSMWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(f"Failed to create mask from images:\n{str(e)}")
+            self.progress_bar.setValue(0)
+    def preview_current_frame(self):
+        """Preview stress calculation for the current frame."""
+        try:
+            # Check prerequisites
+            if self.current_mask is None:
+                raise ValueError("No mask loaded. Please load a mask first.")
+
+            if self.data_manager.force_results is None:
+                raise ValueError("No force data available. Please calculate forces first.")
+
+            # Get current frame index and data
+            current_frame = self.viewer.dims.current_step[0]
+            tx = self.data_manager.force_results['tx'][current_frame]
+            ty = self.data_manager.force_results['ty'][current_frame]
+
+            # Ensure mask matches force data shape
+            current_mask = self.current_mask[current_frame]
+            if current_mask.shape != tx.shape:
+                current_mask = self.visualization_manager._upscale_field(
+                    current_mask.astype(float),
+                    self._downscale_factor
+                ) > 0.5
+
+            # Create new analyzer instance with current frame's mask
+            self.analyzer = MonolayerStressMicroscopy(
+                mask=current_mask,
+                pixelsize=self._pixelsize * self._downscale_factor * 1e-6,
+                sigma=self.parameter_spins['sigma'].value(),
+                youngs_modulus=1.0,
+                density_factor=self.parameter_spins['density_factor'].value(),
+                algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
+                use_optimization=self.parameter_spins['use_optimization'].isChecked()
+            )
+
+            self._update_status("Calculating stress field...", 20)
+
+            # Calculate stress tensor
+            stress_tensor = self.analyzer.calculate_stress_field(tx, ty)
+
+            self._update_status("Updating visualization...", 80)
+
+            # Get max stress parameter and update visualization
+            max_stress = self.parameter_spins['max_stress'].value()
+            self.visualization_manager.visualize_stress_preview(
+                stress_tensor[0],  # Get just the tensor from the tuple
+                max_stress
+            )
+
+            # Update status with condition number and residual if available
+            status_text = f"Stress preview generated for frame {current_frame}"
+            if len(stress_tensor) == 3:
+                condition_number = stress_tensor[1]
+                residual = stress_tensor[2]
+                status_text += f"\nCondition number: {condition_number:.1e}"
+                status_text += f"\nResidual: {residual:.1e}"
+
+            self._update_status(status_text, 100)
+
+        except Exception as e:
+            self._handle_error(f"Failed to preview stress field: {str(e)}")
             self.progress_bar.setValue(0)
     def _update_parameters(self):
         """Update analysis parameters."""
@@ -229,7 +309,7 @@ class MSMWidget(BaseAnalysisWidget):
                 # Initialize analyzer with current parameters
                 self.analyzer = MonolayerStressMicroscopy(
                     mask=current_mask,
-                    pixelsize=self._pixelsize * self._downscale_factor,
+                    pixelsize=self._pixelsize * self._downscale_factor * 1e-6,
                     sigma=sigma,
                     youngs_modulus=1.0,
                     density_factor=density_factor,
@@ -243,60 +323,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(f"Failed to update parameters: {str(e)}")
-    def preview_current_frame(self):
-        """Preview stress calculation for the current frame."""
-        try:
-            # Check prerequisites
-            if self.current_mask is None:
-                raise ValueError("No mask loaded. Please load a mask first.")
-
-            if self.data_manager.force_results is None:
-                raise ValueError("No force data available. Please calculate forces first.")
-
-            # Get current frame index
-            current_frame = self.viewer.dims.current_step[0]
-
-            # Get force data for current frame
-            tx = self.data_manager.force_results['tx'][current_frame]
-            ty = self.data_manager.force_results['ty'][current_frame]
-
-            # Update status
-            self._update_status("Calculating stress field...", 20)
-
-            # Update parameters and initialize analyzer with current frame's mask
-            self._update_parameters()
-
-            # Calculate stress tensor - note we don't pass the mask anymore
-            stress_tensor = self.analyzer.calculate_stress_field(tx, ty)
-
-            # Convert stress units from N/pixel² to mN/m
-            pixelsize = self._pixelsize * self._downscale_factor
-            stress_tensor = stress_tensor[0] / (pixelsize * 1e-6)  # [0] to get just the tensor from the tuple
-
-            self._update_status("Updating visualization...", 80)
-
-            # Get max stress parameter
-            max_stress = self.parameter_spins['max_stress'].value()
-
-            # Update visualization
-            self.visualization_manager.visualize_stress_preview(
-                stress_tensor,
-                max_stress
-            )
-
-            # Update status with condition number and residual if available
-            status_text = f"Stress preview generated for frame {current_frame}"
-            if len(stress_tensor) == 3:  # If metrics are available
-                condition_number = stress_tensor[1]
-                residual = stress_tensor[2]
-                status_text += f"\nCondition number: {condition_number:.1e}"
-                status_text += f"\nResidual: {residual:.1e}"
-
-            self._update_status(status_text, 100)
-
-        except Exception as e:
-            self._handle_error(f"Failed to preview stress field: {str(e)}")
-            self.progress_bar.setValue(0)
 
     def analyze_all_frames(self):
         """Run stress analysis for all frames."""
@@ -317,7 +343,6 @@ class MSMWidget(BaseAnalysisWidget):
             stress_results = []
             condition_numbers = []
             residuals = []
-            pixelsize = self._pixelsize * self._downscale_factor
 
             # Process each frame
             for frame in range(num_frames):
@@ -333,7 +358,7 @@ class MSMWidget(BaseAnalysisWidget):
                 # Update analyzer with current frame's mask
                 self.analyzer = MonolayerStressMicroscopy(
                     mask=self.current_mask[frame],
-                    pixelsize=pixelsize,
+                    pixelsize=self._pixelsize * self._downscale_factor * 1e-6,
                     sigma=self.parameter_spins['sigma'].value(),
                     youngs_modulus=1.0,
                     density_factor=self.parameter_spins['density_factor'].value(),
@@ -345,7 +370,7 @@ class MSMWidget(BaseAnalysisWidget):
                 result = self.analyzer.calculate_stress_field(current_tx, current_ty)
 
                 # Convert units from N/pixel² to mN/m and store results
-                stress_tensor = result[0] / (pixelsize * 1e-6)
+                stress_tensor = result[0]
                 stress_results.append(stress_tensor)
 
                 if len(result) == 3:  # If metrics are available
@@ -361,7 +386,7 @@ class MSMWidget(BaseAnalysisWidget):
                 'condition_numbers': np.array(condition_numbers) if condition_numbers else None,
                 'residuals': np.array(residuals) if residuals else None,
                 'parameters': {
-                    'pixelsize': pixelsize,
+                    'pixelsize': self._pixelsize * self._downscale_factor * 1e-6,
                     'youngs_modulus': self.analyzer.E,
                     'poisson_ratio': self.analyzer.sigma,
                     'density_factor': self.parameter_spins['density_factor'].value(),
@@ -821,7 +846,7 @@ class MSMWidget(BaseAnalysisWidget):
 
                 # Update analyzer with loaded parameters
                 self.analyzer = MonolayerStressMicroscopy(
-                    pixelsize=parameters['pixelsize'],
+                    pixelsize=parameters['pixel_size'] * parameters['downscale_factor'],
                     sigma=poisson_ratio,
                     youngs_modulus=parameters['youngs_modulus'],
                     target_nodes=parameters['target_nodes'],
