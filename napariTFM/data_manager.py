@@ -139,33 +139,35 @@ class DataManager:
     def displacement_reference_image(self) -> Optional[np.ndarray]:
         return self._displacement_reference_image
 
-    def clear_preprocessing_data(self):
-        """Clear all preprocessing-related data"""
+    def clear_all_data(self):
+        """Clear all stored data, resetting the DataManager to its initial state."""
+        # Clear raw input data for preprocessing
         self._preprocessing_bead_stack = None
         self._preprocessing_reference_image = None
         self._preprocessing_cell_stack = None
+
+        # Clear raw input data for displacement analysis
+        self._displacement_bead_stack = None
+        self._displacement_reference_image = None
+
+        # Clear preprocessed data
         self._preprocessed_bead_stack = None
         self._preprocessed_reference = None
         self._preprocessed_cell_stack = None
+
+        # Clear preprocessing info
         self.bead_preprocessing_info = None
         self.reference_preprocessing_info = None
         self.cell_preprocessing_info = None
-        self.registration_transforms = None
 
-    def clear_displacement_data(self):
-        """Clear all displacement-related data"""
-        self._displacement_bead_stack = None
-        self._displacement_reference_image = None
+        # Clear analysis results and transforms
+        self.registration_transforms = None
         self.displacement_results = None
         self._force_results = None
 
-    def clear_all_data(self):
-        """Clear all stored data"""
-        self.clear_preprocessing_data()
-        self.clear_displacement_data()
+        # Clear metadata
         self._num_frames = None
         self._image_shape = None
-
 
     @property
     def force_results(self) -> Optional[Dict[str, Any]]:

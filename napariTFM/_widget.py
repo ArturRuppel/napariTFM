@@ -184,14 +184,43 @@ class napariTFMWidget(QWidget):
     def _clear_all_data(self):
         """
         Clear all data and reset the widget to its initial state.
-        To be implemented: Clear all stored data and reset UI elements.
+        This includes clearing the data manager and resetting UI elements.
         """
-        logger.info("Clear all data functionality to be implemented")
-        # TODO: Implement clearing all data and resetting UI
-        reply = QMessageBox.question(self, "Confirm", "Are you sure you want to clear all data?",
-                                     QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(
+            self,
+            "Confirm",
+            "Are you sure you want to clear all data? This action cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
         if reply == QMessageBox.Yes:
-            QMessageBox.information(self, "Info", "Clear all data functionality will be implemented here")
+            try:
+                # Clear data manager
+                self.data_manager.clear_all_data()
+
+                # Update UI state in all widgets
+                self.preprocessing_widget._update_ui_state()
+                self.displacement_widget._update_ui_state()
+                self.force_widget._update_ui_state()
+                self.msm_widget._update_ui_state()
+                self.batch_widget._update_ui_state()
+
+                # # Reset all widget states
+                # self.preprocessing_widget._reset_widget()
+                # self.displacement_widget._reset_widget()
+                # self.force_widget._reset_widget()
+                # self.msm_widget._reset_widget()
+                # self.batch_widget._reset_widget()
+
+                # # Clear visualizations
+                # self.visualization_manager.clear_all_layers()
+
+                logger.info("All data cleared successfully")
+                QMessageBox.information(self, "Success", "All data has been cleared successfully")
+
+            except Exception as e:
+                logger.error(f"Error clearing data: {str(e)}")
+                QMessageBox.critical(self, "Error", f"Failed to clear data: {str(e)}")
 
     def connect_signals(self):
         """Connect signals between components"""
