@@ -50,6 +50,88 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
+    def _create_parameters_group(self):
+        """Create a group containing all parameter controls."""
+        parameters_group = QGroupBox("Parameters")
+        parameters_layout = QVBoxLayout()
+
+        # Add existing parameter groups
+        parameters_layout.addWidget(self._create_intensity_range_group())
+        parameters_layout.addWidget(self._create_cell_params_group())
+        parameters_layout.addWidget(self._create_registration_group())
+
+        # Move reset button to bottom of parameters group
+        self.reset_btn = QPushButton("Reset Parameters")
+        self.reset_btn.setToolTip("Reset all parameters to default values")
+        parameters_layout.addWidget(self.reset_btn)
+
+        parameters_group.setLayout(parameters_layout)
+        return parameters_group
+
+    def _setup_ui(self):
+        """Set up the complete user interface for the preprocessing widget."""
+        main_layout = QHBoxLayout()
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create colorbar container
+        colorbar_container = QWidget()
+        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        colorbar_layout = QVBoxLayout()
+        colorbar_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Create colorbar
+        colorbar_group = self.create_colorbar_widget(
+            colormap_name='gray',
+            label="Intensity Value",
+            clim=(255, 0),  # Reversed for better visualization
+            colorbar_manager=self.colorbar_manager
+        )
+        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        colorbar_layout.addStretch()
+        colorbar_container.setLayout(colorbar_layout)
+
+        main_layout.addWidget(colorbar_container)
+
+        # Right side container
+        right_container = QWidget()
+        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Add all component groups
+        right_layout.addWidget(self._create_load_group())
+        right_layout.addWidget(self._create_preview_selection_group())
+        right_layout.addWidget(self._create_parameters_group())  # New grouped parameters
+        right_layout.addWidget(self._create_preview_frame())
+
+        # Create action buttons frame (now without reset button)
+        action_frame = QFrame()
+        action_layout = QHBoxLayout()
+        self.preprocess_btn = QPushButton("Run Preprocessing")
+        self.preprocess_btn.setToolTip("Apply preprocessing to all loaded data")
+        self.save_btn = QPushButton("Save Preprocessed Data")
+        self.save_btn.setToolTip("Save preprocessed data as TIFF files with calibration metadata")
+        self.save_btn.setEnabled(False)
+        action_layout.addWidget(self.preprocess_btn)
+        action_layout.addWidget(self.save_btn)
+        action_frame.setLayout(action_layout)
+
+        right_layout.addWidget(action_frame)
+        right_layout.addWidget(self._create_status_frame())
+        right_layout.addStretch()
+
+        right_container.setLayout(right_layout)
+        right_container.setFixedWidth(350)
+
+        main_layout.addWidget(right_container)
+        main_layout.addStretch(1)
+
+        self.setLayout(main_layout)
+
     def toggle_preview(self, enabled: bool):
         """Toggle preview mode"""
         try:
@@ -211,10 +293,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.load_cells_btn = QPushButton("Load Cell Stack")
         self.load_cells_btn.setToolTip("Load a time series of cell images from the active layer")
 
-        self.clear_data_btn = QPushButton("Clear All Data")
-        self.clear_data_btn.setToolTip("Remove all loaded data and reset the widget")
-        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
-
         self.bead_status = QLabel("Not loaded")
         self.reference_status = QLabel("Not loaded")
         self.cell_status = QLabel("Not loaded")
@@ -229,9 +307,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
             btn_layout.addWidget(btn)
             btn_layout.addWidget(label)
             load_layout.addLayout(btn_layout)
-
-        # Add clear button at the bottom
-        load_layout.addWidget(self.clear_data_btn)
 
         load_group.setLayout(load_layout)
         return load_group
@@ -263,7 +338,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         intensity_group = QGroupBox("Bead/Reference Parameters")
         intensity_layout = QVBoxLayout()
 
-        # Add slider
         self.intensity_slider = QRangeSlider(Qt.Horizontal)
         self.intensity_slider.setToolTip("Adjust intensity range for contrast enhancement")
         self.intensity_slider.setRange(0, 1000)  # Range 0-1000 for 0.1% steps
@@ -286,12 +360,12 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Add spinboxes layout
         spinbox_layout = QHBoxLayout()
-        spinbox_layout.addWidget(QLabel("Min %:"))
+        spinbox_layout.addWidget(QLabel("Min "))
         spinbox_layout.addWidget(self.min_spinbox)
         spinbox_layout.addStretch()
-        spinbox_layout.addWidget(QLabel("Max %:"))
         spinbox_layout.addWidget(self.max_spinbox)
         intensity_layout.addLayout(spinbox_layout)
+        spinbox_layout.addWidget(QLabel("Max "))
 
         # Add Gaussian filter controls
         self.gaussian_sigma_spin = QDoubleSpinBox()
@@ -377,7 +451,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Cell contrast enhancement
         cell_intensity_layout = QVBoxLayout()
-        cell_intensity_layout.addWidget(QLabel("Contrast Enhancement"))
 
         self.cell_intensity_slider = QRangeSlider(Qt.Horizontal)
         self.cell_intensity_slider.setToolTip("Adjust intensity range for cell image contrast enhancement")
@@ -468,7 +541,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
     def _create_sigma_control(self, sigma_spinbox):
         """Create a layout with sigma control for Gaussian filter."""
         sigma_layout = QHBoxLayout()
-        sigma_layout.addWidget(QLabel("Sigma:"))
+        sigma_layout.addWidget(QLabel("Blur"))
 
         # Create slider for Gaussian sigma
         slider = QSlider(Qt.Horizontal)
@@ -494,58 +567,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         return sigma_layout
 
-    def _setup_ui(self):
-        """Set up the complete user interface for the preprocessing widget."""
-        main_layout = QHBoxLayout()
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Create colorbar container
-        colorbar_container = QWidget()
-        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Create colorbar
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='gray',
-            label="Intensity Value",
-            clim=(255, 0),  # Reversed for better visualization
-            colorbar_manager=self.colorbar_manager
-        )
-        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        colorbar_layout.addStretch()
-        colorbar_container.setLayout(colorbar_layout)
-
-        main_layout.addWidget(colorbar_container)
-
-        # Right side container
-        right_container = QWidget()
-        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        right_layout = QVBoxLayout()
-        right_layout.setSpacing(8)
-        right_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Add all component groups
-        right_layout.addWidget(self._create_load_group())
-        right_layout.addWidget(self._create_preview_selection_group())
-        right_layout.addWidget(self._create_intensity_range_group())
-        right_layout.addWidget(self._create_cell_params_group())
-        right_layout.addWidget(self._create_registration_group())
-        right_layout.addWidget(self._create_preview_frame())
-        right_layout.addWidget(self._create_action_buttons())
-        right_layout.addWidget(self._create_status_frame())
-        right_layout.addStretch()
-
-        right_container.setLayout(right_layout)
-        right_container.setFixedWidth(350)
-
-        main_layout.addWidget(right_container)
-        main_layout.addStretch(1)
-
-        self.setLayout(main_layout)
     def _update_sigma_from_slider(self):
         """Update sigma spinbox from slider value"""
         slider_value = self.gaussian_sigma_slider.value()
@@ -690,7 +711,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.load_beads_btn.clicked.connect(lambda: self._load_active_layer('beads'))
         self.load_reference_btn.clicked.connect(lambda: self._load_active_layer('reference'))
         self.load_cells_btn.clicked.connect(lambda: self._load_active_layer('cells'))
-        self.clear_data_btn.clicked.connect(self._clear_data)
 
         # Preview connections
         self.preview_check.toggled.connect(self.toggle_preview)
@@ -726,19 +746,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         self.cell_gaussian_sigma_slider.valueChanged.connect(self._update_cell_sigma_from_slider)
         self.cell_gaussian_sigma_spin.valueChanged.connect(self._update_cell_slider_from_sigma)
-
-    def _clear_data(self):
-        """Clear all preprocessing data"""
-        try:
-            # Clear data from manager
-            self.data_manager.clear_preprocessing_data()
-
-            # Update UI
-            self._update_ui_state()
-            self._update_status("All preprocessing data cleared")
-
-        except Exception as e:
-            self._handle_error(str(e))
 
     def update_preview_frame(self):
         """Update the preview for the current frame"""
@@ -823,6 +830,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.colorbar_manager = None
 
         super().cleanup()
+
     def _update_intensity_labels(self, values):
         """Update intensity range spinboxes with slider values"""
         min_val, max_val = values
@@ -866,11 +874,11 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         max_spinbox.setValue(100)
 
-        spinbox_layout.addWidget(QLabel("Min %:"))
+        spinbox_layout.addWidget(QLabel("Min "))
         spinbox_layout.addWidget(min_spinbox)
         spinbox_layout.addStretch()
-        spinbox_layout.addWidget(QLabel("Max %:"))
         spinbox_layout.addWidget(max_spinbox)
+        spinbox_layout.addWidget(QLabel("Max "))
 
         return spinbox_layout
 
@@ -890,9 +898,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.cell_max_spinbox.blockSignals(False)
 
         self.update_parameters()
-
-
-
 
     def _create_status_frame(self):
         """Create the status and progress frame."""

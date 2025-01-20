@@ -47,7 +47,7 @@ class napariTFMWidget(QWidget):
         self.visualization_manager = VisualizationManager(self.viewer, self.data_manager)
 
         # Create calibration group
-        calibration_group = QGroupBox("Calibration")
+        calibration_group = QGroupBox("")
         calibration_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         calibration_layout = QVBoxLayout()  # Main layout is vertical
 
