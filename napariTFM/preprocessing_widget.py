@@ -8,7 +8,7 @@ from qtpy.QtWidgets import (
     QCheckBox
 )
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QScrollArea, QWidget, QSizePolicy,
+    QVBoxLayout, QHBoxLayout, QGroupBox, QScrollArea, QWidget, QSizePolicy, QMessageBox,
     QRadioButton, QLabel, QFrame, QProgressBar, QFileDialog, QSlider,
     QDoubleSpinBox, QPushButton,
     QComboBox
@@ -316,7 +316,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self._update_status(f"Loaded {data_type} data: {data.shape}")
 
         except Exception as e:
-            self._show_warning(str(e))
+            QMessageBox.warning(self, "Error", str(e))
 
     def run_preprocessing(self):
         """Run preprocessing on all available data in a separate thread"""

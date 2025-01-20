@@ -100,26 +100,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self):
         """Update UI elements based on current state."""
-        # Check displacement results
-        if hasattr(self.data_manager, 'displacement_results'):
-            results = self.data_manager.displacement_results
-            if results and isinstance(results, dict) and 'flows' in results:
-                flows = results['flows']
-                try:
-                    # Convert to numpy array if it isn't already
-                    if not isinstance(flows, np.ndarray):
-                        flows = np.array(flows)
-                    self.displacement_status.setText(f"Displacement results: {flows.shape}")
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-                    self.displacement_status.setText(f"Displacement results: Error ({str(e)})")
-            else:
-                self.displacement_status.setText("Displacement results: Not loaded")
-        else:
-            self.displacement_status.setText("Displacement results: Not loaded")
 
-        # Only look at displacement input data
         reference = self.data_manager.displacement_reference_image
         bead_stack = self.data_manager.displacement_bead_stack
 
@@ -128,14 +109,14 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         # Update status labels with shape information if data exists
         if has_reference:
-            self.reference_status.setText(f"Reference: {reference.shape}")
+            self.reference_status.setText(f"Loaded: {reference.shape}")
         else:
-            self.reference_status.setText("Reference: Not loaded")
+            self.reference_status.setText("Not loaded")
 
         if has_beads:
-            self.bead_status.setText(f"Bead stack: {bead_stack.shape}")
+            self.bead_status.setText(f"Loaded: {bead_stack.shape}")
         else:
-            self.bead_status.setText("Bead stack: Not loaded")
+            self.bead_status.setText("Not loaded")
 
         can_analyze = has_beads and has_reference
         self.analyze_btn.setEnabled(can_analyze)
@@ -274,43 +255,33 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
-        group = QGroupBox("Data")
-        layout = QVBoxLayout()
+        load_group = QGroupBox("Data")
+        load_layout = QVBoxLayout()
+        load_layout.setSpacing(4)
 
-        # Status labels stacked vertically
-        self.bead_status = QLabel("Bead stack: Not loaded")
-        self.reference_status = QLabel("Reference: Not loaded")
-        self.displacement_status = QLabel("Displacement results: Not loaded")
-
-        # Add all status labels first
-        layout.addWidget(self.bead_status)
-        layout.addWidget(self.reference_status)
-        layout.addWidget(self.displacement_status)
-
-        # Create horizontal layout for load buttons
-        button_row = QHBoxLayout()
-
+        # Initialize buttons and status labels
         self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.load_beads_btn.setToolTip("Load the time series of bead images for displacement analysis")
+        self.load_beads_btn.setToolTip("Load a time series of bead images from the active layer in napari")
 
         self.load_reference_btn = QPushButton("Load Reference Image")
-        self.load_reference_btn.setToolTip("Load the reference (initial) bead image")
+        self.load_reference_btn.setToolTip("Load a single reference image for registration from the active layer")
 
-        button_row.addWidget(self.load_beads_btn)
-        button_row.addWidget(self.load_reference_btn)
+        self.bead_status = QLabel("Not loaded")
+        self.reference_status = QLabel("Not loaded")
+        self.displacement_status = QLabel("Not loaded")
 
-        # Add button row to layout
-        layout.addLayout(button_row)
+        # Add widgets with their status labels in rows
+        for btn, label in [
+            (self.load_beads_btn, self.bead_status),
+            (self.load_reference_btn, self.reference_status),
+        ]:
+            btn_layout = QHBoxLayout()
+            btn_layout.addWidget(btn)
+            btn_layout.addWidget(label)
+            load_layout.addLayout(btn_layout)
 
-        # Clear data button at the bottom
-        self.clear_data_btn = QPushButton("Clear All Data")
-        self.clear_data_btn.setToolTip("Clear all loaded data and analysis results")
-        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
-        layout.addWidget(self.clear_data_btn)
-
-        group.setLayout(layout)
-        return group
-
+        load_group.setLayout(load_layout)
+        return load_group
     def analyze_all_frames(self):
         """Analyze displacement for all frames using a thread worker."""
         try:
@@ -360,22 +331,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         progress = update_dict['progress']
         message = update_dict['message']
         self._update_status(message, int(progress))
-
-    def _clear_data(self):
-        """Clear all displacement analysis data"""
-        try:
-            # Clear data from manager
-            self.data_manager.clear_displacement_data()
-
-            # Disable save button when data is cleared
-            self.save_displacement_btn.setEnabled(False)
-
-            # Update UI
-            self._update_ui_state()
-            self._update_status("All displacement analysis data cleared")
-
-        except Exception as e:
-            self._handle_error(str(e))
 
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame."""
@@ -704,7 +659,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Existing connections
         self.load_beads_btn.clicked.connect(lambda: self._load_data('beads'))
         self.load_reference_btn.clicked.connect(lambda: self._load_data('reference'))
-        self.clear_data_btn.clicked.connect(self._clear_data)
         self.preview_btn.clicked.connect(self.preview_displacement)
         self.analyze_btn.clicked.connect(self.analyze_all_frames)
 
