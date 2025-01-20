@@ -50,6 +50,93 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
+    def _handle_results(self, results):
+        """Handle the final results from the worker"""
+        # Update data manager with processed results
+        if 'beads' in results:
+            self.data_manager.preprocessed_bead_stack = results['beads'][0]
+        if 'reference' in results:
+            self.data_manager.preprocessed_reference = results['reference'][0]
+        if 'cells' in results:
+            self.data_manager.preprocessed_cell_stack = results['cells'][0]
+
+        # Update visualization through manager
+        self.visualization_manager.update_preprocessing_visualization(results)
+
+        # Use Qt's single shot timer to ensure layers are created
+        from qtpy.QtCore import QTimer
+        def update_visibility():
+            # Hide all layers
+            for layer in self.viewer.layers:
+                layer.visible = False
+                if layer.name == 'Bead Overlay':  # Original layers
+                    layer.visible = True
+
+        # Wait a brief moment for layers to be created
+        QTimer.singleShot(100, update_visibility)
+
+        # Update UI state to enable save button
+        self._update_ui_state()
+
+        self._update_status("Preprocessing complete", 100)
+        self.preprocessing_completed.emit(results)
+
+    def _update_ui_state(self):
+        """Update UI elements based on available data and current state"""
+        # Update data status indicators with shape information
+        bead_shape = self.data_manager.preprocessing_bead_stack.shape if self.data_manager.preprocessing_bead_stack is not None else None
+        ref_shape = self.data_manager.preprocessing_reference_image.shape if self.data_manager.preprocessing_reference_image is not None else None
+        cell_shape = self.data_manager.preprocessing_cell_stack.shape if self.data_manager.preprocessing_cell_stack is not None else None
+
+        self.bead_status.setText(f"Loaded: {bead_shape}" if bead_shape else "Not loaded")
+        self.reference_status.setText(f"Loaded: {ref_shape}" if ref_shape else "Not loaded")
+        self.cell_status.setText(f"Loaded: {cell_shape}" if cell_shape else "Not loaded")
+
+        # Update registration note visibility based on data availability
+        can_register = (
+                self.data_manager.preprocessing_bead_stack is not None and
+                self.data_manager.preprocessing_reference_image is not None
+        )
+        self.registration_note.setVisible(not can_register)
+
+        # Update preview radio buttons - always enabled
+        self.bead_radio.setEnabled(True)
+        self.reference_radio.setEnabled(True)
+        self.cell_radio.setEnabled(True)
+
+        # Keep all parameter controls enabled
+        self.registration_mode_combo.setEnabled(True)
+        self.cell_intensity_slider.setEnabled(True)
+        self.cell_min_spinbox.setEnabled(True)
+        self.cell_max_spinbox.setEnabled(True)
+        self.cell_gaussian_sigma_spin.setEnabled(True)
+        self.cell_gaussian_sigma_slider.setEnabled(True)
+        self.gaussian_sigma_spin.setEnabled(True)
+        self.gaussian_sigma_slider.setEnabled(True)
+        self.intensity_slider.setEnabled(True)
+        self.min_spinbox.setEnabled(True)
+        self.max_spinbox.setEnabled(True)
+
+        # Enable preview checkbox only if we have any data
+        has_data = any([
+            self.data_manager.preprocessing_bead_stack is not None,
+            self.data_manager.preprocessing_reference_image is not None,
+            self.data_manager.preprocessing_cell_stack is not None
+        ])
+        self.preview_check.setEnabled(has_data)
+        if not has_data and self.preview_check.isChecked():
+            self.preview_check.setChecked(False)
+
+        # Enable preprocessing button if we have any data
+        self.preprocess_btn.setEnabled(has_data)
+
+        # Update save button state based on preprocessed data
+        has_preprocessed_data = any([
+            self.data_manager.preprocessed_bead_stack is not None,
+            self.data_manager.preprocessed_reference is not None,
+            self.data_manager.preprocessed_cell_stack is not None
+        ])
+        self.save_btn.setEnabled(has_preprocessed_data)
     def _create_parameters_group(self):
         """Create a group containing all parameter controls."""
         parameters_group = QGroupBox("Parameters")
@@ -487,26 +574,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         message = update_dict['message']
         self._update_status(message, int(progress))
 
-    def _handle_results(self, results):
-        """Handle the final results from the worker"""
-        # Update visualization through manager
-        self.visualization_manager.update_preprocessing_visualization(results)
-
-        # Use Qt's single shot timer to ensure layers are created
-        from qtpy.QtCore import QTimer
-        def update_visibility():
-            # Hide all layers
-            for layer in self.viewer.layers:
-                layer.visible = False
-                if layer.name == 'Bead Overlay':  # Original layers
-                    layer.visible = True
-
-        # Wait a brief moment for layers to be created
-        QTimer.singleShot(100, update_visibility)
-
-        self._update_status("Preprocessing complete", 100)
-        self.preprocessing_completed.emit(results)
-
     def _register_controls(self):
         """Register all controls with the base widget"""
         controls = [
@@ -758,63 +825,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(str(e))
-
-    def _update_ui_state(self):
-        """Update UI elements based on available data and current state"""
-        # Update data status indicators with shape information
-        bead_shape = self.data_manager.preprocessing_bead_stack.shape if self.data_manager.preprocessing_bead_stack is not None else None
-        ref_shape = self.data_manager.preprocessing_reference_image.shape if self.data_manager.preprocessing_reference_image is not None else None
-        cell_shape = self.data_manager.preprocessing_cell_stack.shape if self.data_manager.preprocessing_cell_stack is not None else None
-
-        self.bead_status.setText(f"Loaded: {bead_shape}" if bead_shape else "Not loaded")
-        self.reference_status.setText(f"Loaded: {ref_shape}" if ref_shape else "Not loaded")
-        self.cell_status.setText(f"Loaded: {cell_shape}" if cell_shape else "Not loaded")
-
-        # Update registration note visibility based on data availability
-        can_register = (
-                self.data_manager.preprocessing_bead_stack is not None and
-                self.data_manager.preprocessing_reference_image is not None
-        )
-        self.registration_note.setVisible(not can_register)
-
-        # Update preview radio buttons - always enabled
-        self.bead_radio.setEnabled(True)
-        self.reference_radio.setEnabled(True)
-        self.cell_radio.setEnabled(True)
-
-        # Keep all parameter controls enabled
-        self.registration_mode_combo.setEnabled(True)
-        self.cell_intensity_slider.setEnabled(True)
-        self.cell_min_spinbox.setEnabled(True)
-        self.cell_max_spinbox.setEnabled(True)
-        self.cell_gaussian_sigma_spin.setEnabled(True)
-        self.cell_gaussian_sigma_slider.setEnabled(True)
-        self.gaussian_sigma_spin.setEnabled(True)
-        self.gaussian_sigma_slider.setEnabled(True)
-        self.intensity_slider.setEnabled(True)
-        self.min_spinbox.setEnabled(True)
-        self.max_spinbox.setEnabled(True)
-
-        # Enable preview checkbox only if we have any data
-        has_data = any([
-            self.data_manager.preprocessing_bead_stack is not None,
-            self.data_manager.preprocessing_reference_image is not None,
-            self.data_manager.preprocessing_cell_stack is not None
-        ])
-        self.preview_check.setEnabled(has_data)
-        if not has_data and self.preview_check.isChecked():
-            self.preview_check.setChecked(False)
-
-        # Enable preprocessing button if we have any data
-        self.preprocess_btn.setEnabled(has_data)
-
-        # Update save button state
-        has_preprocessed_data = any([
-            self.data_manager.preprocessed_bead_stack is not None,
-            self.data_manager.preprocessed_reference is not None,
-            self.data_manager.preprocessed_cell_stack is not None
-        ])
-        self.save_btn.setEnabled(has_preprocessed_data)
 
     def cleanup(self):
         """Clean up resources and event connections."""
