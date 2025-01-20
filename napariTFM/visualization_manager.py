@@ -133,7 +133,7 @@ class VisualizationManager(ErrorHandlingMixin):
                     colormap='viridis',
                     blending='additive',
                     contrast_limits=(0, vis_params['d_max']),
-                    visible=False
+                    visible=True
                 )
 
                 # Add initial vector layer
@@ -597,7 +597,6 @@ class VisualizationManager(ErrorHandlingMixin):
             self._clear_layers([
                 'Normal Stress XX',
                 'Normal Stress YY',
-                'Shear Stress',
                 'Average Normal Stress'
             ])
 
@@ -615,7 +614,6 @@ class VisualizationManager(ErrorHandlingMixin):
             # Extract and upscale stress components
             sigma_xx = upscale_component(stress_tensor[..., 0, 0]) * 1e3  # convert to mN/m
             sigma_yy = upscale_component(stress_tensor[..., 1, 1]) * 1e3  # convert to mN/m
-            sigma_xy = upscale_component(stress_tensor[..., 0, 1]) * 1e3  # convert to mN/m
 
             # Calculate average normal stress after upscaling
             sigma_normal = (sigma_xx + sigma_yy) / 2
@@ -640,14 +638,6 @@ class VisualizationManager(ErrorHandlingMixin):
                     contrast_limits=(-max_stress, max_stress)
                 )
 
-                # Shear stress
-                self._layers['stress_xy'] = self.viewer.add_image(
-                    sigma_xy,
-                    name='Shear Stress',
-                    colormap='seismic',
-                    blending='additive',
-                    contrast_limits=(-max_stress, max_stress)
-                )
 
                 # Average normal stress
                 self._layers['stress_normal'] = self.viewer.add_image(
@@ -681,7 +671,6 @@ class VisualizationManager(ErrorHandlingMixin):
             self._clear_layers([
                 'Normal Stress XX',
                 'Normal Stress YY',
-                'Shear Stress',
                 'Average Normal Stress'
             ])
 
@@ -720,7 +709,6 @@ class VisualizationManager(ErrorHandlingMixin):
             # Extract and upscale stress components
             sigma_xx = upscale_component(stress_tensor[..., 0, 0]) * 1e3  # convert to mN/m
             sigma_yy = upscale_component(stress_tensor[..., 1, 1]) * 1e3  # convert to mN/m
-            sigma_xy = upscale_component(stress_tensor[..., 0, 1]) * 1e3  # convert to mN/m
 
             # Calculate average normal stress after upscaling
             sigma_normal = (sigma_xx + sigma_yy) / 2
@@ -745,14 +733,6 @@ class VisualizationManager(ErrorHandlingMixin):
                     contrast_limits=(-max_stress, max_stress)
                 )
 
-                # Shear stress
-                self._layers['stress_xy'] = self.viewer.add_image(
-                    sigma_xy,
-                    name='Shear Stress',
-                    colormap='seismic',
-                    blending='additive',
-                    contrast_limits=(-max_stress, max_stress)
-                )
 
                 # Average normal stress
                 self._layers['stress_normal'] = self.viewer.add_image(

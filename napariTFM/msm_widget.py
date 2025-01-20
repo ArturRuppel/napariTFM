@@ -276,6 +276,8 @@ class MSMWidget(BaseAnalysisWidget):
                 status_text += f"\nCondition number: {condition_number:.1e}"
                 status_text += f"\nResidual: {residual:.1e}"
 
+            self._handle_visualization_layers()
+
             self._update_status(status_text, 100)
 
         except Exception as e:
@@ -392,6 +394,8 @@ class MSMWidget(BaseAnalysisWidget):
                 avg_residual = np.mean(residuals)
                 status_text += f"\nMean condition number: {avg_condition:.1e}"
                 status_text += f"\nMean residual: {avg_residual:.1e}"
+
+            self._handle_visualization_layers()
 
             self._update_status(status_text, 100)
 
@@ -952,3 +956,38 @@ class MSMWidget(BaseAnalysisWidget):
         self.preview_mesh_btn.setEnabled(has_mask)
         self.preview_frame_btn.setEnabled(has_mask and has_force_data)
         self.analyze_btn.setEnabled(has_mask and has_force_data)
+
+    def _handle_visualization_layers(self):
+        """Handle layer visibility and ordering for stress visualization."""
+        from qtpy.QtCore import QTimer
+
+        def update_visibility():
+            # Track indices of stress layers
+            avg_normal_index = None
+            xx_index = None
+            yy_index = None
+
+            # First pass: collect indices and set visibility
+            for i, layer in enumerate(self.viewer.layers):
+                # Default all layers to invisible
+                layer.visible = False
+
+                # Keep track of indices and set desired visibility
+                if layer.name == 'Average Normal Stress':
+                    layer.visible = True
+                    avg_normal_index = i
+                elif layer.name == 'Normal Stress XX':
+                    xx_index = i
+                elif layer.name == 'Normal Stress YY':
+                    yy_index = i
+
+            # Move layers to desired order
+            if avg_normal_index is not None:
+                self.viewer.layers.move(avg_normal_index, -1)  # Move to top
+            if xx_index is not None:
+                self.viewer.layers.move(xx_index, -2)  # Move second from top
+            if yy_index is not None:
+                self.viewer.layers.move(yy_index, -3)  # Move third from top
+
+        # Wait a brief moment for layers to be created
+        QTimer.singleShot(10, update_visibility)
