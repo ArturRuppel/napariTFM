@@ -20,6 +20,9 @@ class napariTFMWidget(QWidget):
         super().__init__()
         self.viewer = napari_viewer
 
+        # Set fixed width for entire widget
+        self.setFixedWidth(530)
+
         # Create scroll area for widgets
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
