@@ -282,7 +282,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         """Load the currently active layer as the specified data type"""
         active_layer = self._get_active_image_layer()
         if active_layer is None:
-            self._show_warning("No active image layer found")
+            QMessageBox.warning(self, "Error", "No active image layer found")
             return
 
         try:
