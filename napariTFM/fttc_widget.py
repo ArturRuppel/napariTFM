@@ -67,7 +67,6 @@ class FTTCWidget(BaseAnalysisWidget):
         self.save_force_btn.clicked.connect(self._save_force_data)
         self.load_force_btn.clicked.connect(self._load_force_data)
         self.reset_params_btn.clicked.connect(self.reset_parameters)
-        self.clear_data_btn.clicked.connect(self._clear_data)
 
         # Add GCV control connections
         self.gcv_button.clicked.connect(self._auto_select_gcv)
@@ -324,22 +323,6 @@ class FTTCWidget(BaseAnalysisWidget):
         else:
             self.displacement_status.setText("Displacement data: Not loaded")
 
-        # Check force results
-        if hasattr(self.data_manager, 'force_results') and self.data_manager.force_results is not None:
-            results = self.data_manager.force_results
-            if isinstance(results, dict) and 'tx' in results and 'ty' in results:
-                try:
-                    shape = results['tx'].shape
-                    if len(shape) > 0:  # Check if shape is not empty
-                        self.force_status.setText(f"Force results: {shape}")
-                    else:
-                        self.force_status.setText("Force results: Invalid shape")
-                except Exception as e:
-                    self.force_status.setText(f"Force results: Error ({str(e)})")
-            else:
-                self.force_status.setText("Force results: Not loaded")
-        else:
-            self.force_status.setText("Force results: Not loaded")
 
         # Update button states based on data availability and analysis state
         if self.is_analysis_running:
@@ -510,11 +493,9 @@ class FTTCWidget(BaseAnalysisWidget):
                        self.reset_params_btn,
                        self.save_force_btn,
                        self.load_force_btn,
-                       self.clear_data_btn,
                        self.progress_bar,
                        self.status_label,
                        self.displacement_status,
-                       self.force_status,
                        self.gcv_button,
                        self.auto_gcv_checkbox
                    ] + list(self.visualization_params.values())
@@ -754,46 +735,18 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _create_data_status_group(self) -> QGroupBox:
         """Create the data status group."""
-        group = QGroupBox("Data Status")
+        group = QGroupBox("Datas")
         layout = QVBoxLayout()
 
         # Status labels stacked vertically
-        self.displacement_status = QLabel("Displacement data: Not loaded")
-        self.force_status = QLabel("Force results: Not loaded")
+        # Please add a button here, next to the label with "Load Displacements"
+        self.displacement_status = QLabel("Not loaded")
 
         # Add status labels
         layout.addWidget(self.displacement_status)
-        layout.addWidget(self.force_status)
-
-        # Add clear data button
-        self.clear_data_btn = QPushButton("Clear All Data")
-        self.clear_data_btn.setToolTip("Clear all loaded data and force calculation results")
-        self.clear_data_btn.setStyleSheet("QPushButton { color: red; }")
-        layout.addWidget(self.clear_data_btn)
 
         group.setLayout(layout)
         return group
-
-    def _clear_data(self):
-        """Clear all force calculation and displacement data"""
-        try:
-            # Clear force results
-            if hasattr(self.data_manager, 'force_results'):
-                self.data_manager.force_results = None
-
-            # Clear displacement results
-            if hasattr(self.data_manager, 'displacement_results'):
-                self.data_manager.displacement_results = None
-
-            # Disable save button when data is cleared
-            self.save_force_btn.setEnabled(False)
-
-            # Update UI
-            self._update_ui_state()
-            self._update_status("All data cleared")
-
-        except Exception as e:
-            self._handle_error(str(e))
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -829,7 +782,7 @@ class FTTCWidget(BaseAnalysisWidget):
         right_layout.setContentsMargins(6, 6, 6, 6)
 
         # Add parameter groups
-        right_layout.addWidget(self._create_data_status_group())  # Add the new data status group
+        right_layout.addWidget(self._create_data_status_group())
         right_layout.addWidget(self._create_material_params_group())
         right_layout.addWidget(self._create_calculation_params_group())
         right_layout.addWidget(self._create_visualization_parameters_group())
