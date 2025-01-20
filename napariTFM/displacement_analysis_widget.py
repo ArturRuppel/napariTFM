@@ -682,7 +682,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         right_layout.addStretch()
 
         right_container.setLayout(right_layout)
-        right_container.setFixedWidth(350)  # Compromised width between 300 and 400
+        right_container.setFixedWidth(360)
 
         main_layout.addWidget(right_container)
         main_layout.addStretch(1)
