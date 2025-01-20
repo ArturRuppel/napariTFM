@@ -12,6 +12,7 @@ from qtpy.QtWidgets import (
 from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
 from .data_manager import DataManager
+from .displacement_analysis_widget import DisplacementAnalysisWidget
 from .fttc import FTTC
 from .visualization_manager import VisualizationManager
 
@@ -20,6 +21,7 @@ class FTTCWidget(BaseAnalysisWidget):
     """Widget for calculating traction forces using FTTC method."""
 
     force_calculated = Signal(dict)
+
     def __init__(
             self,
             viewer: "napari.Viewer",
@@ -54,12 +56,12 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _connect_signals(self):
         """Connect all widget signals."""
-        # Keep existing signal connections
         self.young_spin.valueChanged.connect(self._update_parameters)
         self.poisson_spin.valueChanged.connect(self._update_parameters)
         self.height_spin.valueChanged.connect(self._update_parameters)
         self.lanczos_exp_spin.valueChanged.connect(self._update_parameters)
         self.regularization_spin.valueChanged.connect(self._update_parameters)
+        self.load_displacement_btn.clicked.connect(self._load_displacement)
 
         # Action buttons
         self.calculate_btn.clicked.connect(self.calculate_forces)
@@ -71,6 +73,55 @@ class FTTCWidget(BaseAnalysisWidget):
         # Add GCV control connections
         self.gcv_button.clicked.connect(self._auto_select_gcv)
         self.auto_gcv_checkbox.stateChanged.connect(self._toggle_auto_gcv)
+
+    def _load_displacement(self):
+        """Load displacement data from files."""
+        try:
+            # Get file path
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Displacement Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                # Load data using numpy
+                displacement_data = np.load(file_path, allow_pickle=True).item()
+
+                # Validate the loaded data
+                if 'flows' not in displacement_data:
+                    raise ValueError("Invalid displacement data: 'flows' not found")
+
+                flows = np.array(displacement_data['flows'])
+                parameters = displacement_data.get('parameters', {})
+
+                # Handle flow array reshaping if needed
+                if len(flows.shape) == 3:  # If flows is (frames, height*2, width)
+                    frames, height_doubled, width = flows.shape
+                    height = height_doubled // 2
+                    flows = flows.reshape(frames, 2, height, width).transpose(0, 2, 3, 1)
+
+                # Create results dictionary
+                results = {
+                    'flows': flows,
+                    'parameters': parameters
+                }
+
+                # Update data manager
+                self.data_manager.displacement_results = results
+
+                # Update UI state
+                self._update_ui_state()
+
+                self._update_status(f"Displacement data successfully loaded from:\n{file_path}", 100)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load displacement data: {str(e)}"
+            )
 
     def _auto_select_gcv(self):
         """Calculate optimal regularization parameter for current frame using GCV."""
@@ -200,7 +251,6 @@ class FTTCWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(str(e))
 
-
     def _handle_force_frame(self, results):
         """Handle results from a single frame calculation."""
         try:
@@ -314,15 +364,14 @@ class FTTCWidget(BaseAnalysisWidget):
                     # Convert to numpy array if it isn't already
                     if not isinstance(flows, np.ndarray):
                         flows = np.array(flows)
-                    self.displacement_status.setText(f"Displacement data: {flows.shape}")
+                    self.displacement_status.setText(f"Loaded : {flows.shape}")
                     has_displacement = True  # Set to True only if we successfully validated the data
                 except Exception as e:
-                    self.displacement_status.setText(f"Displacement data: Error ({str(e)})")
+                    self.displacement_status.setText(f"Error ({str(e)})")
             else:
-                self.displacement_status.setText("Displacement data: Not loaded")
+                self.displacement_status.setText("Not loaded")
         else:
-            self.displacement_status.setText("Displacement data: Not loaded")
-
+            self.displacement_status.setText("Not loaded")
 
         # Update button states based on data availability and analysis state
         if self.is_analysis_running:
@@ -732,18 +781,22 @@ class FTTCWidget(BaseAnalysisWidget):
                 recovery_hint="Check input data and parameters"
             ))
 
-
-    def _create_data_status_group(self) -> QGroupBox:
+    def _create_data_loading_group(self) -> QGroupBox:
         """Create the data status group."""
-        group = QGroupBox("Datas")
+        group = QGroupBox("Data")
         layout = QVBoxLayout()
+        layout.setSpacing(4)
 
-        # Status labels stacked vertically
-        # Please add a button here, next to the label with "Load Displacements"
+        # Initialize button and status label for displacement data
+        self.load_displacement_btn = QPushButton("Load Displacement")
+        self.load_displacement_btn.setToolTip("Load displacement data from file")
         self.displacement_status = QLabel("Not loaded")
 
-        # Add status labels
-        layout.addWidget(self.displacement_status)
+        # Add button and status label in a row
+        displacement_layout = QHBoxLayout()
+        displacement_layout.addWidget(self.load_displacement_btn)
+        displacement_layout.addWidget(self.displacement_status)
+        layout.addLayout(displacement_layout)
 
         group.setLayout(layout)
         return group
@@ -782,7 +835,7 @@ class FTTCWidget(BaseAnalysisWidget):
         right_layout.setContentsMargins(6, 6, 6, 6)
 
         # Add parameter groups
-        right_layout.addWidget(self._create_data_status_group())
+        right_layout.addWidget(self._create_data_loading_group())
         right_layout.addWidget(self._create_material_params_group())
         right_layout.addWidget(self._create_calculation_params_group())
         right_layout.addWidget(self._create_visualization_parameters_group())
@@ -791,7 +844,7 @@ class FTTCWidget(BaseAnalysisWidget):
         right_layout.addStretch()
 
         right_container.setLayout(right_layout)
-        right_container.setFixedWidth(350)
+        right_container.setFixedWidth(360)
 
         main_layout.addWidget(right_container)
         main_layout.addStretch(1)
@@ -1073,7 +1126,6 @@ class FTTCWidget(BaseAnalysisWidget):
             # Print the full error for debugging
             import traceback
             traceback.print_exc()
-
 
     def _handle_visualization_layers(self):
         """Handle layer visibility and ordering for better force visualization."""
