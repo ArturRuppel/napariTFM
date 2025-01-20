@@ -166,6 +166,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self.status_label.setText(f"Missing required data: {', '.join(missing)}")
         else:
             self.status_label.setText("Ready for analysis")
+
     def _load_displacement(self):
         """Load displacement data from files."""
         try:
@@ -316,6 +317,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         load_group.setLayout(load_layout)
         return load_group
+
     def analyze_all_frames(self):
         """Analyze displacement for all frames using a thread worker."""
         try:
@@ -512,13 +514,9 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _create_parameters_group(self) -> QGroupBox:
         """Create the analysis parameters group."""
-        group = QGroupBox("Analysis Parameters")
-        layout = QVBoxLayout()
-
-        # Add reset parameters button at the top
-        self.reset_params_btn = QPushButton("Reset Parameters")
-        self.reset_params_btn.setToolTip("Reset all parameters to their default values")
-        layout.addWidget(self.reset_params_btn)
+        # Main parameters group
+        group = QGroupBox("Parameters")
+        main_layout = QVBoxLayout()
 
         # Create sections for better organization
         flow_params_group = QGroupBox("Optical Flow Parameters")
@@ -526,6 +524,9 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         scaling_group = QGroupBox("Scaling Parameters")
         scaling_layout = QVBoxLayout()
+
+        vis_params_group = QGroupBox("Visualization Parameters")
+        vis_params_layout = QVBoxLayout()
 
         # Define core optical flow parameters with tooltips
         flow_params = [
@@ -583,21 +584,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         downscale_row.addWidget(downscale_spin)
         scaling_layout.addLayout(downscale_row)
 
-        flow_params_group.setLayout(flow_params_layout)
-        scaling_group.setLayout(scaling_layout)
-
-        layout.addWidget(flow_params_group)
-        layout.addWidget(scaling_group)
-        layout.addStretch()
-
-        group.setLayout(layout)
-        return group
-
-    def _create_visualization_parameters_group(self) -> QGroupBox:
-        """Create the visualization parameters group."""
-        group = QGroupBox("Visualization Parameters")
-        layout = QVBoxLayout()
-
+        # Add visualization parameters
         # Vector stride
         stride_layout = QHBoxLayout()
         stride_layout.addWidget(QLabel("Vector Stride:"))
@@ -608,7 +595,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             "Display every nth vector in the visualization. Higher values show fewer vectors but improve clarity"
         )
         stride_layout.addWidget(self.visualization_params['vector_stride'])
-        layout.addLayout(stride_layout)
+        vis_params_layout.addLayout(stride_layout)
 
         # Arrow scale
         arrow_layout = QHBoxLayout()
@@ -621,7 +608,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             "Scale factor for arrow length in the visualization. Adjust to make displacement vectors more visible"
         )
         arrow_layout.addWidget(self.visualization_params['arrow_scale'])
-        layout.addLayout(arrow_layout)
+        vis_params_layout.addLayout(arrow_layout)
 
         # Maximum displacement (now in µm)
         dmax_layout = QHBoxLayout()
@@ -634,9 +621,25 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             "Maximum displacement value for color scaling (in µm). Adjust to optimize the color range of the visualization"
         )
         dmax_layout.addWidget(self.visualization_params['d_max'])
-        layout.addLayout(dmax_layout)
+        vis_params_layout.addLayout(dmax_layout)
 
-        group.setLayout(layout)
+        # Set layouts for all groups
+        flow_params_group.setLayout(flow_params_layout)
+        scaling_group.setLayout(scaling_layout)
+        vis_params_group.setLayout(vis_params_layout)
+
+        # Add all parameter groups to main layout
+        main_layout.addWidget(flow_params_group)
+        main_layout.addWidget(scaling_group)
+        main_layout.addWidget(vis_params_group)
+
+        # Add reset parameters button at the bottom
+        self.reset_params_btn = QPushButton("Reset Parameters")
+        self.reset_params_btn.setToolTip("Reset all parameters to their default values")
+        main_layout.addWidget(self.reset_params_btn)
+
+        main_layout.addStretch()
+        group.setLayout(main_layout)
         return group
 
     def _setup_ui(self):
@@ -674,7 +677,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         right_layout.addWidget(self._create_data_loading_group())
         right_layout.addWidget(self._create_parameters_group())
-        right_layout.addWidget(self._create_visualization_parameters_group())
         right_layout.addWidget(self._create_action_buttons())
         right_layout.addWidget(self._create_status_frame())
         right_layout.addStretch()
