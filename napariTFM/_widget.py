@@ -2,7 +2,7 @@ import logging
 import napari
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout,
+    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton
 )
 
 from .batch_analysis_widget import BatchAnalysisWidget
@@ -14,6 +14,7 @@ from .visualization_manager import VisualizationManager
 from .msm_widget import MSMWidget
 
 logger = logging.getLogger(__name__)
+
 
 class napariTFMWidget(QWidget):
     def __init__(self, napari_viewer: "napari.Viewer"):
@@ -48,7 +49,10 @@ class napariTFMWidget(QWidget):
         # Create calibration group
         calibration_group = QGroupBox("Calibration")
         calibration_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        calibration_layout = QHBoxLayout()
+        calibration_layout = QVBoxLayout()  # Main layout is vertical
+
+        # First row: spinboxes
+        spinbox_layout = QHBoxLayout()
 
         # Pixel size controls
         pixel_layout = QHBoxLayout()
@@ -59,9 +63,9 @@ class napariTFMWidget(QWidget):
         self.pixel_spin.setSingleStep(0.1)
         self.pixel_spin.setDecimals(3)
         pixel_layout.addWidget(self.pixel_spin)
-        calibration_layout.addLayout(pixel_layout)
+        spinbox_layout.addLayout(pixel_layout)
 
-        calibration_layout.addSpacing(20)  # Add some spacing between controls
+        spinbox_layout.addSpacing(20)  # Add some spacing between controls
 
         # Frame length controls
         frame_layout = QHBoxLayout()
@@ -72,12 +76,34 @@ class napariTFMWidget(QWidget):
         self.frame_spin.setSingleStep(0.1)
         self.frame_spin.setDecimals(3)
         frame_layout.addWidget(self.frame_spin)
-        calibration_layout.addLayout(frame_layout)
+        spinbox_layout.addLayout(frame_layout)
 
-        calibration_layout.addStretch()  # Add stretch to push controls to the left
+        spinbox_layout.addStretch()  # Push spinboxes to the left
+        calibration_layout.addLayout(spinbox_layout)
+
+        # Second row: buttons
+        button_layout = QHBoxLayout()
+
+        # Save/load buttons and clear data button
+        self.save_params_btn = QPushButton("Save Parameters")
+        self.load_params_btn = QPushButton("Load Parameters")
+        self.clear_data_btn = QPushButton("Clear All Data")
+        self.clear_data_btn.setStyleSheet("color: red;")
+
+        # Connect signals
+        self.save_params_btn.clicked.connect(self._save_parameters)
+        self.load_params_btn.clicked.connect(self._load_parameters)
+        self.clear_data_btn.clicked.connect(self._clear_all_data)
+
+        # Add buttons to layout with stretch
+        button_layout.addWidget(self.save_params_btn, stretch=1)
+        button_layout.addWidget(self.load_params_btn, stretch=1)
+        button_layout.addWidget(self.clear_data_btn, stretch=1)
+
+        calibration_layout.addLayout(button_layout)
+
         calibration_group.setLayout(calibration_layout)
         container_layout.addWidget(calibration_group)
-
         # Create tab widget for different components
         tabs = QTabWidget()
 
@@ -137,6 +163,36 @@ class napariTFMWidget(QWidget):
 
         self.connect_signals()
 
+    def _save_parameters(self):
+        """
+        Save current parameter values to a file.
+        To be implemented: Save pixel size, frame length, and other relevant parameters.
+        """
+        logger.info("Save parameters functionality to be implemented")
+        # TODO: Implement saving parameters to a file
+        QMessageBox.information(self, "Info", "Save parameters functionality will be implemented here")
+
+    def _load_parameters(self):
+        """
+        Load parameter values from a file.
+        To be implemented: Load pixel size, frame length, and other relevant parameters.
+        """
+        logger.info("Load parameters functionality to be implemented")
+        # TODO: Implement loading parameters from a file
+        QMessageBox.information(self, "Info", "Load parameters functionality will be implemented here")
+
+    def _clear_all_data(self):
+        """
+        Clear all data and reset the widget to its initial state.
+        To be implemented: Clear all stored data and reset UI elements.
+        """
+        logger.info("Clear all data functionality to be implemented")
+        # TODO: Implement clearing all data and resetting UI
+        reply = QMessageBox.question(self, "Confirm", "Are you sure you want to clear all data?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            QMessageBox.information(self, "Info", "Clear all data functionality will be implemented here")
+
     def connect_signals(self):
         """Connect signals between components"""
         # Existing signal connections
@@ -162,6 +218,7 @@ class napariTFMWidget(QWidget):
         ]:
             if hasattr(widget, '_update_calibration'):
                 widget._update_calibration()
+
     def _on_preprocessing_completed(self, results):
         """Handle completion of preprocessing"""
         logger.info("Preprocessing completed successfully")
@@ -207,5 +264,3 @@ class napariTFMWidget(QWidget):
         """Handle completion of stress calculation"""
         logger.info("Stress calculation completed successfully")
         self.data_manager.stress_results = results
-
-
