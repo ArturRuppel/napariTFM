@@ -98,40 +98,74 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             import traceback
             traceback.print_exc()
 
+    def _load_data(self, data_type: str):
+        """Load data from active layer."""
+        active_layer = self._get_active_image_layer()
+        if active_layer is None:
+            QMessageBox.warning(self, "Warning", "No active image layer")
+            return
+
+        try:
+            data = active_layer.data
+
+            if data_type == 'beads':
+                if data.ndim == 2:
+                    data = data[np.newaxis, ...]
+                if data.ndim != 3:
+                    raise ValueError("Bead stack must be 3D (frames, height, width)")
+                self.data_manager.set_displacement_bead_stack(data)
+            else:  # reference
+                if data.ndim != 2:
+                    raise ValueError("Reference image must be 2D (height, width)")
+                self.data_manager.set_displacement_reference_image(data)
+
+            self._update_ui_state()
+
+        except ValueError as e:
+            QMessageBox.warning(self, "Error", str(e))
+
     def _update_ui_state(self):
         """Update UI elements based on current state."""
-
+        # Check actual displacement data first
         reference = self.data_manager.displacement_reference_image
         bead_stack = self.data_manager.displacement_bead_stack
 
-        has_reference = reference is not None
-        has_beads = bead_stack is not None
-
-        # Update status labels with shape information if data exists
-        if has_reference:
+        # Update status labels with shape information
+        if reference is not None:
             self.reference_status.setText(f"Loaded: {reference.shape}")
         else:
-            self.reference_status.setText("Not loaded")
+            # Check if preprocessed data is available
+            if self.data_manager.preprocessed_reference is not None:
+                self.data_manager.set_displacement_reference_image(self.data_manager.preprocessed_reference)
+                self.reference_status.setText(f"Loaded: {self.data_manager.preprocessed_reference.shape}")
+            else:
+                self.reference_status.setText("Not loaded")
 
-        if has_beads:
+        if bead_stack is not None:
             self.bead_status.setText(f"Loaded: {bead_stack.shape}")
         else:
-            self.bead_status.setText("Not loaded")
+            # Check if preprocessed data is available
+            if self.data_manager.preprocessed_bead_stack is not None:
+                self.data_manager.set_displacement_bead_stack(self.data_manager.preprocessed_bead_stack)
+                self.bead_status.setText(f"Loaded: {self.data_manager.preprocessed_bead_stack.shape}")
+            else:
+                self.bead_status.setText("Not loaded")
 
-        can_analyze = has_beads and has_reference
-        self.analyze_btn.setEnabled(can_analyze)
-        self.preview_btn.setEnabled(can_analyze)
+        # Update button states based on displacement data availability
+        has_displacement = (self.data_manager.displacement_bead_stack is not None and
+                            self.data_manager.displacement_reference_image is not None)
+        self.analyze_btn.setEnabled(has_displacement)
+        self.preview_btn.setEnabled(has_displacement)
 
-        if not can_analyze:
+        if not has_displacement:
             missing = []
-            if not has_beads:
+            if self.data_manager.displacement_bead_stack is None:
                 missing.append("bead stack")
-            if not has_reference:
+            if self.data_manager.displacement_reference_image is None:
                 missing.append("reference image")
             self.status_label.setText(f"Missing required data: {', '.join(missing)}")
         else:
             self.status_label.setText("Ready for analysis")
-
     def _load_displacement(self):
         """Load displacement data from files."""
         try:
@@ -803,32 +837,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             return False
 
         return True
-
-    def _load_data(self, data_type: str):
-        """Load data from active layer."""
-        active_layer = self._get_active_image_layer()
-        if active_layer is None:
-            QMessageBox.warning(self, "Warning", "No active image layer")
-            return
-
-        try:
-            data = active_layer.data
-
-            if data_type == 'beads':
-                if data.ndim == 2:
-                    data = data[np.newaxis, ...]
-                if data.ndim != 3:
-                    raise ValueError("Bead stack must be 3D (frames, height, width)")
-                self.data_manager.set_displacement_bead_stack(data)
-            else:  # reference
-                if data.ndim != 2:
-                    raise ValueError("Reference image must be 2D (height, width)")
-                self.data_manager.set_displacement_reference_image(data)
-
-            self._update_ui_state()
-
-        except ValueError as e:
-            QMessageBox.warning(self, "Error", str(e))
 
     def _create_status_frame(self) -> QFrame:
         """Create the status and progress frame."""

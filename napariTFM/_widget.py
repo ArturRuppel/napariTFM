@@ -270,6 +270,8 @@ class napariTFMWidget(QWidget):
 
         # Update visualization through manager
         self.visualization_manager.update_preprocessing_visualization(results)
+        self.displacement_widget._update_ui_state()
+
 
     def _on_preprocessing_failed(self, error_msg):
         """Handle preprocessing failure"""
