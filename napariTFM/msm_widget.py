@@ -106,6 +106,46 @@ class MSMWidget(BaseAnalysisWidget):
 
         self.setLayout(main_layout)
 
+    def _update_ui_state(self):
+        """Update UI element states based on current data availability."""
+        # Update force data status
+        has_force_data = False
+        if hasattr(self.data_manager, 'force_results'):
+            results = self.data_manager.force_results
+            if results and isinstance(results, dict) and 'tx' in results:
+                tx = results['tx']
+                try:
+                    # Convert to numpy array if it isn't already
+                    if not isinstance(tx, np.ndarray):
+                        tx = np.array(tx)
+                    self.force_status.setText(f"Loaded: {tx.shape}")
+                    has_force_data = True
+                except Exception as e:
+                    self.force_status.setText(f"Error ({str(e)})")
+            else:
+                self.force_status.setText("Not loaded")
+        else:
+            self.force_status.setText("Not loaded")
+
+        # Update mask status
+        has_mask = False
+        if self.current_mask is not None:
+            try:
+                mask_shape = self.current_mask.shape
+                self.mask_status.setText(f"Loaded: {mask_shape}")
+                has_mask = True
+            except Exception as e:
+                self.mask_status.setText(f"Error ({str(e)})")
+        else:
+            self.mask_status.setText("Not loaded")
+
+        # Update button states
+        self.preview_mesh_btn.setEnabled(has_mask)
+        self.preview_frame_btn.setEnabled(has_mask and has_force_data)
+        self.analyze_btn.setEnabled(has_mask and has_force_data)
+        self.save_stress_btn.setEnabled(hasattr(self.data_manager, 'stress_results') and
+                                        self.data_manager.stress_results is not None)
+
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
         group = QGroupBox("Data")
@@ -126,7 +166,7 @@ class MSMWidget(BaseAnalysisWidget):
         self.load_mask_btn.setToolTip("Load input image data")
         self.mask_status = QLabel("Not loaded")
         mask_layout.addWidget(self.load_mask_btn)
-        mask_layout.addWidget(self.image_status)
+        mask_layout.addWidget(self.mask_status)
 
         layout.addLayout(force_layout)
         layout.addLayout(mask_layout)
@@ -302,6 +342,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         self._update_parameters()
         self._update_status("Parameters reset to defaults", 100)
+
     def _create_mask_from_images(self):
         """Create masks from the cell stack using dilation and smoothing."""
         try:
@@ -706,8 +747,6 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to update parameters: {str(e)}")
 
-
-
     def _connect_signals(self):
         """Connect widget signals."""
         # Buttons
@@ -842,7 +881,6 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to preview mesh: {str(e)}")
             self.progress_bar.setValue(0)
-
 
     def cleanup(self):
         """Clean up resources."""
@@ -1011,15 +1049,6 @@ class MSMWidget(BaseAnalysisWidget):
                 "Error",
                 f"Failed to load stress tensor data: {str(e)}"
             )
-
-    def _update_ui_state(self):
-        """Update UI element states based on current data availability."""
-        has_mask = self.current_mask is not None
-        has_force_data = self.data_manager.force_results is not None
-
-        self.preview_mesh_btn.setEnabled(has_mask)
-        self.preview_frame_btn.setEnabled(has_mask and has_force_data)
-        self.analyze_btn.setEnabled(has_mask and has_force_data)
 
     def _handle_visualization_layers(self):
         """Handle layer visibility and ordering for stress visualization."""
