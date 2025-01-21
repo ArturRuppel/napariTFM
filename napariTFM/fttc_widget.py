@@ -1,5 +1,6 @@
 import os
 from typing import Optional
+from napari.qt.threading import thread_worker
 
 import numpy as np
 from qtpy.QtCore import Qt, Signal
@@ -102,6 +103,120 @@ class FTTCWidget(BaseAnalysisWidget):
 
         self.setLayout(main_layout)
         self._register_controls()
+
+    def calculate_forces(self):
+        """Calculate traction forces for all frames."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Starting force calculation...", 0)
+
+            flows = self.data_manager.displacement_results['flows']
+            self._initialize_calculator()
+
+            # Prepare data structure to collect results
+            self.force_results = {
+                'tx': [],
+                'ty': []
+            }
+
+            # Create and configure worker for batch processing
+            @thread_worker
+            def process_frames():
+                for frame_idx, flow in enumerate(flows):
+                    # Calculate regularization if needed
+                    shape = flow.shape[:-1]  # Get shape excluding the vector component
+
+                    # Create properly sized coordinate arrays for interpolation
+                    x = np.arange(shape[1])  # Width
+                    y = np.arange(shape[0])  # Height
+                    pos = np.array(np.meshgrid(x, y, indexing='xy'))
+
+                    # Prepare displacement vectors
+                    vec = np.array([
+                        flow[..., 0].flatten(),  # x component
+                        flow[..., 1].flatten()  # y component
+                    ])
+
+                    pix_per_mu = self.mesh_size / (self._pixel_size * self._downscale_factor)
+
+                    if self.auto_gcv_checkbox.isChecked():
+                        lam = self.calculator._find_regularization(pos, vec)
+                    else:
+                        lam = self.regularization
+
+                    # Perform TFM calculation
+                    results = self.calculator._perform_tfm(pos, vec, pix_per_mu, lam)
+
+                    yield frame_idx, results
+
+            # Create worker and connect signals
+            worker = process_frames()
+
+            def handle_frame(result):
+                try:
+                    frame_idx, (_, fnorm, f, _, _, energy, force, _, _) = result
+                    self.force_results['tx'].append(f[0])
+                    self.force_results['ty'].append(f[1])
+
+                    progress = (frame_idx + 1) / len(flows) * 100
+                    self._update_status(
+                        f"Processing frame {frame_idx + 1}/{len(flows)}...\n"
+                        f"Energy: {energy:.2e} J\n"
+                        f"Total force: {force:.2e} N",
+                        progress
+                    )
+                except Exception as e:
+                    self._handle_error(f"Error processing frame {frame_idx}: {str(e)}")
+
+            def handle_completion():
+                try:
+                    if not self.force_results['tx']:
+                        raise ValueError("No frames were successfully processed")
+
+                    # Convert lists to arrays
+                    self.force_results['tx'] = np.stack(self.force_results['tx'])
+                    self.force_results['ty'] = np.stack(self.force_results['ty'])
+
+                    # Add parameters
+                    self.force_results['parameters'] = {
+                        'young_modulus': self.young_modulus,
+                        'poisson_ratio': self.poisson_ratio,
+                        'gel_height': self.gel_height,
+                        'pixel_size': self._pixel_size,
+                        'regularization': self.regularization,
+                        'mesh_size': self.mesh_size,
+                        'lanczos_exp': self.lanczos_exp,
+                        'downscale_factor': self.data_manager.displacement_results.get('parameters', {}).get('downscale_factor', 1),
+                        'visualization': {
+                            'vector_stride': self.visualization_params['vector_stride'].value(),
+                            'arrow_scale': self.visualization_params['arrow_scale'].value(),
+                            'f_max': self.visualization_params['f_max'].value()
+                        }
+                    }
+
+                    self._handle_force_results(self.force_results)
+                except Exception as e:
+                    self._handle_error(f"Error finalizing results: {str(e)}")
+                finally:
+                    self._set_controls_enabled(True)
+
+            def handle_error(error):
+                self._handle_error(str(error))
+                self._set_controls_enabled(True)
+
+            worker.yielded.connect(handle_frame)
+            worker.finished.connect(handle_completion)
+            worker.errored.connect(handle_error)
+
+            # Start processing
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self._set_controls_enabled(True)
 
     def _create_parameters_group(self) -> QGroupBox:
         """Create a consolidated parameters group."""
@@ -366,168 +481,6 @@ class FTTCWidget(BaseAnalysisWidget):
         self.regularization_spin.setEnabled(not state)
         self.gcv_button.setEnabled(not state)
 
-    def calculate_forces(self):
-        """Calculate traction forces using the FTTC calculator."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            # Set analysis running flag and disable controls
-            self.is_analysis_running = True
-            self._set_controls_enabled(False)
-            self._update_status("Starting force calculation...", 0)
-
-            # Get displacement data
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            self.total_frames = len(flows)
-
-            # Initialize result arrays
-            self.force_results = {
-                'tx': [],
-                'ty': []
-            }
-            self.flows = flows
-            self.current_frame = 0
-
-            # Initialize calculator if needed
-            self._initialize_calculator()
-
-            # Start processing first frame
-            self._process_next_frame()
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.is_analysis_running = False
-            self._set_controls_enabled(True)
-
-    def _process_next_frame(self):
-        """Process the next frame in the sequence."""
-        try:
-            if self.current_frame >= self.total_frames:
-                self._finalize_force_results()
-                return
-
-            # Get spatial coordinates for current frame
-            shape = self.flows[self.current_frame].shape[:-1]
-            x = np.arange(shape[1])  # Width
-            y = np.arange(shape[0])  # Height
-
-            # Determine regularization parameter
-            if self.auto_gcv_checkbox.isChecked():
-                # Calculate optimal regularization for this frame
-                pos = np.array(np.meshgrid(x, y, indexing='xy'))
-                vec = np.array([
-                    self.flows[self.current_frame][..., 0],
-                    self.flows[self.current_frame][..., 1]
-                ])
-                pix_per_mu = self.mesh_size / (self._pixel_size * self._downscale_factor)
-                vec = pix_per_mu * vec
-                lam = self.calculator._find_regularization(pos, vec)
-            else:
-                lam = self.regularization
-
-            # Create worker for current frame
-            worker = self.calculator.calculate_traction(
-                x=x,
-                y=y,
-                u_data=self.flows[self.current_frame][..., 0],
-                v_data=self.flows[self.current_frame][..., 1],
-                dx=self._pixel_size * self._downscale_factor,
-                set_lam=lam
-            )
-
-            # Connect worker signals with proper error handling
-            worker.returned.connect(self._handle_force_frame)
-            worker.finished.connect(self._on_frame_finished)
-            worker.errored.connect(self._handle_error)
-
-            # Start the worker
-            worker.start()
-
-        except Exception as e:
-            self._handle_error(str(e))
-
-    def _handle_force_frame(self, results):
-        """Handle results from a single frame calculation."""
-        try:
-            # Unpack results
-            (_, _), _, f, _, _, energy, force, _, _ = results
-
-            # Store force components
-            self.force_results['tx'].append(f[0])
-            self.force_results['ty'].append(f[1])
-
-            # Update progress
-            progress = (self.current_frame + 1) / self.total_frames * 100
-            self._update_status(
-                f"Processing frame {self.current_frame + 1}/{self.total_frames}...\n"
-                f"Computing forces...",
-                progress
-            )
-
-        except Exception as e:
-            self._handle_error(str(e))
-
-    def _on_frame_finished(self):
-        """Handle completion of a frame calculation."""
-        try:
-            # Increment frame counter
-            self.current_frame += 1
-
-            # Process next frame or finalize
-            if self.current_frame < self.total_frames:
-                self._process_next_frame()
-            else:
-                self._finalize_force_results()
-
-        except Exception as e:
-            self._handle_error(str(e))
-
-    def _finalize_force_results(self):
-        """Finalize and handle the complete force calculation results."""
-        try:
-            # Convert lists to arrays
-            self.force_results['tx'] = np.stack(self.force_results['tx'])
-            self.force_results['ty'] = np.stack(self.force_results['ty'])
-
-            # Store calculation parameters
-            visualization_params = {
-                'vector_stride': self.visualization_params['vector_stride'].value(),
-                'arrow_scale': self.visualization_params['arrow_scale'].value(),
-                'f_max': self.visualization_params['f_max'].value()
-            }
-
-            displacement_results = self.data_manager.displacement_results
-            downscale_factor = displacement_results.get('parameters', {}).get('downscale_factor', 1)
-
-            self.force_results['parameters'] = {
-                'young_modulus': self.young_modulus,
-                'poisson_ratio': self.poisson_ratio,
-                'gel_height': self.gel_height,
-                'pixel_size': self._pixel_size,
-                'regularization': self.regularization,
-                'mesh_size': self.mesh_size,
-                'lanczos_exp': self.lanczos_exp,
-                'downscale_factor': downscale_factor,
-                'visualization': visualization_params
-            }
-
-            # Handle final results
-            self._handle_force_results(self.force_results)
-
-            # Clean up
-            self.is_analysis_running = False
-            self._set_controls_enabled(True)
-            self.current_frame = 0
-            self.total_frames = 0
-            self.flows = None
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.is_analysis_running = False
-            self._set_controls_enabled(True)
-
     def _handle_error(self, error):
         """Handle errors during calculation."""
         error_message = str(error)
@@ -587,6 +540,7 @@ class FTTCWidget(BaseAnalysisWidget):
                 self.status_label.setText("Ready for force calculation")
             else:
                 self.status_label.setText("Missing required displacement data")
+
     def _set_controls_enabled(self, enabled: bool):
         """Enable or disable all registered controls."""
         self.is_analysis_running = not enabled
@@ -683,39 +637,6 @@ class FTTCWidget(BaseAnalysisWidget):
                 f"Total force: {force:.2e} N",
                 100
             )
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self._set_controls_enabled(True)
-
-    def _start_next_frame(self):
-        """Start calculation for next frame if available."""
-        try:
-            self.current_frame += 1
-
-            if self.current_frame < self.total_frames:
-                # Start next frame calculation
-                shape = self.flows[0].shape[:-1]
-                x = np.arange(shape[1])
-                y = np.arange(shape[0])
-
-                worker = self.calculator.calculate_traction(
-                    x=x,
-                    y=y,
-                    u_data=self.flows[self.current_frame][..., 0],
-                    v_data=self.flows[self.current_frame][..., 1],
-                    dx=self._pixel_size,
-                    set_lam=self.regularization
-                )
-
-                worker.returned.connect(self._handle_force_frame)
-                worker.finished.connect(self._start_next_frame)
-                worker.errored.connect(self._handle_error)
-
-                worker.start()
-            else:
-                # All frames complete, finalize results
-                self._finalize_force_results()
 
         except Exception as e:
             self._handle_error(str(e))
