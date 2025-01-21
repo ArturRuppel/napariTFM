@@ -1,7 +1,7 @@
 import os
 
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QSizePolicy,
+    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QSizePolicy, QCheckBox,
     QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QComboBox,
     QProgressBar, QMessageBox, QFileDialog
 )
@@ -58,6 +58,250 @@ class MSMWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
+    def _setup_ui(self):
+        """Set up the user interface."""
+        main_layout = QHBoxLayout()
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create colorbar container
+        colorbar_container = QWidget()
+        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        colorbar_layout = QVBoxLayout()
+        colorbar_layout.setContentsMargins(6, 6, 6, 6)
+
+        colorbar_group = self.create_colorbar_widget(
+            colormap_name='seismic',
+            label="Stress (mN/m)",
+            clim=(-1, 1),
+            colorbar_manager=self.colorbar_manager
+        )
+        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        colorbar_layout.addStretch()
+        colorbar_container.setLayout(colorbar_layout)
+
+        main_layout.addWidget(colorbar_container)
+
+        # Right side container
+        right_container = QWidget()
+        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Add main UI elements
+        right_layout.addWidget(self._create_data_loading_group())
+        right_layout.addWidget(self._create_parameters_group())
+        right_layout.addWidget(self._create_action_buttons())
+        right_layout.addWidget(self._create_status_frame())
+        right_layout.addStretch()
+
+        right_container.setLayout(right_layout)
+        right_container.setFixedWidth(360)
+
+        main_layout.addWidget(right_container)
+        main_layout.addStretch(1)
+
+        self.setLayout(main_layout)
+
+    def _create_data_loading_group(self) -> QGroupBox:
+        """Create the data loading group."""
+        group = QGroupBox("Data")
+        layout = QVBoxLayout()
+        layout.setSpacing(4)
+
+        # Force data row
+        force_layout = QHBoxLayout()
+        self.load_force_btn = QPushButton("Load Force Data")
+        self.load_force_btn.setToolTip("Load force data from file")
+        self.force_status = QLabel("Not loaded")
+        force_layout.addWidget(self.load_force_btn)
+        force_layout.addWidget(self.force_status)
+
+        # Input image row
+        image_layout = QHBoxLayout()
+        self.load_image_btn = QPushButton("Load Image Data")
+        self.load_image_btn.setToolTip("Load input image data")
+        self.image_status = QLabel("Not loaded")
+        image_layout.addWidget(self.load_image_btn)
+        image_layout.addWidget(self.image_status)
+
+        layout.addLayout(force_layout)
+        layout.addLayout(image_layout)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_parameters_group(self) -> QGroupBox:
+        """Create the analysis parameters group."""
+        group = QGroupBox("Parameters")
+        layout = QVBoxLayout()
+
+        # Mask parameters
+        mask_params = [
+            ("dilation", "Mask Dilation (px):", 0, 50, 1, 10,
+             "Number of pixels to dilate the mask. Higher values create a larger boundary around the cell."),
+            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 10,
+             "Gaussian smoothing sigma for the mask boundary. Higher values create smoother boundaries."),
+        ]
+
+        # Mesh parameters
+        mesh_params = [
+            ("density_factor", "Density Factor:", 0.001, 0.1, 0.001, 0.025,
+             "Controls mesh density. Lower values create finer meshes with more elements."),
+            ("algorithm", "Mesh Algorithm:", None, None, None, "Frontal-Del.",
+             "Algorithm used for mesh generation. Frontal-Delaunay is recommended for most cases."),
+            ("use_optimization", "Mesh Optimization", None, None, None, True,
+             "Optimize mesh quality after generation. Check mesh quality, does not always improve results."),
+        ]
+
+        # Material parameters
+        material_params = [
+            ("sigma", "Poisson's Ratio:", 0.0, 1.0, 0.01, 0.5,
+             "Material's Poisson ratio. Typical value is 0.5 for incompressible materials."),
+        ]
+
+        # Visualization parameters
+        vis_params = [
+            ("max_stress", "Max Stress (mN/m):", 0.01, 1000.0, 0.1, 1.0,
+             "Maximum stress value for colormap scaling. Adjust to optimize visualization."),
+        ]
+
+        # Create parameter sections with headers
+        sections = [
+            ("Mask Parameters", mask_params),
+            ("Mesh Parameters", mesh_params),
+            ("Material Parameters", material_params),
+            ("Visualization", vis_params)
+        ]
+
+        for section_title, params in sections:
+            # Create group box for each section
+            section_group = QGroupBox(section_title)
+            section_layout = QVBoxLayout()
+
+            for param_info in params:
+                param_name, label, min_val, max_val, step, default, tooltip = param_info
+                param_layout = QHBoxLayout()
+                param_layout.setSpacing(10)
+
+                # Create label with fixed width
+                label_widget = QLabel(label)
+                label_widget.setToolTip(tooltip)
+                label_widget.setFixedWidth(150)
+                param_layout.addWidget(label_widget)
+
+                if param_name == "use_optimization":
+                    spin = QCheckBox()
+                    spin.setChecked(default)
+                elif param_name == "algorithm":
+                    spin = QComboBox()
+                    spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                    for algo_name in self.MESH_ALGORITHMS.keys():
+                        spin.addItem(algo_name)
+                    spin.setCurrentText(default)
+                    full_names_tooltip = "Available algorithms:\n" + \
+                                         "\n".join(f"• {short}: {full}"
+                                                   for short, full in self.ALGORITHM_FULL_NAMES.items())
+                    spin.setToolTip(tooltip + "\n\n" + full_names_tooltip)
+                else:
+                    if isinstance(step, int):
+                        spin = QSpinBox()
+                    else:
+                        spin = QDoubleSpinBox()
+                        spin.setDecimals(3 if param_name == "density_factor" else 2)
+                    spin.setRange(min_val, max_val)
+                    spin.setSingleStep(step)
+                    spin.setValue(default)
+                    spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                    spin.setToolTip(tooltip)
+
+                self.parameter_spins[param_name] = spin
+                param_layout.addWidget(spin)
+                section_layout.addLayout(param_layout)
+
+            section_group.setLayout(section_layout)
+            layout.addWidget(section_group)
+
+        # Add reset parameters button
+        self.reset_params_btn = QPushButton("Reset Parameters")
+        self.reset_params_btn.setToolTip("Reset all parameters to their default values")
+        self.reset_params_btn.clicked.connect(self._reset_parameters)
+        layout.addWidget(self.reset_params_btn)
+
+        layout.addStretch()
+        group.setLayout(layout)
+        return group
+
+    def _create_action_buttons(self) -> QFrame:
+        """Create the action buttons frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
+
+        button_grid = QHBoxLayout()
+
+        # Create left column (Create Mask and Preview)
+        left_column = QVBoxLayout()
+        self.create_mask_btn = QPushButton("Create Mask from Images")
+        self.create_mask_btn.setToolTip("Generate a mask from the active image layer using current dilation and smoothing settings")
+        self.preview_frame_btn = QPushButton("Preview Current Frame")
+        self.preview_frame_btn.setToolTip("Calculate and visualize stress field for the current frame")
+        left_column.addWidget(self.create_mask_btn)
+        left_column.addWidget(self.preview_frame_btn)
+
+        # Create right column (Preview Mesh and Analyze)
+        right_column = QVBoxLayout()
+        self.preview_mesh_btn = QPushButton("Preview Mesh")
+        self.preview_mesh_btn.setToolTip("Generate and display the finite element mesh for the current frame")
+        self.analyze_btn = QPushButton("Analyze All Frames")
+        self.analyze_btn.setToolTip("Calculate stress fields for all frames in the dataset")
+        right_column.addWidget(self.preview_mesh_btn)
+        right_column.addWidget(self.analyze_btn)
+
+        button_grid.addLayout(left_column)
+        button_grid.addLayout(right_column)
+
+        # Add save/load buttons in a row
+        save_load_layout = QHBoxLayout()
+        self.save_stress_btn = QPushButton("Save Stress Tensor")
+        self.save_stress_btn.setToolTip("Save calculated stress tensor data to file")
+        self.load_stress_btn = QPushButton("Load Stress Tensor")
+        self.load_stress_btn.setToolTip("Load previously saved stress tensor data")
+        save_load_layout.addWidget(self.save_stress_btn)
+        save_load_layout.addWidget(self.load_stress_btn)
+
+        layout.addLayout(button_grid)
+        layout.addLayout(save_load_layout)
+
+        frame.setLayout(layout)
+        return frame
+
+    def _reset_parameters(self):
+        """Reset all parameters to their default values."""
+        # Reset each parameter to its default value
+        default_values = {
+            'dilation': 10,
+            'smoothing_sigma': 10,
+            'density_factor': 0.025,
+            'algorithm': 'Frontal-Del.',
+            'use_optimization': True,
+            'sigma': 0.5,
+            'max_stress': 1.0
+        }
+
+        for param_name, default_value in default_values.items():
+            if param_name in self.parameter_spins:
+                if isinstance(self.parameter_spins[param_name], QComboBox):
+                    self.parameter_spins[param_name].setCurrentText(default_value)
+                elif isinstance(self.parameter_spins[param_name], QCheckBox):
+                    self.parameter_spins[param_name].setChecked(default_value)
+                else:
+                    self.parameter_spins[param_name].setValue(default_value)
+
+        self._update_parameters()
+        self._update_status("Parameters reset to defaults", 100)
     def _create_mask_from_images(self):
         """Create masks from the cell stack using dilation and smoothing."""
         try:
@@ -462,141 +706,7 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to update parameters: {str(e)}")
 
-    def _create_parameters_group(self) -> QGroupBox:
-        """Create the analysis parameters group."""
-        group = QGroupBox("Analysis Parameters")
-        layout = QVBoxLayout()
 
-        # Mesh generation parameters
-        mesh_params = [
-            ("dilation", "Mask Dilation (px):", 0, 50, 1, 10,
-             "Number of pixels to dilate the mask. Higher values create a larger boundary around the cell."),
-            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 10,
-             "Gaussian smoothing sigma for the mask boundary. Higher values create smoother boundaries."),
-            ("density_factor", "Density Factor:", 0.001, 0.1, 0.001, 0.025,
-             "Controls mesh density. Lower values create finer meshes with more elements."),
-            ("algorithm", "Mesh Algorithm:", None, None, None, "Frontal-Del.",
-             "Algorithm used for mesh generation. Frontal-Delaunay is recommended for most cases."),
-            ("use_optimization", "Mesh Optimization", None, None, None, True,
-             "Optimize mesh quality after generation. Check mesh quality, does not always improve results."),
-        ]
-
-        # Material parameters
-        material_params = [
-            ("sigma", "Poisson's Ratio:", 0.0, 1.0, 0.01, 0.5,
-             "Material's Poisson ratio. Typical value is 0.5 for incompressible materials."),
-        ]
-
-        # Visualization parameters
-        vis_params = [
-            ("max_stress", "Max Stress (mN/m):", 0.01, 1000.0, 0.1, 1.0,
-             "Maximum stress value for colormap scaling. Adjust to optimize visualization."),
-        ]
-
-        # Create parameter sections with headers
-        sections = [
-            ("Mesh Parameters", mesh_params),
-            ("Material Parameters", material_params),
-            ("Visualization", vis_params)
-        ]
-
-        for section_title, params in sections:
-            header = QLabel(f"<b>{section_title}</b>")
-            layout.addWidget(header)
-
-            for param_info in params:
-                param_name, label, min_val, max_val, step, default, tooltip = param_info
-                param_layout = QHBoxLayout()
-                param_layout.setSpacing(10)
-
-                # Create label with fixed width to align all inputs
-                label_widget = QLabel(label)
-                label_widget.setToolTip(tooltip)
-                label_widget.setFixedWidth(150)  # Fixed width for consistent alignment
-                param_layout.addWidget(label_widget)
-
-                if param_name == "use_optimization":
-                    from qtpy.QtWidgets import QCheckBox
-                    spin = QCheckBox()
-                    spin.setChecked(default)
-                elif param_name == "algorithm":
-                    spin = QComboBox()
-                    # Set size policy to expand horizontally
-                    spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-                    # Add items with shortened names
-                    for algo_name in self.MESH_ALGORITHMS.keys():
-                        spin.addItem(algo_name)
-
-                    # Create detailed tooltip that shows full algorithm names
-                    full_names_tooltip = "Available algorithms:\n" + \
-                                         "\n".join(f"• {short}: {full}"
-                                                   for short, full in self.ALGORITHM_FULL_NAMES.items())
-                    spin.setToolTip(tooltip + "\n\n" + full_names_tooltip)
-
-                    spin.setCurrentText(default)
-                else:
-                    if isinstance(step, int):
-                        spin = QSpinBox()
-                    else:
-                        spin = QDoubleSpinBox()
-                        spin.setDecimals(3 if param_name == "density_factor" else 2)
-
-                    spin.setRange(min_val, max_val)
-                    spin.setSingleStep(step)
-                    spin.setValue(default)
-                    # Set size policy to expand horizontally
-                    spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-                if param_name != "algorithm":  # Algorithm already has a custom tooltip
-                    spin.setToolTip(tooltip)
-
-                self.parameter_spins[param_name] = spin
-                param_layout.addWidget(spin)
-                layout.addLayout(param_layout)
-
-            layout.addSpacing(10)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_action_buttons(self) -> QFrame:
-        """Create the action buttons frame with compact layout."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-        layout.setSpacing(6)
-
-        # Create buttons with tooltips
-        self.create_mask_btn = QPushButton("Create Mask from Images")
-        self.create_mask_btn.setToolTip("Generate a mask from the active image layer using current dilation and smoothing settings")
-
-        self.preview_mesh_btn = QPushButton("Preview Mesh")
-        self.preview_mesh_btn.setToolTip("Generate and display the finite element mesh for the current frame")
-
-        self.preview_frame_btn = QPushButton("Preview Current Frame")
-        self.preview_frame_btn.setToolTip("Calculate and visualize stress field for the current frame")
-
-        self.analyze_btn = QPushButton("Analyze All Frames")
-        self.analyze_btn.setToolTip("Calculate stress fields for all frames in the dataset")
-
-        save_load_layout = QHBoxLayout()
-        self.save_stress_btn = QPushButton("Save Stress Tensor")
-        self.save_stress_btn.setToolTip("Save calculated stress tensor data to file")
-
-        self.load_stress_btn = QPushButton("Load Stress Tensor")
-        self.load_stress_btn.setToolTip("Load previously saved stress tensor data")
-
-        save_load_layout.addWidget(self.save_stress_btn)
-        save_load_layout.addWidget(self.load_stress_btn)
-
-        layout.addWidget(self.create_mask_btn)
-        layout.addWidget(self.preview_mesh_btn)
-        layout.addWidget(self.preview_frame_btn)
-        layout.addWidget(self.analyze_btn)
-        layout.addLayout(save_load_layout)
-
-        frame.setLayout(layout)
-        return frame
 
     def _connect_signals(self):
         """Connect widget signals."""
@@ -733,52 +843,6 @@ class MSMWidget(BaseAnalysisWidget):
             self._handle_error(f"Failed to preview mesh: {str(e)}")
             self.progress_bar.setValue(0)
 
-    def _setup_ui(self):
-        """Set up the user interface."""
-        main_layout = QHBoxLayout()
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Create colorbar widget
-        colorbar_container = QWidget()
-        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(6, 6, 6, 6)
-
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='seismic',
-            label="Stress (mN/m)",
-            clim=(-1, 1),
-            colorbar_manager=self.colorbar_manager
-        )
-        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        colorbar_layout.addStretch()
-        colorbar_container.setLayout(colorbar_layout)
-
-        main_layout.addWidget(colorbar_container)
-
-        # Container for right side content
-        right_container = QWidget()
-        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        right_layout = QVBoxLayout()
-        right_layout.setSpacing(8)
-        right_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Add main UI elements
-        right_layout.addWidget(self._create_parameters_group())
-        right_layout.addWidget(self._create_action_buttons())
-        right_layout.addWidget(self._create_status_frame())
-        right_layout.addStretch()
-
-        right_container.setLayout(right_layout)
-        right_container.setFixedWidth(350)
-
-        main_layout.addWidget(right_container)
-        main_layout.addStretch(1)
-
-        self.setLayout(main_layout)
 
     def cleanup(self):
         """Clean up resources."""
