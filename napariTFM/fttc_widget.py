@@ -575,17 +575,18 @@ class FTTCWidget(BaseAnalysisWidget):
             # If analysis is running, disable the buttons regardless of data availability
             self.calculate_btn.setEnabled(False)
             self.preview_btn.setEnabled(False)
+            self.gcv_button.setEnabled(False)  # Also disable GCV button during analysis
             self.status_label.setText("Analysis in progress...")
         else:
             # If no analysis is running, enable buttons if we have valid displacement data
             self.calculate_btn.setEnabled(has_displacement)
             self.preview_btn.setEnabled(has_displacement)
+            self.gcv_button.setEnabled(has_displacement and not self.auto_gcv_checkbox.isChecked())  # Enable GCV button only if we have data and auto-GCV is off
 
             if has_displacement:
                 self.status_label.setText("Ready for force calculation")
             else:
                 self.status_label.setText("Missing required displacement data")
-
     def _set_controls_enabled(self, enabled: bool):
         """Enable or disable all registered controls."""
         self.is_analysis_running = not enabled
@@ -889,7 +890,7 @@ class FTTCWidget(BaseAnalysisWidget):
         self.height_spin.setValue(0)
         self.mesh_size = 1  # hardcoded to 1
         self.lanczos_exp_spin.setValue(1)
-        self.regularization_spin.setValue(-17)  # 10^-17
+        self.regularization_spin.setValue(-4)  # 10^-4
         self.auto_gcv_checkbox.setChecked(False)
 
         self.visualization_params['vector_stride'].setValue(20)
