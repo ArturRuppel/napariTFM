@@ -48,7 +48,156 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Setup UI and connect signals
         self._setup_ui()
         self._connect_signals()
+
+        # Connect to viewer layer events
+        self.viewer.layers.events.inserted.connect(self._on_layer_change)
+        self.viewer.layers.events.removed.connect(self._on_layer_change)
+        self.viewer.layers.selection.events.changed.connect(self._on_layer_selection_change)
+
+        # Initialize button states
+        self._update_button_states()
         self._update_ui_state()
+
+    def _get_active_image_layer(self):
+        """Get currently active image layer"""
+        from napari.layers import Image
+
+        selected_layers = list(self.viewer.layers.selection)
+        if not selected_layers:
+            return None
+
+        active_layer = selected_layers[0]
+        if not isinstance(active_layer, Image):
+            return None
+
+        return active_layer
+
+    def _validate_layer_for_data_type(self, layer, data_type: str) -> bool:
+        """
+        Validate if the given layer is suitable for the specified data type.
+
+        Parameters
+        ----------
+        layer : napari.layers.Image
+            The layer to validate
+        data_type : str
+            The type of data ('beads', 'reference', or 'cells')
+
+        Returns
+        -------
+        bool
+            True if the layer is valid for the data type, False otherwise
+        """
+        from napari.layers import Image
+
+        if layer is None or not isinstance(layer, Image):
+            return False
+
+        data = layer.data
+
+        if data_type == 'reference':
+            # Reference image must be 2D
+            return data.ndim == 2
+        elif data_type in ['beads', 'cells']:
+            # Bead and cell stacks must be 3D, or 2D (which can be converted to 3D)
+            return data.ndim in [2, 3]
+
+        return False
+
+    def _on_layer_change(self, event=None):
+        """Handle layer addition/removal events"""
+        self._update_button_states()
+
+    def _on_layer_selection_change(self, event=None):
+        """Handle layer selection changes"""
+        self._update_button_states()
+
+    def _update_button_states(self):
+        """Update the enabled state of load buttons based on available data"""
+        active_layer = self._get_active_image_layer()
+
+        # Update each button's enabled state based on layer validation
+        self.load_beads_btn.setEnabled(
+            self._validate_layer_for_data_type(active_layer, 'beads')
+        )
+        self.load_reference_btn.setEnabled(
+            self._validate_layer_for_data_type(active_layer, 'reference')
+        )
+        self.load_cells_btn.setEnabled(
+            self._validate_layer_for_data_type(active_layer, 'cells')
+        )
+
+    def _create_load_group(self):
+        """Create the data loading group."""
+        load_group = QGroupBox("Input Data")
+        load_layout = QVBoxLayout()
+        load_layout.setSpacing(4)
+
+        # Initialize buttons and status labels
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_beads_btn.setEnabled(False)  # Initially disabled
+        self.load_beads_btn.setToolTip("Load a time series of bead images from the active layer in napari")
+
+        self.load_reference_btn = QPushButton("Load Reference Image")
+        self.load_reference_btn.setEnabled(False)  # Initially disabled
+        self.load_reference_btn.setToolTip("Load a single reference image for registration from the active layer")
+
+        self.load_cells_btn = QPushButton("Load Cell Stack")
+        self.load_cells_btn.setEnabled(False)  # Initially disabled
+        self.load_cells_btn.setToolTip("Load a time series of cell images from the active layer")
+
+        self.bead_status = QLabel("Not loaded")
+        self.reference_status = QLabel("Not loaded")
+        self.cell_status = QLabel("Not loaded")
+
+        # Add widgets with their status labels
+        for btn, label in [
+            (self.load_beads_btn, self.bead_status),
+            (self.load_reference_btn, self.reference_status),
+            (self.load_cells_btn, self.cell_status)
+        ]:
+            btn_layout = QHBoxLayout()
+            btn_layout.addWidget(btn)
+            btn_layout.addWidget(label)
+            load_layout.addLayout(btn_layout)
+
+        load_group.setLayout(load_layout)
+        return load_group
+
+    def _update_button_tooltips(self, active_layer):
+        """Update button tooltips to provide feedback about why they might be disabled"""
+        from napari.layers import Image
+
+        base_tooltips = {
+            'beads': "Load a time series of bead images from the active layer in napari",
+            'reference': "Load a single reference image for registration from the active layer",
+            'cells': "Load a time series of cell images from the active layer"
+        }
+
+        if active_layer is None:
+            disabled_msg = " (No image layer selected)"
+        elif not isinstance(active_layer, Image):
+            disabled_msg = " (Selected layer is not an image)"
+        else:
+            data_dims = active_layer.data.ndim
+            if data_dims not in [2, 3]:
+                disabled_msg = f" (Invalid dimensions: {data_dims}D)"
+            else:
+                disabled_msg = ""
+
+        # Update each button's tooltip
+        buttons = {
+            'beads': self.load_beads_btn,
+            'reference': self.load_reference_btn,
+            'cells': self.load_cells_btn
+        }
+
+        for data_type, button in buttons.items():
+            base_tooltip = base_tooltips[data_type]
+            if button.isEnabled():
+                button.setToolTip(base_tooltip)
+            else:
+                button.setToolTip(f"{base_tooltip}{disabled_msg}")
 
     def _handle_results(self, results):
         """Handle the final results from the worker"""
@@ -174,7 +323,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         spinbox_layout.addWidget(QLabel("Max "))
         intensity_layout.addLayout(spinbox_layout)
 
-
         # Add Gaussian filter controls
         self.gaussian_sigma_spin = QDoubleSpinBox()
         self.gaussian_sigma_spin.setToolTip("Set Gaussian blur sigma (0 = disabled)")
@@ -285,6 +433,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         spinbox_layout.addWidget(max_label)
 
         return spinbox_layout
+
     def _create_parameters_group(self):
         """Create a group containing all parameter controls."""
         parameters_group = QGroupBox("Parameters")
@@ -512,40 +661,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.processing_failed.emit(str(e))
             self._set_controls_enabled(True)
 
-    def _create_load_group(self):
-        """Create the data loading group."""
-        load_group = QGroupBox("Input Data")
-        load_layout = QVBoxLayout()
-        load_layout.setSpacing(4)
-
-        # Initialize buttons and status labels
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.load_beads_btn.setToolTip("Load a time series of bead images from the active layer in napari")
-
-        self.load_reference_btn = QPushButton("Load Reference Image")
-        self.load_reference_btn.setToolTip("Load a single reference image for registration from the active layer")
-
-        self.load_cells_btn = QPushButton("Load Cell Stack")
-        self.load_cells_btn.setToolTip("Load a time series of cell images from the active layer")
-
-        self.bead_status = QLabel("Not loaded")
-        self.reference_status = QLabel("Not loaded")
-        self.cell_status = QLabel("Not loaded")
-
-        # Add widgets with their status labels
-        for btn, label in [
-            (self.load_beads_btn, self.bead_status),
-            (self.load_reference_btn, self.reference_status),
-            (self.load_cells_btn, self.cell_status)
-        ]:
-            btn_layout = QHBoxLayout()
-            btn_layout.addWidget(btn)
-            btn_layout.addWidget(label)
-            load_layout.addLayout(btn_layout)
-
-        load_group.setLayout(load_layout)
-        return load_group
-
     def _create_preview_selection_group(self):
         """Create the preview selection group."""
         preview_select_group = QGroupBox("Preview Data Type")
@@ -646,7 +761,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         for control in controls:
             self.register_control(control)
-
 
     def _update_sigma_from_slider(self):
         """Update sigma spinbox from slider value"""
