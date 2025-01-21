@@ -60,6 +60,156 @@ class MSMWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
+    def _connect_signals(self):
+        """Connect widget signals."""
+        # Buttons
+        self.create_mask_btn.clicked.connect(self._create_mask_from_images)
+        self.preview_mesh_btn.clicked.connect(self.preview_mesh)
+        self.preview_frame_btn.clicked.connect(self.preview_current_frame)
+        self.analyze_btn.clicked.connect(self.analyze_all_frames)
+        self.save_stress_btn.clicked.connect(self._save_stress_tensor)
+        self.load_stress_btn.clicked.connect(self._load_stress_tensor)
+
+        # Parameters
+        for name, widget in self.parameter_spins.items():
+            if isinstance(widget, tuple):
+                # Handle threshold spinbox and slider
+                spin, slider = widget
+                spin.valueChanged.connect(self._update_parameters)
+                spin.valueChanged.connect(self._update_mask_preview)
+                slider.valueChanged.connect(self._update_parameters)
+                slider.valueChanged.connect(self._update_mask_preview)
+            elif isinstance(widget, QComboBox):
+                widget.currentTextChanged.connect(self._update_parameters)
+            elif isinstance(widget, QCheckBox):
+                if name == 'show_preview':
+                    widget.stateChanged.connect(self._handle_preview_state)
+                else:
+                    widget.stateChanged.connect(self._update_parameters)
+            elif name in ['dilation', 'smoothing_sigma']:
+                widget.valueChanged.connect(self._update_parameters)
+                widget.valueChanged.connect(self._update_mask_preview)
+            else:  # Other spin boxes
+                widget.valueChanged.connect(self._update_parameters)
+
+    def _handle_preview_state(self, state):
+        """Handle changes in the preview checkbox state."""
+        from qtpy.QtCore import Qt
+
+        if state == Qt.Checked:
+            self._update_mask_preview()
+        else:
+            # Remove preview layer if it exists
+            if 'Mask Preview' in self.viewer.layers:
+                self.viewer.layers.remove('Mask Preview')
+
+    def _get_active_image_layer(self):
+        """Get the currently active image layer."""
+        # First try to get the selected layer
+        active_layer = self.viewer.layers.selection.active
+        if active_layer is not None and active_layer._type_string == 'image':
+            return active_layer
+
+        # If no layer is selected or selected layer is not an image,
+        # try to find the first image layer
+        for layer in self.viewer.layers:
+            if layer._type_string == 'image':
+                return layer
+
+        return None
+
+    def _update_mask_preview(self):
+        """Update the mask preview based on current parameters."""
+        try:
+            # Check if preview is enabled
+            if not self.parameter_spins['show_preview'].isChecked():
+                return
+
+            # Get active layer
+            active_layer = self._get_active_image_layer()
+            if active_layer is None:
+                self.status_label.setText("No active image layer found")
+                return
+
+            # Get current frame data
+            current_frame = self.viewer.dims.current_step[0]
+            image = active_layer.data
+            if image.ndim == 3:
+                image = image[current_frame]
+            elif image.ndim != 2:
+                self.status_label.setText("Image must be 2D or 3D")
+                return
+
+            # Get current parameters
+            dilation = self.parameter_spins['dilation'].value()
+            smoothing_sigma = self.parameter_spins['smoothing_sigma'].value()
+            threshold_spin, _ = self.parameter_spins['threshold']
+            threshold = threshold_spin.value()
+
+            # Process the mask
+            preview_mask = self._process_single_mask(
+                image,
+                dilation=dilation,
+                smoothing_sigma=smoothing_sigma
+            )
+
+            # Check if we need to resize the mask for force data resolution
+            target_shape = None
+            downscale_factor = 1
+
+            if hasattr(self.data_manager, 'force_results') and self.data_manager.force_results is not None:
+                tx = self.data_manager.force_results['tx'][0]
+                target_shape = tx.shape
+                downscale_factor = self.data_manager.force_results.get('parameters', {}).get('downscale_factor', 1)
+
+            # Resize mask if needed
+            if target_shape is not None and preview_mask.shape != target_shape:
+                from skimage.transform import resize
+                preview_mask = resize(
+                    preview_mask.astype(float),
+                    target_shape,
+                    order=0,
+                    preserve_range=True,
+                    anti_aliasing=False
+                ) > 0.5
+
+            # Scale up for visualization if needed
+            if downscale_factor > 1:
+                vis_shape = (preview_mask.shape[0] * downscale_factor,
+                             preview_mask.shape[1] * downscale_factor)
+                preview_mask = resize(
+                    preview_mask.astype(float),
+                    vis_shape,
+                    order=0,
+                    preserve_range=True,
+                    anti_aliasing=False
+                ) > 0.5
+
+            # Update or create preview layer
+            if 'Mask Preview' in self.viewer.layers:
+                self.viewer.layers['Mask Preview'].data = preview_mask
+            else:
+                # Create a color mapping for the labels
+                colors = {
+                    0: 'transparent',
+                    1: [1, 1, 0, 0.5]  # Yellow with 0.5 opacity
+                }
+
+                self.viewer.add_labels(
+                    data=preview_mask.astype(np.uint8),
+                    name='Mask Preview'
+                )
+                # Set the colors after creation
+                self.viewer.layers['Mask Preview'].opacity = 0.5
+                self.viewer.layers['Mask Preview'].color = colors
+
+            self.status_label.setText(f"Preview updated (Frame {current_frame})")
+
+        except Exception as e:
+            self.status_label.setText(f"Preview error: {str(e)}")
+            # Remove preview layer if there's an error
+            if 'Mask Preview' in self.viewer.layers:
+                self.viewer.layers.remove('Mask Preview')
     def _create_mask_from_images(self):
         """Create masks from the cell stack using dilation and smoothing."""
         try:
@@ -265,30 +415,6 @@ class MSMWidget(BaseAnalysisWidget):
         self._update_parameters()
         self._update_status("Parameters reset to defaults", 100)
 
-    def _connect_signals(self):
-        """Connect widget signals."""
-        # Buttons
-        self.create_mask_btn.clicked.connect(self._create_mask_from_images)
-        self.preview_mesh_btn.clicked.connect(self.preview_mesh)
-        self.preview_frame_btn.clicked.connect(self.preview_current_frame)
-        self.analyze_btn.clicked.connect(self.analyze_all_frames)
-        self.save_stress_btn.clicked.connect(self._save_stress_tensor)
-        self.load_stress_btn.clicked.connect(self._load_stress_tensor)
-
-        # Parameters
-        for name, widget in self.parameter_spins.items():
-            if isinstance(widget, tuple):
-                # Handle threshold spinbox and slider
-                spin, slider = widget
-                spin.valueChanged.connect(self._update_parameters)
-                slider.valueChanged.connect(self._update_parameters)
-            elif isinstance(widget, QComboBox):
-                widget.currentTextChanged.connect(self._update_parameters)
-            elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
-                widget.valueChanged.connect(self._update_parameters)
-            else:  # QCheckBox
-                widget.stateChanged.connect(self._update_parameters)
-
     def _resize_mask_stack(self, mask_stack: np.ndarray,
                            target_shape: Tuple[int, int]) -> np.ndarray:
         """Resize a mask stack to target shape."""
@@ -447,9 +573,11 @@ class MSMWidget(BaseAnalysisWidget):
              "Number of pixels to dilate the mask. Higher values create a larger boundary around the cell."),
             ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 10,
              "Gaussian smoothing sigma for the mask boundary. Higher values create smoother boundaries."),
+            ("show_preview", "Show Preview:", None, None, None, False,
+             "Show mask preview in real-time as parameters are adjusted"),
         ]
 
-        # Mesh parameters
+        # Rest of the parameters remain the same
         mesh_params = [
             ("density_factor", "Density Factor:", 0.001, 0.1, 0.001, 0.025,
              "Controls mesh density. Lower values create finer meshes with more elements."),
@@ -459,13 +587,11 @@ class MSMWidget(BaseAnalysisWidget):
              "Optimize mesh quality after generation. Check mesh quality, does not always improve results."),
         ]
 
-        # Material parameters
         material_params = [
             ("sigma", "Poisson's Ratio:", 0.0, 1.0, 0.01, 0.5,
              "Material's Poisson ratio. Typical value is 0.5 for incompressible materials."),
         ]
 
-        # Visualization parameters
         vis_params = [
             ("max_stress", "Max Stress (mN/m):", 0.01, 1000.0, 0.1, 1.0,
              "Maximum stress value for colormap scaling. Adjust to optimize visualization."),
@@ -495,7 +621,15 @@ class MSMWidget(BaseAnalysisWidget):
                 label_widget.setFixedWidth(150)
                 param_layout.addWidget(label_widget)
 
-                if param_name == "threshold":
+                if param_name == "show_preview":
+                    spin = QCheckBox()
+                    spin.setChecked(default)
+                    spin.setToolTip(tooltip)
+                    self.parameter_spins[param_name] = spin
+                    param_layout.addWidget(spin)
+                    param_layout.addStretch()
+
+                elif param_name == "threshold":
                     # Create both spinbox and slider for threshold
                     spin = QSpinBox()
                     spin.setRange(min_val, max_val)
@@ -575,48 +709,43 @@ class MSMWidget(BaseAnalysisWidget):
         frame = QFrame()
         layout = QVBoxLayout()
 
-        # Create button rows
-        row_layouts = []
-        for _ in range(4):
-            row = QHBoxLayout()
-            row_layouts.append(row)
-            layout.addLayout(row)
+        button_grid = QHBoxLayout()
 
-        # Row 1: Preview Mask and Create Masks
-        self.preview_mask_btn = QPushButton("Preview Mask")
-        self.preview_mask_btn.setToolTip("Preview the current mask")
+        # Create left column (Create Mask and Preview)
+        left_column = QVBoxLayout()
         self.create_mask_btn = QPushButton("Create Mask from Images")
         self.create_mask_btn.setToolTip("Generate a mask from the active image layer using current dilation and smoothing settings")
-        row_layouts[0].addWidget(self.preview_mask_btn)
-        row_layouts[0].addWidget(self.create_mask_btn)
-
-        # Row 2: Preview Mesh
-        self.preview_mesh_btn = QPushButton("Preview Mesh")
-        self.preview_mesh_btn.setToolTip("Generate and display the finite element mesh for the current frame")
-        row_layouts[1].addWidget(self.preview_mesh_btn)
-
-        # Row 3: Preview Current Frame and Calculate Stress Tensors
         self.preview_frame_btn = QPushButton("Preview Current Frame")
         self.preview_frame_btn.setToolTip("Calculate and visualize stress field for the current frame")
+        left_column.addWidget(self.create_mask_btn)
+        left_column.addWidget(self.preview_frame_btn)
+
+        # Create right column (Preview Mesh and Analyze)
+        right_column = QVBoxLayout()
+        self.preview_mesh_btn = QPushButton("Preview Mesh")
+        self.preview_mesh_btn.setToolTip("Generate and display the finite element mesh for the current frame")
         self.analyze_btn = QPushButton("Calculate Stress Tensors")
         self.analyze_btn.setToolTip("Calculate stress fields for all frames in the dataset")
-        row_layouts[2].addWidget(self.preview_frame_btn)
-        row_layouts[2].addWidget(self.analyze_btn)
+        right_column.addWidget(self.preview_mesh_btn)
+        right_column.addWidget(self.analyze_btn)
 
-        # Row 4: Save and Load Stress Tensors
+        button_grid.addLayout(left_column)
+        button_grid.addLayout(right_column)
+
+        # Add save/load buttons in a row
+        save_load_layout = QHBoxLayout()
         self.save_stress_btn = QPushButton("Save Stress Tensor")
         self.save_stress_btn.setToolTip("Save calculated stress tensor data to file")
         self.load_stress_btn = QPushButton("Load Stress Tensor")
         self.load_stress_btn.setToolTip("Load previously saved stress tensor data")
-        row_layouts[3].addWidget(self.save_stress_btn)
-        row_layouts[3].addWidget(self.load_stress_btn)
+        save_load_layout.addWidget(self.save_stress_btn)
+        save_load_layout.addWidget(self.load_stress_btn)
+
+        layout.addLayout(button_grid)
+        layout.addLayout(save_load_layout)
 
         frame.setLayout(layout)
         return frame
-
-    def _preview_mask(self):
-        """Dummy method for previewing the current mask."""
-        pass
 
     def _create_status_frame(self) -> QFrame:
         """Create the status and progress frame."""
