@@ -52,7 +52,159 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self._setup_ui()
         self._connect_signals()
         self._update_ui_state()
+        self._connect_layer_events()
 
+
+    def _create_data_loading_group(self) -> QGroupBox:
+        """Create the data loading group."""
+        load_group = QGroupBox("Input Data")
+        load_layout = QVBoxLayout()
+        load_layout.setSpacing(4)
+
+        # Initialize buttons and status labels
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_beads_btn.setEnabled(False)  # Initially disabled
+        self.load_beads_btn.setToolTip("Load a time series of bead images from the active layer in napari")
+
+        self.load_reference_btn = QPushButton("Load Reference Image")
+        self.load_reference_btn.setEnabled(False)  # Initially disabled
+        self.load_reference_btn.setToolTip("Load a single reference image for registration from the active layer")
+
+        self.bead_status = QLabel("Not loaded")
+        self.reference_status = QLabel("Not loaded")
+
+        # Add widgets with their status labels in rows
+        for btn, label in [
+            (self.load_beads_btn, self.bead_status),
+            (self.load_reference_btn, self.reference_status),
+        ]:
+            btn_layout = QHBoxLayout()
+            btn_layout.addWidget(btn)
+            btn_layout.addWidget(label)
+            load_layout.addLayout(btn_layout)
+
+        load_group.setLayout(load_layout)
+        return load_group
+
+    def _validate_layer_for_data_type(self, layer, data_type: str) -> bool:
+        """
+        Validate if the given layer is suitable for the specified data type.
+
+        Parameters
+        ----------
+        layer : napari.layers.Image
+            The layer to validate
+        data_type : str
+            The type of data ('beads' or 'reference')
+
+        Returns
+        -------
+        bool
+            True if the layer is valid for the data type, False otherwise
+        """
+        from napari.layers import Image
+
+        if layer is None or not isinstance(layer, Image):
+            return False
+
+        data = layer.data
+
+        if data_type == 'reference':
+            # Reference image must be 2D
+            return data.ndim == 2
+        elif data_type == 'beads':
+            # Bead stack must be 3D, or 2D (which can be converted to 3D)
+            return data.ndim in [2, 3]
+
+        return False
+
+    def _update_button_tooltips(self, active_layer):
+        """Update button tooltips to provide feedback about why they might be disabled"""
+        from napari.layers import Image
+
+        base_tooltips = {
+            'beads': "Load a time series of bead images from the active layer in napari",
+            'reference': "Load a single reference image for registration from the active layer"
+        }
+
+        if active_layer is None:
+            disabled_msg = " (No image layer selected)"
+        elif not isinstance(active_layer, Image):
+            disabled_msg = " (Selected layer is not an image)"
+        else:
+            data_dims = active_layer.data.ndim
+            if data_dims not in [2, 3]:
+                disabled_msg = f" (Invalid dimensions: {data_dims}D)"
+            else:
+                disabled_msg = ""
+
+        # Update each button's tooltip
+        buttons = {
+            'beads': self.load_beads_btn,
+            'reference': self.load_reference_btn
+        }
+
+        for data_type, button in buttons.items():
+            base_tooltip = base_tooltips[data_type]
+            if button.isEnabled():
+                button.setToolTip(base_tooltip)
+            else:
+                button.setToolTip(f"{base_tooltip}{disabled_msg}")
+
+    def _update_button_states(self):
+        """Update the enabled state of load buttons based on available data"""
+        active_layer = self._get_active_image_layer()
+
+        # Update each button's enabled state based on layer validation
+        self.load_beads_btn.setEnabled(
+            self._validate_layer_for_data_type(active_layer, 'beads')
+        )
+        self.load_reference_btn.setEnabled(
+            self._validate_layer_for_data_type(active_layer, 'reference')
+        )
+
+        # Update tooltips
+        self._update_button_tooltips(active_layer)
+
+    def _load_data(self, data_type: str):
+        """Load data from active layer."""
+        active_layer = self._get_active_image_layer()
+        if active_layer is None:
+            QMessageBox.warning(self, "Warning", "No active image layer")
+            return
+
+        try:
+            data = active_layer.data
+
+            if data_type == 'beads':
+                if data.ndim == 2:
+                    data = data[np.newaxis, ...]
+                if data.ndim != 3:
+                    raise ValueError("Bead stack must be 3D (frames, height, width)")
+                self.data_manager.set_displacement_bead_stack(data)
+            else:  # reference
+                if data.ndim != 2:
+                    raise ValueError("Reference image must be 2D (height, width)")
+                self.data_manager.set_displacement_reference_image(data)
+
+            self._update_ui_state()
+
+        except ValueError as e:
+            QMessageBox.warning(self, "Error", str(e))
+
+    def _on_layer_change(self, event=None):
+        """Handle layer addition/removal events"""
+        self._update_button_states()
+
+    def _on_layer_selection_change(self, event=None):
+        """Handle layer selection changes"""
+        self._update_button_states()
+
+    def _connect_layer_events(self):
+        """Connect to viewer layer events"""
+        self.viewer.layers.events.inserted.connect(self._on_layer_change)
+        self.viewer.layers.events.removed.connect(self._on_layer_change)
+        self.viewer.layers.selection.events.changed.connect(self._on_layer_selection_change)
     def _handle_displacement_results(self, results):
         """Handle the completed displacement analysis results."""
         try:
@@ -97,32 +249,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
             import traceback
             traceback.print_exc()
-
-    def _load_data(self, data_type: str):
-        """Load data from active layer."""
-        active_layer = self._get_active_image_layer()
-        if active_layer is None:
-            QMessageBox.warning(self, "Warning", "No active image layer")
-            return
-
-        try:
-            data = active_layer.data
-
-            if data_type == 'beads':
-                if data.ndim == 2:
-                    data = data[np.newaxis, ...]
-                if data.ndim != 3:
-                    raise ValueError("Bead stack must be 3D (frames, height, width)")
-                self.data_manager.set_displacement_bead_stack(data)
-            else:  # reference
-                if data.ndim != 2:
-                    raise ValueError("Reference image must be 2D (height, width)")
-                self.data_manager.set_displacement_reference_image(data)
-
-            self._update_ui_state()
-
-        except ValueError as e:
-            QMessageBox.warning(self, "Error", str(e))
 
     def _update_ui_state(self):
         """Update UI elements based on current state."""
@@ -287,36 +413,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             # Print the full error for debugging
             import traceback
             traceback.print_exc()
-
-    def _create_data_loading_group(self) -> QGroupBox:
-        """Create the data loading group."""
-        load_group = QGroupBox("Input Data")
-        load_layout = QVBoxLayout()
-        load_layout.setSpacing(4)
-
-        # Initialize buttons and status labels
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.load_beads_btn.setToolTip("Load a time series of bead images from the active layer in napari")
-
-        self.load_reference_btn = QPushButton("Load Reference Image")
-        self.load_reference_btn.setToolTip("Load a single reference image for registration from the active layer")
-
-        self.bead_status = QLabel("Not loaded")
-        self.reference_status = QLabel("Not loaded")
-        self.displacement_status = QLabel("Not loaded")
-
-        # Add widgets with their status labels in rows
-        for btn, label in [
-            (self.load_beads_btn, self.bead_status),
-            (self.load_reference_btn, self.reference_status),
-        ]:
-            btn_layout = QHBoxLayout()
-            btn_layout.addWidget(btn)
-            btn_layout.addWidget(label)
-            load_layout.addLayout(btn_layout)
-
-        load_group.setLayout(load_layout)
-        return load_group
 
     def analyze_all_frames(self):
         """Analyze displacement for all frames using a thread worker."""
