@@ -569,48 +569,54 @@ class MSMWidget(BaseAnalysisWidget):
         layout.addStretch(1)  # Add stretch at the end only
         group.setLayout(layout)
         return group
+
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame."""
         frame = QFrame()
         layout = QVBoxLayout()
 
-        button_grid = QHBoxLayout()
+        # Create button rows
+        row_layouts = []
+        for _ in range(4):
+            row = QHBoxLayout()
+            row_layouts.append(row)
+            layout.addLayout(row)
 
-        # Create left column (Create Mask and Preview)
-        left_column = QVBoxLayout()
+        # Row 1: Preview Mask and Create Masks
+        self.preview_mask_btn = QPushButton("Preview Mask")
+        self.preview_mask_btn.setToolTip("Preview the current mask")
         self.create_mask_btn = QPushButton("Create Mask from Images")
         self.create_mask_btn.setToolTip("Generate a mask from the active image layer using current dilation and smoothing settings")
-        self.preview_frame_btn = QPushButton("Preview Current Frame")
-        self.preview_frame_btn.setToolTip("Calculate and visualize stress field for the current frame")
-        left_column.addWidget(self.create_mask_btn)
-        left_column.addWidget(self.preview_frame_btn)
+        row_layouts[0].addWidget(self.preview_mask_btn)
+        row_layouts[0].addWidget(self.create_mask_btn)
 
-        # Create right column (Preview Mesh and Analyze)
-        right_column = QVBoxLayout()
+        # Row 2: Preview Mesh
         self.preview_mesh_btn = QPushButton("Preview Mesh")
         self.preview_mesh_btn.setToolTip("Generate and display the finite element mesh for the current frame")
-        self.analyze_btn = QPushButton("Analyze All Frames")
+        row_layouts[1].addWidget(self.preview_mesh_btn)
+
+        # Row 3: Preview Current Frame and Calculate Stress Tensors
+        self.preview_frame_btn = QPushButton("Preview Current Frame")
+        self.preview_frame_btn.setToolTip("Calculate and visualize stress field for the current frame")
+        self.analyze_btn = QPushButton("Calculate Stress Tensors")
         self.analyze_btn.setToolTip("Calculate stress fields for all frames in the dataset")
-        right_column.addWidget(self.preview_mesh_btn)
-        right_column.addWidget(self.analyze_btn)
+        row_layouts[2].addWidget(self.preview_frame_btn)
+        row_layouts[2].addWidget(self.analyze_btn)
 
-        button_grid.addLayout(left_column)
-        button_grid.addLayout(right_column)
-
-        # Add save/load buttons in a row
-        save_load_layout = QHBoxLayout()
+        # Row 4: Save and Load Stress Tensors
         self.save_stress_btn = QPushButton("Save Stress Tensor")
         self.save_stress_btn.setToolTip("Save calculated stress tensor data to file")
         self.load_stress_btn = QPushButton("Load Stress Tensor")
         self.load_stress_btn.setToolTip("Load previously saved stress tensor data")
-        save_load_layout.addWidget(self.save_stress_btn)
-        save_load_layout.addWidget(self.load_stress_btn)
-
-        layout.addLayout(button_grid)
-        layout.addLayout(save_load_layout)
+        row_layouts[3].addWidget(self.save_stress_btn)
+        row_layouts[3].addWidget(self.load_stress_btn)
 
         frame.setLayout(layout)
         return frame
+
+    def _preview_mask(self):
+        """Dummy method for previewing the current mask."""
+        pass
 
     def _create_status_frame(self) -> QFrame:
         """Create the status and progress frame."""
