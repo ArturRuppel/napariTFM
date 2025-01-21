@@ -114,22 +114,22 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Force data row
         force_layout = QHBoxLayout()
-        self.load_force_btn = QPushButton("Load Force Data")
+        self.load_force_btn = QPushButton("Load Forces")
         self.load_force_btn.setToolTip("Load force data from file")
         self.force_status = QLabel("Not loaded")
         force_layout.addWidget(self.load_force_btn)
         force_layout.addWidget(self.force_status)
 
-        # Input image row
-        image_layout = QHBoxLayout()
-        self.load_image_btn = QPushButton("Load Image Data")
-        self.load_image_btn.setToolTip("Load input image data")
+        # Input mask row
+        mask_layout = QHBoxLayout()
+        self.load_mask_btn = QPushButton("Load Masks")
+        self.load_mask_btn.setToolTip("Load input image data")
         self.image_status = QLabel("Not loaded")
-        image_layout.addWidget(self.load_image_btn)
-        image_layout.addWidget(self.image_status)
+        mask_layout.addWidget(self.load_mask_btn)
+        mask_layout.addWidget(self.image_status)
 
         layout.addLayout(force_layout)
-        layout.addLayout(image_layout)
+        layout.addLayout(mask_layout)
 
         group.setLayout(layout)
         return group
