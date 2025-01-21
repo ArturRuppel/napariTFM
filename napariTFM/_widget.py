@@ -1,8 +1,8 @@
 import logging
 import napari
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton
+    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox
 )
 
 from .batch_analysis_widget import BatchAnalysisWidget
@@ -15,11 +15,32 @@ from .msm_widget import MSMWidget
 
 logger = logging.getLogger(__name__)
 
-
+class SpinBoxEventFilter(QObject):
+    def eventFilter(self, obj, event):
+        # Check for all spinnable input widgets
+        if (isinstance(obj, (QSpinBox, QDoubleSpinBox, QComboBox)) and
+            event.type() == event.Wheel):
+            if not obj.hasFocus():
+                event.ignore()
+                return True
+        return super().eventFilter(obj, event)
 class napariTFMWidget(QWidget):
     def __init__(self, napari_viewer: "napari.Viewer"):
         super().__init__()
         self.viewer = napari_viewer
+
+        # Create and install event filter
+        self.spinbox_filter = SpinBoxEventFilter(self)
+
+        # Find and filter all spinboxes in the application
+        def install_filter_on_inputs():
+            for widget in self.window().findChildren((QSpinBox, QDoubleSpinBox, QComboBox)):
+                widget.installEventFilter(self.spinbox_filter)
+                widget.setFocusPolicy(Qt.StrongFocus)
+
+        # Install filters after a short delay to ensure all widgets are created
+        from qtpy.QtCore import QTimer
+        QTimer.singleShot(0, install_filter_on_inputs)
 
         # Set fixed width for entire widget
         self.setFixedWidth(530)
