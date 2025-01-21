@@ -59,6 +59,7 @@ class MSMWidget(BaseAnalysisWidget):
         self._setup_ui()
         self._connect_signals()
         self._update_ui_state()
+        self._update_button_states()
 
     def _connect_signals(self):
         """Connect widget signals."""
@@ -71,6 +72,12 @@ class MSMWidget(BaseAnalysisWidget):
         self.analyze_btn.clicked.connect(self.analyze_all_frames)
         self.save_stress_btn.clicked.connect(self._save_stress_tensor)
         self.load_stress_btn.clicked.connect(self._load_stress_tensor)
+
+        # Add viewer layer events
+        self.viewer.layers.events.inserting.connect(self._update_button_states)
+        self.viewer.layers.events.removing.connect(self._update_button_states)
+        self.viewer.layers.selection.events.changed.connect(self._update_button_states)
+
 
         # Viewer dimension changes (for frame updates)
         self.viewer.dims.events.current_step.connect(self._handle_frame_change)
@@ -400,8 +407,7 @@ class MSMWidget(BaseAnalysisWidget):
             else:
                 response = QMessageBox.warning(
                     self, "No Force Data",
-                    "Creating masks without loading force data may lead to inconsistent behavior. "
-                    "The masks may need to be regenerated after loading force data. "
+                    "Creating masks without loading force data may lead to inconsistent behavior if the shapes are not the same.\n"
                     "Do you want to continue?",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No
@@ -664,6 +670,9 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self):
         """Update UI element states based on current data availability."""
+        # First update mask-related button states
+        self._update_button_states()
+
         # Update force data status
         has_force_data = False
         if hasattr(self.data_manager, 'force_results'):
@@ -695,13 +704,36 @@ class MSMWidget(BaseAnalysisWidget):
         else:
             self.mask_status.setText("Not loaded")
 
-        # Update button states
+        # Update analysis button states
         self.preview_mesh_btn.setEnabled(has_mask)
         self.preview_frame_btn.setEnabled(has_mask and has_force_data)
         self.analyze_btn.setEnabled(has_mask and has_force_data)
         self.save_stress_btn.setEnabled(hasattr(self.data_manager, 'stress_results') and
-                                        self.data_manager.stress_results is not None)
+                                      self.data_manager.stress_results is not None)
 
+    def _update_button_states(self, event=None):
+        """Update button states based on layer availability."""
+        # Check for valid layers
+        has_valid_layer = False
+        active_layer = self.viewer.layers.selection.active
+
+        if active_layer is not None:
+            # Check if active layer is an image or labels layer
+            if active_layer._type_string in ['image', 'labels']:
+                has_valid_layer = True
+
+        # If no active layer, check if there are any valid layers
+        if not has_valid_layer:
+            for layer in self.viewer.layers:
+                if layer._type_string in ['image', 'labels']:
+                    has_valid_layer = True
+                    break
+
+        # Update button states
+        if hasattr(self, 'create_mask_btn'):
+            self.create_mask_btn.setEnabled(has_valid_layer)
+        if hasattr(self, 'load_mask_btn'):
+            self.load_mask_btn.setEnabled(has_valid_layer)
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
         group = QGroupBox("Input Data")
@@ -719,7 +751,8 @@ class MSMWidget(BaseAnalysisWidget):
         # Input mask row
         mask_layout = QHBoxLayout()
         self.load_mask_btn = QPushButton("Load Masks")
-        self.load_mask_btn.setToolTip("Load input image data")
+        self.load_mask_btn.setToolTip("Load mask from active layer")
+        self.load_mask_btn.setEnabled(False)  # Initially disabled
         self.mask_status = QLabel("Not loaded")
         mask_layout.addWidget(self.load_mask_btn)
         mask_layout.addWidget(self.mask_status)
@@ -874,6 +907,8 @@ class MSMWidget(BaseAnalysisWidget):
 
         layout.addStretch(1)  # Add stretch at the end only
         group.setLayout(layout)
+
+
         return group
 
     def _create_action_buttons(self) -> QFrame:
