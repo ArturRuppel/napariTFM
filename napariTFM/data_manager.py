@@ -21,7 +21,11 @@ class DataManager:
         self._preprocessed_reference: Optional[np.ndarray] = None
         self._preprocessed_cell_stack: Optional[np.ndarray] = None
 
-        # Rest remains the same...
+        # Add mask-related attributes
+        self._mask_stack: Optional[np.ndarray] = None
+        self._visualization_mask_stack: Optional[np.ndarray] = None
+        self.mask_processing_info: Optional[Dict[str, Any]] = None
+
         self.bead_preprocessing_info: Optional[List[Dict[str, Any]]] = None
         self.reference_preprocessing_info: Optional[List[Dict[str, Any]]] = None
         self.cell_preprocessing_info: Optional[List[Dict[str, Any]]] = None
@@ -30,6 +34,92 @@ class DataManager:
         self._force_results: Optional[Dict[str, Any]] = None
         self._num_frames: Optional[int] = None
         self._image_shape: Optional[Tuple[int, ...]] = None
+
+
+
+    @property
+    def preprocessing_bead_stack(self) -> Optional[np.ndarray]:
+        return self._preprocessing_bead_stack
+
+    @property
+    def preprocessing_reference_image(self) -> Optional[np.ndarray]:
+        return self._preprocessing_reference_image
+
+    @property
+    def preprocessing_cell_stack(self) -> Optional[np.ndarray]:
+        return self._preprocessing_cell_stack
+
+    @property
+    def preprocessed_bead_stack(self) -> Optional[np.ndarray]:
+        return self._preprocessed_bead_stack
+
+    @property
+    def preprocessed_reference(self) -> Optional[np.ndarray]:
+        return self._preprocessed_reference
+
+    @property
+    def preprocessed_cell_stack(self) -> Optional[np.ndarray]:
+        return self._preprocessed_cell_stack
+
+    @preprocessed_bead_stack.setter
+    def preprocessed_bead_stack(self, data: Optional[np.ndarray]):
+        if data is not None and data.ndim == 2:
+            data = data[np.newaxis, ...]
+        self._preprocessed_bead_stack = data
+
+    @preprocessed_reference.setter
+    def preprocessed_reference(self, data: Optional[np.ndarray]):
+        if data is not None and data.ndim == 3:
+            raise ValueError("Preprocessed reference should be 2D")
+        self._preprocessed_reference = data
+
+    @preprocessed_cell_stack.setter
+    def preprocessed_cell_stack(self, data: Optional[np.ndarray]):
+        if data is not None and data.ndim == 2:
+            data = data[np.newaxis, ...]
+        self._preprocessed_cell_stack = data
+
+    @property
+    def displacement_bead_stack(self) -> Optional[np.ndarray]:
+        return self._displacement_bead_stack
+
+    @property
+    def displacement_reference_image(self) -> Optional[np.ndarray]:
+        return self._displacement_reference_image
+
+
+    @property
+    def force_results(self) -> Optional[Dict[str, Any]]:
+        """Get force calculation results"""
+        return self._force_results
+
+    @force_results.setter
+    def force_results(self, results: Optional[Dict[str, Any]]):
+        """Set force calculation results after validation"""
+        if results is not None:
+            # Check for required fields
+            required_keys = ['tx', 'ty', 'parameters']
+            if not all(key in results for key in required_keys):
+                raise ValueError("Force results missing required fields")
+
+            # Validate array shapes
+            if not all(isinstance(results[key], np.ndarray) for key in ['tx', 'ty']):
+                raise ValueError("Force results must contain numpy arrays")
+
+            if results['tx'].shape != results['ty'].shape:
+                raise ValueError("Force components tx and ty must have same shape")
+
+        self._force_results = results
+
+    @property
+    def mask_stack(self) -> Optional[np.ndarray]:
+        """Get the mask stack at analysis resolution."""
+        return self._mask_stack
+
+    @property
+    def visualization_mask_stack(self) -> Optional[np.ndarray]:
+        """Get the mask stack at visualization resolution."""
+        return self._visualization_mask_stack
 
     def set_preprocessing_bead_stack(self, data: np.ndarray):
         """Set bead stack data for preprocessing after validation"""
@@ -89,55 +179,24 @@ class DataManager:
         self._displacement_reference_image = data
 
 
-    @property
-    def preprocessing_bead_stack(self) -> Optional[np.ndarray]:
-        return self._preprocessing_bead_stack
+    def set_mask_stack(self, mask_stack: np.ndarray, visualization_mask_stack: Optional[np.ndarray] = None,
+                       processing_info: Optional[Dict[str, Any]] = None):
+        """Set the mask stack data after validation.
 
-    @property
-    def preprocessing_reference_image(self) -> Optional[np.ndarray]:
-        return self._preprocessing_reference_image
+        Args:
+            mask_stack: Mask data at analysis resolution (frames, height, width)
+            visualization_mask_stack: Optional upscaled mask for visualization
+            processing_info: Optional dictionary containing mask processing parameters
+        """
+        if mask_stack.ndim not in [2, 3]:
+            raise ValueError("Mask stack must be 2D or 3D (frames, height, width)")
 
-    @property
-    def preprocessing_cell_stack(self) -> Optional[np.ndarray]:
-        return self._preprocessing_cell_stack
+        if mask_stack.ndim == 2:
+            mask_stack = mask_stack[np.newaxis, ...]
 
-    @property
-    def preprocessed_bead_stack(self) -> Optional[np.ndarray]:
-        return self._preprocessed_bead_stack
-
-    @property
-    def preprocessed_reference(self) -> Optional[np.ndarray]:
-        return self._preprocessed_reference
-
-    @property
-    def preprocessed_cell_stack(self) -> Optional[np.ndarray]:
-        return self._preprocessed_cell_stack
-
-    @preprocessed_bead_stack.setter
-    def preprocessed_bead_stack(self, data: Optional[np.ndarray]):
-        if data is not None and data.ndim == 2:
-            data = data[np.newaxis, ...]
-        self._preprocessed_bead_stack = data
-
-    @preprocessed_reference.setter
-    def preprocessed_reference(self, data: Optional[np.ndarray]):
-        if data is not None and data.ndim == 3:
-            raise ValueError("Preprocessed reference should be 2D")
-        self._preprocessed_reference = data
-
-    @preprocessed_cell_stack.setter
-    def preprocessed_cell_stack(self, data: Optional[np.ndarray]):
-        if data is not None and data.ndim == 2:
-            data = data[np.newaxis, ...]
-        self._preprocessed_cell_stack = data
-
-    @property
-    def displacement_bead_stack(self) -> Optional[np.ndarray]:
-        return self._displacement_bead_stack
-
-    @property
-    def displacement_reference_image(self) -> Optional[np.ndarray]:
-        return self._displacement_reference_image
+        self._mask_stack = mask_stack
+        self._visualization_mask_stack = visualization_mask_stack
+        self.mask_processing_info = processing_info
 
     def clear_all_data(self):
         """Clear all stored data, resetting the DataManager to its initial state."""
@@ -169,33 +228,28 @@ class DataManager:
         self._num_frames = None
         self._image_shape = None
 
-    @property
-    def force_results(self) -> Optional[Dict[str, Any]]:
-        """Get force calculation results"""
-        return self._force_results
+        self._mask_stack = None
+        self._visualization_mask_stack = None
+        self.mask_processing_info = None
 
-    @force_results.setter
-    def force_results(self, results: Optional[Dict[str, Any]]):
-        """Set force calculation results after validation"""
-        if results is not None:
-            # Check for required fields
-            required_keys = ['tx', 'ty', 'parameters']
-            if not all(key in results for key in required_keys):
-                raise ValueError("Force results missing required fields")
+    def validate_mask_shape(self, shape: Tuple[int, ...]) -> bool:
+        """Validate if mask shape matches expected dimensions.
 
-            # Validate array shapes
-            if not all(isinstance(results[key], np.ndarray) for key in ['tx', 'ty']):
-                raise ValueError("Force results must contain numpy arrays")
+        Args:
+            shape: Shape to validate against current mask
 
-            if results['tx'].shape != results['ty'].shape:
-                raise ValueError("Force components tx and ty must have same shape")
+        Returns:
+            bool: True if shapes match, False otherwise
+        """
+        if self._mask_stack is None:
+            return False
 
-        self._force_results = results
+        return self._mask_stack.shape[1:] == shape
 
-    def clear_force_results(self):
-        """Clear force calculation results"""
-        self._force_results = None
+    # def clear_force_results(self):
+    #     """Clear force calculation results"""
+    #     self._force_results = None
 
-    def has_required_force_data(self) -> bool:
-        """Check if required data for force calculation is available"""
-        return self.displacement_results is not None and 'flows' in self.displacement_results
+    # def has_required_force_data(self) -> bool:
+    #     """Check if required data for force calculation is available"""
+    #     return self.displacement_results is not None and 'flows' in self.displacement_results

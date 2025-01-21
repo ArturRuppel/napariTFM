@@ -1,4 +1,5 @@
 import os
+from typing import Tuple
 
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QSizePolicy, QCheckBox,
@@ -7,6 +8,7 @@ from qtpy.QtWidgets import (
 )
 from qtpy.QtCore import Signal, Qt
 import numpy as np
+from scipy import ndimage
 
 from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
@@ -57,6 +59,172 @@ class MSMWidget(BaseAnalysisWidget):
         self._setup_ui()
         self._connect_signals()
         self._update_ui_state()
+
+    def _create_mask_from_images(self):
+        """Create masks from the cell stack using dilation and smoothing."""
+        try:
+            # Get active layer
+            active_layer = self._get_active_image_layer()
+            if active_layer is None:
+                raise ValueError("No active image layer selected")
+
+            # Check if force data is available and get target shape
+            target_shape = None
+            downscale_factor = 1
+            if self.data_manager.force_results is not None:
+                tx = self.data_manager.force_results['tx'][0]
+                target_shape = tx.shape
+                downscale_factor = self.data_manager.force_results.get('parameters', {}).get('downscale_factor', 1)
+            else:
+                response = QMessageBox.warning(
+                    self, "No Force Data",
+                    "Creating masks without loading force data may lead to inconsistent behavior. "
+                    "The masks may need to be regenerated after loading force data. "
+                    "Do you want to continue?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if response == QMessageBox.No:
+                    return
+
+            # Update status
+            self.status_label.setText("Creating masks...")
+            self.progress_bar.setValue(20)
+
+            # Get parameters
+            dilation = self.parameter_spins['dilation'].value()
+            smoothing_sigma = self.parameter_spins['smoothing_sigma'].value()
+
+            # Process the image stack
+            from scipy import ndimage
+            from skimage.transform import resize
+
+            cell_stack = active_layer.data
+            if cell_stack.ndim == 2:
+                cell_stack = cell_stack[np.newaxis, ...]
+
+            # Create mask stack at original size first
+            mask_stack = np.zeros_like(cell_stack, dtype=bool)
+
+            # Process each frame
+            for frame in range(cell_stack.shape[0]):
+                mask_stack[frame] = self._process_single_mask(cell_stack[frame],
+                                                              dilation,
+                                                              smoothing_sigma)
+
+            # Resize mask to match force data resolution if needed
+            analysis_mask_stack = mask_stack
+            if target_shape is not None and mask_stack.shape[1:] != target_shape:
+                analysis_mask_stack = self._resize_mask_stack(mask_stack, target_shape)
+
+            # Create visualization mask (potentially upscaled)
+            vis_mask_stack = analysis_mask_stack
+            if downscale_factor > 1:
+                vis_shape = (analysis_mask_stack.shape[1] * downscale_factor,
+                             analysis_mask_stack.shape[2] * downscale_factor)
+                vis_mask_stack = self._resize_mask_stack(analysis_mask_stack, vis_shape)
+
+            # Store mask data in data manager
+            self.data_manager.set_mask_stack(
+                analysis_mask_stack,
+                visualization_mask_stack=vis_mask_stack,
+                processing_info={
+                    'dilation': dilation,
+                    'smoothing_sigma': smoothing_sigma,
+                    'original_shape': cell_stack.shape[1:],
+                    'target_shape': target_shape,
+                    'downscale_factor': downscale_factor
+                }
+            )
+
+            # Update visualization
+            self._update_mask_visualization(vis_mask_stack)
+
+            # Update status
+            num_frames = analysis_mask_stack.shape[0]
+            shape_info = f"{analysis_mask_stack.shape[1]}x{analysis_mask_stack.shape[2]}"
+            vis_shape_info = f"{vis_mask_stack.shape[1]}x{vis_mask_stack.shape[2]}"
+            self.status_label.setText(
+                f"Successfully created masks for {num_frames} frames\n"
+                f"Data resolution: {shape_info}\n"
+                f"Display resolution: {vis_shape_info}"
+            )
+            self.progress_bar.setValue(100)
+
+            # Update UI state
+            self._update_ui_state()
+            self._update_parameters()
+
+        except Exception as e:
+            self._handle_error(f"Failed to create mask from images:\n{str(e)}")
+            self.progress_bar.setValue(0)
+
+    def _process_single_mask(self, image: np.ndarray, dilation: int,
+                             smoothing_sigma: float) -> np.ndarray:
+        """Process a single frame to create a mask."""
+        # Basic thresholding
+        mask = image > 0
+
+        # Fill holes
+        filled_mask = ndimage.binary_fill_holes(mask)
+
+        # Smoothing
+        if smoothing_sigma > 0:
+            float_mask = filled_mask.astype(float)
+            smoothed = ndimage.gaussian_filter(float_mask, sigma=smoothing_sigma)
+            smoothed_mask = smoothed > 0.5
+            smoothed_mask = ndimage.binary_fill_holes(smoothed_mask)
+        else:
+            smoothed_mask = filled_mask
+
+        # Dilation
+        if dilation > 0:
+            struct = ndimage.generate_binary_structure(2, 2)
+            dilated_mask = ndimage.binary_dilation(
+                smoothed_mask,
+                structure=struct,
+                iterations=dilation
+            )
+        else:
+            dilated_mask = smoothed_mask
+
+        # Get largest connected component
+        labels, num_features = ndimage.label(dilated_mask)
+        if num_features > 0:
+            sizes = ndimage.sum(dilated_mask, labels, range(1, num_features + 1))
+            largest_feature = np.argmax(sizes) + 1
+            final_mask = labels == largest_feature
+        else:
+            final_mask = dilated_mask
+
+        return final_mask
+
+    def _resize_mask_stack(self, mask_stack: np.ndarray,
+                           target_shape: Tuple[int, int]) -> np.ndarray:
+        """Resize a mask stack to target shape."""
+        from skimage.transform import resize
+        resized_stack = np.zeros((mask_stack.shape[0], *target_shape), dtype=bool)
+        for frame in range(mask_stack.shape[0]):
+            resized_stack[frame] = resize(
+                mask_stack[frame].astype(float),
+                target_shape,
+                order=0,
+                preserve_range=True,
+                anti_aliasing=False
+            ) > 0.5
+        return resized_stack
+
+    def _update_mask_visualization(self, vis_mask_stack: np.ndarray):
+        """Update the mask visualization in napari."""
+        if 'Cell Mask' in self.viewer.layers:
+            self.viewer.layers.remove('Cell Mask')
+
+        self.viewer.add_labels(
+            vis_mask_stack.astype(np.uint8),
+            name='Cell Mask',
+            visible=True,
+            opacity=0.5,
+        )
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -115,7 +283,6 @@ class MSMWidget(BaseAnalysisWidget):
             if results and isinstance(results, dict) and 'tx' in results:
                 tx = results['tx']
                 try:
-                    # Convert to numpy array if it isn't already
                     if not isinstance(tx, np.ndarray):
                         tx = np.array(tx)
                     self.force_status.setText(f"Loaded: {tx.shape}")
@@ -129,9 +296,10 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Update mask status
         has_mask = False
-        if self.current_mask is not None:
+        mask_stack = self.data_manager.mask_stack
+        if mask_stack is not None:
             try:
-                mask_shape = self.current_mask.shape
+                mask_shape = mask_stack.shape
                 self.mask_status.setText(f"Loaded: {mask_shape}")
                 has_mask = True
             except Exception as e:
@@ -342,155 +510,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         self._update_parameters()
         self._update_status("Parameters reset to defaults", 100)
-
-    def _create_mask_from_images(self):
-        """Create masks from the cell stack using dilation and smoothing."""
-        try:
-            # Get active layer
-            active_layer = self._get_active_image_layer()
-            if active_layer is None:
-                raise ValueError("No active image layer selected")
-
-            # Check if force data is available and get target shape
-            target_shape = None
-            downscale_factor = 1
-            if self.data_manager.force_results is not None:
-                tx = self.data_manager.force_results['tx'][0]  # Use first frame
-                target_shape = tx.shape
-                downscale_factor = self.data_manager.force_results.get('parameters', {}).get('downscale_factor', 1)
-            else:
-                # Show warning dialog
-                from qtpy.QtWidgets import QMessageBox
-                response = QMessageBox.warning(
-                    self,
-                    "No Force Data",
-                    "Creating masks without loading force data may lead to inconsistent behavior. "
-                    "The masks may need to be regenerated after loading force data. "
-                    "Do you want to continue?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
-                )
-                if response == QMessageBox.No:
-                    return
-
-            # Update status
-            self.status_label.setText("Creating masks...")
-            self.progress_bar.setValue(20)
-
-            # Get parameters
-            dilation = self.parameter_spins['dilation'].value()
-            smoothing_sigma = self.parameter_spins['smoothing_sigma'].value()
-
-            # Process the image stack
-            from scipy import ndimage
-            from skimage.transform import resize
-
-            cell_stack = active_layer.data
-            if cell_stack.ndim == 2:
-                cell_stack = cell_stack[np.newaxis, ...]
-
-            # Create mask stack at original size first
-            mask_stack = np.zeros_like(cell_stack, dtype=bool)
-
-            for frame in range(cell_stack.shape[0]):
-                # Basic thresholding
-                mask = cell_stack[frame] > 0
-
-                # Fill holes
-                filled_mask = ndimage.binary_fill_holes(mask)
-
-                # Smoothing
-                if smoothing_sigma > 0:
-                    float_mask = filled_mask.astype(float)
-                    smoothed = ndimage.gaussian_filter(float_mask, sigma=smoothing_sigma)
-                    smoothed_mask = smoothed > 0.5
-                    smoothed_mask = ndimage.binary_fill_holes(smoothed_mask)
-                else:
-                    smoothed_mask = filled_mask
-
-                # Dilation
-                if dilation > 0:
-                    struct = ndimage.generate_binary_structure(2, 2)
-                    dilated_mask = ndimage.binary_dilation(
-                        smoothed_mask,
-                        structure=struct,
-                        iterations=dilation
-                    )
-                else:
-                    dilated_mask = smoothed_mask
-
-                # Get largest connected component last
-                labels, num_features = ndimage.label(dilated_mask)
-                if num_features > 0:
-                    sizes = ndimage.sum(dilated_mask, labels, range(1, num_features + 1))
-                    largest_feature = np.argmax(sizes) + 1
-                    final_mask = labels == largest_feature
-                else:
-                    final_mask = dilated_mask
-
-                mask_stack[frame] = final_mask
-
-            # First resize to match force data resolution if target shape exists
-            if target_shape is not None and mask_stack.shape[1:] != target_shape:
-                resized_stack = np.zeros((mask_stack.shape[0], *target_shape), dtype=bool)
-                for frame in range(mask_stack.shape[0]):
-                    resized_stack[frame] = resize(
-                        mask_stack[frame].astype(float),
-                        target_shape,
-                        order=0,
-                        preserve_range=True,
-                        anti_aliasing=False
-                    ) > 0.5
-                mask_stack = resized_stack
-
-            # Store the mask at the force data resolution
-            self.current_mask = mask_stack
-
-            # Create visualization mask (potentially upscaled)
-            vis_mask = mask_stack.copy()
-            if downscale_factor > 1:
-                vis_shape = (mask_stack.shape[1] * downscale_factor,
-                             mask_stack.shape[2] * downscale_factor)
-                upscaled_stack = np.zeros((mask_stack.shape[0], *vis_shape), dtype=bool)
-                for frame in range(mask_stack.shape[0]):
-                    upscaled_stack[frame] = resize(
-                        mask_stack[frame].astype(float),
-                        vis_shape,
-                        order=0,
-                        preserve_range=True,
-                        anti_aliasing=False
-                    ) > 0.5
-                vis_mask = upscaled_stack
-
-            # Add visualization layer
-            if 'Cell Mask' in self.viewer.layers:
-                self.viewer.layers.remove('Cell Mask')
-
-            self.viewer.add_labels(
-                vis_mask.astype(np.uint8),
-                name='Cell Mask',
-                visible=True,
-                opacity=0.5,
-            )
-
-            # Update status
-            num_frames = self.current_mask.shape[0]
-            shape_info = f"{self.current_mask.shape[1]}x{self.current_mask.shape[2]}"
-            vis_shape_info = f"{vis_mask.shape[1]}x{vis_mask.shape[2]}"
-            self.status_label.setText(
-                f"Successfully created masks for {num_frames} frames\n"
-                f"Data resolution: {shape_info}\n"
-                f"Display resolution: {vis_shape_info}"
-            )
-            self.progress_bar.setValue(100)
-
-            # Update UI state
-            self._update_ui_state()
-            self._update_parameters()  # Initialize analyzer with new mask
-
-        except Exception as e:
-            self._handle_error(f"Failed to create mask from images:\n{str(e)}")
-            self.progress_bar.setValue(0)
 
     def preview_current_frame(self):
         """Preview stress calculation for the current frame."""
@@ -769,11 +788,14 @@ class MSMWidget(BaseAnalysisWidget):
     def preview_mesh(self):
         """Generate and display preview of the triangular mesh for the current frame."""
         try:
-            if self.current_mask is None:
-                raise ValueError("No mask loaded. Please load a mask first.")
+            # Get mask from data manager
+            mask_stack = self.data_manager.mask_stack
+            if mask_stack is None:
+                raise ValueError("No mask loaded. Please create or load a mask first.")
 
+            # Get current frame and corresponding mask
             current_frame = self.viewer.dims.current_step[0]
-            current_mask = self.current_mask[current_frame]
+            current_mask = mask_stack[current_frame]
 
             self._update_parameters()
 
@@ -869,7 +891,8 @@ class MSMWidget(BaseAnalysisWidget):
             quality_metrics = self.mesh_generator.analyze_mesh_quality(nodes, elements)
 
             status_text = (
-                f"Mesh generated: {quality_metrics['n_elements']} elements\n"
+                f"Mesh generated for frame {current_frame}:\n"
+                f"{quality_metrics['n_elements']} elements\n"
                 f"Min angle: {quality_metrics['min_angle']:.1f}°\n"
                 f"Mean quality: {quality_metrics['mean_quality']:.3f}"
             )
