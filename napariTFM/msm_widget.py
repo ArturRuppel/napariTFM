@@ -70,6 +70,9 @@ class MSMWidget(BaseAnalysisWidget):
         self.save_stress_btn.clicked.connect(self._save_stress_tensor)
         self.load_stress_btn.clicked.connect(self._load_stress_tensor)
 
+        # Viewer dimension changes (for frame updates)
+        self.viewer.dims.events.current_step.connect(self._handle_frame_change)
+
         # Parameters
         for name, widget in self.parameter_spins.items():
             if isinstance(widget, tuple):
@@ -92,6 +95,11 @@ class MSMWidget(BaseAnalysisWidget):
             else:  # Other spin boxes
                 widget.valueChanged.connect(self._update_parameters)
 
+    def _handle_frame_change(self, event=None):
+        """Handle frame changes in the viewer."""
+        # Only update if preview is enabled
+        if self.parameter_spins['show_preview'].isChecked():
+            self._update_mask_preview()
     def _handle_preview_state(self, state):
         """Handle changes in the preview checkbox state."""
         from qtpy.QtCore import Qt
@@ -567,7 +575,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Mask parameters
         mask_params = [
-            ("threshold", "Intensity Percentile:", 0, 100, 1, 0,
+            ("threshold", "Threshold Percentile:", 0, 100, 1, 0,
              "Clip intensity values below this percentile before creating the mask."),
             ("dilation", "Mask Dilation (px):", 0, 50, 1, 10,
              "Number of pixels to dilate the mask. Higher values create a larger boundary around the cell."),
@@ -713,8 +721,8 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Create left column (Create Mask and Preview)
         left_column = QVBoxLayout()
-        self.create_mask_btn = QPushButton("Create Mask from Images")
-        self.create_mask_btn.setToolTip("Generate a mask from the active image layer using current dilation and smoothing settings")
+        self.create_mask_btn = QPushButton("Create Masks from Images")
+        self.create_mask_btn.setToolTip("Generate a stack of masks from the active image layer using current intensity thresholding, dilation and smoothing settings")
         self.preview_frame_btn = QPushButton("Preview Current Frame")
         self.preview_frame_btn.setToolTip("Calculate and visualize stress field for the current frame")
         left_column.addWidget(self.create_mask_btn)
