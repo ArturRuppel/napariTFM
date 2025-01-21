@@ -684,7 +684,7 @@ class FTTCWidget(BaseAnalysisWidget):
         self.preview_btn.setToolTip(
             "Calculate and display forces for the current frame only"
         )
-        self.save_force_btn = QPushButton("Save Force Data")
+        self.save_force_btn = QPushButton("Save Traction Forces")
         self.save_force_btn.setToolTip(
             "Save calculated force data to file for later use"
         )
@@ -762,12 +762,12 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data status group."""
-        group = QGroupBox("Data")
+        group = QGroupBox("Input Data")
         layout = QVBoxLayout()
         layout.setSpacing(4)
 
         # Initialize button and status label for displacement data
-        self.load_displacement_btn = QPushButton("Load Displacement")
+        self.load_displacement_btn = QPushButton("Load Displacements")
         self.load_displacement_btn.setToolTip("Load displacement data from file")
         self.displacement_status = QLabel("Not loaded")
 
@@ -933,7 +933,7 @@ class FTTCWidget(BaseAnalysisWidget):
             # Get file path from user
             save_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Save Force Data",
+                "Save Traction Forces",
                 os.path.expanduser("~"),
                 "NumPy Files (*.npy)"
             )
@@ -975,7 +975,7 @@ class FTTCWidget(BaseAnalysisWidget):
             QMessageBox.critical(
                 self,
                 "Error",
-                f"Failed to save force data: {str(e)}"
+                f"Failed to save traction force data: {str(e)}"
             )
 
     def _load_force_data(self):

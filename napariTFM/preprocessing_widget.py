@@ -200,8 +200,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
         action_layout = QHBoxLayout()
         self.preprocess_btn = QPushButton("Run Preprocessing")
         self.preprocess_btn.setToolTip("Apply preprocessing to all loaded data")
-        self.save_btn = QPushButton("Save Preprocessed Data")
-        self.save_btn.setToolTip("Save preprocessed data as TIFF files with calibration metadata")
+        self.save_btn = QPushButton("Save Preprocessed Images")
+        self.save_btn.setToolTip("Save preprocessed Images as TIFF files with calibration metadata")
         self.save_btn.setEnabled(False)
         action_layout.addWidget(self.preprocess_btn)
         action_layout.addWidget(self.save_btn)
@@ -366,7 +366,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
     def _create_load_group(self):
         """Create the data loading group."""
-        load_group = QGroupBox("Data")
+        load_group = QGroupBox("Input Data")
         load_layout = QVBoxLayout()
         load_layout.setSpacing(4)
 
@@ -504,31 +504,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         preview_layout.addStretch()
         preview_frame.setLayout(preview_layout)
         return preview_frame
-
-    def _create_action_buttons(self):
-        """Create the action buttons frame."""
-        button_frame = QFrame()
-        button_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        button_layout = QHBoxLayout()
-
-        # Create buttons
-        self.preprocess_btn = QPushButton("Run Preprocessing")
-        self.preprocess_btn.setToolTip("Apply preprocessing to all loaded data")
-
-        self.reset_btn = QPushButton("Reset Parameters")
-        self.reset_btn.setToolTip("Reset all parameters to default values")
-
-        self.save_btn = QPushButton("Save Preprocessed Data")
-        self.save_btn.setToolTip("Save preprocessed data as TIFF files with calibration metadata")
-        self.save_btn.setEnabled(False)
-
-        # Add buttons to layout
-        button_layout.addWidget(self.preprocess_btn)
-        button_layout.addWidget(self.reset_btn)
-        button_layout.addWidget(self.save_btn)
-
-        button_frame.setLayout(button_layout)
-        return button_frame
 
     def _create_cell_params_group(self):
         """Create the cell stack parameters group."""

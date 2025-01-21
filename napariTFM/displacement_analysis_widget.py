@@ -290,7 +290,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
-        load_group = QGroupBox("Data")
+        load_group = QGroupBox("Input Data")
         load_layout = QVBoxLayout()
         load_layout.setSpacing(4)
 
@@ -381,7 +381,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.preview_btn = QPushButton("Preview Current Frame")
         self.preview_btn.setToolTip("Calculate and visualize displacement for the current frame")
 
-        self.save_displacement_btn = QPushButton("Save Displacement")
+        self.save_displacement_btn = QPushButton("Save Displacements")
         self.save_displacement_btn.setToolTip("Save the current displacement analysis results to a file")
         # Initialize save button as disabled
         self.save_displacement_btn.setEnabled(False)
@@ -391,10 +391,10 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         # Create right column (Analyze and Load)
         right_column = QVBoxLayout()
-        self.analyze_btn = QPushButton("Analyze All Frames")
+        self.analyze_btn = QPushButton("Measure Displacements")
         self.analyze_btn.setToolTip("Calculate displacement for all frames in the sequence")
 
-        self.load_displacement_btn = QPushButton("Load Displacement")
+        self.load_displacement_btn = QPushButton("Load Displacements")
         self.load_displacement_btn.setToolTip("Load previously saved displacement analysis results")
 
         right_column.addWidget(self.analyze_btn)

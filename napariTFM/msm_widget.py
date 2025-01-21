@@ -406,7 +406,7 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
-        group = QGroupBox("Data")
+        group = QGroupBox("Input Data")
         layout = QVBoxLayout()
         layout.setSpacing(4)
 
