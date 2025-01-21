@@ -609,7 +609,7 @@ class MSMWidget(BaseAnalysisWidget):
             ("Mask Parameters", mask_params),
             ("Mesh Parameters", mesh_params),
             ("Material Parameters", material_params),
-            ("Visualization", vis_params)
+            ("Visualization Parameters", vis_params)
         ]
 
         for section_title, params in sections:
