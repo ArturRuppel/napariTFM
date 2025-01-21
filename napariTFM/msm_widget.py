@@ -63,6 +63,7 @@ class MSMWidget(BaseAnalysisWidget):
     def _connect_signals(self):
         """Connect widget signals."""
         # Buttons
+        self.load_force_btn.clicked.connect(self._load_force_data)
         self.create_mask_btn.clicked.connect(self._create_mask_from_images)
         self.preview_mesh_btn.clicked.connect(self.preview_mesh)
         self.preview_frame_btn.clicked.connect(self.preview_current_frame)
@@ -100,6 +101,7 @@ class MSMWidget(BaseAnalysisWidget):
         # Only update if preview is enabled
         if self.parameter_spins['show_preview'].isChecked():
             self._update_mask_preview()
+
     def _handle_preview_state(self, state):
         """Handle changes in the preview checkbox state."""
         from qtpy.QtCore import Qt
@@ -125,6 +127,80 @@ class MSMWidget(BaseAnalysisWidget):
                 return layer
 
         return None
+
+    def _load_force_data(self):
+        """Load force data from files."""
+        try:
+            # Get file path
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Force Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                # Load the force data
+                force_data = np.load(file_path, allow_pickle=True).item()
+
+                # Validate the loaded data structure
+                required_fields = ['tx', 'ty', 'parameters']
+                if not all(field in force_data for field in required_fields):
+                    raise ValueError("Invalid force data: missing required fields")
+
+                # Convert force components to numpy arrays if they aren't already
+                tx = np.array(force_data['tx'])
+                ty = np.array(force_data['ty'])
+
+                # Create results dictionary with proper parameter structure
+                results = {
+                    'tx': tx,
+                    'ty': ty,
+                    'parameters': {
+                        'young_modulus': force_data['parameters']['youngs_modulus'],
+                        'poisson_ratio': force_data['parameters']['poisson_ratio'],
+                        'gel_height': force_data['parameters']['gel_height'],
+                        'pixel_size': force_data['parameters']['pixelsize'],
+                        'regularization': force_data['parameters']['regularization'],
+                        'mesh_size': 1,  # Default value from FTTC
+                        'lanczos_exp': force_data['parameters']['lanczos_exp'],
+                        'downscale_factor': force_data['parameters'].get('downscale_factor', 1),
+                        'visualization': {
+                            'vector_stride': force_data['parameters']['vector_stride'],
+                            'arrow_scale': force_data['parameters']['arrow_scale'],
+                            'f_max': force_data['parameters']['f_max']
+                        }
+                    }
+                }
+
+                # Update data manager
+                self.data_manager.force_results = results
+
+                # Store pixel size and downscale factor as class variables
+                self._pixelsize = results['parameters']['pixel_size']
+                self._downscale_factor = results['parameters']['downscale_factor']
+
+                # Update UI state
+                self._update_ui_state()
+
+                # Update status
+                shape_info = f"{tx.shape[1]}x{tx.shape[2]}"
+                self._update_status(
+                    f"Force data successfully loaded from:\n{file_path}\n"
+                    f"Resolution: {shape_info}\n"
+                    f"Frames: {len(tx)}",
+                    100
+                )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load force data: {str(e)}"
+            )
+            # Print the full error for debugging
+            import traceback
+            traceback.print_exc()
 
     def _update_mask_preview(self):
         """Update the mask preview based on current parameters."""
@@ -218,6 +294,7 @@ class MSMWidget(BaseAnalysisWidget):
             # Remove preview layer if there's an error
             if 'Mask Preview' in self.viewer.layers:
                 self.viewer.layers.remove('Mask Preview')
+
     def _create_mask_from_images(self):
         """Create masks from the cell stack using dilation and smoothing."""
         try:
@@ -773,7 +850,8 @@ class MSMWidget(BaseAnalysisWidget):
         """Preview stress calculation for the current frame."""
         try:
             # Check prerequisites
-            if self.current_mask is None:
+            mask_stack = self.data_manager.mask_stack
+            if mask_stack is None:
                 raise ValueError("No mask loaded. Please load a mask first.")
 
             if self.data_manager.force_results is None:
@@ -789,7 +867,7 @@ class MSMWidget(BaseAnalysisWidget):
             downscale_factor = params.get('downscale_factor', 1)
 
             # Ensure mask matches force data shape
-            current_mask = self.current_mask[current_frame]
+            current_mask = mask_stack[current_frame]
             if current_mask.shape != tx.shape:
                 from skimage.transform import resize
                 current_mask = resize(
@@ -850,7 +928,8 @@ class MSMWidget(BaseAnalysisWidget):
         """Run stress analysis for all frames."""
         try:
             # Validate prerequisites
-            if self.current_mask is None:
+            mask_stack = self.data_manager.mask_stack
+            if mask_stack is None:
                 raise ValueError("No mask loaded. Please load a mask first.")
 
             if self.data_manager.force_results is None:
@@ -885,7 +964,7 @@ class MSMWidget(BaseAnalysisWidget):
                 current_ty = ty[frame]
 
                 # Ensure mask matches force data shape
-                current_mask = self.current_mask[frame]
+                current_mask = mask_stack[frame]
                 if current_mask.shape != current_tx.shape:
                     from skimage.transform import resize
                     current_mask = resize(
