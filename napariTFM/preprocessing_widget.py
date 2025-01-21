@@ -137,6 +137,154 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.data_manager.preprocessed_cell_stack is not None
         ])
         self.save_btn.setEnabled(has_preprocessed_data)
+
+    def _create_intensity_range_group(self):
+        """Create the bead/reference parameters group with intensity range and filter controls."""
+        intensity_group = QGroupBox("Bead/Reference Parameters")
+        intensity_layout = QVBoxLayout()
+
+        self.intensity_slider = QRangeSlider(Qt.Horizontal)
+        self.intensity_slider.setToolTip("Adjust intensity range for contrast enhancement")
+        self.intensity_slider.setRange(0, 1000)  # Range 0-1000 for 0.1% steps
+        self.intensity_slider.setValue((0, 1000))
+        intensity_layout.addWidget(self.intensity_slider)
+
+        # Create spinboxes first
+        self.min_spinbox = QDoubleSpinBox()
+        self.min_spinbox.setToolTip("Set minimum intensity percentile (0-100%)")
+        self.max_spinbox = QDoubleSpinBox()
+        self.max_spinbox.setToolTip("Set maximum intensity percentile (0-100%)")
+
+        # Configure spinboxes with finer step size
+        for spinbox in [self.min_spinbox, self.max_spinbox]:
+            spinbox.setRange(0, 100)
+            spinbox.setDecimals(1)  # Show one decimal place
+            spinbox.setSingleStep(0.1)  # 0.1% steps
+
+        self.max_spinbox.setValue(100)
+
+        # Add spinboxes layout
+        spinbox_layout = QHBoxLayout()
+        min_label = QLabel("Min ")
+        min_label.setFixedWidth(40)
+        spinbox_layout.addWidget(min_label)
+        spinbox_layout.addWidget(self.min_spinbox)
+        spinbox_layout.addStretch()
+        spinbox_layout.addWidget(self.max_spinbox)
+        spinbox_layout.addWidget(QLabel("Max "))
+        intensity_layout.addLayout(spinbox_layout)
+
+
+        # Add Gaussian filter controls
+        self.gaussian_sigma_spin = QDoubleSpinBox()
+        self.gaussian_sigma_spin.setToolTip("Set Gaussian blur sigma (0 = disabled)")
+        sigma_layout = self._create_sigma_control(self.gaussian_sigma_spin)
+        intensity_layout.addLayout(sigma_layout)
+
+        intensity_group.setLayout(intensity_layout)
+        return intensity_group
+
+    def _create_cell_params_group(self):
+        """Create the cell stack parameters group."""
+        cell_params_group = QGroupBox("Cell Stack Parameters")
+        cell_params_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        cell_params_layout = QVBoxLayout()
+
+        # Cell contrast enhancement
+        cell_intensity_layout = QVBoxLayout()
+
+        self.cell_intensity_slider = QRangeSlider(Qt.Horizontal)
+        self.cell_intensity_slider.setToolTip("Adjust intensity range for cell image contrast enhancement")
+        self.cell_intensity_slider.setRange(0, 1000)
+        self.cell_intensity_slider.setValue((0, 1000))
+        cell_intensity_layout.addWidget(self.cell_intensity_slider)
+
+        # Create cell spinboxes
+        self.cell_min_spinbox = QDoubleSpinBox()
+        self.cell_min_spinbox.setToolTip("Set minimum intensity percentile for cell images (0-100%)")
+        self.cell_max_spinbox = QDoubleSpinBox()
+        self.cell_max_spinbox.setToolTip("Set maximum intensity percentile for cell images (0-100%)")
+
+        spinbox_layout = QHBoxLayout()
+        min_label = QLabel("Min ")
+        min_label.setFixedWidth(40)
+        spinbox_layout.addWidget(min_label)
+        spinbox_layout.addWidget(self.cell_min_spinbox)
+        spinbox_layout.addStretch()
+        spinbox_layout.addWidget(self.cell_max_spinbox)
+        spinbox_layout.addWidget(QLabel("Max "))
+        cell_intensity_layout.addLayout(spinbox_layout)
+
+        # Cell gaussian blur
+        self.cell_gaussian_sigma_spin = QDoubleSpinBox()
+        self.cell_gaussian_sigma_spin.setToolTip("Set Gaussian blur sigma for cell images (0 = disabled)")
+        sigma_layout = self._create_sigma_control(self.cell_gaussian_sigma_spin)
+        cell_intensity_layout.addLayout(sigma_layout)
+        cell_params_layout.addLayout(cell_intensity_layout)
+
+        cell_params_group.setLayout(cell_params_layout)
+        return cell_params_group
+
+    def _create_sigma_control(self, sigma_spinbox):
+        """Create a layout with sigma control for Gaussian filter."""
+        sigma_layout = QHBoxLayout()
+
+        # Create fixed-width label
+        blur_label = QLabel("Blur")
+        blur_label.setFixedWidth(40)
+        sigma_layout.addWidget(blur_label)
+
+        # Configure spinbox
+        sigma_spinbox.setRange(0.0, 10.0)
+        sigma_spinbox.setValue(0.0)
+        sigma_spinbox.setSingleStep(0.1)
+        sigma_spinbox.setDecimals(2)
+        sigma_spinbox.setButtonSymbols(QDoubleSpinBox.PlusMinus)
+        sigma_spinbox.setFixedWidth(105)
+
+        # Create slider for Gaussian sigma
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, 100)
+        slider.setValue(0)
+        slider.setTickPosition(QSlider.TicksBelow)
+        slider.setTickInterval(10)
+
+        # Add both controls
+        sigma_layout.addWidget(sigma_spinbox)
+        sigma_layout.addWidget(slider, stretch=1)
+
+        # Store slider reference
+        if sigma_spinbox == self.gaussian_sigma_spin:
+            self.gaussian_sigma_slider = slider
+        else:
+            self.cell_gaussian_sigma_slider = slider
+
+        return sigma_layout
+
+    def _create_range_spinboxes(self, min_spinbox, max_spinbox, is_cell=False):
+        """Create a layout with min/max range spinboxes."""
+        spinbox_layout = QHBoxLayout()
+
+        # Create fixed-width labels
+        min_label = QLabel("Min ")
+        max_label = QLabel("Max ")
+        min_label.setFixedWidth(40)  # Set fixed width for consistent alignment
+
+        for spinbox in [min_spinbox, max_spinbox]:
+            spinbox.setRange(0, 100)
+            spinbox.setDecimals(1)
+            spinbox.setSingleStep(0.1 if is_cell else 1.0)
+            spinbox.setButtonSymbols(QDoubleSpinBox.PlusMinus)
+
+        max_spinbox.setValue(100)
+
+        spinbox_layout.addWidget(min_label)
+        spinbox_layout.addWidget(min_spinbox)
+        spinbox_layout.addStretch()
+        spinbox_layout.addWidget(max_spinbox)
+        spinbox_layout.addWidget(max_label)
+
+        return spinbox_layout
     def _create_parameters_group(self):
         """Create a group containing all parameter controls."""
         parameters_group = QGroupBox("Parameters")
@@ -420,49 +568,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         preview_select_group.setLayout(preview_layout)
         return preview_select_group
 
-    def _create_intensity_range_group(self):
-        """Create the bead/reference parameters group with intensity range and filter controls."""
-        intensity_group = QGroupBox("Bead/Reference Parameters")
-        intensity_layout = QVBoxLayout()
-
-        self.intensity_slider = QRangeSlider(Qt.Horizontal)
-        self.intensity_slider.setToolTip("Adjust intensity range for contrast enhancement")
-        self.intensity_slider.setRange(0, 1000)  # Range 0-1000 for 0.1% steps
-        self.intensity_slider.setValue((0, 1000))
-        intensity_layout.addWidget(self.intensity_slider)
-
-        # Create spinboxes first
-        self.min_spinbox = QDoubleSpinBox()
-        self.min_spinbox.setToolTip("Set minimum intensity percentile (0-100%)")
-        self.max_spinbox = QDoubleSpinBox()
-        self.max_spinbox.setToolTip("Set maximum intensity percentile (0-100%)")
-
-        # Configure spinboxes with finer step size
-        for spinbox in [self.min_spinbox, self.max_spinbox]:
-            spinbox.setRange(0, 100)
-            spinbox.setDecimals(1)  # Show one decimal place
-            spinbox.setSingleStep(0.1)  # 0.1% steps
-
-        self.max_spinbox.setValue(100)
-
-        # Add spinboxes layout
-        spinbox_layout = QHBoxLayout()
-        spinbox_layout.addWidget(QLabel("Min "))
-        spinbox_layout.addWidget(self.min_spinbox)
-        spinbox_layout.addStretch()
-        spinbox_layout.addWidget(self.max_spinbox)
-        intensity_layout.addLayout(spinbox_layout)
-        spinbox_layout.addWidget(QLabel("Max "))
-
-        # Add Gaussian filter controls
-        self.gaussian_sigma_spin = QDoubleSpinBox()
-        self.gaussian_sigma_spin.setToolTip("Set Gaussian blur sigma (0 = disabled)")
-        sigma_layout = self._create_sigma_control(self.gaussian_sigma_spin)
-        intensity_layout.addLayout(sigma_layout)
-
-        intensity_group.setLayout(intensity_layout)
-        return intensity_group
-
     def _create_registration_group(self):
         """Create the registration group."""
         registration_group = QGroupBox("Registration")
@@ -505,44 +610,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         preview_frame.setLayout(preview_layout)
         return preview_frame
 
-    def _create_cell_params_group(self):
-        """Create the cell stack parameters group."""
-        cell_params_group = QGroupBox("Cell Stack Parameters")
-        cell_params_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        cell_params_layout = QVBoxLayout()
-
-        # Cell contrast enhancement
-        cell_intensity_layout = QVBoxLayout()
-
-        self.cell_intensity_slider = QRangeSlider(Qt.Horizontal)
-        self.cell_intensity_slider.setToolTip("Adjust intensity range for cell image contrast enhancement")
-        self.cell_intensity_slider.setRange(0, 1000)
-        self.cell_intensity_slider.setValue((0, 1000))
-        cell_intensity_layout.addWidget(self.cell_intensity_slider)
-
-        # Create cell spinboxes
-        self.cell_min_spinbox = QDoubleSpinBox()
-        self.cell_min_spinbox.setToolTip("Set minimum intensity percentile for cell images (0-100%)")
-        self.cell_max_spinbox = QDoubleSpinBox()
-        self.cell_max_spinbox.setToolTip("Set maximum intensity percentile for cell images (0-100%)")
-
-        spinbox_layout = self._create_range_spinboxes(
-            self.cell_min_spinbox,
-            self.cell_max_spinbox,
-            is_cell=True
-        )
-        cell_intensity_layout.addLayout(spinbox_layout)
-        cell_params_layout.addLayout(cell_intensity_layout)
-
-        # Cell gaussian blur
-        self.cell_gaussian_sigma_spin = QDoubleSpinBox()
-        self.cell_gaussian_sigma_spin.setToolTip("Set Gaussian blur sigma for cell images (0 = disabled)")
-        sigma_layout = self._create_sigma_control(self.cell_gaussian_sigma_spin)
-        cell_params_layout.addLayout(sigma_layout)
-
-        cell_params_group.setLayout(cell_params_layout)
-        return cell_params_group
-
     def _handle_progress(self, update_dict):
         """Handle progress updates from the worker"""
         progress = update_dict['progress']
@@ -580,34 +647,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         for control in controls:
             self.register_control(control)
 
-    def _create_sigma_control(self, sigma_spinbox):
-        """Create a layout with sigma control for Gaussian filter."""
-        sigma_layout = QHBoxLayout()
-        sigma_layout.addWidget(QLabel("Blur"))
-
-        # Create slider for Gaussian sigma
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(0, 100)  # Range 0-10.0 with 100 steps
-        slider.setValue(0)
-        slider.setTickPosition(QSlider.TicksBelow)
-        slider.setTickInterval(10)
-
-        # Configure spinbox
-        sigma_spinbox.setRange(0.0, 10.0)
-        sigma_spinbox.setValue(0.0)
-        sigma_spinbox.setSingleStep(0.1)
-
-        # Add both controls
-        sigma_layout.addWidget(sigma_spinbox)
-        sigma_layout.addWidget(slider, stretch=1)  # Give slider more space
-
-        # Store slider reference
-        if sigma_spinbox == self.gaussian_sigma_spin:
-            self.gaussian_sigma_slider = slider
-        else:
-            self.cell_gaussian_sigma_slider = slider
-
-        return sigma_layout
 
     def _update_sigma_from_slider(self):
         """Update sigma spinbox from slider value"""
@@ -846,26 +885,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.intensity_slider.blockSignals(False)
 
         self.update_parameters()
-
-    def _create_range_spinboxes(self, min_spinbox, max_spinbox, is_cell=False):
-        """Create a layout with min/max range spinboxes."""
-        spinbox_layout = QHBoxLayout()
-
-        for spinbox in [min_spinbox, max_spinbox]:
-            spinbox.setRange(0, 100)
-            spinbox.setDecimals(1)
-            # Finer step size for cell controls
-            spinbox.setSingleStep(0.1 if is_cell else 1.0)
-
-        max_spinbox.setValue(100)
-
-        spinbox_layout.addWidget(QLabel("Min "))
-        spinbox_layout.addWidget(min_spinbox)
-        spinbox_layout.addStretch()
-        spinbox_layout.addWidget(max_spinbox)
-        spinbox_layout.addWidget(QLabel("Max "))
-
-        return spinbox_layout
 
     def _update_cell_intensity_labels(self, values):
         """Update cell intensity range spinboxes with slider values"""
