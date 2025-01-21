@@ -124,7 +124,7 @@ class MSMWidget(BaseAnalysisWidget):
         mask_layout = QHBoxLayout()
         self.load_mask_btn = QPushButton("Load Masks")
         self.load_mask_btn.setToolTip("Load input image data")
-        self.image_status = QLabel("Not loaded")
+        self.mask_status = QLabel("Not loaded")
         mask_layout.addWidget(self.load_mask_btn)
         mask_layout.addWidget(self.image_status)
 
