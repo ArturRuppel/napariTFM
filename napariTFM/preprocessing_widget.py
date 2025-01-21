@@ -54,9 +54,110 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.viewer.layers.events.removed.connect(self._on_layer_change)
         self.viewer.layers.selection.events.changed.connect(self._on_layer_selection_change)
 
+        # Initialize parameters with default values
+        self.reset_parameters()
+
         # Initialize button states
         self._update_button_states()
         self._update_ui_state()
+
+    def reset_parameters(self):
+        """Reset all parameters to defaults with proper signal blocking"""
+        # Block all signals temporarily
+        widgets_to_block = [
+            self.intensity_slider,
+            self.min_spinbox,
+            self.max_spinbox,
+            self.cell_intensity_slider,
+            self.cell_min_spinbox,
+            self.cell_max_spinbox,
+            self.gaussian_sigma_spin,
+            self.gaussian_sigma_slider,
+            self.cell_gaussian_sigma_spin,
+            self.cell_gaussian_sigma_slider
+        ]
+
+        # Store original blocked states
+        original_states = [widget.signalsBlocked() for widget in widgets_to_block]
+
+        try:
+            # Block all signals
+            for widget in widgets_to_block:
+                widget.blockSignals(True)
+
+            # Reset bead/reference intensity range
+            self.intensity_slider.setValue((0, 1000))
+            self.min_spinbox.setValue(0)
+            self.max_spinbox.setValue(100)
+
+            # Reset cell intensity range
+            self.cell_intensity_slider.setValue((0, 1000))
+            self.cell_min_spinbox.setValue(0)
+            self.cell_max_spinbox.setValue(100)
+
+            # Reset gaussian filters
+            self.gaussian_sigma_spin.setValue(0.0)
+            self.gaussian_sigma_slider.setValue(0)
+            self.cell_gaussian_sigma_spin.setValue(0.0)
+            self.cell_gaussian_sigma_slider.setValue(0)
+
+            # Reset registration
+            self.registration_mode_combo.setCurrentText('Translation')
+
+            # Update parameters with new values
+            self.update_parameters()
+
+        finally:
+            # Restore original blocked states
+            for widget, state in zip(widgets_to_block, original_states):
+                widget.blockSignals(state)
+
+        self._update_status("Parameters reset to defaults")
+
+    def update_parameters(self):
+        """Update preprocessing parameters from UI controls with validation"""
+        try:
+            # Get and validate intensity ranges
+            min_percentile = max(0.0, min(100.0, self.min_spinbox.value())) / 100.0
+            max_percentile = max(0.0, min(100.0, self.max_spinbox.value())) / 100.0
+
+            cell_min_percentile = max(0.0, min(100.0, self.cell_min_spinbox.value())) / 100.0
+            cell_max_percentile = max(0.0, min(100.0, self.cell_max_spinbox.value())) / 100.0
+
+            # Ensure min is less than max
+            if min_percentile >= max_percentile:
+                max_percentile = min(1.0, min_percentile + 0.01)
+            if cell_min_percentile >= cell_max_percentile:
+                cell_max_percentile = min(1.0, cell_min_percentile + 0.01)
+
+            # Create new parameters
+            params = PreprocessingParameters(
+                # Bead/Reference parameters
+                min_intensity_percentile=min_percentile,
+                max_intensity_percentile=max_percentile,
+                enable_gaussian_filter=self.gaussian_sigma_spin.value() > 0,
+                gaussian_sigma=max(0.0, self.gaussian_sigma_spin.value()),
+
+                # Cell parameters
+                cell_min_intensity_percentile=cell_min_percentile,
+                cell_max_intensity_percentile=cell_max_percentile,
+                enable_cell_gaussian_filter=self.cell_gaussian_sigma_spin.value() > 0,
+                cell_gaussian_sigma=max(0.0, self.cell_gaussian_sigma_spin.value()),
+
+                # Registration parameters
+                enable_registration=self.registration_mode_combo.currentText() != 'No registration',
+                registration_mode=self.registration_mode_combo.currentText().lower()
+            )
+
+            # Update preprocessor
+            self.preprocessor.update_parameters(params)
+
+            # Update preview if enabled
+            if self.preview_enabled:
+                self.update_preview_frame()
+
+        except Exception as e:
+            self._handle_error(str(e))
 
     def _get_active_image_layer(self):
         """Get currently active image layer"""
@@ -352,6 +453,11 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.cell_min_spinbox.setToolTip("Set minimum intensity percentile for cell images (0-100%)")
         self.cell_max_spinbox = QDoubleSpinBox()
         self.cell_max_spinbox.setToolTip("Set maximum intensity percentile for cell images (0-100%)")
+
+        for spinbox in [self.cell_min_spinbox, self.cell_max_spinbox]:
+            spinbox.setRange(0, 100)
+            spinbox.setDecimals(1)  # Show one decimal place
+            spinbox.setSingleStep(0.1)  # 0.1% steps
 
         spinbox_layout = QHBoxLayout()
         min_label = QLabel("Min ")
@@ -821,84 +927,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 f"Current calibration: pixel size = {pixel_size:.3f} µm, "
                 f"frame length = {frame_length:.3f} min"
             )
-
-    def update_parameters(self):
-        """Update preprocessing parameters from UI controls"""
-        try:
-            # Get bead/reference intensity ranges
-            min_percentile = self.min_spinbox.value() / 100.0
-            max_percentile = self.max_spinbox.value() / 100.0
-
-            # Get cell intensity ranges
-            cell_min_percentile = self.cell_min_spinbox.value() / 100.0
-            cell_max_percentile = self.cell_max_spinbox.value() / 100.0
-
-            # Create new parameters
-            params = PreprocessingParameters(
-                # Bead/Reference parameters
-                min_intensity_percentile=min_percentile,
-                max_intensity_percentile=max_percentile,
-                enable_gaussian_filter=self.gaussian_sigma_spin.value() > 0,
-                gaussian_sigma=self.gaussian_sigma_spin.value(),
-
-                # Cell parameters
-                cell_min_intensity_percentile=cell_min_percentile,
-                cell_max_intensity_percentile=cell_max_percentile,
-                enable_cell_gaussian_filter=self.cell_gaussian_sigma_spin.value() > 0,
-                cell_gaussian_sigma=self.cell_gaussian_sigma_spin.value(),
-
-                # Registration parameters
-                enable_registration=self.registration_mode_combo.currentText() != 'No registration',
-                registration_mode=self.registration_mode_combo.currentText().lower()
-            )
-
-            # Validate and update preprocessor
-            params.validate()
-            self.preprocessor.update_parameters(params)
-
-            # Update preview if enabled
-            if self.preview_enabled:
-                self.update_preview_frame()
-
-        except Exception as e:
-            self._handle_error(e)
-
-    def reset_parameters(self):
-        """Reset all parameters to defaults"""
-        # Reset bead/reference intensity range
-        self.intensity_slider.setValue((0, 1000))
-        self.min_spinbox.blockSignals(True)
-        self.max_spinbox.blockSignals(True)
-        self.min_spinbox.setValue(0)
-        self.max_spinbox.setValue(100)
-        self.min_spinbox.blockSignals(False)
-        self.max_spinbox.blockSignals(False)
-
-        # Reset cell intensity range
-        self.cell_intensity_slider.setValue((0, 1000))
-        self.cell_min_spinbox.blockSignals(True)
-        self.cell_max_spinbox.blockSignals(True)
-        self.cell_min_spinbox.setValue(0)
-        self.cell_max_spinbox.setValue(100)
-        self.cell_min_spinbox.blockSignals(False)
-        self.cell_max_spinbox.blockSignals(False)
-
-        # Reset gaussian filters
-        self.gaussian_sigma_spin.setValue(0.0)
-        self.cell_gaussian_sigma_spin.setValue(0.0)
-
-        # Reset gaussian sliders
-        self.gaussian_sigma_slider.setValue(0)
-        self.cell_gaussian_sigma_slider.setValue(0)
-
-        self._update_status("Parameters reset to defaults")
-        self.update_parameters()
-
-        # Reset registration
-        self.registration_mode_combo.setCurrentText('Translation')
-
-        self._update_status("Parameters reset to defaults")
-        self.update_parameters()
 
     def _connect_signals(self):
         """Connect widget signals"""
