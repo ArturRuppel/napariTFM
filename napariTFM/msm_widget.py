@@ -64,6 +64,7 @@ class MSMWidget(BaseAnalysisWidget):
         """Connect widget signals."""
         # Buttons
         self.load_force_btn.clicked.connect(self._load_force_data)
+        self.load_mask_btn.clicked.connect(self._load_masks)
         self.create_mask_btn.clicked.connect(self._create_mask_from_images)
         self.preview_mesh_btn.clicked.connect(self.preview_mesh)
         self.preview_frame_btn.clicked.connect(self.preview_current_frame)
@@ -95,6 +96,92 @@ class MSMWidget(BaseAnalysisWidget):
                 widget.valueChanged.connect(self._update_mask_preview)
             else:  # Other spin boxes
                 widget.valueChanged.connect(self._update_parameters)
+
+    def _load_masks(self):
+        """Load mask data from the active layer."""
+        try:
+            # Get active layer
+            active_layer = self.viewer.layers.selection.active
+            if active_layer is None:
+                raise ValueError("No active layer selected")
+
+            # Get layer data
+            data = active_layer.data
+            if data is None:
+                raise ValueError("Selected layer contains no data")
+
+            # Convert data to numpy array if needed
+            data = np.array(data)
+
+            # Handle different layer types
+            if active_layer._type_string == 'labels':
+                # Check for multiple labels
+                unique_labels = np.unique(data)
+                unique_labels = unique_labels[unique_labels != 0]  # Exclude background
+
+                if len(unique_labels) > 1:
+                    QMessageBox.warning(
+                        self,
+                        "Multiple Labels Detected",
+                        f"Found {len(unique_labels)} different labels. "
+                        "All non-zero labels will be converted to 1."
+                    )
+
+                # Convert all non-zero labels to 1
+                mask_stack = (data > 0).astype(np.uint8)
+
+            elif active_layer._type_string == 'image':
+                # Check for multiple intensity values
+                unique_values = np.unique(data)
+                unique_values = unique_values[unique_values != 0]  # Exclude background
+
+                if len(unique_values) > 1:
+                    QMessageBox.warning(
+                        self,
+                        "Multiple Intensity Values",
+                        f"Found {len(unique_values)} different non-zero intensity values. "
+                        "All non-zero values will be converted to 1."
+                    )
+
+                # Convert to binary mask
+                mask_stack = (data > 0).astype(np.uint8)
+
+            else:
+                raise ValueError(f"Unsupported layer type: {active_layer._type_string}")
+
+            # Ensure proper dimensionality
+            if mask_stack.ndim == 2:
+                mask_stack = mask_stack[np.newaxis, ...]  # Add time dimension
+
+            # Store mask data in data manager
+            self.data_manager.set_mask_stack(
+                mask_stack,
+                visualization_mask_stack=mask_stack,  # Initially same as analysis mask
+                processing_info={
+                    'source_type': active_layer._type_string,
+                    'original_shape': mask_stack.shape[1:],
+                    'downscale_factor': 1  # Will be updated when analyzing with force data
+                }
+            )
+
+            # Update visualization
+            self._update_mask_visualization(mask_stack)
+
+            # Update UI state
+            self._update_ui_state()
+
+            # Update status
+            num_frames = mask_stack.shape[0]
+            shape_info = f"{mask_stack.shape[1]}x{mask_stack.shape[2]}"
+            self._update_status(
+                f"Successfully loaded {num_frames} masks\n"
+                f"Resolution: {shape_info}",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(f"Failed to load masks: {str(e)}")
+            self.progress_bar.setValue(0)
 
     def _handle_frame_change(self, event=None):
         """Handle frame changes in the viewer."""
@@ -517,12 +604,12 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _update_mask_visualization(self, vis_mask_stack: np.ndarray):
         """Update the mask visualization in napari."""
-        if 'Cell Mask' in self.viewer.layers:
-            self.viewer.layers.remove('Cell Mask')
+        if 'Masks' in self.viewer.layers:
+            self.viewer.layers.remove('Masks')
 
         self.viewer.add_labels(
             vis_mask_stack.astype(np.uint8),
-            name='Cell Mask',
+            name='Masks',
             visible=True,
             opacity=0.5,
         )
