@@ -3,7 +3,7 @@ from typing import Tuple
 
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QSizePolicy, QCheckBox,
-    QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QComboBox,
+    QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QComboBox, QSlider,
     QProgressBar, QMessageBox, QFileDialog
 )
 from qtpy.QtCore import Signal, Qt
@@ -161,9 +161,44 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _process_single_mask(self, image: np.ndarray, dilation: int,
                              smoothing_sigma: float) -> np.ndarray:
-        """Process a single frame to create a mask."""
-        # Basic thresholding
-        mask = image > 0
+        """
+        Process a single frame to create a mask.
+
+        Parameters
+        ----------
+        image : np.ndarray
+            Input image frame
+        dilation : int
+            Number of pixels to dilate the mask
+        smoothing_sigma : float
+            Sigma value for Gaussian smoothing
+
+        Returns
+        -------
+        np.ndarray
+            Binary mask
+        """
+        # Get threshold percentile value
+        threshold_spin, _ = self.parameter_spins['threshold']
+        percentile = threshold_spin.value()
+
+        # Convert image to float for consistent processing
+        image_float = image.astype(float)
+
+        # Calculate threshold value based on percentile
+        # Ignore zero values when calculating percentile
+        if percentile > 0:
+            nonzero_mask = image_float > 0
+            if np.any(nonzero_mask):
+                threshold_value = np.percentile(image_float[nonzero_mask], percentile)
+                thresholded_image = np.where(image_float > threshold_value, image_float, 0)
+            else:
+                thresholded_image = image_float
+        else:
+            thresholded_image = image_float
+
+        # Basic thresholding to create binary mask
+        mask = thresholded_image > 0
 
         # Fill holes
         filled_mask = ndimage.binary_fill_holes(mask)
@@ -198,6 +233,61 @@ class MSMWidget(BaseAnalysisWidget):
             final_mask = dilated_mask
 
         return final_mask
+
+    def _reset_parameters(self):
+        """Reset all parameters to their default values."""
+        # Reset each parameter to its default value
+        default_values = {
+            'threshold': 0,
+            'dilation': 10,
+            'smoothing_sigma': 10,
+            'density_factor': 0.025,
+            'algorithm': 'Frontal-Del.',
+            'use_optimization': True,
+            'sigma': 0.5,
+            'max_stress': 1.0
+        }
+
+        for param_name, default_value in default_values.items():
+            if param_name in self.parameter_spins:
+                if isinstance(self.parameter_spins[param_name], tuple):
+                    # Handle threshold spinbox and slider
+                    spin, slider = self.parameter_spins[param_name]
+                    spin.setValue(default_value)
+                    # Slider will be updated automatically through signal connection
+                elif isinstance(self.parameter_spins[param_name], QComboBox):
+                    self.parameter_spins[param_name].setCurrentText(default_value)
+                elif isinstance(self.parameter_spins[param_name], QCheckBox):
+                    self.parameter_spins[param_name].setChecked(default_value)
+                else:
+                    self.parameter_spins[param_name].setValue(default_value)
+
+        self._update_parameters()
+        self._update_status("Parameters reset to defaults", 100)
+
+    def _connect_signals(self):
+        """Connect widget signals."""
+        # Buttons
+        self.create_mask_btn.clicked.connect(self._create_mask_from_images)
+        self.preview_mesh_btn.clicked.connect(self.preview_mesh)
+        self.preview_frame_btn.clicked.connect(self.preview_current_frame)
+        self.analyze_btn.clicked.connect(self.analyze_all_frames)
+        self.save_stress_btn.clicked.connect(self._save_stress_tensor)
+        self.load_stress_btn.clicked.connect(self._load_stress_tensor)
+
+        # Parameters
+        for name, widget in self.parameter_spins.items():
+            if isinstance(widget, tuple):
+                # Handle threshold spinbox and slider
+                spin, slider = widget
+                spin.valueChanged.connect(self._update_parameters)
+                slider.valueChanged.connect(self._update_parameters)
+            elif isinstance(widget, QComboBox):
+                widget.currentTextChanged.connect(self._update_parameters)
+            elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                widget.valueChanged.connect(self._update_parameters)
+            else:  # QCheckBox
+                widget.stateChanged.connect(self._update_parameters)
 
     def _resize_mask_stack(self, mask_stack: np.ndarray,
                            target_shape: Tuple[int, int]) -> np.ndarray:
@@ -346,9 +436,13 @@ class MSMWidget(BaseAnalysisWidget):
         """Create the analysis parameters group."""
         group = QGroupBox("Parameters")
         layout = QVBoxLayout()
+        layout.setSpacing(8)  # Match FTTC spacing
+        layout.setContentsMargins(6, 6, 6, 6)  # Match FTTC margins
 
         # Mask parameters
         mask_params = [
+            ("threshold", "Intensity Percentile:", 0, 100, 1, 0,
+             "Clip intensity values below this percentile before creating the mask."),
             ("dilation", "Mask Dilation (px):", 0, 50, 1, 10,
              "Number of pixels to dilate the mask. Higher values create a larger boundary around the cell."),
             ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 10,
@@ -377,7 +471,6 @@ class MSMWidget(BaseAnalysisWidget):
              "Maximum stress value for colormap scaling. Adjust to optimize visualization."),
         ]
 
-        # Create parameter sections with headers
         sections = [
             ("Mask Parameters", mask_params),
             ("Mesh Parameters", mesh_params),
@@ -386,9 +479,10 @@ class MSMWidget(BaseAnalysisWidget):
         ]
 
         for section_title, params in sections:
-            # Create group box for each section
             section_group = QGroupBox(section_title)
             section_layout = QVBoxLayout()
+            section_layout.setSpacing(4)
+            section_layout.setContentsMargins(6, 6, 6, 6)  # Match FTTC margins
 
             for param_info in params:
                 param_name, label, min_val, max_val, step, default, tooltip = param_info
@@ -401,9 +495,39 @@ class MSMWidget(BaseAnalysisWidget):
                 label_widget.setFixedWidth(150)
                 param_layout.addWidget(label_widget)
 
-                if param_name == "use_optimization":
+                if param_name == "threshold":
+                    # Create both spinbox and slider for threshold
+                    spin = QSpinBox()
+                    spin.setRange(min_val, max_val)
+                    spin.setSingleStep(step)
+                    spin.setValue(default)
+                    spin.setToolTip(tooltip)
+                    spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                    spin.setSuffix("%")
+
+                    slider = QSlider(Qt.Horizontal)
+                    slider.setRange(min_val, max_val)
+                    slider.setSingleStep(step)
+                    slider.setValue(default)
+                    slider.setToolTip(tooltip)
+                    slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+                    # Connect signals for synchronization
+                    spin.valueChanged.connect(slider.setValue)
+                    slider.valueChanged.connect(spin.setValue)
+
+                    self.parameter_spins[param_name] = (spin, slider)
+
+                    # Add to layout with correct proportions
+                    param_layout.addWidget(spin)
+                    param_layout.addWidget(slider)
+
+                elif param_name == "use_optimization":
                     spin = QCheckBox()
                     spin.setChecked(default)
+                    self.parameter_spins[param_name] = spin
+                    param_layout.addWidget(spin)
+
                 elif param_name == "algorithm":
                     spin = QComboBox()
                     spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -414,6 +538,9 @@ class MSMWidget(BaseAnalysisWidget):
                                          "\n".join(f"• {short}: {full}"
                                                    for short, full in self.ALGORITHM_FULL_NAMES.items())
                     spin.setToolTip(tooltip + "\n\n" + full_names_tooltip)
+                    self.parameter_spins[param_name] = spin
+                    param_layout.addWidget(spin)
+
                 else:
                     if isinstance(step, int):
                         spin = QSpinBox()
@@ -425,9 +552,9 @@ class MSMWidget(BaseAnalysisWidget):
                     spin.setValue(default)
                     spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
                     spin.setToolTip(tooltip)
+                    self.parameter_spins[param_name] = spin
+                    param_layout.addWidget(spin)
 
-                self.parameter_spins[param_name] = spin
-                param_layout.addWidget(spin)
                 section_layout.addLayout(param_layout)
 
             section_group.setLayout(section_layout)
@@ -439,10 +566,9 @@ class MSMWidget(BaseAnalysisWidget):
         self.reset_params_btn.clicked.connect(self._reset_parameters)
         layout.addWidget(self.reset_params_btn)
 
-        layout.addStretch()
+        layout.addStretch(1)  # Add stretch at the end only
         group.setLayout(layout)
         return group
-
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame."""
         frame = QFrame()
@@ -486,30 +612,19 @@ class MSMWidget(BaseAnalysisWidget):
         frame.setLayout(layout)
         return frame
 
-    def _reset_parameters(self):
-        """Reset all parameters to their default values."""
-        # Reset each parameter to its default value
-        default_values = {
-            'dilation': 10,
-            'smoothing_sigma': 10,
-            'density_factor': 0.025,
-            'algorithm': 'Frontal-Del.',
-            'use_optimization': True,
-            'sigma': 0.5,
-            'max_stress': 1.0
-        }
+    def _create_status_frame(self) -> QFrame:
+        """Create the status and progress frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
 
-        for param_name, default_value in default_values.items():
-            if param_name in self.parameter_spins:
-                if isinstance(self.parameter_spins[param_name], QComboBox):
-                    self.parameter_spins[param_name].setCurrentText(default_value)
-                elif isinstance(self.parameter_spins[param_name], QCheckBox):
-                    self.parameter_spins[param_name].setChecked(default_value)
-                else:
-                    self.parameter_spins[param_name].setValue(default_value)
+        self.progress_bar = QProgressBar()
+        self.status_label = QLabel("")
 
-        self._update_parameters()
-        self._update_status("Parameters reset to defaults", 100)
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.status_label)
+
+        frame.setLayout(layout)
+        return frame
 
     def preview_current_frame(self):
         """Preview stress calculation for the current frame."""
@@ -766,25 +881,6 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to update parameters: {str(e)}")
 
-    def _connect_signals(self):
-        """Connect widget signals."""
-        # Buttons
-        self.create_mask_btn.clicked.connect(self._create_mask_from_images)
-        self.preview_mesh_btn.clicked.connect(self.preview_mesh)
-        self.preview_frame_btn.clicked.connect(self.preview_current_frame)
-        self.analyze_btn.clicked.connect(self.analyze_all_frames)
-        self.save_stress_btn.clicked.connect(self._save_stress_tensor)
-        self.load_stress_btn.clicked.connect(self._load_stress_tensor)
-
-        # Parameters - need to handle QComboBox differently from other widgets
-        for name, widget in self.parameter_spins.items():
-            if isinstance(widget, QComboBox):
-                widget.currentTextChanged.connect(self._update_parameters)
-            elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
-                widget.valueChanged.connect(self._update_parameters)
-            else:  # QCheckBox
-                widget.stateChanged.connect(self._update_parameters)
-
     def preview_mesh(self):
         """Generate and display preview of the triangular mesh for the current frame."""
         try:
@@ -915,20 +1011,6 @@ class MSMWidget(BaseAnalysisWidget):
             pass
 
         super().cleanup()
-
-    def _create_status_frame(self) -> QFrame:
-        """Create the status and progress frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        self.progress_bar = QProgressBar()
-        self.status_label = QLabel("")
-
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.status_label)
-
-        frame.setLayout(layout)
-        return frame
 
     def _save_stress_tensor(self):
         """Save stress tensor data to files."""
