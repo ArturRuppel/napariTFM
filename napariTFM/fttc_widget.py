@@ -54,6 +54,203 @@ class FTTCWidget(BaseAnalysisWidget):
         self._register_controls()
         self._update_ui_state()
 
+    def _setup_ui(self):
+        """Set up the user interface."""
+        main_layout = QHBoxLayout()
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create colorbar container
+        colorbar_container = QWidget()
+        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        colorbar_layout = QVBoxLayout()
+        colorbar_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Create colorbar
+        colorbar_group = self.create_colorbar_widget(
+            colormap_name='inferno',
+            label="Force (Pa)",
+            clim=(1000, 0),
+            colorbar_manager=self.colorbar_manager
+        )
+        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        colorbar_layout.addStretch()
+        colorbar_container.setLayout(colorbar_layout)
+        main_layout.addWidget(colorbar_container)
+
+        # Right side container
+        right_container = QWidget()
+        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        right_layout = QVBoxLayout()
+        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Add widgets to right container
+        right_layout.addWidget(self._create_data_loading_group())
+        right_layout.addWidget(self._create_parameters_group())
+        right_layout.addWidget(self._create_action_buttons())
+        right_layout.addWidget(self._create_status_frame())
+        right_layout.addStretch()
+
+        right_container.setLayout(right_layout)
+        right_container.setFixedWidth(360)
+
+        main_layout.addWidget(right_container)
+        main_layout.addStretch(1)
+
+        self.setLayout(main_layout)
+        self._register_controls()
+
+    def _create_parameters_group(self) -> QGroupBox:
+        """Create a consolidated parameters group."""
+        # Create all spin boxes first
+        self.young_spin = QDoubleSpinBox()
+        self.poisson_spin = QDoubleSpinBox()
+        self.height_spin = QDoubleSpinBox()
+        self.lanczos_exp_spin = QSpinBox()
+        self.regularization_spin = QDoubleSpinBox()
+        self.auto_gcv_checkbox = QCheckBox("Auto-GCV per frame")
+        self.gcv_button = QPushButton("Auto-select (GCV)")
+
+        # Initialize visualization parameters if not already done
+        if not hasattr(self, 'visualization_params'):
+            self.visualization_params = {}
+        if 'vector_stride' not in self.visualization_params:
+            self.visualization_params['vector_stride'] = QSpinBox()
+        if 'arrow_scale' not in self.visualization_params:
+            self.visualization_params['arrow_scale'] = QDoubleSpinBox()
+        if 'f_max' not in self.visualization_params:
+            self.visualization_params['f_max'] = QDoubleSpinBox()
+
+        # Main parameters group
+        group = QGroupBox("Parameters")
+        main_layout = QVBoxLayout()
+
+        # Create sections for better organization
+        material_params_group = QGroupBox("Material Parameters")
+        material_params_layout = QVBoxLayout()
+
+        regularization_params_group = QGroupBox("Regularization Parameters")
+        regularization_params_layout = QVBoxLayout()
+
+        vis_params_group = QGroupBox("Visualization Parameters")
+        vis_params_layout = QVBoxLayout()
+
+        # Material parameters
+        params = [
+            ("Young's Modulus (kPa):", self.young_spin, 0.1, 1000, 0.1, self.young_modulus,
+             "Elastic modulus of the gel substrate in kilopascals (kPa)"),
+            ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, self.poisson_ratio,
+             "Poisson's ratio of the gel substrate (typically 0.45-0.49 for hydrogels)"),
+            ("Gel Height (μm):", self.height_spin, 0, 1000, 10, 0,
+             "Thickness of the gel substrate in micrometers. Set to 0 for infinite thickness"),
+            ("Lanczos Exponent:", self.lanczos_exp_spin, 0, 5, 1, self.lanczos_exp,
+             "Exponent for Lanczos interpolation. Higher values increase smoothing")
+        ]
+
+        for label_text, spin, min_val, max_val, step, default, tooltip in params:
+            row = QHBoxLayout()
+            label = QLabel(label_text)
+            label.setFixedWidth(150)
+            label.setToolTip(tooltip)
+            row.addWidget(label)
+
+            spin.setRange(min_val, max_val)
+            spin.setSingleStep(step)
+            spin.setValue(default)
+            spin.setToolTip(tooltip)
+            if label_text.startswith("Gel Height"):
+                spin.setSpecialValueText("∞")
+            row.addWidget(spin)
+            material_params_layout.addLayout(row)
+
+        material_params_group.setLayout(material_params_layout)
+
+        # Regularization controls
+        reg_layout = QHBoxLayout()
+        reg_layout.addWidget(QLabel("Parameter (10^x):"))
+        self.regularization_spin.setRange(-21, 0)
+        self.regularization_spin.setValue(-17)
+        self.regularization_spin.setSingleStep(0.5)
+        self.regularization_spin.setDecimals(1)
+        self.regularization_spin.setToolTip(
+            "Tikhonov regularization parameter as a power of 10.\n"
+            "Lower values give more detailed but potentially noisier results"
+        )
+        reg_layout.addWidget(self.regularization_spin)
+        regularization_params_layout.addLayout(reg_layout)
+
+        gcv_layout = QHBoxLayout()
+        self.auto_gcv_checkbox.setToolTip(
+            "Automatically optimize regularization parameter for each frame\n"
+            "using Generalized Cross-Validation"
+        )
+        gcv_layout.addWidget(self.auto_gcv_checkbox)
+
+        self.gcv_button.setToolTip(
+            "Calculate optimal regularization parameter for current frame\n"
+            "using Generalized Cross-Validation"
+        )
+        gcv_layout.addWidget(self.gcv_button)
+        regularization_params_layout.addLayout(gcv_layout)
+
+        regularization_params_group.setLayout(regularization_params_layout)
+
+        # Visualization parameters
+        # Vector stride
+        stride_layout = QHBoxLayout()
+        stride_layout.addWidget(QLabel("Vector Stride:"))
+        self.visualization_params['vector_stride'].setRange(1, 100)
+        self.visualization_params['vector_stride'].setValue(20)
+        self.visualization_params['vector_stride'].setToolTip(
+            "Display every nth vector in the visualization.\n"
+            "Higher values show fewer vectors but improve clarity"
+        )
+        stride_layout.addWidget(self.visualization_params['vector_stride'])
+        vis_params_layout.addLayout(stride_layout)
+
+        # Arrow scale
+        arrow_layout = QHBoxLayout()
+        arrow_layout.addWidget(QLabel("Arrow Scale:"))
+        self.visualization_params['arrow_scale'].setRange(0.1, 50.0)
+        self.visualization_params['arrow_scale'].setValue(1.0)
+        self.visualization_params['arrow_scale'].setToolTip(
+            "Scale factor for force vector arrows.\n"
+            "Adjust to make vectors more or less visible"
+        )
+        arrow_layout.addWidget(self.visualization_params['arrow_scale'])
+        vis_params_layout.addLayout(arrow_layout)
+
+        # Maximum force
+        fmax_layout = QHBoxLayout()
+        fmax_layout.addWidget(QLabel("Max Force (Pa):"))
+        self.visualization_params['f_max'].setRange(0.1, 10000.0)
+        self.visualization_params['f_max'].setValue(1000.0)
+        self.visualization_params['f_max'].setToolTip(
+            "Maximum force value for color scaling.\n"
+            "Forces above this value will be shown at maximum intensity"
+        )
+        fmax_layout.addWidget(self.visualization_params['f_max'])
+        vis_params_layout.addLayout(fmax_layout)
+
+        vis_params_group.setLayout(vis_params_layout)
+
+        # Add all parameter groups to main layout
+        main_layout.addWidget(material_params_group)
+        main_layout.addWidget(regularization_params_group)
+        main_layout.addWidget(vis_params_group)
+
+        # Add reset parameters button at the bottom
+        self.reset_params_btn = QPushButton("Reset Parameters")
+        self.reset_params_btn.setToolTip("Reset all parameters to their default values")
+        main_layout.addWidget(self.reset_params_btn)
+
+        main_layout.addStretch()
+        group.setLayout(main_layout)
+        return group
+
     def _connect_signals(self):
         """Connect all widget signals."""
         self.young_spin.valueChanged.connect(self._update_parameters)
@@ -552,146 +749,6 @@ class FTTCWidget(BaseAnalysisWidget):
         for control in controls:
             self.register_control(control)
 
-    def _create_material_params_group(self) -> QGroupBox:
-        """Create the material parameters group."""
-        group = QGroupBox("Material Parameters")
-        layout = QVBoxLayout()
-
-        # Add reset parameters button at the top
-        self.reset_params_btn = QPushButton("Reset Parameters")
-        self.reset_params_btn.setToolTip("Reset all parameters to their default values")
-        layout.addWidget(self.reset_params_btn)
-
-        # Create spinboxes
-        self.young_spin = QDoubleSpinBox()
-        self.poisson_spin = QDoubleSpinBox()
-        self.height_spin = QDoubleSpinBox()
-        self.lanczos_exp_spin = QSpinBox()
-
-        params = [
-            ("Young's Modulus (kPa):", self.young_spin, 0.1, 1000, 0.1, self.young_modulus,
-             "Elastic modulus of the gel substrate in kilopascals (kPa)"),
-            ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, self.poisson_ratio,
-             "Poisson's ratio of the gel substrate (typically 0.45-0.49 for hydrogels)"),
-            ("Gel Height (μm):", self.height_spin, 0, 1000, 10, 0,
-             "Thickness of the gel substrate in micrometers. Set to 0 for infinite thickness"),
-            ("Lanczos Exponent:", self.lanczos_exp_spin, 0, 5, 1, self.lanczos_exp,
-             "Exponent for Lanczos interpolation. Higher values increase smoothing")
-        ]
-
-        for label_text, spin, min_val, max_val, step, default, tooltip in params:
-            row = QHBoxLayout()
-            label = QLabel(label_text)
-            label.setFixedWidth(150)
-            label.setToolTip(tooltip)
-            row.addWidget(label)
-
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
-            spin.setToolTip(tooltip)
-            if label_text.startswith("Gel Height"):
-                spin.setSpecialValueText("∞")
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_calculation_params_group(self) -> QGroupBox:
-        """Create the calculation parameters group."""
-        group = QGroupBox("Calculation Parameters")
-        layout = QVBoxLayout()
-
-        # Regularization controls container
-        reg_container = QGroupBox("Regularization")
-        reg_container_layout = QVBoxLayout()
-
-        # Regularization parameter with log scale
-        reg_layout = QHBoxLayout()
-        reg_layout.addWidget(QLabel("Parameter (10^x):"))
-        self.regularization_spin = QDoubleSpinBox()
-        self.regularization_spin.setRange(-21, 0)
-        self.regularization_spin.setValue(-17)
-        self.regularization_spin.setSingleStep(0.5)
-        self.regularization_spin.setDecimals(1)
-        self.regularization_spin.setToolTip(
-            "Tikhonov regularization parameter as a power of 10.\n"
-            "Lower values give more detailed but potentially noisier results"
-        )
-        reg_layout.addWidget(self.regularization_spin)
-        reg_container_layout.addLayout(reg_layout)
-
-        # Add checkbox and GCV button
-        gcv_layout = QHBoxLayout()
-        self.auto_gcv_checkbox = QCheckBox("Auto-GCV per frame")
-        self.auto_gcv_checkbox.setToolTip(
-            "Automatically optimize regularization parameter for each frame\n"
-            "using Generalized Cross-Validation"
-        )
-        gcv_layout.addWidget(self.auto_gcv_checkbox)
-
-        self.gcv_button = QPushButton("Auto-select (GCV)")
-        self.gcv_button.setToolTip(
-            "Calculate optimal regularization parameter for current frame\n"
-            "using Generalized Cross-Validation"
-        )
-        gcv_layout.addWidget(self.gcv_button)
-
-        reg_container_layout.addLayout(gcv_layout)
-        reg_container.setLayout(reg_container_layout)
-        layout.addWidget(reg_container)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_visualization_parameters_group(self) -> QGroupBox:
-        """Create the visualization parameters group."""
-        group = QGroupBox("Visualization Parameters")
-        layout = QVBoxLayout()
-
-        # Vector stride
-        stride_layout = QHBoxLayout()
-        stride_layout.addWidget(QLabel("Vector Stride:"))
-        self.visualization_params['vector_stride'] = QSpinBox()
-        self.visualization_params['vector_stride'].setRange(1, 100)
-        self.visualization_params['vector_stride'].setValue(20)
-        self.visualization_params['vector_stride'].setToolTip(
-            "Display every nth force vector.\n"
-            "Higher values show fewer vectors but improve visibility"
-        )
-        stride_layout.addWidget(self.visualization_params['vector_stride'])
-        layout.addLayout(stride_layout)
-
-        # Arrow scale
-        arrow_layout = QHBoxLayout()
-        arrow_layout.addWidget(QLabel("Arrow Scale:"))
-        self.visualization_params['arrow_scale'] = QDoubleSpinBox()
-        self.visualization_params['arrow_scale'].setRange(0.1, 50.0)
-        self.visualization_params['arrow_scale'].setValue(1.0)
-        self.visualization_params['arrow_scale'].setToolTip(
-            "Scale factor for force vector arrows.\n"
-            "Adjust to make vectors more or less visible"
-        )
-        arrow_layout.addWidget(self.visualization_params['arrow_scale'])
-        layout.addLayout(arrow_layout)
-
-        # Maximum force
-        fmax_layout = QHBoxLayout()
-        fmax_layout.addWidget(QLabel("Max Force (Pa):"))
-        self.visualization_params['f_max'] = QDoubleSpinBox()
-        self.visualization_params['f_max'].setRange(0.1, 10000.0)
-        self.visualization_params['f_max'].setValue(1000.0)
-        self.visualization_params['f_max'].setToolTip(
-            "Maximum force value for color scaling.\n"
-            "Forces above this value will be shown at maximum intensity"
-        )
-        fmax_layout.addWidget(self.visualization_params['f_max'])
-        layout.addLayout(fmax_layout)
-
-        group.setLayout(layout)
-        return group
-
     def _create_action_buttons(self) -> QFrame:
         """Create the action buttons frame."""
         frame = QFrame()
@@ -800,56 +857,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
-
-    def _setup_ui(self):
-        """Set up the user interface."""
-        main_layout = QHBoxLayout()
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Create colorbar container
-        colorbar_container = QWidget()
-        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Create colorbar
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='inferno',
-            label="Force (Pa)",
-            clim=(1000, 0),
-            colorbar_manager=self.colorbar_manager
-        )
-        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        colorbar_layout.addStretch()
-        colorbar_container.setLayout(colorbar_layout)
-        main_layout.addWidget(colorbar_container)
-
-        # Right side container
-        right_container = QWidget()
-        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        right_layout = QVBoxLayout()
-        right_layout.setSpacing(8)
-        right_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Add parameter groups
-        right_layout.addWidget(self._create_data_loading_group())
-        right_layout.addWidget(self._create_material_params_group())
-        right_layout.addWidget(self._create_calculation_params_group())
-        right_layout.addWidget(self._create_visualization_parameters_group())
-        right_layout.addWidget(self._create_action_buttons())
-        right_layout.addWidget(self._create_status_frame())
-        right_layout.addStretch()
-
-        right_container.setLayout(right_layout)
-        right_container.setFixedWidth(360)
-
-        main_layout.addWidget(right_container)
-        main_layout.addStretch(1)
-
-        self.setLayout(main_layout)
 
     def _update_parameters(self):
         """Update parameters from UI controls and data manager."""
