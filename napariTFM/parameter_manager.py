@@ -207,3 +207,37 @@ class ParameterManager(QObject):
                     callback(self._parameters[name].value)
                 # Emit signal for the parameter change
                 self.parameter_changed.emit(name, self._parameters[name].value)
+
+    def reset_category_to_defaults(self, category: ParameterCategory):
+        """Reset parameters of a specific category to their default values."""
+        # Store existing callbacks for parameters in this category
+        callbacks = {
+            name: param.callbacks
+            for name, param in self._parameters.items()
+            if param.category == category
+        }
+
+        # Store parameters from other categories
+        other_params = {
+            name: param
+            for name, param in self._parameters.items()
+            if param.category != category
+        }
+
+        # Clear and reinitialize all parameters
+        self._parameters.clear()
+        self._initialize_default_parameters()
+
+        # Restore parameters from other categories
+        for name, param in other_params.items():
+            self._parameters[name] = param
+
+        # Restore callbacks for reset category and notify
+        for name, saved_callbacks in callbacks.items():
+            if name in self._parameters:
+                self._parameters[name].callbacks = saved_callbacks
+                # Notify callbacks of new default value
+                for callback in saved_callbacks:
+                    callback(self._parameters[name].value)
+                # Emit signal for the parameter change
+                self.parameter_changed.emit(name, self._parameters[name].value)

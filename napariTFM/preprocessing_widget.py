@@ -19,7 +19,7 @@ from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
 from napariTFM.data_manager import DataManager
 from napariTFM.error_handling import ProcessingError
-from napariTFM.parameter_manager import ParameterManager
+from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.preprocessing import (
     PreprocessingParameters,
     ImagePreprocessor
@@ -171,10 +171,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
             widget.blockSignals(block)
 
     def reset_parameters(self):
-        """Reset all parameters to defaults"""
+        """Reset preprocessing-specific parameters to defaults."""
         try:
-            # Reset parameters in the parameter manager
-            self.parameter_manager.reset_to_defaults()
+            # Reset only preprocessing parameters
+            self.parameter_manager.reset_category_to_defaults(ParameterCategory.PREPROCESSING)
 
             # Synchronize widget values with reset parameters
             self._sync_widget_with_parameters()
@@ -198,7 +198,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             if self.preview_enabled:
                 self.update_preview_frame()
 
-            self._update_status("Parameters reset to defaults")
+            self._update_status("Preprocessing parameters reset to defaults")
 
         except Exception as e:
             self._handle_error(f"Error resetting parameters: {str(e)}")
