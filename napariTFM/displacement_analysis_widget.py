@@ -150,7 +150,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # New button connections
         self.save_displacement_btn.clicked.connect(self._save_displacement)
         self.load_displacement_btn.clicked.connect(self._load_displacement)
-        self.reset_params_btn.clicked.connect(self._reset_parameters)
+        self.reset_params_btn.clicked.connect(self.reset_parameters)
 
     def _on_parameter_changed(self, param_name: str, value: object):
         """Handle parameter changes from the parameter manager"""
@@ -167,7 +167,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         for widget in widgets:
             widget.blockSignals(block)
 
-    def _reset_parameters(self):
+    def reset_parameters(self):
         """Reset displacement-specific parameters to defaults."""
         try:
             # Reset only displacement parameters

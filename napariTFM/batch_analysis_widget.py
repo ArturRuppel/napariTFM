@@ -20,6 +20,15 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
     batch_completed = Signal(dict)  # Emits results when batch processing completes
 
+    MESH_ALGORITHMS = {
+        "Frontal-Del.": 6,
+        "Delaunay": 5,
+        "MeshAdapt": 1,
+        "BAMG": 7,
+        "FD Quads": 8,
+        "Para. Pack": 9
+    }
+
     def __init__(self, viewer, data_manager, parameter_manager: ParameterManager, visualization_manager):
         super().__init__(viewer, data_manager, visualization_manager)
 
@@ -315,10 +324,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
             if name == "mesh_algorithm":
                 combo = QComboBox()
-                combo.addItems([
-                    "Frontal-Del.", "Delaunay", "MeshAdapt",
-                    "BAMG", "FD Quads", "Para. Pack"
-                ])
+                combo.addItems(self.MESH_ALGORITHMS.keys())
                 combo.setCurrentText(default)
                 self.parameter_combos[name] = combo
                 row.addWidget(combo)
@@ -380,23 +386,16 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         if 'mesh_algorithm' in self.parameter_combos:
             combo = self.parameter_combos['mesh_algorithm']
             combo.currentTextChanged.connect(
-                lambda text: self.parameter_manager.set_value(
-                    'mesh_algorithm', text.lower().replace('-', '_')
-                )
+                lambda text: self.parameter_manager.set_value('mesh_algorithm', text)
             )
             self.parameter_manager.register_callback(
                 'mesh_algorithm',
-                lambda value, combo=combo: combo.setCurrentText(
-                    value.replace('_', '-').title() if value else ''
-                )
+                lambda value, combo=combo: combo.setCurrentText(value if value else '')
             )
             try:
                 value = self.parameter_manager.get_value('mesh_algorithm')
                 if value:
-                    display_value = value.replace('_', '-').title()
-                    index = combo.findText(display_value, Qt.MatchFixedString)
-                    if index >= 0:
-                        combo.setCurrentIndex(index)
+                    combo.setCurrentText(value)
             except KeyError:
                 print("Warning: Parameter mesh_algorithm not found in parameter manager")
 

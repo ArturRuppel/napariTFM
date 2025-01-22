@@ -14,7 +14,7 @@ from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
 from .mesh_generator import MeshParameters, MeshGenerator
 from .msm import MonolayerStressMicroscopy
-from .parameter_manager import ParameterManager
+from .parameter_manager import ParameterManager, ParameterCategory
 
 
 class MSMWidget(BaseAnalysisWidget):
@@ -667,37 +667,25 @@ class MSMWidget(BaseAnalysisWidget):
 
         return final_mask
 
-    def _reset_parameters(self):
-        """Reset all parameters to their default values."""
-        # Reset each parameter to its default value
-        default_values = {
-            'threshold': 0,
-            'dilation': 10,
-            'smoothing_sigma': 10,
-            'density_factor': 0.025,
-            'algorithm': 'Frontal-Del.',
-            'use_optimization': True,
-            'sigma': 0.5,
-            'max_stress': 1.0
-        }
+    def reset_parameters(self):
+        """Reset MSM-specific parameters to defaults."""
+        try:
+            # Reset only stress parameters
+            self.parameter_manager.reset_category_to_defaults(ParameterCategory.STRESS)
 
-        for param_name, default_value in default_values.items():
-            if param_name in self.parameter_spins:
-                if isinstance(self.parameter_spins[param_name], tuple):
-                    # Handle threshold spinbox and slider
-                    spin, slider = self.parameter_spins[param_name]
-                    spin.setValue(default_value)
-                    # Slider will be updated automatically through signal connection
-                elif isinstance(self.parameter_spins[param_name], QComboBox):
-                    self.parameter_spins[param_name].setCurrentText(default_value)
-                elif isinstance(self.parameter_spins[param_name], QCheckBox):
-                    self.parameter_spins[param_name].setChecked(default_value)
-                else:
-                    self.parameter_spins[param_name].setValue(default_value)
+            # Synchronize widget values with reset parameters
+            self._sync_widget_with_parameters()
 
-        self._update_parameters()
-        self._update_status("Parameters reset to defaults", 100)
+            # Update mask preview with new parameters
+            self._update_mask_preview()
 
+            # Update UI state in case any changes affect button states
+            self._update_ui_state()
+
+            self._update_status("Stress parameters reset to defaults", 100)
+
+        except Exception as e:
+            self._handle_error(f"Error resetting parameters: {str(e)}")
     def _resize_mask_stack(self, mask_stack: np.ndarray,
                            target_shape: Tuple[int, int]) -> np.ndarray:
         """Resize a mask stack to target shape."""
@@ -1014,7 +1002,7 @@ class MSMWidget(BaseAnalysisWidget):
         # Add reset parameters button
         self.reset_params_btn = QPushButton("Reset Parameters")
         self.reset_params_btn.setToolTip("Reset all parameters to their default values")
-        self.reset_params_btn.clicked.connect(self._reset_parameters)
+        self.reset_params_btn.clicked.connect(self.reset_parameters)
         layout.addWidget(self.reset_params_btn)
 
         layout.addStretch(1)  # Add stretch at the end only
