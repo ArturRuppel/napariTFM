@@ -54,6 +54,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Setup UI and connect signals
         self._setup_ui()
         self._connect_signals()
+        self._connect_parameters()
 
         # Connect to parameter manager signals only after UI is set up
         if hasattr(self.parameter_manager, 'parameter_changed'):
@@ -140,10 +141,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 if index >= 0:
                     self.registration_mode_combo.setCurrentIndex(index)
 
-            # Update preview if enabled
-            if self.preview_enabled:
-                self.update_preview_frame()
-
         except Exception as e:
             print(f"Error syncing parameters: {str(e)}")
 
@@ -151,6 +148,102 @@ class PreprocessingWidget(BaseAnalysisWidget):
             # Restore signal handling
             self._block_parameter_widgets(False)
 
+    def _connect_parameters(self):
+        """Connect widget controls to parameter manager."""
+        # Block signals during initial setup
+        self._block_parameter_widgets(True)
+
+        try:
+            # Connect intensity range controls
+            self.min_spinbox.valueChanged.connect(
+                lambda value: self.parameter_manager.set_value('min_intensity', value)
+            )
+            self.max_spinbox.valueChanged.connect(
+                lambda value: self.parameter_manager.set_value('max_intensity', value)
+            )
+            self.parameter_manager.register_callback(
+                'min_intensity',
+                lambda value: self._safe_set_value(self.min_spinbox, value)
+            )
+            self.parameter_manager.register_callback(
+                'max_intensity',
+                lambda value: self._safe_set_value(self.max_spinbox, value)
+            )
+
+            # Connect intensity slider
+            self.intensity_slider.valueChanged.connect(self._update_intensity_labels)
+
+            # Connect cell intensity range controls
+            self.cell_min_spinbox.valueChanged.connect(
+                lambda value: self.parameter_manager.set_value('cell_min_intensity', value)
+            )
+            self.cell_max_spinbox.valueChanged.connect(
+                lambda value: self.parameter_manager.set_value('cell_max_intensity', value)
+            )
+            self.parameter_manager.register_callback(
+                'cell_min_intensity',
+                lambda value: self._safe_set_value(self.cell_min_spinbox, value)
+            )
+            self.parameter_manager.register_callback(
+                'cell_max_intensity',
+                lambda value: self._safe_set_value(self.cell_max_spinbox, value)
+            )
+
+            # Connect cell intensity slider
+            self.cell_intensity_slider.valueChanged.connect(self._update_cell_intensity_labels)
+
+            # Connect Gaussian sigma controls
+            self.gaussian_sigma_spin.valueChanged.connect(
+                lambda value: self.parameter_manager.set_value('gaussian_sigma', value)
+            )
+            self.parameter_manager.register_callback(
+                'gaussian_sigma',
+                lambda value: self._safe_set_value(self.gaussian_sigma_spin, value)
+            )
+            self.gaussian_sigma_slider.valueChanged.connect(self._update_sigma_from_slider)
+
+            # Connect cell Gaussian sigma controls
+            self.cell_gaussian_sigma_spin.valueChanged.connect(
+                lambda value: self.parameter_manager.set_value('cell_gaussian_sigma', value)
+            )
+            self.parameter_manager.register_callback(
+                'cell_gaussian_sigma',
+                lambda value: self._safe_set_value(self.cell_gaussian_sigma_spin, value)
+            )
+            self.cell_gaussian_sigma_slider.valueChanged.connect(self._update_cell_sigma_from_slider)
+
+            # Connect registration mode
+            self.registration_mode_combo.currentTextChanged.connect(
+                lambda text: self.parameter_manager.set_value(
+                    'registration_mode',
+                    text.lower()
+                )
+            )
+            self.parameter_manager.register_callback(
+                'registration_mode',
+                lambda value: self._safe_set_combo_text(
+                    self.registration_mode_combo,
+                    value.title() if value else ''
+                )
+            )
+
+        finally:
+            self._block_parameter_widgets(False)
+
+    def _safe_set_value(self, widget, value):
+        """Safely set widget value with signal blocking."""
+        if value is not None:
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
+
+    def _safe_set_combo_text(self, combo, text):
+        """Safely set combo box text with signal blocking."""
+        combo.blockSignals(True)
+        index = combo.findText(text, Qt.MatchFixedString)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        combo.blockSignals(False)
     def _block_parameter_widgets(self, block: bool):
         """Block or unblock signals for all parameter-related widgets"""
         widgets = [

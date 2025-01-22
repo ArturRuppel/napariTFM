@@ -95,7 +95,7 @@ class ParameterManager(QObject):
             'dilation': 10,
             'smoothing_sigma': 10.0,
             'density_factor': 0.025,
-            'mesh_algorithm': 'frontal-del.',
+            'mesh_algorithm': 'Frontal-Del.',
             'use_optimization': True,
             'poisson_ratio': 0.5,
             'max_stress': 1.0

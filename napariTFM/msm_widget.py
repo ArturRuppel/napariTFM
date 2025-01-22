@@ -82,25 +82,28 @@ class MSMWidget(BaseAnalysisWidget):
             print("Warning: No parameter manager available for syncing")
             return
 
-        # Block signals temporarily
         self._block_parameter_widgets(True)
-
         try:
-            # Sync threshold spinbox and slider
+            # Threshold
             threshold_spin, threshold_slider = self.parameter_spins['threshold']
             threshold_value = self.parameter_manager.get_value('threshold')
             threshold_spin.setValue(threshold_value)
             threshold_slider.setValue(threshold_value)
 
-            # Sync other parameters
+            # Algorithm
+            algo_value = self.parameter_manager.get_value('mesh_algorithm')
+            if algo_value not in self.MESH_ALGORITHMS:
+                algo_value = 'Frontal-Del.'  # Default to valid value
+                self.parameter_manager.set_value('mesh_algorithm', algo_value)
+            self.parameter_spins['algorithm'].setCurrentText(algo_value)
+
+            # Other parameters
             self.parameter_spins['dilation'].setValue(
                 self.parameter_manager.get_value('dilation'))
             self.parameter_spins['smoothing_sigma'].setValue(
                 self.parameter_manager.get_value('smoothing_sigma'))
             self.parameter_spins['density_factor'].setValue(
                 self.parameter_manager.get_value('density_factor'))
-            self.parameter_spins['algorithm'].setCurrentText(
-                self.parameter_manager.get_value('mesh_algorithm'))
             self.parameter_spins['use_optimization'].setChecked(
                 self.parameter_manager.get_value('use_optimization'))
             self.parameter_spins['sigma'].setValue(
@@ -110,9 +113,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         except Exception as e:
             print(f"Error syncing parameters: {str(e)}")
-
         finally:
-            # Restore signal handling
             self._block_parameter_widgets(False)
 
     def _update_parameters(self):
@@ -169,7 +170,7 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _connect_signals(self):
         """Connect widget signals."""
-        # Buttons
+        # Existing connections
         self.load_force_btn.clicked.connect(self._load_force_data)
         self.load_mask_btn.clicked.connect(self._load_masks)
         self.create_mask_btn.clicked.connect(self._create_mask_from_images)
@@ -179,34 +180,25 @@ class MSMWidget(BaseAnalysisWidget):
         self.save_stress_btn.clicked.connect(self._save_stress_tensor)
         self.load_stress_btn.clicked.connect(self._load_stress_tensor)
 
-        # Add viewer layer events
-        self.viewer.layers.events.inserting.connect(self._update_button_states)
-        self.viewer.layers.events.removing.connect(self._update_button_states)
-        self.viewer.layers.selection.events.changed.connect(self._update_button_states)
+        # Parameter connections
+        self.parameter_spins['algorithm'].currentTextChanged.connect(
+            lambda text: self.parameter_manager.set_value('mesh_algorithm', text)
+        )
 
-        # Viewer dimension changes (for frame updates)
-        self.viewer.dims.events.current_step.connect(self._handle_frame_change)
-
-        # Parameters
-        for name, widget in self.parameter_spins.items():
-            if isinstance(widget, tuple):
-                # Handle threshold spinbox and slider
+        # Connect other parameters
+        params_to_connect = [
+            'threshold', 'dilation', 'smoothing_sigma',
+            'density_factor', 'use_optimization', 'sigma', 'max_stress'
+        ]
+        for param in params_to_connect:
+            widget = self.parameter_spins[param]
+            if isinstance(widget, tuple):  # Threshold (spin + slider)
                 spin, slider = widget
                 spin.valueChanged.connect(self._update_parameters)
-                spin.valueChanged.connect(self._update_mask_preview)
                 slider.valueChanged.connect(self._update_parameters)
-                slider.valueChanged.connect(self._update_mask_preview)
-            elif isinstance(widget, QComboBox):
-                widget.currentTextChanged.connect(self._update_parameters)
             elif isinstance(widget, QCheckBox):
-                if name == 'show_preview':
-                    widget.stateChanged.connect(self._handle_preview_state)
-                else:
-                    widget.stateChanged.connect(self._update_parameters)
-            elif name in ['dilation', 'smoothing_sigma']:
-                widget.valueChanged.connect(self._update_parameters)
-                widget.valueChanged.connect(self._update_mask_preview)
-            else:  # Other spin boxes
+                widget.stateChanged.connect(self._update_parameters)
+            else:
                 widget.valueChanged.connect(self._update_parameters)
 
     def _load_masks(self):
@@ -356,7 +348,7 @@ class MSMWidget(BaseAnalysisWidget):
                     'tx': tx,
                     'ty': ty,
                     'parameters': {
-                        'young_modulus': force_data['parameters']['youngs_modulus'],
+                        'young_modulus': force_data['parameters']['young_modulus'],
                         'poisson_ratio': force_data['parameters']['poisson_ratio'],
                         'gel_height': force_data['parameters']['gel_height'],
                         'pixel_size': force_data['parameters']['pixelsize'],
@@ -1107,7 +1099,7 @@ class MSMWidget(BaseAnalysisWidget):
                 mask=current_mask,  # Use resized mask
                 pixelsize=pixel_size * downscale_factor * 1e-6,  # Convert to meters
                 sigma=self.parameter_spins['sigma'].value(),
-                youngs_modulus=1.0,
+                young_modulus=1.0,
                 density_factor=self.parameter_spins['density_factor'].value(),
                 algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
                 use_optimization=self.parameter_spins['use_optimization'].isChecked()
@@ -1200,7 +1192,7 @@ class MSMWidget(BaseAnalysisWidget):
                     mask=current_mask,
                     pixelsize=pixel_size * downscale_factor * 1e-6,  # Convert to meters
                     sigma=self.parameter_spins['sigma'].value(),
-                    youngs_modulus=1.0,
+                    young_modulus=1.0,
                     density_factor=self.parameter_spins['density_factor'].value(),
                     algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
                     use_optimization=self.parameter_spins['use_optimization'].isChecked()
@@ -1228,7 +1220,7 @@ class MSMWidget(BaseAnalysisWidget):
                 'residuals': np.array(residuals) if residuals else None,
                 'parameters': {
                     'pixel_size': pixel_size,
-                    'youngs_modulus': self.analyzer.E,
+                    'young_modulus': self.analyzer.E,
                     'poisson_ratio': self.analyzer.sigma,
                     'density_factor': self.parameter_spins['density_factor'].value(),
                     'algorithm': self.parameter_spins['algorithm'].currentText(),
@@ -1419,7 +1411,7 @@ class MSMWidget(BaseAnalysisWidget):
                 algorithm_id = self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()]
 
                 # Get Young's modulus safely - default to 1.0 if analyzer is not initialized
-                youngs_modulus = getattr(self.analyzer, 'E', 1.0)
+                young_modulus = getattr(self.analyzer, 'E', 1.0)
 
                 # Package results with all necessary parameters
                 stress_results = {
@@ -1429,7 +1421,7 @@ class MSMWidget(BaseAnalysisWidget):
                     'parameters': {
                         'pixel_size': self._pixelsize,
                         'downscale_factor': self._downscale_factor,
-                        'youngs_modulus': youngs_modulus,
+                        'young_modulus': young_modulus,
                         'sigma': self.parameter_spins['sigma'].value(),
                         'density_factor': self.parameter_spins['density_factor'].value(),
                         'algorithm': algorithm_id,

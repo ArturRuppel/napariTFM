@@ -1071,7 +1071,7 @@ class FTTCWidget(BaseAnalysisWidget):
                     'tx': np.array(results['tx']),
                     'ty': np.array(results['ty']),
                     'parameters': {
-                        'youngs_modulus': float(results['parameters']['young_modulus']),
+                        'young_modulus': float(results['parameters']['young_modulus']),
                         'poisson_ratio': float(results['parameters']['poisson_ratio']),
                         'gel_height': gel_height_m,
                         'pixelsize': float(results['parameters']['pixel_size']),
@@ -1125,7 +1125,7 @@ class FTTCWidget(BaseAnalysisWidget):
                     'tx': tx,
                     'ty': ty,
                     'parameters': {
-                        'young_modulus': parameters['youngs_modulus'],
+                        'young_modulus': parameters['young_modulus'],
                         'poisson_ratio': parameters['poisson_ratio'],
                         'gel_height': None if parameters.get('gel_height') is None else parameters['gel_height'] * 1e6,
                         'pixel_size': parameters['pixelsize'],

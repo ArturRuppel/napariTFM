@@ -102,15 +102,19 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         try:
             # Sync optical flow parameters
-            for param_name in ['tau', 'lambda_', 'theta', 'nscales', 'warps', 'epsilon',
-                               'inner_iterations', 'outer_iterations', 'scale_step',
-                               'median_filtering', 'downscale_factor']:
-                if param_name in self.parameter_spins:
-                    self.parameter_spins[param_name].setValue(
-                        self.parameter_manager.get_value(param_name)
-                    )
+            optical_flow_params = [
+                'tau', 'lambda_', 'theta', 'nscales', 'warps', 'epsilon',
+                'inner_iterations', 'outer_iterations', 'scale_step',
+                'median_filtering', 'downscale_factor'
+            ]
 
-            # Sync visualization parameters - Modified to match parameter manager names
+            for param_name in optical_flow_params:
+                if param_name in self.parameter_spins:
+                    value = self.parameter_manager.get_value(param_name)
+                    if value is not None:
+                        self.parameter_spins[param_name].setValue(value)
+
+            # Sync visualization parameters
             if 'vector_stride' in self.visualization_params:
                 self.visualization_params['vector_stride'].setValue(
                     self.parameter_manager.get_value('disp_vector_stride')
@@ -139,19 +143,82 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.preview_btn.clicked.connect(self.preview_displacement)
         self.analyze_btn.clicked.connect(self.analyze_all_frames)
 
+        int_params = [
+            'nscales', 'warps', 'inner_iterations',
+            'outer_iterations', 'median_filtering', 'downscale_factor'
+        ]
+
+        for param_name in int_params:
+            spin = self.parameter_spins[param_name]
+
+            # Connect spinbox -> parameter manager with int conversion
+            spin.valueChanged.connect(
+                lambda value, pn=param_name: self.parameter_manager.set_value(pn, int(value))
+            )
+
+            # Connect parameter manager -> spinbox with int conversion
+            self.parameter_manager.register_callback(
+                param_name,
+                lambda value, spin=spin: self._safe_set_value(spin, int(value))
+            )
+
         # Parameter change connections
-        for spin in self.parameter_spins.values():
-            spin.valueChanged.connect(self.update_parameters)
+        optical_flow_params = [
+            'tau', 'lambda_', 'theta', 'nscales', 'warps', 'epsilon',
+            'inner_iterations', 'outer_iterations', 'scale_step',
+            'median_filtering', 'downscale_factor'
+        ]
 
-        # Connect visualization parameter changes
-        for param in self.visualization_params.values():
-            param.valueChanged.connect(self.update_parameters)
 
-        # New button connections
+        for param_name in optical_flow_params:
+            spin = self.parameter_spins[param_name]
+            # Connect spinbox -> parameter manager
+            spin.valueChanged.connect(
+                lambda value, pn=param_name: self.parameter_manager.set_value(pn, value)
+            )
+            # Connect parameter manager -> spinbox
+            self.parameter_manager.register_callback(
+                param_name,
+                lambda value, spin=spin: self._safe_set_value(spin, value)
+            )
+
+        # Connect visualization parameters - MODIFIED SECTION
+        vis_mapping = {
+            'vector_stride': 'disp_vector_stride',
+            'arrow_scale': 'disp_arrow_scale',
+            'd_max': 'd_max'
+        }
+
+        for vis_name, param_name in vis_mapping.items():
+            spin = self.visualization_params[vis_name]
+            spin.valueChanged.connect(
+                lambda value, pn=param_name: self.parameter_manager.set_value(pn, value)
+            )
+            self.parameter_manager.register_callback(
+                param_name,
+                lambda value, spin=spin: self._safe_set_value(spin, value)
+            )
+
+        # Button connections
         self.save_displacement_btn.clicked.connect(self._save_displacement)
         self.load_displacement_btn.clicked.connect(self._load_displacement)
         self.reset_params_btn.clicked.connect(self.reset_parameters)
 
+        # Initialize with current parameter values
+        self._sync_widget_with_parameters()
+
+    def _safe_set_value(self, widget, value):
+        """Safely set widget value with signal blocking."""
+        if value is not None:
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
+    def _safe_set_value(self, widget, value):
+        """Safely set widget value with signal blocking."""
+        if value is not None:
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
     def _on_parameter_changed(self, param_name: str, value: object):
         """Handle parameter changes from the parameter manager"""
         # Only update if the change didn't come from this widget

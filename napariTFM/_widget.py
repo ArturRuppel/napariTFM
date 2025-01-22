@@ -75,7 +75,7 @@ class napariTFMWidget(QWidget):
         self.visualization_manager = VisualizationManager(self.viewer, self.data_manager)
 
         # Create calibration group
-        calibration_group = self._create_calibration_group()
+        calibration_group = self._create_general_group()
         container_layout.addWidget(calibration_group)
 
         # Create tab widget for different components
@@ -139,7 +139,7 @@ class napariTFMWidget(QWidget):
 
         self.connect_signals()
 
-    def _create_calibration_group(self) -> QGroupBox:
+    def _create_general_group(self) -> QGroupBox:
         """Create calibration group box with controls."""
         calibration_group = QGroupBox("")
         calibration_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
@@ -193,25 +193,66 @@ class napariTFMWidget(QWidget):
         spinbox_layout.addStretch()
         calibration_layout.addLayout(spinbox_layout)
 
-        # Second row: buttons
-        button_layout = QHBoxLayout()
+        # Create 2x2 button grid
+        button_grid = QVBoxLayout()
+
+        # First row of buttons
+        button_row1 = QHBoxLayout()
         self.save_params_btn = QPushButton("Save Parameters")
         self.load_params_btn = QPushButton("Load Parameters")
+        button_row1.addWidget(self.save_params_btn)
+        button_row1.addWidget(self.load_params_btn)
+
+        # Second row of buttons
+        button_row2 = QHBoxLayout()
+        self.reset_params_btn = QPushButton("Reset Parameters")
         self.clear_data_btn = QPushButton("Clear All Data")
         self.clear_data_btn.setStyleSheet("color: red;")
+        button_row2.addWidget(self.reset_params_btn)
+        button_row2.addWidget(self.clear_data_btn)
+
+        # Add button rows to grid
+        button_grid.addLayout(button_row1)
+        button_grid.addLayout(button_row2)
 
         # Connect button signals
         self.save_params_btn.clicked.connect(self._save_parameters)
         self.load_params_btn.clicked.connect(self._load_parameters)
+        self.reset_params_btn.clicked.connect(self._reset_parameters)
         self.clear_data_btn.clicked.connect(self._clear_all_data)
 
-        button_layout.addWidget(self.save_params_btn, stretch=1)
-        button_layout.addWidget(self.load_params_btn, stretch=1)
-        button_layout.addWidget(self.clear_data_btn, stretch=1)
-
-        calibration_layout.addLayout(button_layout)
+        calibration_layout.addLayout(button_grid)
         calibration_group.setLayout(calibration_layout)
         return calibration_group
+
+    def _reset_parameters(self):
+        """Reset parameters to default values and notify all widgets."""
+        try:
+            reply = QMessageBox.question(
+                self,
+                "Confirm",
+                "Are you sure you want to reset all parameters to default values?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                # Reset parameters
+                self.parameter_manager.reset_to_defaults()
+
+                # Update all widget states
+                for widget in [
+                    self.preprocessing_widget,
+                    self.displacement_widget,
+                    self.force_widget,
+                    self.msm_widget,
+                    self.batch_widget
+                ]:
+                    if hasattr(widget, '_update_ui_state'):
+                        widget._update_ui_state()
+
+        except Exception as e:
+            logger.error(f"Error resetting parameters: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to reset parameters: {str(e)}")
 
     def _save_parameters(self):
         """Save parameters using parameter manager."""

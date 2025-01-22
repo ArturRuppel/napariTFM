@@ -91,12 +91,12 @@ class MonolayerStressMicroscopy:
                  algorithm: int = 2,
                  use_optimization: bool = False,
                  sigma: float = 0.5,
-                 youngs_modulus: float = 1):
+                 young_modulus: float = 1):
         """Initialize MSM calculator with mask and configurable mesh parameters"""
         self.mask = mask
         self.pixelsize = pixelsize
         self.sigma = sigma
-        self.E = youngs_modulus
+        self.E = young_modulus
         self.timing_stats = {}
         self._nested_calls = {}
 
