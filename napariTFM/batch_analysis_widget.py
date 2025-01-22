@@ -227,7 +227,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         reg_spin = QDoubleSpinBox()
         reg_spin.setRange(-21, 0)
         reg_spin.setSingleStep(0.5)
-        reg_spin.setValue(-17)
+        reg_spin.setValue(-4)
         reg_spin.setDecimals(1)
         self.parameter_spins['regularization'] = reg_spin
         reg_row.addWidget(reg_spin)
@@ -382,11 +382,11 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         )
         self.parameter_manager.register_callback(
             'regularization',
-            lambda value: reg_spin.setValue(np.log10(value) if value and value > 0 else -17)
+            lambda value: reg_spin.setValue(np.log10(value) if value and value > 0 else -4)
         )
         try:
             value = self.parameter_manager.get_value('regularization')
-            reg_spin.setValue(np.log10(value) if value and value > 0 else -17)
+            reg_spin.setValue(np.log10(value) if value and value > 0 else -4)
         except KeyError:
             print("Warning: Parameter regularization not found in parameter manager")
 

@@ -80,7 +80,7 @@ class ParameterManager(QObject):
             'poisson_ratio': 0.49,
             'gel_height': None,  # None means infinite
             'lanczos_exp': 1,
-            'regularization': 1e-17,
+            'regularization': 1e-4,
             'auto_gcv': False,
             'force_vector_stride': 20,
             'force_arrow_scale': 1.0,

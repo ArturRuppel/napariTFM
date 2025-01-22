@@ -151,6 +151,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.save_displacement_btn.clicked.connect(self._save_displacement)
         self.load_displacement_btn.clicked.connect(self._load_displacement)
         self.reset_params_btn.clicked.connect(self._reset_parameters)
+
     def _on_parameter_changed(self, param_name: str, value: object):
         """Handle parameter changes from the parameter manager"""
         # Only update if the change didn't come from this widget
@@ -175,26 +176,11 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             # Synchronize widget values with reset parameters
             self._sync_widget_with_parameters()
 
-            # Update analyzer with new parameters
-            params = TVL1Parameters(
-                tau=self.parameter_manager.get_value('tau'),
-                lambda_=self.parameter_manager.get_value('lambda_'),
-                theta=self.parameter_manager.get_value('theta'),
-                nscales=self.parameter_manager.get_value('nscales'),
-                warps=self.parameter_manager.get_value('warps'),
-                epsilon=self.parameter_manager.get_value('epsilon'),
-                inner_iterations=self.parameter_manager.get_value('inner_iterations'),
-                outer_iterations=self.parameter_manager.get_value('outer_iterations'),
-                scale_step=self.parameter_manager.get_value('scale_step'),
-                median_filtering=self.parameter_manager.get_value('median_filtering'),
-                downscale_factor=self.parameter_manager.get_value('downscale_factor')
-            )
-            self.analyzer = DisplacementAnalyzer(params)
-
             self._update_status("Displacement parameters reset to defaults")
 
         except Exception as e:
             self._handle_error(f"Error resetting parameters: {str(e)}")
+
     def _load_displacement(self):
         """Load displacement data from files."""
         try:
@@ -303,7 +289,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             )
             import traceback
             traceback.print_exc()
-
 
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
@@ -455,6 +440,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.viewer.layers.events.inserted.connect(self._on_layer_change)
         self.viewer.layers.events.removed.connect(self._on_layer_change)
         self.viewer.layers.selection.events.changed.connect(self._on_layer_selection_change)
+
     def _handle_displacement_results(self, results):
         """Handle the completed displacement analysis results."""
         try:

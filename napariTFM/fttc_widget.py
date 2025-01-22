@@ -15,7 +15,7 @@ from .colorbar import ColorbarManager
 from .data_manager import DataManager
 from .displacement_analysis_widget import DisplacementAnalysisWidget
 from .fttc import FTTC
-from .parameter_manager import ParameterManager
+from .parameter_manager import ParameterManager, ParameterCategory
 from .visualization_manager import VisualizationManager
 
 
@@ -78,7 +78,7 @@ class FTTCWidget(BaseAnalysisWidget):
             if reg_value is not None and reg_value > 0:
                 self.regularization_spin.setValue(np.log10(reg_value))
             else:
-                self.regularization_spin.setValue(-17)  # Default value
+                self.regularization_spin.setValue(-4)  # Default value
 
             # Sync auto GCV checkbox
             auto_gcv = self.parameter_manager.get_value('auto_gcv')
@@ -175,7 +175,7 @@ class FTTCWidget(BaseAnalysisWidget):
             # Update regularization parameters - ensure we never set None or invalid values
             reg_value = 10 ** self.regularization_spin.value()
             if reg_value <= 0:
-                reg_value = 1e-17  # Set minimum value
+                reg_value = 1e-4  # Set minimum value
             self.parameter_manager.set_value('regularization', reg_value)
             self.parameter_manager.set_value('auto_gcv', self.auto_gcv_checkbox.isChecked())
 
@@ -331,11 +331,21 @@ class FTTCWidget(BaseAnalysisWidget):
             self._handle_error(f"Error initializing calculator: {str(e)}")
 
     def reset_parameters(self):
-        """Reset all parameters to defaults."""
-        self.parameter_manager.reset_to_defaults()
-        self._sync_widget_with_parameters()
-        self._update_status("Parameters reset to defaults")
+        """Reset force-specific parameters to defaults."""
+        try:
+            # Reset only force parameters
+            self.parameter_manager.reset_category_to_defaults(ParameterCategory.FORCE)
 
+            # Synchronize widget values with reset parameters
+            self._sync_widget_with_parameters()
+
+            # Reinitialize calculator with new parameters
+            self._initialize_calculator()
+
+            self._update_status("Force parameters reset to defaults")
+
+        except Exception as e:
+            self._handle_error(f"Error resetting parameters: {str(e)}")
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
@@ -571,7 +581,7 @@ class FTTCWidget(BaseAnalysisWidget):
         reg_layout = QHBoxLayout()
         reg_layout.addWidget(QLabel("Parameter (10^x):"))
         self.regularization_spin.setRange(-21, 0)
-        self.regularization_spin.setValue(-17)
+        self.regularization_spin.setValue(-4)
         self.regularization_spin.setSingleStep(0.5)
         self.regularization_spin.setDecimals(1)
         self.regularization_spin.setToolTip(
@@ -681,6 +691,7 @@ class FTTCWidget(BaseAnalysisWidget):
         self.visualization_params['vector_stride'].valueChanged.connect(self._update_parameters)
         self.visualization_params['arrow_scale'].valueChanged.connect(self._update_parameters)
         self.visualization_params['f_max'].valueChanged.connect(self._update_parameters)
+
     def _load_displacement(self):
         """Load displacement data from files."""
         try:
