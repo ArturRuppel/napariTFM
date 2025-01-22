@@ -97,6 +97,7 @@ class ParameterManager(QObject):
             'density_factor': 0.025,
             'mesh_algorithm': 'frontal-del.',
             'use_optimization': True,
+            'poisson_ratio': 0.5,
             'max_stress': 1.0
         }
         for name, value in stress_params.items():

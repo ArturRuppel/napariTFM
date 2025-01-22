@@ -50,22 +50,122 @@ class MSMWidget(BaseAnalysisWidget):
             visualization_manager: "VisualizationManager"):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Initialize parameters
+        # Store reference to parameter manager
+        self.parameter_manager = parameter_manager
+
+        # Initialize UI-specific attributes
         self.parameter_spins = {}
-        self._pixel_size = None  # Will be set from data manager
-        self._downscale_factor = None  # Will be set from data manager
+        self._pixel_size = None
+        self._downscale_factor = None
         self.current_mask = None
         self.mesh = None
         self.colorbar_manager = ColorbarManager()
-
-        # Initialize analyzer with default parameters (will be updated when needed)
         self.analyzer = None
         self.mesh_generator = None
 
         self._setup_ui()
         self._connect_signals()
+
+        # Connect to parameter manager signals
+        if hasattr(self.parameter_manager, 'parameter_changed'):
+            self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
+        else:
+            print("Warning: ParameterManager does not have parameter_changed signal")
+
+        # Initialize widget with current parameter values
+        self._sync_widget_with_parameters()
         self._update_ui_state()
-        self._update_button_states()
+
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager values"""
+        if not hasattr(self, 'parameter_manager') or self.parameter_manager is None:
+            print("Warning: No parameter manager available for syncing")
+            return
+
+        # Block signals temporarily
+        self._block_parameter_widgets(True)
+
+        try:
+            # Sync threshold spinbox and slider
+            threshold_spin, threshold_slider = self.parameter_spins['threshold']
+            threshold_value = self.parameter_manager.get_value('threshold')
+            threshold_spin.setValue(threshold_value)
+            threshold_slider.setValue(threshold_value)
+
+            # Sync other parameters
+            self.parameter_spins['dilation'].setValue(
+                self.parameter_manager.get_value('dilation'))
+            self.parameter_spins['smoothing_sigma'].setValue(
+                self.parameter_manager.get_value('smoothing_sigma'))
+            self.parameter_spins['density_factor'].setValue(
+                self.parameter_manager.get_value('density_factor'))
+            self.parameter_spins['algorithm'].setCurrentText(
+                self.parameter_manager.get_value('mesh_algorithm'))
+            self.parameter_spins['use_optimization'].setChecked(
+                self.parameter_manager.get_value('use_optimization'))
+            self.parameter_spins['sigma'].setValue(
+                self.parameter_manager.get_value('poisson_ratio'))
+            self.parameter_spins['max_stress'].setValue(
+                self.parameter_manager.get_value('max_stress'))
+
+        except Exception as e:
+            print(f"Error syncing parameters: {str(e)}")
+
+        finally:
+            # Restore signal handling
+            self._block_parameter_widgets(False)
+
+    def _update_parameters(self):
+        """Update parameters in the parameter manager"""
+        try:
+            # Block signals temporarily
+            self.blockSignals(True)
+
+            # Update threshold
+            threshold_spin, _ = self.parameter_spins['threshold']
+            self.parameter_manager.set_value('threshold', threshold_spin.value())
+
+            # Update other parameters
+            self.parameter_manager.set_value('dilation',
+                                             self.parameter_spins['dilation'].value())
+            self.parameter_manager.set_value('smoothing_sigma',
+                                             self.parameter_spins['smoothing_sigma'].value())
+            self.parameter_manager.set_value('density_factor',
+                                             self.parameter_spins['density_factor'].value())
+            self.parameter_manager.set_value('mesh_algorithm',
+                                             self.parameter_spins['algorithm'].currentText())
+            self.parameter_manager.set_value('use_optimization',
+                                             self.parameter_spins['use_optimization'].isChecked())
+            self.parameter_manager.set_value('poisson_ratio',
+                                             self.parameter_spins['sigma'].value())
+            self.parameter_manager.set_value('max_stress',
+                                             self.parameter_spins['max_stress'].value())
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self.blockSignals(False)
+
+    def _on_parameter_changed(self, param_name: str, value: object):
+        """Handle parameter changes from the parameter manager"""
+        # Only update if the change didn't come from this widget
+        if not self.signalsBlocked():
+            self._sync_widget_with_parameters()
+
+    def _block_parameter_widgets(self, block: bool):
+        """Block or unblock signals for all parameter-related widgets"""
+        widgets = [
+            *self.parameter_spins['threshold'],  # Unpack tuple of spin and slider
+            self.parameter_spins['dilation'],
+            self.parameter_spins['smoothing_sigma'],
+            self.parameter_spins['density_factor'],
+            self.parameter_spins['algorithm'],
+            self.parameter_spins['use_optimization'],
+            self.parameter_spins['sigma'],
+            self.parameter_spins['max_stress']
+        ]
+        for widget in widgets:
+            widget.blockSignals(block)
 
     def _connect_signals(self):
         """Connect widget signals."""
@@ -83,7 +183,6 @@ class MSMWidget(BaseAnalysisWidget):
         self.viewer.layers.events.inserting.connect(self._update_button_states)
         self.viewer.layers.events.removing.connect(self._update_button_states)
         self.viewer.layers.selection.events.changed.connect(self._update_button_states)
-
 
         # Viewer dimension changes (for frame updates)
         self.viewer.dims.events.current_step.connect(self._handle_frame_change)
@@ -715,7 +814,7 @@ class MSMWidget(BaseAnalysisWidget):
         self.preview_frame_btn.setEnabled(has_mask and has_force_data)
         self.analyze_btn.setEnabled(has_mask and has_force_data)
         self.save_stress_btn.setEnabled(hasattr(self.data_manager, 'stress_results') and
-                                      self.data_manager.stress_results is not None)
+                                        self.data_manager.stress_results is not None)
 
     def _update_button_states(self, event=None):
         """Update button states based on layer availability."""
@@ -740,6 +839,7 @@ class MSMWidget(BaseAnalysisWidget):
             self.create_mask_btn.setEnabled(has_valid_layer)
         if hasattr(self, 'load_mask_btn'):
             self.load_mask_btn.setEnabled(has_valid_layer)
+
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
         group = QGroupBox("Input Data")
@@ -913,7 +1013,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         layout.addStretch(1)  # Add stretch at the end only
         group.setLayout(layout)
-
 
         return group
 
@@ -1171,65 +1270,6 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to analyze frames: {str(e)}")
             self.progress_bar.setValue(0)
-
-    def _update_parameters(self):
-        """Update analysis parameters."""
-        try:
-            # Get current parameters from UI
-            sigma = self.parameter_spins['sigma'].value()
-            density_factor = self.parameter_spins['density_factor'].value()
-            algorithm_name = self.parameter_spins['algorithm'].currentText()
-            algorithm = self.MESH_ALGORITHMS[algorithm_name]
-            use_optimization = self.parameter_spins['use_optimization'].isChecked()
-
-            # Get pixelsize and downscale_factor from force results if available
-            self._pixelsize = None
-            self._downscale_factor = None
-            if self.data_manager.force_results is not None:
-                params = self.data_manager.force_results.get('parameters', {})
-                self._pixelsize = params.get("pixel_size")
-                self._downscale_factor = params.get("downscale_factor")
-
-            # Create mesh parameters if we have a mask and force data
-            if self.current_mask is not None and self._pixelsize is not None:
-                # Get force data shape
-                if self.data_manager.force_results is not None:
-                    tx = self.data_manager.force_results['tx'][0]  # Use first frame
-                    force_shape = tx.shape
-
-                    # Check if mask needs resizing
-                    if self.current_mask[0].shape != force_shape:
-                        from skimage.transform import resize
-                        current_mask = resize(
-                            self.current_mask[0].astype(float),
-                            force_shape,
-                            order=0,
-                            preserve_range=True,
-                            anti_aliasing=False
-                        ) > 0.5
-                    else:
-                        current_mask = self.current_mask[0]
-
-                else:
-                    current_mask = self.current_mask[0]
-
-                # Initialize analyzer with current parameters
-                self.analyzer = MonolayerStressMicroscopy(
-                    mask=current_mask,
-                    pixelsize=self._pixelsize * self._downscale_factor * 1e-6,
-                    sigma=sigma,
-                    youngs_modulus=1.0,
-                    density_factor=density_factor,
-                    algorithm=algorithm,
-                    use_optimization=use_optimization
-                )
-
-                # Update colorbar limits based on max_stress parameter
-                max_stress = self.parameter_spins['max_stress'].value()
-                self.colorbar_manager.update_limits(-max_stress, max_stress)
-
-        except Exception as e:
-            self._handle_error(f"Failed to update parameters: {str(e)}")
 
     def preview_mesh(self):
         """Generate and display preview of the triangular mesh for the current frame."""
