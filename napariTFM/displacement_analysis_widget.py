@@ -13,6 +13,7 @@ from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
 from .data_manager import DataManager
 from .displacement_analysis import DisplacementAnalyzer, TVL1Parameters
+from .parameter_manager import ParameterManager
 from .visualization_manager import VisualizationManager
 
 
@@ -21,9 +22,14 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     displacement_calculated = Signal(dict)  # Emits displacement results
 
-    def __init__(self, viewer: "napari.Viewer", data_manager: "DataManager",
+    def __init__(self, viewer: "napari.Viewer",
+                 data_manager: "DataManager",
+                 parameter_manager: ParameterManager,
                  visualization_manager: "VisualizationManager"):
         super().__init__(viewer, data_manager, visualization_manager)
+
+        # Store reference to parameter manager
+        self.parameter_manager = parameter_manager
 
         self.analyzer = DisplacementAnalyzer()
         self.colorbar_manager = ColorbarManager()
@@ -31,28 +37,249 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.parameter_spins = {}
         self.visualization_params = {}
 
-        # Store default parameter values (removed pixel_size)
-        self.default_parameters = {
-            'tau': 0.25,
-            'lambda_': 0.4,
-            'theta': 0.3,
-            'nscales': 3,
-            'warps': 3,
-            'epsilon': 0.01,
-            'inner_iterations': 15,
-            'outer_iterations': 5,
-            'scale_step': 0.5,
-            'median_filtering': 5,
-            'downscale_factor': 1,
-            'vector_stride': 20,
-            'arrow_scale': 1.0,
-            'd_max': 5.0
-        }
-
+        # Setup UI and connect signals
         self._setup_ui()
         self._connect_signals()
         self._update_ui_state()
         self._connect_layer_events()
+
+        # Connect to parameter manager signals after UI is set up
+        if hasattr(self.parameter_manager, 'parameter_changed'):
+            self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
+        else:
+            print("Warning: ParameterManager does not have parameter_changed signal")
+
+        # Initialize widget with current parameter values
+        self._sync_widget_with_parameters()
+
+    def update_parameters(self):
+        """Update parameters in the parameter manager"""
+        try:
+            # Block signals temporarily
+            self.blockSignals(True)
+
+            # Update optical flow parameters
+            for param_name, spin in self.parameter_spins.items():
+                self.parameter_manager.set_value(param_name, spin.value())
+
+            # Update visualization parameters - Modified to use consistent parameter names
+            self.parameter_manager.set_value('disp_vector_stride',
+                                             self.visualization_params['vector_stride'].value())
+            self.parameter_manager.set_value('disp_arrow_scale',
+                                             self.visualization_params['arrow_scale'].value())
+            self.parameter_manager.set_value('d_max',
+                                             self.visualization_params['d_max'].value())
+
+            # Update analyzer with new parameters
+            params = TVL1Parameters(
+                tau=self.parameter_manager.get_value('tau'),
+                lambda_=self.parameter_manager.get_value('lambda_'),
+                theta=self.parameter_manager.get_value('theta'),
+                nscales=self.parameter_manager.get_value('nscales'),
+                warps=self.parameter_manager.get_value('warps'),
+                epsilon=self.parameter_manager.get_value('epsilon'),
+                inner_iterations=self.parameter_manager.get_value('inner_iterations'),
+                outer_iterations=self.parameter_manager.get_value('outer_iterations'),
+                scale_step=self.parameter_manager.get_value('scale_step'),
+                median_filtering=self.parameter_manager.get_value('median_filtering'),
+                downscale_factor=self.parameter_manager.get_value('downscale_factor')
+            )
+            self.analyzer = DisplacementAnalyzer(params)
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self.blockSignals(False)
+
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager values"""
+        if not hasattr(self, 'parameter_manager') or self.parameter_manager is None:
+            print("Warning: No parameter manager available for syncing")
+            return
+
+        # Block signals temporarily
+        self._block_parameter_widgets(True)
+
+        try:
+            # Sync optical flow parameters
+            for param_name in ['tau', 'lambda_', 'theta', 'nscales', 'warps', 'epsilon',
+                               'inner_iterations', 'outer_iterations', 'scale_step',
+                               'median_filtering', 'downscale_factor']:
+                if param_name in self.parameter_spins:
+                    self.parameter_spins[param_name].setValue(
+                        self.parameter_manager.get_value(param_name)
+                    )
+
+            # Sync visualization parameters - Modified to match parameter manager names
+            if 'vector_stride' in self.visualization_params:
+                self.visualization_params['vector_stride'].setValue(
+                    self.parameter_manager.get_value('disp_vector_stride')
+                )
+            if 'arrow_scale' in self.visualization_params:
+                self.visualization_params['arrow_scale'].setValue(
+                    self.parameter_manager.get_value('disp_arrow_scale')
+                )
+            if 'd_max' in self.visualization_params:
+                self.visualization_params['d_max'].setValue(
+                    self.parameter_manager.get_value('d_max')
+                )
+
+        except Exception as e:
+            print(f"Error syncing parameters: {str(e)}")
+
+        finally:
+            # Restore signal handling
+            self._block_parameter_widgets(False)
+
+    def _connect_signals(self):
+        """Connect widget signals."""
+        # Existing connections
+        self.load_beads_btn.clicked.connect(lambda: self._load_data('beads'))
+        self.load_reference_btn.clicked.connect(lambda: self._load_data('reference'))
+        self.preview_btn.clicked.connect(self.preview_displacement)
+        self.analyze_btn.clicked.connect(self.analyze_all_frames)
+
+        # Parameter change connections
+        for spin in self.parameter_spins.values():
+            spin.valueChanged.connect(self.update_parameters)
+
+        # Connect visualization parameter changes
+        for param in self.visualization_params.values():
+            param.valueChanged.connect(self.update_parameters)
+
+        # New button connections
+        self.save_displacement_btn.clicked.connect(self._save_displacement)
+        self.load_displacement_btn.clicked.connect(self._load_displacement)
+        self.reset_params_btn.clicked.connect(self._reset_parameters)
+    def _on_parameter_changed(self, param_name: str, value: object):
+        """Handle parameter changes from the parameter manager"""
+        # Only update if the change didn't come from this widget
+        if not self.signalsBlocked():
+            self._sync_widget_with_parameters()
+
+    def _block_parameter_widgets(self, block: bool):
+        """Block or unblock signals for all parameter-related widgets"""
+        widgets = [
+            *self.parameter_spins.values(),
+            *self.visualization_params.values()
+        ]
+        for widget in widgets:
+            widget.blockSignals(block)
+
+    def _reset_parameters(self):
+        """Reset all parameters to their default values"""
+        self.parameter_manager.reset_to_defaults()
+        self._sync_widget_with_parameters()
+        self._update_status("Parameters have been reset to default values")
+
+    def _load_displacement(self):
+        """Load displacement data from files."""
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Displacement Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                displacement_data = np.load(file_path, allow_pickle=True).item()
+                flows = np.array(displacement_data['flows'])
+                parameters = displacement_data['parameters']
+
+                # Update calibration in parent widget if available
+                if 'pixel_size' in parameters and 'frame_interval' in parameters:
+                    self._update_parent_calibration(
+                        parameters['pixel_size'],
+                        parameters['frame_interval']
+                    )
+
+                # Handle flow array reshaping if needed
+                if len(flows.shape) == 3:
+                    frames, height_doubled, width = flows.shape
+                    height = height_doubled // 2
+                    flows = flows.reshape(frames, 2, height, width).transpose(0, 2, 3, 1)
+
+                # Update parameters in parameter manager
+                if 'tvl1_params' in parameters:
+                    tvl1_params = parameters['tvl1_params']
+                    param_mapping = {
+                        'tau': 'tau',
+                        'lambda': 'lambda_',
+                        'theta': 'theta',
+                        'nscales': 'nscales',
+                        'warps': 'warps',
+                        'epsilon': 'epsilon',
+                        'inner_iterations': 'inner_iterations',
+                        'outer_iterations': 'outer_iterations',
+                        'scale_step': 'scale_step',
+                        'median_filtering': 'median_filtering'
+                    }
+
+                    for saved_name, param_name in param_mapping.items():
+                        if saved_name in tvl1_params:
+                            self.parameter_manager.set_value(param_name, tvl1_params[saved_name])
+
+                # Update other parameters
+                if 'downscale_factor' in parameters:
+                    self.parameter_manager.set_value('downscale_factor', parameters['downscale_factor'])
+                if 'arrow_scale' in parameters:
+                    self.parameter_manager.set_value('disp_arrow_scale', parameters['arrow_scale'])
+                if 'vector_stride' in parameters:
+                    self.parameter_manager.set_value('disp_vector_stride', parameters['vector_stride'])
+                if 'd_max' in parameters:
+                    self.parameter_manager.set_value('d_max', parameters['d_max'])
+
+                # Sync UI with loaded parameters
+                self._sync_widget_with_parameters()
+
+                # Create results dictionary
+                results = {
+                    'flows': flows,
+                    'parameters': {
+                        'tvl1_params': tvl1_params,
+                        'downscale_factor': parameters.get('downscale_factor', 1),
+                        'pixel_size': self.pixel_size
+                    },
+                    'visualization_params': {
+                        'd_max': parameters.get('d_max', 10.0),
+                        'vector_stride': parameters.get('vector_stride', 20),
+                        'arrow_scale': parameters.get('arrow_scale', 1.0)
+                    },
+                    'original_shape': flows.shape[1:3],
+                    'flow_shape': flows.shape[1:3],
+                    'units': 'micrometers'
+                }
+
+                # Update state and visualization
+                self.data_manager.displacement_results = results
+                self.visualization_manager.visualize_displacement_results(
+                    results,
+                    downscale_factor=parameters.get('downscale_factor', 1)
+                )
+
+                self._handle_visualization_layers()
+                self.colorbar_manager.update_limits(0, parameters.get('d_max', 10.0))
+                self.save_displacement_btn.setEnabled(True)
+                self._update_ui_state()
+                self.displacement_calculated.emit(results)
+
+                self._update_status(
+                    f"Displacement data successfully loaded from:\n"
+                    f"{file_path}\n"
+                    f"Pixel size: {self.pixel_size} µm\n"
+                    f"Frame interval: {self.frame_length} min",
+                    100
+                )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load displacement data: {str(e)}"
+            )
+            import traceback
+            traceback.print_exc()
 
 
     def _create_data_loading_group(self) -> QGroupBox:
@@ -292,127 +519,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self.status_label.setText(f"Missing required data: {', '.join(missing)}")
         else:
             self.status_label.setText("Ready for analysis")
-
-    def _load_displacement(self):
-        """Load displacement data from files."""
-        try:
-            # Get file path
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select Displacement Data File",
-                os.path.expanduser("~"),
-                "NumPy Files (*.npy)"
-            )
-
-            if file_path:
-                # Load data using numpy
-                displacement_data = np.load(file_path, allow_pickle=True).item()
-                flows = np.array(displacement_data['flows'])
-                parameters = displacement_data['parameters']
-
-                # Update calibration in parent widget
-                if 'pixel_size' in parameters and 'frame_interval' in parameters:
-                    self._update_parent_calibration(
-                        parameters['pixel_size'],
-                        parameters['frame_interval']
-                    )
-
-                # Handle flow array reshaping if needed
-                if len(flows.shape) == 3:  # If flows is (frames, height*2, width)
-                    frames, height_doubled, width = flows.shape
-                    height = height_doubled // 2
-                    flows = flows.reshape(frames, 2, height, width).transpose(0, 2, 3, 1)
-
-                # Update optical flow parameters if available
-                if 'tvl1_params' in parameters:
-                    tvl1_params = parameters['tvl1_params']
-                    param_mapping = {
-                        'tau': 'tau',
-                        'lambda': 'lambda_',
-                        'theta': 'theta',
-                        'nscales': 'nscales',
-                        'warps': 'warps',
-                        'epsilon': 'epsilon',
-                        'inner_iterations': 'inner_iterations',
-                        'outer_iterations': 'outer_iterations',
-                        'scale_step': 'scale_step',
-                        'median_filtering': 'median_filtering'
-                    }
-
-                    for saved_name, ui_name in param_mapping.items():
-                        if saved_name in tvl1_params and ui_name in self.parameter_spins:
-                            self.parameter_spins[ui_name].setValue(tvl1_params[saved_name])
-
-                # Update other parameters
-                if 'downscale_factor' in parameters:
-                    self.parameter_spins['downscale_factor'].setValue(parameters['downscale_factor'])
-                if 'arrow_scale' in parameters:
-                    self.visualization_params['arrow_scale'].setValue(parameters['arrow_scale'])
-                if 'vector_stride' in parameters:
-                    self.visualization_params['vector_stride'].setValue(parameters['vector_stride'])
-                if 'd_max' in parameters:
-                    self.visualization_params['d_max'].setValue(parameters['d_max'])
-
-                # Update analyzer parameters
-                self.update_parameters()
-
-                # Create results dictionary with updated pixel size
-                results = {
-                    'flows': flows,
-                    'parameters': {
-                        'tvl1_params': tvl1_params,
-                        'downscale_factor': parameters.get('downscale_factor', 1),
-                        'pixel_size': self.pixel_size  # Use current pixel size
-                    },
-                    'visualization_params': {
-                        'd_max': parameters.get('d_max', 10.0),
-                        'vector_stride': parameters.get('vector_stride', 20),
-                        'arrow_scale': parameters.get('arrow_scale', 1.0)
-                    },
-                    'original_shape': flows.shape[1:3],
-                    'flow_shape': flows.shape[1:3],
-                    'units': 'micrometers'
-                }
-
-                # Update data manager and visualization
-                self.data_manager.displacement_results = results
-                self.visualization_manager.visualize_displacement_results(
-                    results,
-                    downscale_factor=parameters.get('downscale_factor', 1)
-                )
-
-                # Handle layer visibility and ordering
-                self._handle_visualization_layers()
-
-                # Update colorbar with loaded d_max
-                self.colorbar_manager.update_limits(0, parameters.get('d_max', 10.0))
-
-                # Enable save button
-                self.save_displacement_btn.setEnabled(True)
-
-                # Update UI state to show new data status
-                self._update_ui_state()
-
-                # Emit the displacement_calculated signal with the results
-                self.displacement_calculated.emit(results)
-
-                self._update_status(
-                    f"Displacement data successfully loaded from:\n"
-                    f"{file_path}\n"
-                    f"Pixel size: {self.pixel_size} µm\n"
-                    f"Frame interval: {self.frame_length} min",
-                    100
-                )
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to load displacement data: {str(e)}"
-            )
-            # Print the full error for debugging
-            import traceback
-            traceback.print_exc()
 
     def analyze_all_frames(self):
         """Analyze displacement for all frames using a thread worker."""
@@ -786,34 +892,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.setLayout(main_layout)
         self._register_controls()
 
-    def _connect_signals(self):
-        """Connect all widget signals."""
-        # Existing connections
-        self.load_beads_btn.clicked.connect(lambda: self._load_data('beads'))
-        self.load_reference_btn.clicked.connect(lambda: self._load_data('reference'))
-        self.preview_btn.clicked.connect(self.preview_displacement)
-        self.analyze_btn.clicked.connect(self.analyze_all_frames)
-
-        # Parameter change connections
-        for spin in self.parameter_spins.values():
-            spin.valueChanged.connect(self.update_parameters)
-
-        # New button connections
-        self.save_displacement_btn.clicked.connect(self._save_displacement)
-        self.load_displacement_btn.clicked.connect(self._load_displacement)
-        self.reset_params_btn.clicked.connect(self._reset_parameters)
-
-    def _reset_parameters(self):
-        """Reset all parameters to their default values."""
-        for param_name, default_value in self.default_parameters.items():
-            if param_name in self.parameter_spins:
-                self.parameter_spins[param_name].setValue(default_value)
-            elif param_name in self.visualization_params:
-                self.visualization_params[param_name].setValue(default_value)
-
-        self.update_parameters()
-        self._update_status("Parameters have been reset to default values")
-
     def _save_displacement(self):
         """Save displacement data to files."""
         if not hasattr(self.data_manager, 'displacement_results') or not self.data_manager.displacement_results:
@@ -899,27 +977,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         """Handle completion of displacement analysis"""
         super()._on_displacement_completed(results)
         self.save_displacement_btn.setEnabled(True)
-
-    def update_parameters(self):
-        """Update analysis parameters."""
-        try:
-            params = TVL1Parameters(
-                tau=self.parameter_spins['tau'].value(),
-                lambda_=self.parameter_spins['lambda_'].value(),
-                theta=self.parameter_spins['theta'].value(),
-                nscales=self.parameter_spins['nscales'].value(),
-                warps=self.parameter_spins['warps'].value(),
-                epsilon=self.parameter_spins['epsilon'].value(),
-                inner_iterations=self.parameter_spins['inner_iterations'].value(),
-                outer_iterations=self.parameter_spins['outer_iterations'].value(),
-                scale_step=self.parameter_spins['scale_step'].value(),
-                median_filtering=self.parameter_spins['median_filtering'].value(),
-                downscale_factor=self.parameter_spins['downscale_factor'].value()
-            )
-            self.analyzer = DisplacementAnalyzer(params)
-
-        except ValueError as e:
-            self._handle_error(str(e))
 
     def _validate_input_data(self) -> bool:
         """Validate required input data is available."""

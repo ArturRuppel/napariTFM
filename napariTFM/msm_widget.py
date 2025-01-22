@@ -14,6 +14,7 @@ from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
 from .mesh_generator import MeshParameters, MeshGenerator
 from .msm import MonolayerStressMicroscopy
+from .parameter_manager import ParameterManager
 
 
 class MSMWidget(BaseAnalysisWidget):
@@ -41,7 +42,12 @@ class MSMWidget(BaseAnalysisWidget):
         "Para. Pack": "Parallelogram Packing (experimental)"
     }
 
-    def __init__(self, viewer, data_manager, visualization_manager):
+    def __init__(
+            self,
+            viewer: "napari.Viewer",
+            data_manager: "DataManager",
+            parameter_manager: ParameterManager,
+            visualization_manager: "VisualizationManager"):
         super().__init__(viewer, data_manager, visualization_manager)
 
         # Initialize parameters

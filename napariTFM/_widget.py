@@ -1,13 +1,16 @@
 import logging
+from typing import Any
+
 import napari
 from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox
+    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog
 )
 
 from .batch_analysis_widget import BatchAnalysisWidget
 from .displacement_analysis_widget import DisplacementAnalysisWidget
 from .fttc_widget import FTTCWidget
+from .parameter_manager import ParameterManager
 from .preprocessing_widget import PreprocessingWidget
 from .data_manager import DataManager
 from .visualization_manager import VisualizationManager
@@ -15,15 +18,18 @@ from .msm_widget import MSMWidget
 
 logger = logging.getLogger(__name__)
 
+
 class SpinBoxEventFilter(QObject):
     def eventFilter(self, obj, event):
         # Check for all spinnable input widgets
         if (isinstance(obj, (QSpinBox, QDoubleSpinBox, QComboBox)) and
-            event.type() == event.Wheel):
+                event.type() == event.Wheel):
             if not obj.hasFocus():
                 event.ignore()
                 return True
         return super().eventFilter(obj, event)
+
+
 class napariTFMWidget(QWidget):
     def __init__(self, napari_viewer: "napari.Viewer"):
         super().__init__()
@@ -60,107 +66,56 @@ class napariTFMWidget(QWidget):
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         container_layout.addWidget(title)
 
-        # Set size policy for container to prevent vertical stretching
+        # Set size policy for container
         container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
         # Initialize managers
         self.data_manager = DataManager()
+        self.parameter_manager = ParameterManager()
         self.visualization_manager = VisualizationManager(self.viewer, self.data_manager)
 
         # Create calibration group
-        calibration_group = QGroupBox("")
-        calibration_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        calibration_layout = QVBoxLayout()  # Main layout is vertical
-
-        # First row: spinboxes
-        spinbox_layout = QHBoxLayout()
-
-        # Pixel size controls
-        pixel_layout = QHBoxLayout()
-        pixel_layout.addWidget(QLabel("Pixel Size (µm):"))
-        self.pixel_spin = QDoubleSpinBox()
-        self.pixel_spin.setRange(0.001, 100.0)
-        self.pixel_spin.setValue(1.0)  # Default value
-        self.pixel_spin.setSingleStep(0.1)
-        self.pixel_spin.setDecimals(3)
-        pixel_layout.addWidget(self.pixel_spin)
-        spinbox_layout.addLayout(pixel_layout)
-
-        spinbox_layout.addSpacing(20)  # Add some spacing between controls
-
-        # Frame length controls
-        frame_layout = QHBoxLayout()
-        frame_layout.addWidget(QLabel("Frame Length (min):"))
-        self.frame_spin = QDoubleSpinBox()
-        self.frame_spin.setRange(0.001, 1000.0)
-        self.frame_spin.setValue(1.0)  # Default value
-        self.frame_spin.setSingleStep(0.1)
-        self.frame_spin.setDecimals(3)
-        frame_layout.addWidget(self.frame_spin)
-        spinbox_layout.addLayout(frame_layout)
-
-        spinbox_layout.addStretch()  # Push spinboxes to the left
-        calibration_layout.addLayout(spinbox_layout)
-
-        # Second row: buttons
-        button_layout = QHBoxLayout()
-
-        # Save/load buttons and clear data button
-        self.save_params_btn = QPushButton("Save Parameters")
-        self.load_params_btn = QPushButton("Load Parameters")
-        self.clear_data_btn = QPushButton("Clear All Data")
-        self.clear_data_btn.setStyleSheet("color: red;")
-
-        # Connect signals
-        self.save_params_btn.clicked.connect(self._save_parameters)
-        self.load_params_btn.clicked.connect(self._load_parameters)
-        self.clear_data_btn.clicked.connect(self._clear_all_data)
-
-        # Add buttons to layout with stretch
-        button_layout.addWidget(self.save_params_btn, stretch=1)
-        button_layout.addWidget(self.load_params_btn, stretch=1)
-        button_layout.addWidget(self.clear_data_btn, stretch=1)
-
-        calibration_layout.addLayout(button_layout)
-
-        calibration_group.setLayout(calibration_layout)
+        calibration_group = self._create_calibration_group()
         container_layout.addWidget(calibration_group)
+
         # Create tab widget for different components
         tabs = QTabWidget()
 
-        # Initialize preprocessing widget
+        # Initialize all widgets with parameter_manager
         self.preprocessing_widget = PreprocessingWidget(
             self.viewer,
             self.data_manager,
-            self.visualization_manager
+            self.parameter_manager,
+            self.visualization_manager,
+
         )
         self.preprocessing_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
-        # Initialize displacement widget
         self.displacement_widget = DisplacementAnalysisWidget(
             self.viewer,
             self.data_manager,
+            self.parameter_manager,
             self.visualization_manager
         )
 
-        # Initialize force calculation widget
         self.force_widget = FTTCWidget(
             self.viewer,
             self.data_manager,
+            self.parameter_manager,
             self.visualization_manager
         )
 
-        # Initialize MSM widget
         self.msm_widget = MSMWidget(
             self.viewer,
             self.data_manager,
+            self.parameter_manager,
             self.visualization_manager
         )
 
-        # Initialize batch analysis widget
         self.batch_widget = BatchAnalysisWidget(
             self.viewer,
             self.data_manager,
+            self.parameter_manager,
             self.visualization_manager
         )
 
@@ -184,23 +139,156 @@ class napariTFMWidget(QWidget):
 
         self.connect_signals()
 
+    def _create_calibration_group(self) -> QGroupBox:
+        """Create calibration group box with controls."""
+        calibration_group = QGroupBox("")
+        calibration_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        calibration_layout = QVBoxLayout()
+
+        # First row: spinboxes
+        spinbox_layout = QHBoxLayout()
+
+        # Pixel size controls
+        pixel_layout = QHBoxLayout()
+        pixel_layout.addWidget(QLabel("Pixel Size (µm):"))
+        self.pixel_spin = QDoubleSpinBox()
+        self.pixel_spin.setRange(0.001, 100.0)
+        self.pixel_spin.setSingleStep(0.1)
+        self.pixel_spin.setDecimals(3)
+        pixel_layout.addWidget(self.pixel_spin)
+        spinbox_layout.addLayout(pixel_layout)
+
+        spinbox_layout.addSpacing(20)
+
+        # Frame length controls
+        frame_layout = QHBoxLayout()
+        frame_layout.addWidget(QLabel("Frame Length (min):"))
+        self.frame_spin = QDoubleSpinBox()
+        self.frame_spin.setRange(0.001, 1000.0)
+        self.frame_spin.setSingleStep(0.1)
+        self.frame_spin.setDecimals(3)
+        frame_layout.addWidget(self.frame_spin)
+        spinbox_layout.addLayout(frame_layout)
+
+        # Register callbacks for parameter changes
+        self.parameter_manager.register_callback('pixel_size',
+                                                 lambda value: self.pixel_spin.setValue(value)
+                                                 )
+        self.parameter_manager.register_callback('frame_interval',
+                                                 lambda value: self.frame_spin.setValue(value)
+                                                 )
+
+        # Connect spinbox signals to parameter manager
+        self.pixel_spin.valueChanged.connect(
+            lambda value: self.parameter_manager.set_value('pixel_size', value)
+        )
+        self.frame_spin.valueChanged.connect(
+            lambda value: self.parameter_manager.set_value('frame_interval', value)
+        )
+
+        # Initialize spinbox values from parameter manager
+        self.pixel_spin.setValue(self.parameter_manager.get_value('pixel_size'))
+        self.frame_spin.setValue(self.parameter_manager.get_value('frame_interval'))
+
+        spinbox_layout.addStretch()
+        calibration_layout.addLayout(spinbox_layout)
+
+        # Second row: buttons
+        button_layout = QHBoxLayout()
+        self.save_params_btn = QPushButton("Save Parameters")
+        self.load_params_btn = QPushButton("Load Parameters")
+        self.clear_data_btn = QPushButton("Clear All Data")
+        self.clear_data_btn.setStyleSheet("color: red;")
+
+        # Connect button signals
+        self.save_params_btn.clicked.connect(self._save_parameters)
+        self.load_params_btn.clicked.connect(self._load_parameters)
+        self.clear_data_btn.clicked.connect(self._clear_all_data)
+
+        button_layout.addWidget(self.save_params_btn, stretch=1)
+        button_layout.addWidget(self.load_params_btn, stretch=1)
+        button_layout.addWidget(self.clear_data_btn, stretch=1)
+
+        calibration_layout.addLayout(button_layout)
+        calibration_group.setLayout(calibration_layout)
+        return calibration_group
+
     def _save_parameters(self):
-        """
-        Save current parameter values to a file.
-        To be implemented: Save pixel size, frame length, and other relevant parameters.
-        """
-        logger.info("Save parameters functionality to be implemented")
-        # TODO: Implement saving parameters to a file
-        QMessageBox.information(self, "Info", "Save parameters functionality will be implemented here")
+        """Save parameters using parameter manager."""
+        try:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Parameters",
+                "",
+                "YAML Files (*.yaml *.yml)"
+            )
+            if file_path:
+                if not file_path.lower().endswith(('.yaml', '.yml')):
+                    file_path += '.yaml'
+                self.parameter_manager.save_to_file(file_path)
+                QMessageBox.information(self, "Success", "Parameters saved successfully!")
+        except Exception as e:
+            logger.error(f"Error saving parameters: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to save parameters: {str(e)}")
 
     def _load_parameters(self):
-        """
-        Load parameter values from a file.
-        To be implemented: Load pixel size, frame length, and other relevant parameters.
-        """
-        logger.info("Load parameters functionality to be implemented")
-        # TODO: Implement loading parameters from a file
-        QMessageBox.information(self, "Info", "Load parameters functionality will be implemented here")
+        """Load parameters using parameter manager."""
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Load Parameters",
+                "",
+                "YAML Files (*.yaml *.yml)"
+            )
+            if file_path:
+                self.parameter_manager.load_from_file(file_path)
+                QMessageBox.information(self, "Success", "Parameters loaded successfully!")
+        except Exception as e:
+            logger.error(f"Error loading parameters: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to load parameters: {str(e)}")
+
+    def connect_signals(self):
+        """Connect signals between components"""
+        # Existing signal connections
+        self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
+        self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
+        self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
+        self.force_widget.force_calculated.connect(self._on_force_completed)
+        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
+
+        # Connect parameter manager signals
+        self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
+
+    def _on_parameter_changed(self, param_name: str, value: Any):
+        """Handle parameter changes from parameter manager"""
+        # For calibration parameters, we need to update all widgets
+        if param_name in ['pixel_size', 'frame_interval']:
+            for widget in [
+                self.preprocessing_widget,
+                self.displacement_widget,
+                self.force_widget,
+                self.msm_widget,
+                self.batch_widget
+            ]:
+                # Use _update_calibration instead of _update_parameters
+                if hasattr(widget, '_update_calibration'):
+                    widget._update_calibration()
+                # Or just update the UI state if _update_calibration doesn't exist
+                elif hasattr(widget, '_update_ui_state'):
+                    widget._update_ui_state()
+
+        # Let individual widgets handle their specific parameters if needed
+        try:
+            if param_name.startswith('preprocessing_'):
+                self.preprocessing_widget._update_ui_state()
+            elif param_name.startswith('displacement_'):
+                self.displacement_widget._update_ui_state()
+            elif param_name.startswith('force_'):
+                self.force_widget._update_ui_state()
+            elif param_name.startswith('stress_'):
+                self.msm_widget._update_ui_state()
+        except AttributeError:
+            pass
 
     def _clear_all_data(self):
         """
@@ -243,19 +331,6 @@ class napariTFMWidget(QWidget):
                 logger.error(f"Error clearing data: {str(e)}")
                 QMessageBox.critical(self, "Error", f"Failed to clear data: {str(e)}")
 
-    def connect_signals(self):
-        """Connect signals between components"""
-        # Existing signal connections
-        self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
-        self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
-        self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
-        self.force_widget.force_calculated.connect(self._on_force_completed)
-        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
-
-        # Add new calibration signal connections
-        self.pixel_spin.valueChanged.connect(self._on_calibration_changed)
-        self.frame_spin.valueChanged.connect(self._on_calibration_changed)
-
     def _on_calibration_changed(self):
         """Handle changes to calibration values"""
         # Notify all widgets that calibration has changed
@@ -292,7 +367,6 @@ class napariTFMWidget(QWidget):
         # Update visualization through manager
         self.visualization_manager.update_preprocessing_visualization(results)
         self.displacement_widget._update_ui_state()
-
 
     def _on_preprocessing_failed(self, error_msg):
         """Handle preprocessing failure"""

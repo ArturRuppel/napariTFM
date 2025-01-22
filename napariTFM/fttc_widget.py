@@ -15,6 +15,7 @@ from .colorbar import ColorbarManager
 from .data_manager import DataManager
 from .displacement_analysis_widget import DisplacementAnalysisWidget
 from .fttc import FTTC
+from .parameter_manager import ParameterManager
 from .visualization_manager import VisualizationManager
 
 
@@ -27,33 +28,303 @@ class FTTCWidget(BaseAnalysisWidget):
             self,
             viewer: "napari.Viewer",
             data_manager: "DataManager",
+            parameter_manager: ParameterManager,
             visualization_manager: "VisualizationManager"
     ):
-        # Keep existing initialization
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Initialize parameters (keep existing ones)
-        self.young_modulus = 10  # kPa (will be converted to Pa internally)
-        self.poisson_ratio = 0.49
-        self.gel_height = None  # μm (None means infinite)
-        self._pixel_size = None  # Will be set from data manager
-        self._downscale_factor = None  # Will be set from data manager
-        self.regularization = 1e-6
-        self.mesh_size = 1  # hardcoded to 1
-        self.lanczos_exp = 1
+        # Store reference to parameter manager
+        self.parameter_manager = parameter_manager
 
-        # Add flag to track if analysis is running
-        self.is_analysis_running = False
-
-        # Initialize calculator
+        # Initialize calculator and UI-related attributes
         self.calculator = None
         self.colorbar_manager = ColorbarManager()
         self.visualization_params = {}
+        self.is_analysis_running = False
 
+        # Setup UI and connect signals
         self._setup_ui()
         self._connect_signals()
         self._register_controls()
         self._update_ui_state()
+
+        # Connect to parameter manager signals
+        if hasattr(self.parameter_manager, 'parameter_changed'):
+            self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
+        else:
+            print("Warning: ParameterManager does not have parameter_changed signal")
+
+        # Initialize widget with current parameter values
+        self._sync_widget_with_parameters()
+
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager values"""
+        if not hasattr(self, 'parameter_manager') or self.parameter_manager is None:
+            print("Warning: No parameter manager available for syncing")
+            return
+
+        # Block signals temporarily
+        self._block_parameter_widgets(True)
+
+        try:
+            # Sync material parameters
+            self.young_spin.setValue(self.parameter_manager.get_value('young_modulus') / 1000)  # Convert Pa to kPa
+            self.poisson_spin.setValue(self.parameter_manager.get_value('poisson_ratio'))
+            self.height_spin.setValue(self.parameter_manager.get_value('gel_height') or 0)
+            self.lanczos_exp_spin.setValue(self.parameter_manager.get_value('lanczos_exp'))
+
+            # Handle regularization parameter carefully
+            reg_value = self.parameter_manager.get_value('regularization')
+            if reg_value is None or reg_value <= 0:
+                # Set a default value if None or invalid
+                reg_value = 1e-17  # Default value
+                self.parameter_manager.set_value('regularization', reg_value)
+            self.regularization_spin.setValue(np.log10(reg_value))
+
+            # Sync auto GCV checkbox
+            auto_gcv = self.parameter_manager.get_value('auto_gcv')
+            self.auto_gcv_checkbox.setChecked(bool(auto_gcv))  # Convert to bool to handle None
+
+            # Sync visualization parameters
+            self.visualization_params['vector_stride'].setValue(
+                self.parameter_manager.get_value('force_vector_stride') or 20
+            )
+            self.visualization_params['arrow_scale'].setValue(
+                self.parameter_manager.get_value('force_arrow_scale') or 1.0
+            )
+            self.visualization_params['f_max'].setValue(
+                self.parameter_manager.get_value('f_max') or 1000.0
+            )
+
+        except Exception as e:
+            print(f"Error syncing parameters: {str(e)}")
+
+        finally:
+            # Restore signal handling
+            self._block_parameter_widgets(False)
+
+    def preview_force(self):
+        """Preview force calculation on current frame."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating forces...", 0)
+
+            # Initialize calculator
+            self._initialize_calculator()
+
+            # Get current frame data
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            current_frame = self.viewer.dims.current_step[0]
+            flow = flows[current_frame]
+
+            # Get spatial coordinates
+            x = np.arange(flow.shape[1])
+            y = np.arange(flow.shape[0])
+
+            # Get pixel size and downscale factor
+            disp_params = displacement_results.get('parameters', {})
+            self._pixel_size = disp_params.get('pixel_size')
+            self._downscale_factor = disp_params.get('downscale_factor', 1)
+
+            # Create and start worker
+            worker = self.calculator.calculate_traction(
+                x=x,
+                y=y,
+                u_data=flow[..., 0],
+                v_data=flow[..., 1],
+                dx=self._pixel_size * self._downscale_factor,
+                set_lam=10 ** self.parameter_manager.get_value('regularization')
+            )
+
+            # Connect worker signals
+            worker.returned.connect(self._handle_preview_results)
+            worker.finished.connect(lambda: self._set_controls_enabled(True))
+            worker.errored.connect(self._handle_error)
+
+            # Start the worker
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self._set_controls_enabled(True)
+
+    def _update_parameters(self):
+        """Update parameters in the parameter manager"""
+        try:
+            # Block signals temporarily
+            self.blockSignals(True)
+
+            # Update material parameters
+            self.parameter_manager.set_value('young_modulus', self.young_spin.value() * 1000)  # Convert kPa to Pa
+            self.parameter_manager.set_value('poisson_ratio', self.poisson_spin.value())
+            self.parameter_manager.set_value('gel_height', None if self.height_spin.value() == 0 else self.height_spin.value())
+            self.parameter_manager.set_value('lanczos_exp', self.lanczos_exp_spin.value())
+
+            # Update regularization parameters - ensure we never set None or invalid values
+            reg_value = 10 ** self.regularization_spin.value()
+            if reg_value <= 0:
+                reg_value = 1e-17  # Set minimum value
+            self.parameter_manager.set_value('regularization', reg_value)
+            self.parameter_manager.set_value('auto_gcv', self.auto_gcv_checkbox.isChecked())
+
+            # Update visualization parameters
+            self.parameter_manager.set_value('force_vector_stride',
+                                             self.visualization_params['vector_stride'].value())
+            self.parameter_manager.set_value('force_arrow_scale',
+                                             self.visualization_params['arrow_scale'].value())
+            self.parameter_manager.set_value('f_max',
+                                             self.visualization_params['f_max'].value())
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self.blockSignals(False)
+    def _on_parameter_changed(self, param_name: str, value: object):
+        """Handle parameter changes from the parameter manager"""
+        # Only update if the change didn't come from this widget
+        if not self.signalsBlocked():
+            self._sync_widget_with_parameters()
+
+    def _block_parameter_widgets(self, block: bool):
+        """Block or unblock signals for all parameter-related widgets"""
+        widgets = [
+            self.young_spin,
+            self.poisson_spin,
+            self.height_spin,
+            self.lanczos_exp_spin,
+            self.regularization_spin,
+            self.auto_gcv_checkbox,
+            *self.visualization_params.values()
+        ]
+        for widget in widgets:
+            widget.blockSignals(block)
+
+    def _auto_select_gcv(self):
+        """Calculate optimal regularization parameter for current frame using GCV."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating optimal regularization parameter...", 0)
+
+            # Initialize calculator if needed
+            self._initialize_calculator()
+
+            # Get current frame data
+            displacement_results = self.data_manager.displacement_results
+            flows = displacement_results['flows']
+            current_frame = self.viewer.dims.current_step[0]
+            flow = flows[current_frame]
+
+            # Get spatial coordinates and prepare data
+            shape = flow.shape[:-1]
+            pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
+            vec = np.array([flow[..., 0], flow[..., 1]])
+
+            # Get pixel size and downscale factor from displacement results
+            disp_params = displacement_results.get('parameters', {})
+            pixel_size = disp_params.get('pixel_size')
+            downscale_factor = disp_params.get('downscale_factor', 1)
+
+            # Scale displacements
+            pix_per_mu = 1 / (pixel_size * downscale_factor)
+            vec = pix_per_mu * vec
+
+            # Calculate optimal regularization parameter
+            lam = self.calculator._find_regularization(pos, vec)
+
+            # Update UI and parameter manager with new value (log scale)
+            self.regularization_spin.setValue(np.log10(lam))
+            self.parameter_manager.set_value('regularization', lam)
+
+            self._set_controls_enabled(True)
+            self._update_status(f"Optimal regularization parameter: {lam:.2e}", 100)
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self._set_controls_enabled(True)
+
+    def _handle_force_results(self, force_results):
+        """Handle the completed force calculation results."""
+        try:
+            if not isinstance(force_results, dict):
+                return
+
+            # Update data manager and visualization
+            self.data_manager.force_results = force_results
+            self.visualization_manager.visualize_force_results(
+                force_results,
+                downscale_factor=force_results['parameters'].get('downscale_factor', 1)
+            )
+            self._handle_visualization_layers()
+
+            # Update colorbar
+            f_max = self.parameter_manager.get_value('f_max')
+            if f_max is not None:
+                self.colorbar_manager.update_limits(0, f_max)
+
+            # Get and display statistics from last frame
+            magnitude = np.sqrt(force_results['tx'][-1] ** 2 + force_results['ty'][-1] ** 2)
+            stats = {
+                'mean_force': np.mean(magnitude),
+                'max_force': np.max(magnitude),
+                'median_force': np.median(magnitude)
+            }
+
+            stats_text = (
+                f"Mean force: {stats['mean_force']:.2f} Pa\n"
+                f"Max force: {stats['max_force']:.2f} Pa\n"
+                f"Median force: {stats['median_force']:.2f} Pa"
+            )
+            self._update_status(stats_text, 100)
+
+            # Enable save button and emit results
+            self.save_force_btn.setEnabled(True)
+            self.force_calculated.emit(force_results)
+
+            # Update UI state to show new data status
+            self._update_ui_state()
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def _initialize_calculator(self):
+        """Initialize the FTTC calculator with current parameters."""
+        try:
+            # Get parameters from parameter manager
+            young_modulus = self.parameter_manager.get_value('young_modulus')
+            poisson_ratio = self.parameter_manager.get_value('poisson_ratio')
+            gel_height = self.parameter_manager.get_value('gel_height')
+            lanczos_exp = self.parameter_manager.get_value('lanczos_exp')
+
+            # Get pixel size and downscale factor from displacement results
+            if self.data_manager.displacement_results:
+                disp_params = self.data_manager.displacement_results.get('parameters', {})
+                pixel_size = disp_params.get('pixel_size')
+                downscale_factor = disp_params.get('downscale_factor', 1)
+
+                # Convert gel height from μm to pixels if specified
+                gel_height_p = None if gel_height is None else gel_height / (pixel_size * downscale_factor)
+
+                self.calculator = FTTC(
+                    E=young_modulus,
+                    nu=poisson_ratio,
+                    mesh_size=1,  # hardcoded to 1
+                    lanczos_exp=lanczos_exp,
+                    gel_height=gel_height_p
+                )
+        except Exception as e:
+            self._handle_error(f"Error initializing calculator: {str(e)}")
+    def reset_parameters(self):
+        """Reset all parameters to defaults."""
+        self.parameter_manager.reset_to_defaults()
+        self._sync_widget_with_parameters()
+        self._update_status("Parameters reset to defaults")
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -116,6 +387,10 @@ class FTTCWidget(BaseAnalysisWidget):
             flows = self.data_manager.displacement_results['flows']
             self._initialize_calculator()
 
+            # Get parameters from parameter manager
+            regularization = self.parameter_manager.get_value('regularization')
+            auto_gcv = self.parameter_manager.get_value('auto_gcv')
+
             # Prepare data structure to collect results
             self.force_results = {
                 'tx': [],
@@ -126,30 +401,27 @@ class FTTCWidget(BaseAnalysisWidget):
             @thread_worker
             def process_frames():
                 for frame_idx, flow in enumerate(flows):
-                    # Calculate regularization if needed
-                    shape = flow.shape[:-1]  # Get shape excluding the vector component
-
-                    # Create properly sized coordinate arrays for interpolation
-                    x = np.arange(shape[1])  # Width
-                    y = np.arange(shape[0])  # Height
+                    shape = flow.shape[:-1]
+                    x = np.arange(shape[1])
+                    y = np.arange(shape[0])
                     pos = np.array(np.meshgrid(x, y, indexing='xy'))
-
-                    # Prepare displacement vectors
                     vec = np.array([
-                        flow[..., 0].flatten(),  # x component
-                        flow[..., 1].flatten()  # y component
+                        flow[..., 0].flatten(),
+                        flow[..., 1].flatten()
                     ])
 
-                    pix_per_mu = self.mesh_size / (self._pixel_size * self._downscale_factor)
+                    # Get pixel size and downscale factor
+                    disp_params = self.data_manager.displacement_results.get('parameters', {})
+                    pixel_size = disp_params.get('pixel_size')
+                    downscale_factor = disp_params.get('downscale_factor', 1)
+                    pix_per_mu = 1 / (pixel_size * downscale_factor)
 
-                    if self.auto_gcv_checkbox.isChecked():
+                    if auto_gcv:
                         lam = self.calculator._find_regularization(pos, vec)
                     else:
-                        lam = self.regularization
+                        lam = regularization
 
-                    # Perform TFM calculation
                     results = self.calculator._perform_tfm(pos, vec, pix_per_mu, lam)
-
                     yield frame_idx, results
 
             # Create worker and connect signals
@@ -182,18 +454,18 @@ class FTTCWidget(BaseAnalysisWidget):
 
                     # Add parameters
                     self.force_results['parameters'] = {
-                        'young_modulus': self.young_modulus,
-                        'poisson_ratio': self.poisson_ratio,
-                        'gel_height': self.gel_height,
+                        'young_modulus': self.parameter_manager.get_value('young_modulus'),
+                        'poisson_ratio': self.parameter_manager.get_value('poisson_ratio'),
+                        'gel_height': self.parameter_manager.get_value('gel_height'),
                         'pixel_size': self._pixel_size,
-                        'regularization': self.regularization,
-                        'mesh_size': self.mesh_size,
-                        'lanczos_exp': self.lanczos_exp,
-                        'downscale_factor': self.data_manager.displacement_results.get('parameters', {}).get('downscale_factor', 1),
+                        'regularization': 10 ** self.parameter_manager.get_value('regularization'),
+                        'mesh_size': 1,  # hardcoded
+                        'lanczos_exp': self.parameter_manager.get_value('lanczos_exp'),
+                        'downscale_factor': self._downscale_factor,
                         'visualization': {
-                            'vector_stride': self.visualization_params['vector_stride'].value(),
-                            'arrow_scale': self.visualization_params['arrow_scale'].value(),
-                            'f_max': self.visualization_params['f_max'].value()
+                            'vector_stride': self.parameter_manager.get_value('force_vector_stride'),
+                            'arrow_scale': self.parameter_manager.get_value('force_arrow_scale'),
+                            'f_max': self.parameter_manager.get_value('f_max')
                         }
                     }
 
@@ -229,7 +501,7 @@ class FTTCWidget(BaseAnalysisWidget):
         self.auto_gcv_checkbox = QCheckBox("Auto-GCV per frame")
         self.gcv_button = QPushButton("Auto-select (GCV)")
 
-        # Initialize visualization parameters if not already done
+        # Initialize visualization parameters
         if not hasattr(self, 'visualization_params'):
             self.visualization_params = {}
         if 'vector_stride' not in self.visualization_params:
@@ -246,22 +518,20 @@ class FTTCWidget(BaseAnalysisWidget):
         # Create sections for better organization
         material_params_group = QGroupBox("Material Parameters")
         material_params_layout = QVBoxLayout()
-
         regularization_params_group = QGroupBox("Regularization Parameters")
         regularization_params_layout = QVBoxLayout()
-
         vis_params_group = QGroupBox("Visualization Parameters")
         vis_params_layout = QVBoxLayout()
 
-        # Material parameters
+        # Material parameters setup
         params = [
-            ("Young's Modulus (kPa):", self.young_spin, 0.1, 1000, 0.1, self.young_modulus,
+            ("Young's Modulus (kPa):", self.young_spin, 0.1, 1000, 0.1, 10,
              "Elastic modulus of the gel substrate in kilopascals (kPa)"),
-            ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, self.poisson_ratio,
+            ("Poisson Ratio:", self.poisson_spin, 0, 0.5, 0.01, 0.49,
              "Poisson's ratio of the gel substrate (typically 0.45-0.49 for hydrogels)"),
             ("Gel Height (μm):", self.height_spin, 0, 1000, 10, 0,
              "Thickness of the gel substrate in micrometers. Set to 0 for infinite thickness"),
-            ("Lanczos Exponent:", self.lanczos_exp_spin, 0, 5, 1, self.lanczos_exp,
+            ("Lanczos Exponent:", self.lanczos_exp_spin, 0, 5, 1, 1,
              "Exponent for Lanczos interpolation. Higher values increase smoothing")
         ]
 
@@ -283,7 +553,11 @@ class FTTCWidget(BaseAnalysisWidget):
 
         material_params_group.setLayout(material_params_layout)
 
-        # Regularization controls
+        # Regularization parameters
+        regularization_container = QWidget()
+        regularization_container_layout = QVBoxLayout()
+
+        # Regularization value control
         reg_layout = QHBoxLayout()
         reg_layout.addWidget(QLabel("Parameter (10^x):"))
         self.regularization_spin.setRange(-21, 0)
@@ -295,8 +569,9 @@ class FTTCWidget(BaseAnalysisWidget):
             "Lower values give more detailed but potentially noisier results"
         )
         reg_layout.addWidget(self.regularization_spin)
-        regularization_params_layout.addLayout(reg_layout)
+        regularization_container_layout.addLayout(reg_layout)
 
+        # GCV controls
         gcv_layout = QHBoxLayout()
         self.auto_gcv_checkbox.setToolTip(
             "Automatically optimize regularization parameter for each frame\n"
@@ -309,8 +584,10 @@ class FTTCWidget(BaseAnalysisWidget):
             "using Generalized Cross-Validation"
         )
         gcv_layout.addWidget(self.gcv_button)
-        regularization_params_layout.addLayout(gcv_layout)
+        regularization_container_layout.addLayout(gcv_layout)
 
+        regularization_container.setLayout(regularization_container_layout)
+        regularization_params_layout.addWidget(regularization_container)
         regularization_params_group.setLayout(regularization_params_layout)
 
         # Visualization parameters
@@ -434,47 +711,6 @@ class FTTCWidget(BaseAnalysisWidget):
                 "Error",
                 f"Failed to load displacement data: {str(e)}"
             )
-
-    def _auto_select_gcv(self):
-        """Calculate optimal regularization parameter for current frame using GCV."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating optimal regularization parameter...", 0)
-
-            # Initialize calculator if needed
-            self._initialize_calculator()
-
-            # Get current frame data
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            current_frame = self.viewer.dims.current_step[0]
-            flow = flows[current_frame]
-
-            # Get spatial coordinates and prepare data
-            shape = flow.shape[:-1]
-            pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
-            vec = np.array([flow[..., 0], flow[..., 1]])
-
-            # Scale displacements
-            pix_per_mu = self.mesh_size / (self._pixel_size * self._downscale_factor)
-            vec = pix_per_mu * vec
-
-            # Calculate optimal regularization parameter
-            lam = self.calculator._find_regularization(pos, vec)
-
-            # Update UI with new value (log scale)
-            self.regularization_spin.setValue(np.log10(lam))
-            self.regularization = lam
-
-            self._set_controls_enabled(True)
-            self._update_status(f"Optimal regularization parameter: {lam:.2e}", 100)
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self._set_controls_enabled(True)
 
     def _toggle_auto_gcv(self, state):
         """Enable or disable automatic GCV calculation per frame."""
@@ -712,54 +948,6 @@ class FTTCWidget(BaseAnalysisWidget):
         frame.setLayout(layout)
         return frame
 
-    def _handle_force_results(self, force_results):
-        """Handle the completed force calculation results."""
-        try:
-            if not isinstance(force_results, dict):
-                return
-
-            # Update data manager and visualization
-            self.data_manager.force_results = force_results
-            self.visualization_manager.visualize_force_results(
-                force_results,
-                downscale_factor=force_results['parameters'].get('downscale_factor', 1)
-            )
-            self._handle_visualization_layers()
-
-            # Update colorbar
-            f_max = force_results['parameters']['visualization']['f_max']
-            if f_max is not None:
-                self.colorbar_manager.update_limits(0, f_max)
-
-            # Get and display statistics from last frame
-            magnitude = np.sqrt(force_results['tx'][-1] ** 2 + force_results['ty'][-1] ** 2)
-            stats = {
-                'mean_force': np.mean(magnitude),
-                'max_force': np.max(magnitude),
-                'median_force': np.median(magnitude)
-            }
-
-            stats_text = (
-                f"Mean force: {stats['mean_force']:.2f} Pa\n"
-                f"Max force: {stats['max_force']:.2f} Pa\n"
-                f"Median force: {stats['median_force']:.2f} Pa"
-            )
-            self._update_status(stats_text, 100)
-
-            # Enable save button and emit results
-            self.save_force_btn.setEnabled(True)
-            self.force_calculated.emit(force_results)
-
-            # Update UI state to show new data status
-            self._update_ui_state()
-
-        except Exception as e:
-            self._handle_error(self.create_error(
-                message="Force calculation failed",
-                details=str(e),
-                recovery_hint="Check input data and parameters"
-            ))
-
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data status group."""
         group = QGroupBox("Input Data")
@@ -779,46 +967,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
-
-    def _update_parameters(self):
-        """Update parameters from UI controls and data manager."""
-        # Update basic parameters
-        self.young_modulus = self.young_spin.value() * 1000
-        self.poisson_ratio = self.poisson_spin.value()
-        self.regularization = 10 ** self.regularization_spin.value()
-        self.mesh_size = 1  # hardcoded to 1, artifact from older version
-        self.lanczos_exp = self.lanczos_exp_spin.value()
-
-        # Handle gel height
-        height_value = self.height_spin.value()
-        self.gel_height = None if height_value == 0 else height_value
-
-        # Get pixel size and downscale_factor from data manager
-        if self.data_manager.displacement_results:
-            disp_params = self.data_manager.displacement_results.get('parameters', {})
-            if disp_params.get('pixel_size') is not None:
-                self._pixel_size = disp_params.get('pixel_size')
-            if disp_params.get('downscale_factor') is not None:
-                self._downscale_factor = disp_params.get('downscale_factor')
-
-        # Update UI state
-        self._update_ui_state()
-
-    def reset_parameters(self):
-        """Reset all parameters to defaults."""
-        self.young_spin.setValue(10)  # 10 kPa
-        self.poisson_spin.setValue(0.49)
-        self.height_spin.setValue(0)
-        self.mesh_size = 1  # hardcoded to 1
-        self.lanczos_exp_spin.setValue(1)
-        self.regularization_spin.setValue(-4)  # 10^-4
-        self.auto_gcv_checkbox.setChecked(False)
-
-        self.visualization_params['vector_stride'].setValue(20)
-        self.visualization_params['arrow_scale'].setValue(1.0)
-        self.visualization_params['f_max'].setValue(1000.0)
-
-        self._update_status("Parameters reset to defaults")
 
     def _load_parameters_to_ui(self, params: dict):
         """Load parameters from dictionary to UI controls."""
@@ -883,21 +1031,6 @@ class FTTCWidget(BaseAnalysisWidget):
             self._handle_error(f"Cleanup failed: {str(e)}")
 
         super().cleanup()
-
-    def _initialize_calculator(self):
-        """Initialize the FTTC calculator with current parameters."""
-        self._update_parameters()
-
-        # Convert gel height from μm to m if specified
-        gel_height_p = None if self.gel_height is None else self.gel_height / (self.pixel_size * self._downscale_factor)
-
-        self.calculator = FTTC(
-            E=self.young_modulus,
-            nu=self.poisson_ratio,
-            mesh_size=self.mesh_size,
-            lanczos_exp=self.lanczos_exp,
-            gel_height=gel_height_p
-        )
 
     def _validate_input_data(self) -> bool:
         """Validate required input data is available."""

@@ -19,6 +19,7 @@ from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
 from napariTFM.data_manager import DataManager
 from napariTFM.error_handling import ProcessingError
+from napariTFM.parameter_manager import ParameterManager
 from napariTFM.preprocessing import (
     PreprocessingParameters,
     ImagePreprocessor
@@ -35,9 +36,14 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self,
             viewer: "napari.Viewer",
             data_manager: DataManager,
+            parameter_manager: ParameterManager,
             visualization_manager: VisualizationManager
     ):
+        # Initialize base widget first
         super().__init__(viewer, data_manager, visualization_manager)
+
+        # Store reference to parameter manager
+        self.parameter_manager = parameter_manager
 
         # Initialize instance variables
         self.preprocessor = ImagePreprocessor()
@@ -49,22 +55,84 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._setup_ui()
         self._connect_signals()
 
+        # Connect to parameter manager signals only after UI is set up
+        if hasattr(self.parameter_manager, 'parameter_changed'):
+            self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
+        else:
+            print("Warning: ParameterManager does not have parameter_changed signal")
+
         # Connect to viewer layer events
         self.viewer.layers.events.inserted.connect(self._on_layer_change)
         self.viewer.layers.events.removed.connect(self._on_layer_change)
         self.viewer.layers.selection.events.changed.connect(self._on_layer_selection_change)
 
         # Initialize parameters with default values
-        self.reset_parameters()
+        self._sync_widget_with_parameters()
 
         # Initialize button states
         self._update_button_states()
         self._update_ui_state()
 
-    def reset_parameters(self):
-        """Reset all parameters to defaults with proper signal blocking"""
-        # Block all signals temporarily
-        widgets_to_block = [
+    def _on_parameter_changed(self, param_name: str, value: object):
+        """Handle parameter changes from the parameter manager"""
+        # Only update if the change didn't come from this widget
+        if not self.signalsBlocked():
+            self._sync_widget_with_parameters()
+            if self.preview_enabled:
+                self.update_preview_frame()
+
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager values"""
+        if not hasattr(self, 'parameter_manager') or self.parameter_manager is None:
+            print("Warning: No parameter manager available for syncing")
+            return
+
+        # Block signals temporarily
+        self._block_parameter_widgets(True)
+
+        try:
+            # Sync intensity ranges
+            self.min_spinbox.setValue(self.parameter_manager.get_value('min_intensity'))
+            self.max_spinbox.setValue(self.parameter_manager.get_value('max_intensity'))
+            self.intensity_slider.setValue((
+                int(self.parameter_manager.get_value('min_intensity') * 10),
+                int(self.parameter_manager.get_value('max_intensity') * 10)
+            ))
+
+            # Sync cell intensity ranges
+            self.cell_min_spinbox.setValue(self.parameter_manager.get_value('cell_min_intensity'))
+            self.cell_max_spinbox.setValue(self.parameter_manager.get_value('cell_max_intensity'))
+            self.cell_intensity_slider.setValue((
+                int(self.parameter_manager.get_value('cell_min_intensity') * 10),
+                int(self.parameter_manager.get_value('cell_max_intensity') * 10)
+            ))
+
+            # Sync Gaussian parameters
+            gaussian_sigma = self.parameter_manager.get_value('gaussian_sigma')
+            self.gaussian_sigma_spin.setValue(gaussian_sigma)
+            self.gaussian_sigma_slider.setValue(int(gaussian_sigma * 10))
+
+            cell_gaussian_sigma = self.parameter_manager.get_value('cell_gaussian_sigma')
+            self.cell_gaussian_sigma_spin.setValue(cell_gaussian_sigma)
+            self.cell_gaussian_sigma_slider.setValue(int(cell_gaussian_sigma * 10))
+
+            # Sync registration mode
+            reg_mode = self.parameter_manager.get_value('registration_mode')
+            if isinstance(reg_mode, str):  # Ensure we have a string value
+                display_mode = reg_mode.capitalize()
+                if display_mode in ['Translation', 'Rigid', 'None']:
+                    self.registration_mode_combo.setCurrentText(display_mode)
+
+        except Exception as e:
+            print(f"Error syncing parameters: {str(e)}")
+
+        finally:
+            # Restore signal handling
+            self._block_parameter_widgets(False)
+
+    def _block_parameter_widgets(self, block: bool):
+        """Block or unblock signals for all parameter-related widgets"""
+        widgets = [
             self.intensity_slider,
             self.min_spinbox,
             self.max_spinbox,
@@ -74,82 +142,45 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.gaussian_sigma_spin,
             self.gaussian_sigma_slider,
             self.cell_gaussian_sigma_spin,
-            self.cell_gaussian_sigma_slider
+            self.cell_gaussian_sigma_slider,
+            self.registration_mode_combo
         ]
-
-        # Store original blocked states
-        original_states = [widget.signalsBlocked() for widget in widgets_to_block]
-
-        try:
-            # Block all signals
-            for widget in widgets_to_block:
-                widget.blockSignals(True)
-
-            # Reset bead/reference intensity range
-            self.intensity_slider.setValue((0, 1000))
-            self.min_spinbox.setValue(0)
-            self.max_spinbox.setValue(100)
-
-            # Reset cell intensity range
-            self.cell_intensity_slider.setValue((0, 1000))
-            self.cell_min_spinbox.setValue(0)
-            self.cell_max_spinbox.setValue(100)
-
-            # Reset gaussian filters
-            self.gaussian_sigma_spin.setValue(0.0)
-            self.gaussian_sigma_slider.setValue(0)
-            self.cell_gaussian_sigma_spin.setValue(0.0)
-            self.cell_gaussian_sigma_slider.setValue(0)
-
-            # Reset registration
-            self.registration_mode_combo.setCurrentText('Translation')
-
-            # Update parameters with new values
-            self.update_parameters()
-
-        finally:
-            # Restore original blocked states
-            for widget, state in zip(widgets_to_block, original_states):
-                widget.blockSignals(state)
-
-        self._update_status("Parameters reset to defaults")
+        for widget in widgets:
+            widget.blockSignals(block)
 
     def update_parameters(self):
-        """Update preprocessing parameters from UI controls with validation"""
+        """Update parameters in the parameter manager"""
         try:
-            # Get and validate intensity ranges
-            min_percentile = max(0.0, min(100.0, self.min_spinbox.value())) / 100.0
-            max_percentile = max(0.0, min(100.0, self.max_spinbox.value())) / 100.0
+            # Update intensity ranges
+            self.parameter_manager.set_value('min_intensity', self.min_spinbox.value())
+            self.parameter_manager.set_value('max_intensity', self.max_spinbox.value())
 
-            cell_min_percentile = max(0.0, min(100.0, self.cell_min_spinbox.value())) / 100.0
-            cell_max_percentile = max(0.0, min(100.0, self.cell_max_spinbox.value())) / 100.0
+            # Update cell intensity ranges
+            self.parameter_manager.set_value('cell_min_intensity', self.cell_min_spinbox.value())
+            self.parameter_manager.set_value('cell_max_intensity', self.cell_max_spinbox.value())
 
-            # Ensure min is less than max
-            if min_percentile >= max_percentile:
-                max_percentile = min(1.0, min_percentile + 0.01)
-            if cell_min_percentile >= cell_max_percentile:
-                cell_max_percentile = min(1.0, cell_min_percentile + 0.01)
+            # Update Gaussian parameters
+            self.parameter_manager.set_value('gaussian_sigma', self.gaussian_sigma_spin.value())
+            self.parameter_manager.set_value('cell_gaussian_sigma', self.cell_gaussian_sigma_spin.value())
 
-            # Create new parameters
+            # Update registration mode
+            self.parameter_manager.set_value('registration_mode',
+                                             self.registration_mode_combo.currentText().lower())
+
+            # Update preprocessor with new parameters
             params = PreprocessingParameters(
-                # Bead/Reference parameters
-                min_intensity_percentile=min_percentile,
-                max_intensity_percentile=max_percentile,
-                enable_gaussian_filter=self.gaussian_sigma_spin.value() > 0,
-                gaussian_sigma=max(0.0, self.gaussian_sigma_spin.value()),
-
-                # Cell parameters
-                cell_min_intensity_percentile=cell_min_percentile,
-                cell_max_intensity_percentile=cell_max_percentile,
-                enable_cell_gaussian_filter=self.cell_gaussian_sigma_spin.value() > 0,
-                cell_gaussian_sigma=max(0.0, self.cell_gaussian_sigma_spin.value()),
-
-                # Registration parameters
-                enable_registration=self.registration_mode_combo.currentText() != 'No registration',
-                registration_mode=self.registration_mode_combo.currentText().lower()
+                min_intensity_percentile=self.parameter_manager.get_value('min_intensity') / 100,
+                max_intensity_percentile=self.parameter_manager.get_value('max_intensity') / 100,
+                enable_gaussian_filter=self.parameter_manager.get_value('gaussian_sigma') > 0,
+                gaussian_sigma=self.parameter_manager.get_value('gaussian_sigma'),
+                cell_min_intensity_percentile=self.parameter_manager.get_value('cell_min_intensity') / 100,
+                cell_max_intensity_percentile=self.parameter_manager.get_value('cell_max_intensity') / 100,
+                enable_cell_gaussian_filter=self.parameter_manager.get_value('cell_gaussian_sigma') > 0,
+                cell_gaussian_sigma=self.parameter_manager.get_value('cell_gaussian_sigma'),
+                enable_registration=self.parameter_manager.get_value('registration_mode') != 'none',
+                registration_mode=self.parameter_manager.get_value('registration_mode')
             )
 
-            # Update preprocessor
             self.preprocessor.update_parameters(params)
 
             # Update preview if enabled
@@ -158,6 +189,59 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(str(e))
+
+    def reset_parameters(self):
+        """Reset all parameters to defaults"""
+        self.parameter_manager.reset_to_defaults()
+        self._sync_widget_with_parameters()
+        self._update_status("Parameters reset to defaults")
+
+    def run_preprocessing(self):
+        """Run preprocessing on all available data in a separate thread"""
+        if self.preview_enabled:
+            self.preview_check.setChecked(False)
+
+        try:
+            self._set_controls_enabled(False)
+            self._update_status("Starting preprocessing...", 0)
+
+            # Get parameters directly from parameter manager
+            params = PreprocessingParameters(
+                min_intensity_percentile=self.parameter_manager.get_value('min_intensity') / 100,
+                max_intensity_percentile=self.parameter_manager.get_value('max_intensity') / 100,
+                enable_gaussian_filter=self.parameter_manager.get_value('gaussian_sigma') > 0,
+                gaussian_sigma=self.parameter_manager.get_value('gaussian_sigma'),
+                cell_min_intensity_percentile=self.parameter_manager.get_value('cell_min_intensity') / 100,
+                cell_max_intensity_percentile=self.parameter_manager.get_value('cell_max_intensity') / 100,
+                enable_cell_gaussian_filter=self.parameter_manager.get_value('cell_gaussian_sigma') > 0,
+                cell_gaussian_sigma=self.parameter_manager.get_value('cell_gaussian_sigma'),
+                enable_registration=self.parameter_manager.get_value('registration_mode') != 'none',
+                registration_mode=self.parameter_manager.get_value('registration_mode')
+            )
+
+            self.preprocessor.update_parameters(params)
+
+            # Create and start worker
+            worker = self.preprocessor.preprocess_all(
+                bead_stack=self.data_manager.preprocessing_bead_stack,
+                reference_image=self.data_manager.preprocessing_reference_image,
+                cell_stack=self.data_manager.preprocessing_cell_stack,
+            )
+
+            # Connect signals
+            worker.yielded.connect(self._handle_progress)
+            worker.returned.connect(self._handle_results)
+            worker.finished.connect(lambda: self._set_controls_enabled(True))
+            worker.errored.connect(self._handle_error)
+
+            # Start the worker
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.processing_failed.emit(str(e))
+            self._set_controls_enabled(True)
+
 
     def _get_active_image_layer(self):
         """Get currently active image layer"""
@@ -720,52 +804,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         except Exception as e:
             QMessageBox.warning(self, "Error", str(e))
-
-    def run_preprocessing(self):
-        """Run preprocessing on all available data in a separate thread"""
-        if self.preview_enabled:
-            self.preview_check.setChecked(False)
-
-        try:
-            self._set_controls_enabled(False)
-            self._update_status("Starting preprocessing...", 0)
-
-            # Get parameters
-            params = PreprocessingParameters(
-                min_intensity_percentile=self.min_spinbox.value() / 100,
-                max_intensity_percentile=self.max_spinbox.value() / 100,
-                enable_gaussian_filter=self.gaussian_sigma_spin.value() > 0,
-                gaussian_sigma=self.gaussian_sigma_spin.value(),
-                cell_min_intensity_percentile=self.cell_min_spinbox.value() / 100,
-                cell_max_intensity_percentile=self.cell_max_spinbox.value() / 100,
-                enable_cell_gaussian_filter=self.cell_gaussian_sigma_spin.value() > 0,
-                cell_gaussian_sigma=self.cell_gaussian_sigma_spin.value(),
-                enable_registration=self.registration_mode_combo.currentText().lower() != 'no registration',
-                registration_mode=self.registration_mode_combo.currentText().lower()
-            )
-
-            self.preprocessor.update_parameters(params)
-
-            # Create and start worker
-            worker = self.preprocessor.preprocess_all(
-                bead_stack=self.data_manager.preprocessing_bead_stack,
-                reference_image=self.data_manager.preprocessing_reference_image,
-                cell_stack=self.data_manager.preprocessing_cell_stack,
-            )
-
-            # Connect signals
-            worker.yielded.connect(self._handle_progress)
-            worker.returned.connect(self._handle_results)
-            worker.finished.connect(lambda: self._set_controls_enabled(True))
-            worker.errored.connect(self._handle_error)
-
-            # Start the worker
-            worker.start()
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.processing_failed.emit(str(e))
-            self._set_controls_enabled(True)
 
     def _create_preview_selection_group(self):
         """Create the preview selection group."""
