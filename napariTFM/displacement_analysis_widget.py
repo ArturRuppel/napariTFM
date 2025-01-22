@@ -13,7 +13,7 @@ from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
 from .data_manager import DataManager
 from .displacement_analysis import DisplacementAnalyzer, TVL1Parameters
-from .parameter_manager import ParameterManager
+from .parameter_manager import ParameterManager, ParameterCategory
 from .visualization_manager import VisualizationManager
 
 
@@ -167,11 +167,34 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             widget.blockSignals(block)
 
     def _reset_parameters(self):
-        """Reset all parameters to their default values"""
-        self.parameter_manager.reset_to_defaults()
-        self._sync_widget_with_parameters()
-        self._update_status("Parameters have been reset to default values")
+        """Reset displacement-specific parameters to defaults."""
+        try:
+            # Reset only displacement parameters
+            self.parameter_manager.reset_category_to_defaults(ParameterCategory.DISPLACEMENT)
 
+            # Synchronize widget values with reset parameters
+            self._sync_widget_with_parameters()
+
+            # Update analyzer with new parameters
+            params = TVL1Parameters(
+                tau=self.parameter_manager.get_value('tau'),
+                lambda_=self.parameter_manager.get_value('lambda_'),
+                theta=self.parameter_manager.get_value('theta'),
+                nscales=self.parameter_manager.get_value('nscales'),
+                warps=self.parameter_manager.get_value('warps'),
+                epsilon=self.parameter_manager.get_value('epsilon'),
+                inner_iterations=self.parameter_manager.get_value('inner_iterations'),
+                outer_iterations=self.parameter_manager.get_value('outer_iterations'),
+                scale_step=self.parameter_manager.get_value('scale_step'),
+                median_filtering=self.parameter_manager.get_value('median_filtering'),
+                downscale_factor=self.parameter_manager.get_value('downscale_factor')
+            )
+            self.analyzer = DisplacementAnalyzer(params)
+
+            self._update_status("Displacement parameters reset to defaults")
+
+        except Exception as e:
+            self._handle_error(f"Error resetting parameters: {str(e)}")
     def _load_displacement(self):
         """Load displacement data from files."""
         try:
@@ -764,6 +787,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             spin.setSingleStep(step)
             spin.setValue(default)
             spin.setToolTip(tooltip)
+            if param_name == "epsilon":
+                spin.setDecimals(3)
 
             self.parameter_spins[param_name] = spin
             row.addWidget(spin)

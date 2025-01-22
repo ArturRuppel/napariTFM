@@ -153,6 +153,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 spin = QSpinBox()
             else:
                 spin = QDoubleSpinBox()
+                spin.setDecimals(2)
+            if name == "epsilon":
                 spin.setDecimals(3)
             spin.setRange(min_val, max_val)
             spin.setSingleStep(step)
