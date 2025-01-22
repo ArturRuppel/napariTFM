@@ -287,22 +287,22 @@ class MSMWidget(BaseAnalysisWidget):
             self._handle_error(f"Failed to load masks: {str(e)}")
             self.progress_bar.setValue(0)
 
-    def _handle_frame_change(self, event=None):
-        """Handle frame changes in the viewer."""
-        # Only update if preview is enabled
-        if self.parameter_spins['show_preview'].isChecked():
-            self._update_mask_preview()
+    # def _handle_frame_change(self, event=None):
+    #     """Handle frame changes in the viewer."""
+    #     # Only update if preview is enabled
+    #     if self.parameter_spins['show_preview'].isChecked():
+    #         self._update_mask_preview()
 
-    def _handle_preview_state(self, state):
-        """Handle changes in the preview checkbox state."""
-        from qtpy.QtCore import Qt
-
-        if state == Qt.Checked:
-            self._update_mask_preview()
-        else:
-            # Remove preview layer if it exists
-            if 'Mask Preview' in self.viewer.layers:
-                self.viewer.layers.remove('Mask Preview')
+    # def _handle_preview_state(self, state):
+    #     """Handle changes in the preview checkbox state."""
+    #     from qtpy.QtCore import Qt
+    #
+    #     if state == Qt.Checked:
+    #         self._update_mask_preview()
+    #     else:
+    #         # Remove preview layer if it exists
+    #         if 'Mask Preview' in self.viewer.layers:
+    #             self.viewer.layers.remove('Mask Preview')
 
     def _get_active_image_layer(self):
         """Get the currently active image layer."""

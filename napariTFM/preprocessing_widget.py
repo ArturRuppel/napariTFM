@@ -491,40 +491,40 @@ class PreprocessingWidget(BaseAnalysisWidget):
         load_group.setLayout(load_layout)
         return load_group
 
-    def _update_button_tooltips(self, active_layer):
-        """Update button tooltips to provide feedback about why they might be disabled"""
-        from napari.layers import Image
-
-        base_tooltips = {
-            'beads': "Load a time series of bead images from the active layer in napari",
-            'reference': "Load a single reference image for registration from the active layer",
-            'cells': "Load a time series of cell images from the active layer"
-        }
-
-        if active_layer is None:
-            disabled_msg = " (No image layer selected)"
-        elif not isinstance(active_layer, Image):
-            disabled_msg = " (Selected layer is not an image)"
-        else:
-            data_dims = active_layer.data.ndim
-            if data_dims not in [2, 3]:
-                disabled_msg = f" (Invalid dimensions: {data_dims}D)"
-            else:
-                disabled_msg = ""
-
-        # Update each button's tooltip
-        buttons = {
-            'beads': self.load_beads_btn,
-            'reference': self.load_reference_btn,
-            'cells': self.load_cells_btn
-        }
-
-        for data_type, button in buttons.items():
-            base_tooltip = base_tooltips[data_type]
-            if button.isEnabled():
-                button.setToolTip(base_tooltip)
-            else:
-                button.setToolTip(f"{base_tooltip}{disabled_msg}")
+    # def _update_button_tooltips(self, active_layer):
+    #     """Update button tooltips to provide feedback about why they might be disabled"""
+    #     from napari.layers import Image
+    #
+    #     base_tooltips = {
+    #         'beads': "Load a time series of bead images from the active layer in napari",
+    #         'reference': "Load a single reference image for registration from the active layer",
+    #         'cells': "Load a time series of cell images from the active layer"
+    #     }
+    #
+    #     if active_layer is None:
+    #         disabled_msg = " (No image layer selected)"
+    #     elif not isinstance(active_layer, Image):
+    #         disabled_msg = " (Selected layer is not an image)"
+    #     else:
+    #         data_dims = active_layer.data.ndim
+    #         if data_dims not in [2, 3]:
+    #             disabled_msg = f" (Invalid dimensions: {data_dims}D)"
+    #         else:
+    #             disabled_msg = ""
+    #
+    #     # Update each button's tooltip
+    #     buttons = {
+    #         'beads': self.load_beads_btn,
+    #         'reference': self.load_reference_btn,
+    #         'cells': self.load_cells_btn
+    #     }
+    #
+    #     for data_type, button in buttons.items():
+    #         base_tooltip = base_tooltips[data_type]
+    #         if button.isEnabled():
+    #             button.setToolTip(base_tooltip)
+    #         else:
+    #             button.setToolTip(f"{base_tooltip}{disabled_msg}")
 
     def _handle_results(self, results):
         """Handle the final results from the worker"""
@@ -726,30 +726,30 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         return sigma_layout
 
-    def _create_range_spinboxes(self, min_spinbox, max_spinbox, is_cell=False):
-        """Create a layout with min/max range spinboxes."""
-        spinbox_layout = QHBoxLayout()
-
-        # Create fixed-width labels
-        min_label = QLabel("Min ")
-        max_label = QLabel("Max ")
-        min_label.setFixedWidth(40)  # Set fixed width for consistent alignment
-
-        for spinbox in [min_spinbox, max_spinbox]:
-            spinbox.setRange(0, 100)
-            spinbox.setDecimals(1)
-            spinbox.setSingleStep(0.1 if is_cell else 1.0)
-            spinbox.setButtonSymbols(QDoubleSpinBox.PlusMinus)
-
-        max_spinbox.setValue(100)
-
-        spinbox_layout.addWidget(min_label)
-        spinbox_layout.addWidget(min_spinbox)
-        spinbox_layout.addStretch()
-        spinbox_layout.addWidget(max_spinbox)
-        spinbox_layout.addWidget(max_label)
-
-        return spinbox_layout
+    # def _create_range_spinboxes(self, min_spinbox, max_spinbox, is_cell=False):
+    #     """Create a layout with min/max range spinboxes."""
+    #     spinbox_layout = QHBoxLayout()
+    #
+    #     # Create fixed-width labels
+    #     min_label = QLabel("Min ")
+    #     max_label = QLabel("Max ")
+    #     min_label.setFixedWidth(40)  # Set fixed width for consistent alignment
+    #
+    #     for spinbox in [min_spinbox, max_spinbox]:
+    #         spinbox.setRange(0, 100)
+    #         spinbox.setDecimals(1)
+    #         spinbox.setSingleStep(0.1 if is_cell else 1.0)
+    #         spinbox.setButtonSymbols(QDoubleSpinBox.PlusMinus)
+    #
+    #     max_spinbox.setValue(100)
+    #
+    #     spinbox_layout.addWidget(min_label)
+    #     spinbox_layout.addWidget(min_spinbox)
+    #     spinbox_layout.addStretch()
+    #     spinbox_layout.addWidget(max_spinbox)
+    #     spinbox_layout.addWidget(max_label)
+    #
+    #     return spinbox_layout
 
     def _create_parameters_group(self):
         """Create a group containing all parameter controls."""
@@ -1002,36 +1002,36 @@ class PreprocessingWidget(BaseAnalysisWidget):
         message = update_dict['message']
         self._update_status(message, int(progress))
 
-    def _register_controls(self):
-        """Register all controls with the base widget"""
-        controls = [
-            self.intensity_slider,
-            self.min_spinbox,
-            self.max_spinbox,
-            self.gaussian_sigma_spin,
-            self.gaussian_sigma_slider,  # Add new slider
-            self.registration_mode_combo,
-            self.preview_check,
-            self.preprocess_btn,
-            self.reset_btn,
-            self.bead_radio,
-            self.reference_radio,
-            self.cell_radio,
-            self.progress_bar,
-            self.status_label,
-            self.bead_status,
-            self.reference_status,
-            self.cell_status,
-            self.cell_intensity_slider,
-            self.cell_min_spinbox,
-            self.cell_max_spinbox,
-            self.cell_gaussian_sigma_spin,
-            self.cell_gaussian_sigma_slider,  # Add new cell slider
-            self.save_btn,
-        ]
-
-        for control in controls:
-            self.register_control(control)
+    # def _register_controls(self):
+    #     """Register all controls with the base widget"""
+    #     controls = [
+    #         self.intensity_slider,
+    #         self.min_spinbox,
+    #         self.max_spinbox,
+    #         self.gaussian_sigma_spin,
+    #         self.gaussian_sigma_slider,  # Add new slider
+    #         self.registration_mode_combo,
+    #         self.preview_check,
+    #         self.preprocess_btn,
+    #         self.reset_btn,
+    #         self.bead_radio,
+    #         self.reference_radio,
+    #         self.cell_radio,
+    #         self.progress_bar,
+    #         self.status_label,
+    #         self.bead_status,
+    #         self.reference_status,
+    #         self.cell_status,
+    #         self.cell_intensity_slider,
+    #         self.cell_min_spinbox,
+    #         self.cell_max_spinbox,
+    #         self.cell_gaussian_sigma_spin,
+    #         self.cell_gaussian_sigma_slider,  # Add new cell slider
+    #         self.save_btn,
+    #     ]
+    #
+    #     for control in controls:
+    #         self.register_control(control)
 
     def _update_sigma_from_slider(self):
         """Update sigma spinbox from slider value"""

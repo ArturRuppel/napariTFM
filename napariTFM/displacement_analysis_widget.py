@@ -52,44 +52,44 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Initialize widget with current parameter values
         self._sync_widget_with_parameters()
 
-    def update_parameters(self):
-        """Update parameters in the parameter manager"""
-        try:
-            # Block signals temporarily
-            self.blockSignals(True)
-
-            # Update optical flow parameters
-            for param_name, spin in self.parameter_spins.items():
-                self.parameter_manager.set_value(param_name, spin.value())
-
-            # Update visualization parameters - Modified to use consistent parameter names
-            self.parameter_manager.set_value('disp_vector_stride',
-                                             self.visualization_params['vector_stride'].value())
-            self.parameter_manager.set_value('disp_arrow_scale',
-                                             self.visualization_params['arrow_scale'].value())
-            self.parameter_manager.set_value('d_max',
-                                             self.visualization_params['d_max'].value())
-
-            # Update analyzer with new parameters
-            params = TVL1Parameters(
-                tau=self.parameter_manager.get_value('tau'),
-                lambda_=self.parameter_manager.get_value('lambda_'),
-                theta=self.parameter_manager.get_value('theta'),
-                nscales=self.parameter_manager.get_value('nscales'),
-                warps=self.parameter_manager.get_value('warps'),
-                epsilon=self.parameter_manager.get_value('epsilon'),
-                inner_iterations=self.parameter_manager.get_value('inner_iterations'),
-                outer_iterations=self.parameter_manager.get_value('outer_iterations'),
-                scale_step=self.parameter_manager.get_value('scale_step'),
-                median_filtering=self.parameter_manager.get_value('median_filtering'),
-                downscale_factor=self.parameter_manager.get_value('downscale_factor')
-            )
-            self.analyzer = DisplacementAnalyzer(params)
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self.blockSignals(False)
+    # def update_parameters(self):
+    #     """Update parameters in the parameter manager"""
+    #     try:
+    #         # Block signals temporarily
+    #         self.blockSignals(True)
+    #
+    #         # Update optical flow parameters
+    #         for param_name, spin in self.parameter_spins.items():
+    #             self.parameter_manager.set_value(param_name, spin.value())
+    #
+    #         # Update visualization parameters - Modified to use consistent parameter names
+    #         self.parameter_manager.set_value('disp_vector_stride',
+    #                                          self.visualization_params['vector_stride'].value())
+    #         self.parameter_manager.set_value('disp_arrow_scale',
+    #                                          self.visualization_params['arrow_scale'].value())
+    #         self.parameter_manager.set_value('d_max',
+    #                                          self.visualization_params['d_max'].value())
+    #
+    #         # Update analyzer with new parameters
+    #         params = TVL1Parameters(
+    #             tau=self.parameter_manager.get_value('tau'),
+    #             lambda_=self.parameter_manager.get_value('lambda_'),
+    #             theta=self.parameter_manager.get_value('theta'),
+    #             nscales=self.parameter_manager.get_value('nscales'),
+    #             warps=self.parameter_manager.get_value('warps'),
+    #             epsilon=self.parameter_manager.get_value('epsilon'),
+    #             inner_iterations=self.parameter_manager.get_value('inner_iterations'),
+    #             outer_iterations=self.parameter_manager.get_value('outer_iterations'),
+    #             scale_step=self.parameter_manager.get_value('scale_step'),
+    #             median_filtering=self.parameter_manager.get_value('median_filtering'),
+    #             downscale_factor=self.parameter_manager.get_value('downscale_factor')
+    #         )
+    #         self.analyzer = DisplacementAnalyzer(params)
+    #
+    #     except Exception as e:
+    #         self._handle_error(str(e))
+    #     finally:
+    #         self.blockSignals(False)
 
     def _sync_widget_with_parameters(self):
         """Sync widget values with parameter manager values"""
@@ -207,12 +207,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Initialize with current parameter values
         self._sync_widget_with_parameters()
 
-    def _safe_set_value(self, widget, value):
-        """Safely set widget value with signal blocking."""
-        if value is not None:
-            widget.blockSignals(True)
-            widget.setValue(value)
-            widget.blockSignals(False)
     def _safe_set_value(self, widget, value):
         """Safely set widget value with signal blocking."""
         if value is not None:
@@ -1051,10 +1045,10 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to update calibration: {str(e)}")
 
-    def _on_displacement_completed(self, results):
-        """Handle completion of displacement analysis"""
-        super()._on_displacement_completed(results)
-        self.save_displacement_btn.setEnabled(True)
+    # def _on_displacement_completed(self, results):
+    #     """Handle completion of displacement analysis"""
+    #     super()._on_displacement_completed(results)
+    #     self.save_displacement_btn.setEnabled(True)
 
     def _validate_input_data(self) -> bool:
         """Validate required input data is available."""

@@ -372,18 +372,18 @@ class napariTFMWidget(QWidget):
                 logger.error(f"Error clearing data: {str(e)}")
                 QMessageBox.critical(self, "Error", f"Failed to clear data: {str(e)}")
 
-    def _on_calibration_changed(self):
-        """Handle changes to calibration values"""
-        # Notify all widgets that calibration has changed
-        for widget in [
-            self.preprocessing_widget,
-            self.displacement_widget,
-            self.force_widget,
-            self.msm_widget,
-            self.batch_widget
-        ]:
-            if hasattr(widget, '_update_calibration'):
-                widget._update_calibration()
+    # def _on_calibration_changed(self):
+    #     """Handle changes to calibration values"""
+    #     # Notify all widgets that calibration has changed
+    #     for widget in [
+    #         self.preprocessing_widget,
+    #         self.displacement_widget,
+    #         self.force_widget,
+    #         self.msm_widget,
+    #         self.batch_widget
+    #     ]:
+    #         if hasattr(widget, '_update_calibration'):
+    #             widget._update_calibration()
 
     def _on_preprocessing_completed(self, results):
         """Handle completion of preprocessing"""

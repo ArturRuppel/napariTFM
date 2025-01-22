@@ -202,72 +202,72 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         for widget in widgets:
             widget.blockSignals(block)
 
-    def _update_parameters(self):
-        """Update parameters in the parameter manager"""
-        try:
-            # Block signals temporarily
-            self.blockSignals(True)
-
-            # Update basic parameters
-            self.parameter_manager.set_value('pixel_size', self.parameter_spins['pixel_size'].value())
-            self.parameter_manager.set_value('frame_interval', self.parameter_spins['frame_interval'].value())
-
-            # Update threshold
-            threshold_spin, _ = self.parameter_spins['threshold']
-            self.parameter_manager.set_value('threshold', threshold_spin.value())
-
-            # Update numeric parameters
-            numeric_params = [
-                'dilation', 'smoothing_sigma', 'density_factor', 'sigma',
-                'max_stress', 'force_vector_stride', 'force_arrow_scale',
-                'f_max', 'lanczos_exp', 'poisson_ratio'
-            ]
-
-            for name in numeric_params:
-                if name in self.parameter_spins:
-                    self.parameter_manager.set_value(name, self.parameter_spins[name].value())
-
-            # Handle special cases
-            # Young's modulus (convert kPa to Pa)
-            self.parameter_manager.set_value('young_modulus',
-                                             self.parameter_spins['young_modulus'].value() * 1000)
-
-            # Gel height (None for infinite)
-            gel_height = self.parameter_spins['gel_height'].value()
-            self.parameter_manager.set_value('gel_height',
-                                             None if gel_height == 0 else gel_height)
-
-            # Regularization (convert from log10)
-            reg_value = 10 ** self.parameter_spins['regularization'].value()
-            if reg_value <= 0:
-                reg_value = 1e-4  # Minimum value
-            self.parameter_manager.set_value('regularization', reg_value)
-
-            # Update mesh algorithm
-            self.parameter_manager.set_value(
-                'mesh_algorithm',
-                self.parameter_combos['algorithm'].currentText().lower().replace('-', '_')
-            )
-
-            # Update checkboxes
-            for name in ['use_optimization', 'auto_gcv']:
-                if name in self.parameter_spins:
-                    self.parameter_manager.set_value(
-                        name,
-                        self.parameter_spins[name].isChecked()
-                    )
-
-            # Update visualization checkboxes
-            for viz_name, checkbox in self.visualization_checkboxes.items():
-                self.parameter_manager.set_value(
-                    f'save_{viz_name}',
-                    checkbox.isChecked()
-                )
-
-        except Exception as e:
-            print(f"Error updating parameters: {str(e)}")
-        finally:
-            self.blockSignals(False)
+    # def _update_parameters(self):
+    #     """Update parameters in the parameter manager"""
+    #     try:
+    #         # Block signals temporarily
+    #         self.blockSignals(True)
+    #
+    #         # Update basic parameters
+    #         self.parameter_manager.set_value('pixel_size', self.parameter_spins['pixel_size'].value())
+    #         self.parameter_manager.set_value('frame_interval', self.parameter_spins['frame_interval'].value())
+    #
+    #         # Update threshold
+    #         threshold_spin, _ = self.parameter_spins['threshold']
+    #         self.parameter_manager.set_value('threshold', threshold_spin.value())
+    #
+    #         # Update numeric parameters
+    #         numeric_params = [
+    #             'dilation', 'smoothing_sigma', 'density_factor', 'sigma',
+    #             'max_stress', 'force_vector_stride', 'force_arrow_scale',
+    #             'f_max', 'lanczos_exp', 'poisson_ratio'
+    #         ]
+    #
+    #         for name in numeric_params:
+    #             if name in self.parameter_spins:
+    #                 self.parameter_manager.set_value(name, self.parameter_spins[name].value())
+    #
+    #         # Handle special cases
+    #         # Young's modulus (convert kPa to Pa)
+    #         self.parameter_manager.set_value('young_modulus',
+    #                                          self.parameter_spins['young_modulus'].value() * 1000)
+    #
+    #         # Gel height (None for infinite)
+    #         gel_height = self.parameter_spins['gel_height'].value()
+    #         self.parameter_manager.set_value('gel_height',
+    #                                          None if gel_height == 0 else gel_height)
+    #
+    #         # Regularization (convert from log10)
+    #         reg_value = 10 ** self.parameter_spins['regularization'].value()
+    #         if reg_value <= 0:
+    #             reg_value = 1e-4  # Minimum value
+    #         self.parameter_manager.set_value('regularization', reg_value)
+    #
+    #         # Update mesh algorithm
+    #         self.parameter_manager.set_value(
+    #             'mesh_algorithm',
+    #             self.parameter_combos['algorithm'].currentText().lower().replace('-', '_')
+    #         )
+    #
+    #         # Update checkboxes
+    #         for name in ['use_optimization', 'auto_gcv']:
+    #             if name in self.parameter_spins:
+    #                 self.parameter_manager.set_value(
+    #                     name,
+    #                     self.parameter_spins[name].isChecked()
+    #                 )
+    #
+    #         # Update visualization checkboxes
+    #         for viz_name, checkbox in self.visualization_checkboxes.items():
+    #             self.parameter_manager.set_value(
+    #                 f'save_{viz_name}',
+    #                 checkbox.isChecked()
+    #             )
+    #
+    #     except Exception as e:
+    #         print(f"Error updating parameters: {str(e)}")
+    #     finally:
+    #         self.blockSignals(False)
 
     def _connect_parameters(self):
         """Connect widget controls to parameter manager."""
@@ -471,23 +471,23 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         checkbox.setChecked(checked)
         checkbox.blockSignals(False)
 
-    def _reset_widget(self):
-        """Reset widget state completely."""
-        # Block signals during reset
-        self.blockSignals(True)
-        try:
-            # Clear folder list
-            self.folder_list.clear()
-            self.folder_list_widget.clear()
-
-            # Sync with parameter manager
-            self._sync_widget_with_parameters()
-
-            # Update UI state
-            self._update_ui_state()
-
-        finally:
-            self.blockSignals(False)
+    # def _reset_widget(self):
+    #     """Reset widget state completely."""
+    #     # Block signals during reset
+    #     self.blockSignals(True)
+    #     try:
+    #         # Clear folder list
+    #         self.folder_list.clear()
+    #         self.folder_list_widget.clear()
+    #
+    #         # Sync with parameter manager
+    #         self._sync_widget_with_parameters()
+    #
+    #         # Update UI state
+    #         self._update_ui_state()
+    #
+    #     finally:
+    #         self.blockSignals(False)
 
     def _update_calibration(self):
         """Update widget based on calibration parameters."""
@@ -832,60 +832,60 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
-    def _connect_stress_parameters(self):
-        """Connect stress parameters to parameter manager."""
-        # Connect spinboxes
-        for name in ['threshold', 'dilation', 'smoothing_sigma', 'density_factor', 'max_stress']:
-            if name in self.parameter_spins:
-                spin = self.parameter_spins[name]
-                spin.valueChanged.connect(
-                    lambda value, name=name: self.parameter_manager.set_value(name, value)
-                )
-                self.parameter_manager.register_callback(
-                    name,
-                    lambda value, spin=spin: spin.setValue(value if value is not None else 0)
-                )
-                # Set initial value
-                try:
-                    value = self.parameter_manager.get_value(name)
-                    spin.setValue(value if value is not None else 0)
-                except KeyError:
-                    print(f"Warning: Parameter {name} not found in parameter manager")
-
-        # Connect mesh algorithm combo box
-        if 'mesh_algorithm' in self.parameter_combos:
-            combo = self.parameter_combos['mesh_algorithm']
-            combo.currentTextChanged.connect(
-                lambda text: self.parameter_manager.set_value('mesh_algorithm', text, category=ParameterCategory.STRESS)
-            )
-            self.parameter_manager.register_callback(
-                'mesh_algorithm',
-                lambda value, combo=combo: self._safe_set_combo_text(combo, value)
-            )
-            try:
-                value = self.parameter_manager.get_value('mesh_algorithm')
-                if value:
-                    combo.setCurrentText(value)
-            except KeyError:
-                print("Warning: Parameter mesh_algorithm not found in parameter manager")
-
-        # Connect optimization checkbox
-        if 'use_optimization' in self.parameter_checks:
-            checkbox = self.parameter_checks['use_optimization']
-            checkbox.stateChanged.connect(
-                lambda state: self.parameter_manager.set_value(
-                    'use_optimization', state == Qt.Checked
-                )
-            )
-            self.parameter_manager.register_callback(
-                'use_optimization',
-                lambda value, cb=checkbox: cb.setChecked(bool(value))
-            )
-            try:
-                value = self.parameter_manager.get_value('use_optimization')
-                checkbox.setChecked(bool(value))
-            except KeyError:
-                print("Warning: Parameter use_optimization not found in parameter manager")
+    # def _connect_stress_parameters(self):
+    #     """Connect stress parameters to parameter manager."""
+    #     # Connect spinboxes
+    #     for name in ['threshold', 'dilation', 'smoothing_sigma', 'density_factor', 'max_stress']:
+    #         if name in self.parameter_spins:
+    #             spin = self.parameter_spins[name]
+    #             spin.valueChanged.connect(
+    #                 lambda value, name=name: self.parameter_manager.set_value(name, value)
+    #             )
+    #             self.parameter_manager.register_callback(
+    #                 name,
+    #                 lambda value, spin=spin: spin.setValue(value if value is not None else 0)
+    #             )
+    #             # Set initial value
+    #             try:
+    #                 value = self.parameter_manager.get_value(name)
+    #                 spin.setValue(value if value is not None else 0)
+    #             except KeyError:
+    #                 print(f"Warning: Parameter {name} not found in parameter manager")
+    #
+    #     # Connect mesh algorithm combo box
+    #     if 'mesh_algorithm' in self.parameter_combos:
+    #         combo = self.parameter_combos['mesh_algorithm']
+    #         combo.currentTextChanged.connect(
+    #             lambda text: self.parameter_manager.set_value('mesh_algorithm', text, category=ParameterCategory.STRESS)
+    #         )
+    #         self.parameter_manager.register_callback(
+    #             'mesh_algorithm',
+    #             lambda value, combo=combo: self._safe_set_combo_text(combo, value)
+    #         )
+    #         try:
+    #             value = self.parameter_manager.get_value('mesh_algorithm')
+    #             if value:
+    #                 combo.setCurrentText(value)
+    #         except KeyError:
+    #             print("Warning: Parameter mesh_algorithm not found in parameter manager")
+    #
+    #     # Connect optimization checkbox
+    #     if 'use_optimization' in self.parameter_checks:
+    #         checkbox = self.parameter_checks['use_optimization']
+    #         checkbox.stateChanged.connect(
+    #             lambda state: self.parameter_manager.set_value(
+    #                 'use_optimization', state == Qt.Checked
+    #             )
+    #         )
+    #         self.parameter_manager.register_callback(
+    #             'use_optimization',
+    #             lambda value, cb=checkbox: cb.setChecked(bool(value))
+    #         )
+    #         try:
+    #             value = self.parameter_manager.get_value('use_optimization')
+    #             checkbox.setChecked(bool(value))
+    #         except KeyError:
+    #             print("Warning: Parameter use_optimization not found in parameter manager")
 
     def _get_parameter_dict(self) -> dict:
         """Get dictionary of current parameter values."""
@@ -1074,34 +1074,34 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self.load_params_btn.clicked.connect(self._load_parameters)
         self.reset_params_btn.clicked.connect(self._reset_parameters)
 
-    def _set_parameters(self, params: dict):
-        """Set parameter values in UI elements."""
-        # Update spinbox values
-        for name, value in params.items():
-            if name in self.parameter_spins:
-                self.parameter_spins[name].setValue(value)
-
-        # Update checkbox values
-        for name, value in params.items():
-            if name in self.parameter_checks:
-                self.parameter_checks[name].setChecked(value)
-
-        # Update combobox values
-        for name, value in params.items():
-            if name in self.parameter_combos:
-                index = self.parameter_combos[name].findText(
-                    value.capitalize(),
-                    Qt.MatchFixedString
-                )
-                if index >= 0:
-                    self.parameter_combos[name].setCurrentIndex(index)
-
-        # Update visualization checkboxes
-        for name, value in params.items():
-            if name.startswith('viz_'):
-                viz_name = name[4:]  # Remove 'viz_' prefix
-                if viz_name in self.visualization_checkboxes:
-                    self.visualization_checkboxes[viz_name].setChecked(value)
+    # def _set_parameters(self, params: dict):
+    #     """Set parameter values in UI elements."""
+    #     # Update spinbox values
+    #     for name, value in params.items():
+    #         if name in self.parameter_spins:
+    #             self.parameter_spins[name].setValue(value)
+    #
+    #     # Update checkbox values
+    #     for name, value in params.items():
+    #         if name in self.parameter_checks:
+    #             self.parameter_checks[name].setChecked(value)
+    #
+    #     # Update combobox values
+    #     for name, value in params.items():
+    #         if name in self.parameter_combos:
+    #             index = self.parameter_combos[name].findText(
+    #                 value.capitalize(),
+    #                 Qt.MatchFixedString
+    #             )
+    #             if index >= 0:
+    #                 self.parameter_combos[name].setCurrentIndex(index)
+    #
+    #     # Update visualization checkboxes
+    #     for name, value in params.items():
+    #         if name.startswith('viz_'):
+    #             viz_name = name[4:]  # Remove 'viz_' prefix
+    #             if viz_name in self.visualization_checkboxes:
+    #                 self.visualization_checkboxes[viz_name].setChecked(value)
 
     def _create_status_frame(self) -> QFrame:
         """Create status frame."""
