@@ -117,7 +117,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         reg_row = QHBoxLayout()
         reg_row.addWidget(QLabel("Registration Mode:"))
         reg_combo = QComboBox()
-        reg_combo.addItems(['None', 'Translation', 'Rigid'])
+        reg_combo.addItems(['Translation', 'Rigid', 'No registration'])
         reg_combo.setToolTip("Choose registration method")
         self.parameter_combos['registration_mode'] = reg_combo
         reg_row.addWidget(reg_combo)
@@ -314,35 +314,50 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
     def _connect_parameters(self):
         """Connect widget controls to parameter manager."""
-        # Existing connections for spinboxes
+        # Connect spinboxes
         for name, spin in self.parameter_spins.items():
-            spin.valueChanged.connect(
-                lambda value, name=name: self.parameter_manager.set_value(name, value if value != 0 else None)
-            )
-
             # Special handling for gel_height
             if name == 'gel_height':
+                # When spinbox changes, update parameter manager
+                spin.valueChanged.connect(
+                    lambda value, name=name: self.parameter_manager.set_value(
+                        name,
+                        None if value == 0 else value
+                    )
+                )
+
+                # When parameter changes, update spinbox
                 self.parameter_manager.register_callback(
                     name,
                     lambda value, spin=spin: spin.setValue(0 if value is None else value)
                 )
+
+                # Initialize spinbox value
                 try:
                     value = self.parameter_manager.get_value(name)
                     spin.setValue(0 if value is None else value)
                 except KeyError:
                     print(f"Warning: Parameter {name} not found in parameter manager")
+
             else:
                 # Normal handling for other parameters
+                spin.valueChanged.connect(
+                    lambda value, name=name: self.parameter_manager.set_value(name, value)
+                )
+
                 self.parameter_manager.register_callback(
                     name,
-                    lambda value, spin=spin: spin.setValue(value)
+                    lambda value, spin=spin: spin.setValue(value if value is not None else 0)
                 )
+
+                # Initialize spinbox value
                 try:
-                    spin.setValue(self.parameter_manager.get_value(name))
+                    value = self.parameter_manager.get_value(name)
+                    spin.setValue(value if value is not None else 0)
                 except KeyError:
                     print(f"Warning: Parameter {name} not found in parameter manager")
 
-        # Existing connections for comboboxes
+        # Connect comboboxes
         for name, combo in self.parameter_combos.items():
             combo.currentTextChanged.connect(
                 lambda text, name=name: self.parameter_manager.set_value(name, text.lower())
@@ -359,7 +374,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             except KeyError:
                 print(f"Warning: Parameter {name} not found in parameter manager")
 
-        # Existing connections for parameter checkboxes
+        # Connect parameter checkboxes
         for name, checkbox in self.parameter_checks.items():
             checkbox.stateChanged.connect(
                 lambda state, name=name: self.parameter_manager.set_value(
@@ -375,29 +390,24 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             except KeyError:
                 print(f"Warning: Parameter {name} not found in parameter manager")
 
-        # Fixed visualization checkbox connections
+        # Connect visualization checkboxes
         for viz_name, checkbox in self.visualization_checkboxes.items():
             param_name = f'save_{viz_name}'
-            # Connect checkbox state changes to parameter manager
             checkbox.stateChanged.connect(
                 lambda state, name=param_name: self.parameter_manager.set_value(
                     name, state == Qt.Checked
                 )
             )
-            # Connect parameter manager changes to checkbox
             self.parameter_manager.register_callback(
                 param_name,
                 lambda value, cb=checkbox: cb.setChecked(value)
             )
-            # Initialize checkbox state from parameter manager
             try:
                 checkbox.setChecked(self.parameter_manager.get_value(param_name))
             except KeyError:
                 print(f"Warning: Visualization parameter {param_name} not found in parameter manager")
-                # Initialize to False if not found
                 self.parameter_manager.set_value(param_name, False)
                 checkbox.setChecked(False)
-
     def _get_parameter_dict(self) -> dict:
         """Get dictionary of current parameter values."""
         params = {}
