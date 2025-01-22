@@ -22,7 +22,6 @@ class PreprocessingParameters:
             cell_max_intensity_percentile: float = 1.0,
             enable_cell_gaussian_filter: bool = False,
             cell_gaussian_sigma: float = 0.0,
-            enable_registration: bool = True,
             registration_mode: str = 'translation'
     ):
         self.min_intensity_percentile = min_intensity_percentile
@@ -33,7 +32,6 @@ class PreprocessingParameters:
         self.cell_max_intensity_percentile = cell_max_intensity_percentile
         self.enable_cell_gaussian_filter = enable_cell_gaussian_filter
         self.cell_gaussian_sigma = cell_gaussian_sigma
-        self.enable_registration = enable_registration
         self.registration_mode = registration_mode.lower()
 
     def validate(self):
@@ -82,55 +80,7 @@ class ImagePreprocessor:
         self.params = parameters or PreprocessingParameters()
         self.registration_result = None
 
-    def register_images(self, moving_image: np.ndarray, reference_image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Register a moving image to a reference image.
-        Returns the registered image and the transformation matrix.
-        """
-        # Convert images to 8-bit for registration
-        moving_norm = ((moving_image - moving_image.min()) * 255 /
-                       (moving_image.max() - moving_image.min())).astype(np.uint8)
-        ref_norm = ((reference_image - reference_image.min()) * 255 /
-                    (reference_image.max() - reference_image.min())).astype(np.uint8)
-
-        # Define registration method based on mode
-        if self.params.registration_mode == 'translation':
-            warp_mode = cv2.MOTION_TRANSLATION
-            warp_matrix = np.eye(2, 3, dtype=np.float32)
-        else:  # rigid
-            warp_mode = cv2.MOTION_EUCLIDEAN
-            warp_matrix = np.eye(2, 3, dtype=np.float32)
-
-        # Define termination criteria
-        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 1000, 1e-10)
-
-        # Run registration with error handling
-        try:
-            cc, warp_matrix = cv2.findTransformECC(
-                ref_norm,
-                moving_norm,
-                warp_matrix,
-                warp_mode,
-                criteria,
-                inputMask=None,
-                gaussFiltSize=1
-            )
-        except cv2.error as e:
-            logger.warning(f"Registration failed: {str(e)}. Using identity transform.")
-            warp_matrix = np.eye(2, 3, dtype=np.float32)
-
-        # Apply transformation to original image with inverse map flag
-        registered = cv2.warpAffine(
-            moving_image,
-            warp_matrix,
-            (moving_image.shape[1], moving_image.shape[0]),
-            flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
-        )
-
-        return registered, warp_matrix
-
     def preprocess_frame(self, image: np.ndarray, is_cell: bool = False,
-                         apply_registration: bool = True,
                          reference_image: Optional[np.ndarray] = None) -> Tuple[np.ndarray, dict]:
         """
         Preprocess a single image frame.
@@ -177,6 +127,53 @@ class ImagePreprocessor:
 
         return processed, info
 
+    def register_images(self, moving_image: np.ndarray, reference_image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Register a moving image to a reference image.
+        Returns the registered image and the transformation matrix.
+        """
+        # Return early if registration is disabled
+        if self.params.registration_mode == 'no registration':
+            return moving_image, np.eye(2, 3, dtype=np.float32)
+
+        # Convert images to 8-bit for registration
+        moving_norm = ((moving_image - moving_image.min()) * 255 /
+                       (moving_image.max() - moving_image.min())).astype(np.uint8)
+        ref_norm = ((reference_image - reference_image.min()) * 255 /
+                    (reference_image.max() - reference_image.min())).astype(np.uint8)
+
+        # Define registration method based on mode
+        warp_mode = cv2.MOTION_TRANSLATION if self.params.registration_mode == 'translation' else cv2.MOTION_EUCLIDEAN
+        warp_matrix = np.eye(2, 3, dtype=np.float32)
+
+        # Define termination criteria
+        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 1000, 1e-10)
+
+        # Run registration with error handling
+        try:
+            cc, warp_matrix = cv2.findTransformECC(
+                ref_norm,
+                moving_norm,
+                warp_matrix,
+                warp_mode,
+                criteria,
+                inputMask=None,
+                gaussFiltSize=1
+            )
+        except cv2.error as e:
+            logger.warning(f"Registration failed: {str(e)}. Using identity transform.")
+            warp_matrix = np.eye(2, 3, dtype=np.float32)
+
+        # Apply transformation to original image with inverse map flag
+        registered = cv2.warpAffine(
+            moving_image,
+            warp_matrix,
+            (moving_image.shape[1], moving_image.shape[0]),
+            flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
+        )
+
+        return registered, warp_matrix
+
     @thread_worker
     def preprocess_all(
             self,
@@ -220,21 +217,17 @@ class ImagePreprocessor:
                 yield {'progress': current_step / total_steps * 100,
                        'message': f"Processing bead frame {i + 1}/{bead_stack.shape[0]}..."}
 
-                # Get preprocessed frame without registration first
-                frame, frame_info = self.preprocess_frame(
-                    bead_stack[i],
-                    apply_registration=False
-                )
+                # Get preprocessed frame
+                frame, frame_info = self.preprocess_frame(bead_stack[i])
 
                 # Perform registration if enabled and reference is available
-                if self.params.enable_registration and processed_ref is not None:
+                if self.params.registration_mode is not None and processed_ref is not None:
                     registered_frame, transform_matrix = self.register_images(frame, processed_ref)
                     self.transform_matrices.append(transform_matrix)
                     processed_stack[i] = registered_frame
                 else:
                     processed_stack[i] = frame
-                    if self.params.enable_registration:
-                        self.transform_matrices.append(np.eye(2, 3, dtype=np.float32))
+                    self.transform_matrices.append(np.eye(2, 3, dtype=np.float32))
 
                 info_list.append(frame_info)
                 current_step += 1
@@ -254,12 +247,11 @@ class ImagePreprocessor:
                 # Preprocess cell frame
                 processed_frame, frame_info = self.preprocess_frame(
                     cell_stack[i],
-                    is_cell=True,
-                    apply_registration=False
+                    is_cell=True
                 )
 
-                # Apply registration transform if available
-                if self.params.enable_registration and len(self.transform_matrices) > i:
+                # Apply registration transform if available and enabled
+                if self.params.registration_mode is not None and len(self.transform_matrices) > i:
                     transform_matrix = self.transform_matrices[i]
                     processed_frame = cv2.warpAffine(
                         processed_frame,
@@ -278,7 +270,6 @@ class ImagePreprocessor:
         yield {'progress': 100, 'message': "Preprocessing complete"}
 
         return results
-
 
 
     def update_parameters(self, parameters: PreprocessingParameters):

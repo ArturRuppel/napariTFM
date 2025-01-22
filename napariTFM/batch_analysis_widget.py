@@ -13,6 +13,7 @@ from qtpy.QtWidgets import (
 from .base_widget import BaseAnalysisWidget
 from .parameter_manager import ParameterManager, ParameterCategory
 
+
 class BatchAnalysisWidget(BaseAnalysisWidget):
     """Widget for running batch analysis on multiple folders."""
 
@@ -34,8 +35,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self._connect_parameters()
         self._update_ui_state()
 
-
-
     def _create_general_params_group(self) -> QGroupBox:
         """Create general parameters group."""
         group = QGroupBox("General Parameters")
@@ -48,7 +47,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         pixel_spin = QDoubleSpinBox()
         pixel_spin.setRange(0.01, 10.0)
         pixel_spin.setSingleStep(0.01)
-        pixel_spin.setDecimals(3)
+        pixel_spin.setDecimals(2)
         pixel_spin.setToolTip("Physical size of each pixel in micrometers")
         self.parameter_spins['pixel_size'] = pixel_spin
         pixel_row.addWidget(pixel_spin)
@@ -60,7 +59,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         frame_spin = QDoubleSpinBox()
         frame_spin.setRange(0.001, 1000.0)
         frame_spin.setSingleStep(0.1)
-        frame_spin.setDecimals(3)
+        frame_spin.setDecimals(1)
         frame_spin.setToolTip("Time between consecutive frames in minutes")
         self.parameter_spins['frame_interval'] = frame_spin
         frame_row.addWidget(frame_spin)
@@ -314,7 +313,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
     def _connect_parameters(self):
         """Connect widget controls to parameter manager."""
-        # Connect spinboxes
+        # Keep existing spinbox connections
         for name, spin in self.parameter_spins.items():
             # Special handling for gel_height
             if name == 'gel_height':
@@ -357,22 +356,46 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 except KeyError:
                     print(f"Warning: Parameter {name} not found in parameter manager")
 
-        # Connect comboboxes
+        # Connect comboboxes with special handling for registration mode
         for name, combo in self.parameter_combos.items():
-            combo.currentTextChanged.connect(
-                lambda text, name=name: self.parameter_manager.set_value(name, text.lower())
-            )
-            self.parameter_manager.register_callback(
-                name,
-                lambda value, combo=combo: combo.setCurrentText(value.capitalize())
-            )
-            try:
-                current_value = self.parameter_manager.get_value(name)
-                index = combo.findText(current_value.capitalize(), Qt.MatchFixedString)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-            except KeyError:
-                print(f"Warning: Parameter {name} not found in parameter manager")
+            if name == 'registration_mode':
+                # When combo changes, convert "No registration" to "none"
+                combo.currentTextChanged.connect(
+                    lambda text, name=name: self.parameter_manager.set_value(
+                        name, text.lower()
+                    )
+                )
+                def update_registration_mode(value, combo=combo):
+                    display_value = value.capitalize()
+                    combo.setCurrentText(display_value)
+
+                self.parameter_manager.register_callback(name, update_registration_mode)
+
+                # Initialize combo value
+                try:
+                    current_value = self.parameter_manager.get_value(name)
+                    display_value = current_value.capitalize()
+                    index = combo.findText(display_value, Qt.MatchFixedString)
+                    if index >= 0:
+                        combo.setCurrentIndex(index)
+                except KeyError:
+                    print(f"Warning: Parameter {name} not found in parameter manager")
+            else:
+                # Normal handling for other combos
+                combo.currentTextChanged.connect(
+                    lambda text, name=name: self.parameter_manager.set_value(name, text.lower())
+                )
+                self.parameter_manager.register_callback(
+                    name,
+                    lambda value, combo=combo: combo.setCurrentText(value.capitalize())
+                )
+                try:
+                    current_value = self.parameter_manager.get_value(name)
+                    index = combo.findText(current_value.capitalize(), Qt.MatchFixedString)
+                    if index >= 0:
+                        combo.setCurrentIndex(index)
+                except KeyError:
+                    print(f"Warning: Parameter {name} not found in parameter manager")
 
         # Connect parameter checkboxes
         for name, checkbox in self.parameter_checks.items():
@@ -408,6 +431,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 print(f"Warning: Visualization parameter {param_name} not found in parameter manager")
                 self.parameter_manager.set_value(param_name, False)
                 checkbox.setChecked(False)
+
     def _get_parameter_dict(self) -> dict:
         """Get dictionary of current parameter values."""
         params = {}

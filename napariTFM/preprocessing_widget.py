@@ -118,10 +118,15 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
             # Sync registration mode
             reg_mode = self.parameter_manager.get_value('registration_mode')
-            if isinstance(reg_mode, str):  # Ensure we have a string value
-                display_mode = reg_mode.capitalize()
-                if display_mode in ['Translation', 'Rigid', 'None']:
-                    self.registration_mode_combo.setCurrentText(display_mode)
+            if isinstance(reg_mode, str):
+                # Find the combo box item that matches when lowercased
+                index = -1
+                for i in range(self.registration_mode_combo.count()):
+                    if self.registration_mode_combo.itemText(i).lower() == reg_mode.lower():
+                        index = i
+                        break
+                if index >= 0:
+                    self.registration_mode_combo.setCurrentIndex(index)
 
         except Exception as e:
             print(f"Error syncing parameters: {str(e)}")
@@ -164,8 +169,11 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.parameter_manager.set_value('cell_gaussian_sigma', self.cell_gaussian_sigma_spin.value())
 
             # Update registration mode
-            self.parameter_manager.set_value('registration_mode',
-                                             self.registration_mode_combo.currentText().lower())
+            reg_mode = self.registration_mode_combo.currentText()
+            self.parameter_manager.set_value(
+                'registration_mode',
+                reg_mode.lower()
+            )
 
             # Update preprocessor with new parameters
             params = PreprocessingParameters(
@@ -177,7 +185,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 cell_max_intensity_percentile=self.parameter_manager.get_value('cell_max_intensity') / 100,
                 enable_cell_gaussian_filter=self.parameter_manager.get_value('cell_gaussian_sigma') > 0,
                 cell_gaussian_sigma=self.parameter_manager.get_value('cell_gaussian_sigma'),
-                enable_registration=self.parameter_manager.get_value('registration_mode') != 'none',
                 registration_mode=self.parameter_manager.get_value('registration_mode')
             )
 
@@ -215,7 +222,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 cell_max_intensity_percentile=self.parameter_manager.get_value('cell_max_intensity') / 100,
                 enable_cell_gaussian_filter=self.parameter_manager.get_value('cell_gaussian_sigma') > 0,
                 cell_gaussian_sigma=self.parameter_manager.get_value('cell_gaussian_sigma'),
-                enable_registration=self.parameter_manager.get_value('registration_mode') != 'none',
                 registration_mode=self.parameter_manager.get_value('registration_mode')
             )
 
@@ -241,7 +247,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
             self.processing_failed.emit(str(e))
             self._set_controls_enabled(True)
-
 
     def _get_active_image_layer(self):
         """Get currently active image layer"""
@@ -472,130 +477,115 @@ class PreprocessingWidget(BaseAnalysisWidget):
         ])
         self.save_btn.setEnabled(has_preprocessed_data)
 
-    def _create_intensity_range_group(self):
-        """Create the bead/reference parameters group with intensity range and filter controls."""
-        intensity_group = QGroupBox("Bead/Reference Parameters")
-        intensity_layout = QVBoxLayout()
+    def _create_intensity_group(self, title, slider, min_spinbox, max_spinbox, sigma_spinbox, tooltip_prefix=""):
+        """Create a parameter group with intensity range and filter controls.
 
-        self.intensity_slider = QRangeSlider(Qt.Horizontal)
-        self.intensity_slider.setToolTip("Adjust intensity range for contrast enhancement")
-        self.intensity_slider.setRange(0, 1000)  # Range 0-1000 for 0.1% steps
-        self.intensity_slider.setValue((0, 1000))
-        intensity_layout.addWidget(self.intensity_slider)
+        Args:
+            title: Group box title
+            slider: Reference to store the range slider
+            min_spinbox: Reference to store the minimum spinbox
+            max_spinbox: Reference to store the maximum spinbox
+            sigma_spinbox: Reference to store the gaussian sigma spinbox
+            tooltip_prefix: Optional prefix for tooltip text
+        """
+        group = QGroupBox(title)
+        layout = QVBoxLayout()
 
-        # Create spinboxes first
-        self.min_spinbox = QDoubleSpinBox()
-        self.min_spinbox.setToolTip("Set minimum intensity percentile (0-100%)")
-        self.max_spinbox = QDoubleSpinBox()
-        self.max_spinbox.setToolTip("Set maximum intensity percentile (0-100%)")
+        # Create and store the range slider
+        setattr(self, slider, QRangeSlider(Qt.Horizontal))
+        slider_widget = getattr(self, slider)
+        slider_widget.setToolTip(f"Adjust intensity range for {tooltip_prefix}contrast enhancement")
+        slider_widget.setRange(0, 1000)
+        slider_widget.setValue((0, 1000))
+        layout.addWidget(slider_widget)
 
-        # Configure spinboxes with finer step size
-        for spinbox in [self.min_spinbox, self.max_spinbox]:
-            spinbox.setRange(0, 100)
-            spinbox.setDecimals(1)  # Show one decimal place
-            spinbox.setSingleStep(0.1)  # 0.1% steps
+        # Create and store the spinboxes
+        setattr(self, min_spinbox, QDoubleSpinBox())
+        setattr(self, max_spinbox, QDoubleSpinBox())
+        min_spin = getattr(self, min_spinbox)
+        max_spin = getattr(self, max_spinbox)
 
-        self.max_spinbox.setValue(100)
+        for spin in [min_spin, max_spin]:
+            spin.setRange(0, 100)
+            spin.setDecimals(1)
+            spin.setSingleStep(0.1)
 
-        # Add spinboxes layout
+        min_spin.setToolTip(f"Set minimum intensity percentile for {tooltip_prefix}(0-100%)")
+        max_spin.setToolTip(f"Set maximum intensity percentile for {tooltip_prefix}(0-100%)")
+        max_spin.setValue(100)
+
+        # Create spinbox layout
         spinbox_layout = QHBoxLayout()
         min_label = QLabel("Min ")
         min_label.setFixedWidth(40)
         spinbox_layout.addWidget(min_label)
-        spinbox_layout.addWidget(self.min_spinbox)
+        spinbox_layout.addWidget(min_spin)
         spinbox_layout.addStretch()
-        spinbox_layout.addWidget(self.max_spinbox)
+        spinbox_layout.addWidget(max_spin)
         spinbox_layout.addWidget(QLabel("Max "))
-        intensity_layout.addLayout(spinbox_layout)
+        layout.addLayout(spinbox_layout)
 
-        # Add Gaussian filter controls
-        self.gaussian_sigma_spin = QDoubleSpinBox()
-        self.gaussian_sigma_spin.setToolTip("Set Gaussian blur sigma (0 = disabled)")
-        sigma_layout = self._create_sigma_control(self.gaussian_sigma_spin)
-        intensity_layout.addLayout(sigma_layout)
+        # Create and add gaussian controls
+        setattr(self, sigma_spinbox, QDoubleSpinBox())
+        sigma_spin = getattr(self, sigma_spinbox)
+        sigma_spin.setObjectName(sigma_spinbox)  # Set object name for slider reference
+        sigma_spin.setToolTip(f"Set Gaussian blur sigma for {tooltip_prefix}(0 = disabled)")
+        sigma_layout = self._create_sigma_control(sigma_spin)
+        layout.addLayout(sigma_layout)
 
-        intensity_group.setLayout(intensity_layout)
-        return intensity_group
+        group.setLayout(layout)
+        return group
+
+    def _create_intensity_range_group(self):
+        """Create the bead/reference parameters group."""
+        return self._create_intensity_group(
+            title="Bead/Reference Parameters",
+            slider="intensity_slider",
+            min_spinbox="min_spinbox",
+            max_spinbox="max_spinbox",
+            sigma_spinbox="gaussian_sigma_spin"
+        )
 
     def _create_cell_params_group(self):
         """Create the cell stack parameters group."""
-        cell_params_group = QGroupBox("Cell Stack Parameters")
-        cell_params_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        cell_params_layout = QVBoxLayout()
-
-        # Cell contrast enhancement
-        cell_intensity_layout = QVBoxLayout()
-
-        self.cell_intensity_slider = QRangeSlider(Qt.Horizontal)
-        self.cell_intensity_slider.setToolTip("Adjust intensity range for cell image contrast enhancement")
-        self.cell_intensity_slider.setRange(0, 1000)
-        self.cell_intensity_slider.setValue((0, 1000))
-        cell_intensity_layout.addWidget(self.cell_intensity_slider)
-
-        # Create cell spinboxes
-        self.cell_min_spinbox = QDoubleSpinBox()
-        self.cell_min_spinbox.setToolTip("Set minimum intensity percentile for cell images (0-100%)")
-        self.cell_max_spinbox = QDoubleSpinBox()
-        self.cell_max_spinbox.setToolTip("Set maximum intensity percentile for cell images (0-100%)")
-
-        for spinbox in [self.cell_min_spinbox, self.cell_max_spinbox]:
-            spinbox.setRange(0, 100)
-            spinbox.setDecimals(1)  # Show one decimal place
-            spinbox.setSingleStep(0.1)  # 0.1% steps
-
-        spinbox_layout = QHBoxLayout()
-        min_label = QLabel("Min ")
-        min_label.setFixedWidth(40)
-        spinbox_layout.addWidget(min_label)
-        spinbox_layout.addWidget(self.cell_min_spinbox)
-        spinbox_layout.addStretch()
-        spinbox_layout.addWidget(self.cell_max_spinbox)
-        spinbox_layout.addWidget(QLabel("Max "))
-        cell_intensity_layout.addLayout(spinbox_layout)
-
-        # Cell gaussian blur
-        self.cell_gaussian_sigma_spin = QDoubleSpinBox()
-        self.cell_gaussian_sigma_spin.setToolTip("Set Gaussian blur sigma for cell images (0 = disabled)")
-        sigma_layout = self._create_sigma_control(self.cell_gaussian_sigma_spin)
-        cell_intensity_layout.addLayout(sigma_layout)
-        cell_params_layout.addLayout(cell_intensity_layout)
-
-        cell_params_group.setLayout(cell_params_layout)
-        return cell_params_group
+        group = self._create_intensity_group(
+            title="Cell Stack Parameters",
+            slider="cell_intensity_slider",
+            min_spinbox="cell_min_spinbox",
+            max_spinbox="cell_max_spinbox",
+            sigma_spinbox="cell_gaussian_sigma_spin",
+            tooltip_prefix="cell images "
+        )
+        group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        return group
 
     def _create_sigma_control(self, sigma_spinbox):
         """Create a layout with sigma control for Gaussian filter."""
         sigma_layout = QHBoxLayout()
 
-        # Create fixed-width label
         blur_label = QLabel("Blur")
         blur_label.setFixedWidth(40)
         sigma_layout.addWidget(blur_label)
 
-        # Configure spinbox
         sigma_spinbox.setRange(0.0, 10.0)
         sigma_spinbox.setValue(0.0)
         sigma_spinbox.setSingleStep(0.1)
-        sigma_spinbox.setDecimals(2)
+        sigma_spinbox.setDecimals(1)
         sigma_spinbox.setButtonSymbols(QDoubleSpinBox.PlusMinus)
         sigma_spinbox.setFixedWidth(105)
 
-        # Create slider for Gaussian sigma
         slider = QSlider(Qt.Horizontal)
         slider.setRange(0, 100)
         slider.setValue(0)
         slider.setTickPosition(QSlider.TicksBelow)
         slider.setTickInterval(10)
 
-        # Add both controls
         sigma_layout.addWidget(sigma_spinbox)
         sigma_layout.addWidget(slider, stretch=1)
 
-        # Store slider reference
-        if sigma_spinbox == self.gaussian_sigma_spin:
-            self.gaussian_sigma_slider = slider
-        else:
-            self.cell_gaussian_sigma_slider = slider
+        # Determine slider name based on spinbox name
+        slider_name = sigma_spinbox.objectName().replace('spin', 'slider')
+        setattr(self, slider_name, slider)
 
         return sigma_layout
 

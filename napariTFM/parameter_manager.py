@@ -49,7 +49,7 @@ class ParameterManager(QObject):
             'cell_min_intensity': 0.0,
             'cell_max_intensity': 100.0,
             'cell_gaussian_sigma': 0.0,
-            'registration_mode': 'Translation'
+            'registration_mode': 'translation'
         }
         for name, value in preproc_params.items():
             self._add_parameter(name, value, ParameterCategory.PREPROCESSING)
