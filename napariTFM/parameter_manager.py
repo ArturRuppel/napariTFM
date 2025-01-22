@@ -191,5 +191,19 @@ class ParameterManager(QObject):
 
     def reset_to_defaults(self):
         """Reset all parameters to their default values."""
+        # Store existing callbacks
+        callbacks = {name: param.callbacks for name, param in self._parameters.items()}
+
+        # Clear and reinitialize parameters
         self._parameters.clear()
         self._initialize_default_parameters()
+
+        # Restore callbacks
+        for name, saved_callbacks in callbacks.items():
+            if name in self._parameters:
+                self._parameters[name].callbacks = saved_callbacks
+                # Notify callbacks of new default value
+                for callback in saved_callbacks:
+                    callback(self._parameters[name].value)
+                # Emit signal for the parameter change
+                self.parameter_changed.emit(name, self._parameters[name].value)

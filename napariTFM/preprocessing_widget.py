@@ -92,19 +92,31 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         try:
             # Sync intensity ranges
-            self.min_spinbox.setValue(self.parameter_manager.get_value('min_intensity'))
-            self.max_spinbox.setValue(self.parameter_manager.get_value('max_intensity'))
+            min_intensity = self.parameter_manager.get_value('min_intensity')
+            max_intensity = self.parameter_manager.get_value('max_intensity')
+
+            # Update spinboxes
+            self.min_spinbox.setValue(min_intensity)
+            self.max_spinbox.setValue(max_intensity)
+
+            # Update slider (values need to be converted to slider range)
             self.intensity_slider.setValue((
-                int(self.parameter_manager.get_value('min_intensity') * 10),
-                int(self.parameter_manager.get_value('max_intensity') * 10)
+                int(min_intensity * 10),
+                int(max_intensity * 10)
             ))
 
             # Sync cell intensity ranges
-            self.cell_min_spinbox.setValue(self.parameter_manager.get_value('cell_min_intensity'))
-            self.cell_max_spinbox.setValue(self.parameter_manager.get_value('cell_max_intensity'))
+            cell_min = self.parameter_manager.get_value('cell_min_intensity')
+            cell_max = self.parameter_manager.get_value('cell_max_intensity')
+
+            # Update cell spinboxes
+            self.cell_min_spinbox.setValue(cell_min)
+            self.cell_max_spinbox.setValue(cell_max)
+
+            # Update cell slider
             self.cell_intensity_slider.setValue((
-                int(self.parameter_manager.get_value('cell_min_intensity') * 10),
-                int(self.parameter_manager.get_value('cell_max_intensity') * 10)
+                int(cell_min * 10),
+                int(cell_max * 10)
             ))
 
             # Sync Gaussian parameters
@@ -128,6 +140,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 if index >= 0:
                     self.registration_mode_combo.setCurrentIndex(index)
 
+            # Update preview if enabled
+            if self.preview_enabled:
+                self.update_preview_frame()
+
         except Exception as e:
             print(f"Error syncing parameters: {str(e)}")
 
@@ -148,10 +164,44 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.gaussian_sigma_slider,
             self.cell_gaussian_sigma_spin,
             self.cell_gaussian_sigma_slider,
-            self.registration_mode_combo
+            self.registration_mode_combo,
+            self.preview_check
         ]
         for widget in widgets:
             widget.blockSignals(block)
+
+    def reset_parameters(self):
+        """Reset all parameters to defaults"""
+        try:
+            # Reset parameters in the parameter manager
+            self.parameter_manager.reset_to_defaults()
+
+            # Synchronize widget values with reset parameters
+            self._sync_widget_with_parameters()
+
+            # Update preprocessor with new parameters
+            params = PreprocessingParameters(
+                min_intensity_percentile=self.parameter_manager.get_value('min_intensity') / 100,
+                max_intensity_percentile=self.parameter_manager.get_value('max_intensity') / 100,
+                enable_gaussian_filter=self.parameter_manager.get_value('gaussian_sigma') > 0,
+                gaussian_sigma=self.parameter_manager.get_value('gaussian_sigma'),
+                cell_min_intensity_percentile=self.parameter_manager.get_value('cell_min_intensity') / 100,
+                cell_max_intensity_percentile=self.parameter_manager.get_value('cell_max_intensity') / 100,
+                enable_cell_gaussian_filter=self.parameter_manager.get_value('cell_gaussian_sigma') > 0,
+                cell_gaussian_sigma=self.parameter_manager.get_value('cell_gaussian_sigma'),
+                registration_mode=self.parameter_manager.get_value('registration_mode')
+            )
+
+            self.preprocessor.update_parameters(params)
+
+            # Update preview if enabled
+            if self.preview_enabled:
+                self.update_preview_frame()
+
+            self._update_status("Parameters reset to defaults")
+
+        except Exception as e:
+            self._handle_error(f"Error resetting parameters: {str(e)}")
 
     def update_parameters(self):
         """Update parameters in the parameter manager"""
@@ -196,12 +246,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(str(e))
-
-    def reset_parameters(self):
-        """Reset all parameters to defaults"""
-        self.parameter_manager.reset_to_defaults()
-        self._sync_widget_with_parameters()
-        self._update_status("Parameters reset to defaults")
 
     def run_preprocessing(self):
         """Run preprocessing on all available data in a separate thread"""
@@ -672,7 +716,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         right_layout.addWidget(self._create_parameters_group())  # New grouped parameters
         right_layout.addWidget(self._create_preview_frame())
 
-        # Create action buttons frame (now without reset button)
+        # Create action buttons frame
         action_frame = QFrame()
         action_layout = QHBoxLayout()
         self.preprocess_btn = QPushButton("Run Preprocessing")
