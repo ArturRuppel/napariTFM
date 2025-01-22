@@ -942,13 +942,13 @@ class MSMWidget(BaseAnalysisWidget):
 
                 elif param_name == "threshold":
                     # Create both spinbox and slider for threshold
-                    spin = QSpinBox()
+                    spin = QDoubleSpinBox()
                     spin.setRange(min_val, max_val)
+                    spin.setDecimals(1)
                     spin.setSingleStep(step)
                     spin.setValue(default)
                     spin.setToolTip(tooltip)
                     spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                    spin.setSuffix("%")
 
                     slider = QSlider(Qt.Horizontal)
                     slider.setRange(min_val, max_val)
@@ -990,8 +990,14 @@ class MSMWidget(BaseAnalysisWidget):
                     if isinstance(step, int):
                         spin = QSpinBox()
                     else:
+                        print(param_name)
                         spin = QDoubleSpinBox()
-                        spin.setDecimals(3 if param_name == "density_factor" else 2)
+                        if param_name == "smoothing_sigma":
+                            spin.setDecimals(1)
+                        elif param_name == "density_factor":
+                            spin.setDecimals(3)
+                        else:
+                            spin.setDecimals(2)
                     spin.setRange(min_val, max_val)
                     spin.setSingleStep(step)
                     spin.setValue(default)

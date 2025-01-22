@@ -264,82 +264,159 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
+
     def _create_stress_params_group(self) -> QGroupBox:
-        """Create stress analysis parameters group."""
+        """Create stress parameters group with proper parameter manager integration."""
         group = QGroupBox("Stress Parameters")
         layout = QVBoxLayout()
         layout.setSpacing(4)
 
-        # Mask parameters first
+        # Mask parameters
         mask_params = [
-            ("threshold", "Threshold Percentile:", 0, 100, 0.1, 0),
-            ("dilation", "Mask Dilation (px):", 0, 50, 1, 10),
-            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 10)
+            ("threshold", "Threshold Percentile:", 0, 100, 0.1, 0,
+             "Percentile threshold for cell mask generation"),
+            ("dilation", "Mask Dilation (px):", 0, 50, 1, 10,
+             "Number of pixels to dilate the mask"),
+            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 10,
+             "Sigma for Gaussian smoothing of mask boundary")
         ]
 
-        for name, label, min_val, max_val, step, default in mask_params:
+        for name, label, min_val, max_val, step, default, tooltip in mask_params:
             row = QHBoxLayout()
-            row.addWidget(QLabel(label))
+            label_widget = QLabel(label)
+            label_widget.setToolTip(tooltip)
+            row.addWidget(label_widget)
+
             spin = QDoubleSpinBox() if isinstance(step, float) else QSpinBox()
             spin.setRange(min_val, max_val)
             spin.setSingleStep(step)
             spin.setValue(default)
             if isinstance(spin, QDoubleSpinBox):
-                spin.setDecimals(2)
-            if name == "threshold":
-                spin.setSuffix("%")
+                spin.setDecimals(1)
+
+
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
 
-        # Density factor
-        density_row = QHBoxLayout()
-        density_row.addWidget(QLabel("Density Factor:"))
-        density_spin = QDoubleSpinBox()
-        density_spin.setRange(0.001, 0.1)
-        density_spin.setSingleStep(0.001)
-        density_spin.setValue(0.025)
-        density_spin.setDecimals(3)
-        self.parameter_spins['density_factor'] = density_spin
-        density_row.addWidget(density_spin)
-        layout.addLayout(density_row)
+        # Mesh parameters
+        mesh_params = [
+            ("density_factor", "Density Factor:", 0.001, 0.1, 0.001, 0.025,
+             "Controls mesh density. Lower values create finer meshes."),
+            ("mesh_algorithm", "Mesh Algorithm:", None, None, None, "Frontal-Del.",
+             "Algorithm used for mesh generation")
+        ]
 
-        # Mesh algorithm selection
-        algo_row = QHBoxLayout()
-        algo_row.addWidget(QLabel("Mesh Algorithm:"))
-        algo_combo = QComboBox()
-        algo_combo.addItems([
-            "Frontal-Del.",
-            "Delaunay",
-            "MeshAdapt",
-            "BAMG",
-            "FD Quads",
-            "Para. Pack"
-        ])
-        self.parameter_combos['mesh_algorithm'] = algo_combo
-        algo_row.addWidget(algo_combo)
-        layout.addLayout(algo_row)
+        for name, label, min_val, max_val, step, default, tooltip in mesh_params:
+            row = QHBoxLayout()
+            label_widget = QLabel(label)
+            label_widget.setToolTip(tooltip)
+            row.addWidget(label_widget)
 
-        # Mesh optimization checkbox
-        self.parameter_checks['use_optimization'] = QCheckBox("Mesh Optimization")
+            if name == "mesh_algorithm":
+                combo = QComboBox()
+                combo.addItems([
+                    "Frontal-Del.", "Delaunay", "MeshAdapt",
+                    "BAMG", "FD Quads", "Para. Pack"
+                ])
+                combo.setCurrentText(default)
+                self.parameter_combos[name] = combo
+                row.addWidget(combo)
+            else:
+                spin = QDoubleSpinBox()
+                spin.setRange(min_val, max_val)
+                spin.setSingleStep(step)
+                spin.setValue(default)
+                spin.setDecimals(3)
+                self.parameter_spins[name] = spin
+                row.addWidget(spin)
+
+            layout.addLayout(row)
+
+        # Add optimization checkbox
+        self.parameter_checks['use_optimization'] = QCheckBox("Use Mesh Optimization")
         self.parameter_checks['use_optimization'].setChecked(True)
+        self.parameter_checks['use_optimization'].setToolTip(
+            "Enable mesh quality optimization after generation"
+        )
         layout.addWidget(self.parameter_checks['use_optimization'])
 
-        # Max stress visualization parameter
-        max_stress_row = QHBoxLayout()
-        max_stress_row.addWidget(QLabel("Max Stress (mN/m):"))
+        # Add max stress visualization parameter
+        stress_row = QHBoxLayout()
+        stress_row.addWidget(QLabel("Max Stress (mN/m):"))
         max_stress_spin = QDoubleSpinBox()
         max_stress_spin.setRange(0.01, 1000.0)
         max_stress_spin.setSingleStep(0.1)
         max_stress_spin.setValue(1.0)
         max_stress_spin.setDecimals(2)
         self.parameter_spins['max_stress'] = max_stress_spin
-        max_stress_row.addWidget(max_stress_spin)
-        layout.addLayout(max_stress_row)
+        stress_row.addWidget(max_stress_spin)
+        layout.addLayout(stress_row)
 
         group.setLayout(layout)
         return group
 
+    def _connect_stress_parameters(self):
+        """Connect stress parameters to parameter manager."""
+        # Connect spinboxes
+        for name in ['threshold', 'dilation', 'smoothing_sigma', 'density_factor', 'max_stress']:
+            if name in self.parameter_spins:
+                spin = self.parameter_spins[name]
+                spin.valueChanged.connect(
+                    lambda value, name=name: self.parameter_manager.set_value(name, value)
+                )
+                self.parameter_manager.register_callback(
+                    name,
+                    lambda value, spin=spin: spin.setValue(value if value is not None else 0)
+                )
+                # Set initial value
+                try:
+                    value = self.parameter_manager.get_value(name)
+                    spin.setValue(value if value is not None else 0)
+                except KeyError:
+                    print(f"Warning: Parameter {name} not found in parameter manager")
+
+        # Connect mesh algorithm combo box
+        if 'mesh_algorithm' in self.parameter_combos:
+            combo = self.parameter_combos['mesh_algorithm']
+            combo.currentTextChanged.connect(
+                lambda text: self.parameter_manager.set_value(
+                    'mesh_algorithm', text.lower().replace('-', '_')
+                )
+            )
+            self.parameter_manager.register_callback(
+                'mesh_algorithm',
+                lambda value, combo=combo: combo.setCurrentText(
+                    value.replace('_', '-').title() if value else ''
+                )
+            )
+            try:
+                value = self.parameter_manager.get_value('mesh_algorithm')
+                if value:
+                    display_value = value.replace('_', '-').title()
+                    index = combo.findText(display_value, Qt.MatchFixedString)
+                    if index >= 0:
+                        combo.setCurrentIndex(index)
+            except KeyError:
+                print("Warning: Parameter mesh_algorithm not found in parameter manager")
+
+        # Connect optimization checkbox
+        if 'use_optimization' in self.parameter_checks:
+            checkbox = self.parameter_checks['use_optimization']
+            checkbox.stateChanged.connect(
+                lambda state: self.parameter_manager.set_value(
+                    'use_optimization', state == Qt.Checked
+                )
+            )
+            self.parameter_manager.register_callback(
+                'use_optimization',
+                lambda value, cb=checkbox: cb.setChecked(bool(value))
+            )
+            try:
+                value = self.parameter_manager.get_value('use_optimization')
+                checkbox.setChecked(bool(value))
+            except KeyError:
+                print("Warning: Parameter use_optimization not found in parameter manager")
     def _connect_parameters(self):
         """Connect widget controls to parameter manager."""
         # Special handling for Young's modulus (convert Pa to kPa for display)
@@ -493,26 +570,16 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 self.parameter_manager.set_value(param_name, False)
                 checkbox.setChecked(False)
 
+        self._connect_stress_parameters()
+
     def _get_parameter_dict(self) -> dict:
         """Get dictionary of current parameter values."""
         params = {}
-
-        # Get general parameters
         params.update(self.parameter_manager.get_category_parameters(ParameterCategory.GENERAL))
-
-        # Get preprocessing parameters
         params.update(self.parameter_manager.get_category_parameters(ParameterCategory.PREPROCESSING))
-
-        # Get displacement parameters
         params.update(self.parameter_manager.get_category_parameters(ParameterCategory.DISPLACEMENT))
-
-        # Get force parameters
         params.update(self.parameter_manager.get_category_parameters(ParameterCategory.FORCE))
-
-        # Get stress parameters
         params.update(self.parameter_manager.get_category_parameters(ParameterCategory.STRESS))
-
-        # Get visualization parameters
         params.update(self.parameter_manager.get_category_parameters(ParameterCategory.VISUALIZATION))
 
         return params
