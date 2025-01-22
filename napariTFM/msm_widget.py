@@ -978,7 +978,6 @@ class MSMWidget(BaseAnalysisWidget):
                     if isinstance(step, int):
                         spin = QSpinBox()
                     else:
-                        print(param_name)
                         spin = QDoubleSpinBox()
                         if param_name == "smoothing_sigma":
                             spin.setDecimals(1)
