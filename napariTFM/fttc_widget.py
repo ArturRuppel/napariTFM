@@ -657,6 +657,7 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _connect_signals(self):
         """Connect all widget signals."""
+        # Keep existing connections
         self.young_spin.valueChanged.connect(self._update_parameters)
         self.poisson_spin.valueChanged.connect(self._update_parameters)
         self.height_spin.valueChanged.connect(self._update_parameters)
@@ -676,6 +677,10 @@ class FTTCWidget(BaseAnalysisWidget):
         self.gcv_button.clicked.connect(self._auto_select_gcv)
         self.auto_gcv_checkbox.stateChanged.connect(self._toggle_auto_gcv)
 
+        # Connect visualization parameter changes
+        self.visualization_params['vector_stride'].valueChanged.connect(self._update_parameters)
+        self.visualization_params['arrow_scale'].valueChanged.connect(self._update_parameters)
+        self.visualization_params['f_max'].valueChanged.connect(self._update_parameters)
     def _load_displacement(self):
         """Load displacement data from files."""
         try:
