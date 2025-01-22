@@ -73,17 +73,18 @@ class FTTCWidget(BaseAnalysisWidget):
             self.height_spin.setValue(self.parameter_manager.get_value('gel_height') or 0)
             self.lanczos_exp_spin.setValue(self.parameter_manager.get_value('lanczos_exp'))
 
-            # Handle regularization parameter carefully
+            # Handle regularization parameter - store and display as log10
             reg_value = self.parameter_manager.get_value('regularization')
-            if reg_value is None or reg_value <= 0:
-                # Set a default value if None or invalid
-                reg_value = 1e-17  # Default value
-                self.parameter_manager.set_value('regularization', reg_value)
-            self.regularization_spin.setValue(np.log10(reg_value))
+            if reg_value is not None and reg_value > 0:
+                self.regularization_spin.setValue(np.log10(reg_value))
+            else:
+                self.regularization_spin.setValue(-17)  # Default value
 
             # Sync auto GCV checkbox
             auto_gcv = self.parameter_manager.get_value('auto_gcv')
-            self.auto_gcv_checkbox.setChecked(bool(auto_gcv))  # Convert to bool to handle None
+            self.auto_gcv_checkbox.setChecked(bool(auto_gcv))
+            self.regularization_spin.setEnabled(not auto_gcv)
+            self.gcv_button.setEnabled(not auto_gcv)
 
             # Sync visualization parameters
             self.visualization_params['vector_stride'].setValue(
@@ -102,6 +103,13 @@ class FTTCWidget(BaseAnalysisWidget):
         finally:
             # Restore signal handling
             self._block_parameter_widgets(False)
+
+    def _on_auto_gcv_changed(self, state):
+        """Handle auto GCV checkbox state changes."""
+        is_checked = state == Qt.Checked
+        self.regularization_spin.setEnabled(not is_checked)
+        self.gcv_button.setEnabled(not is_checked)
+        self.parameter_manager.set_value('auto_gcv', is_checked)
 
     def preview_force(self):
         """Preview force calculation on current frame."""
@@ -183,6 +191,7 @@ class FTTCWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
         finally:
             self.blockSignals(False)
+
     def _on_parameter_changed(self, param_name: str, value: object):
         """Handle parameter changes from the parameter manager"""
         # Only update if the change didn't come from this widget
@@ -320,6 +329,7 @@ class FTTCWidget(BaseAnalysisWidget):
                 )
         except Exception as e:
             self._handle_error(f"Error initializing calculator: {str(e)}")
+
     def reset_parameters(self):
         """Reset all parameters to defaults."""
         self.parameter_manager.reset_to_defaults()
@@ -509,7 +519,7 @@ class FTTCWidget(BaseAnalysisWidget):
         if 'arrow_scale' not in self.visualization_params:
             self.visualization_params['arrow_scale'] = QDoubleSpinBox()
         if 'f_max' not in self.visualization_params:
-            self.visualization_params['f_max'] = QDoubleSpinBox()
+            self.visualization_params['f_max'] = QSpinBox()
 
         # Main parameters group
         group = QGroupBox("Parameters")
@@ -620,6 +630,8 @@ class FTTCWidget(BaseAnalysisWidget):
         fmax_layout.addWidget(QLabel("Max Force (Pa):"))
         self.visualization_params['f_max'].setRange(0.1, 10000.0)
         self.visualization_params['f_max'].setValue(1000.0)
+        self.visualization_params['f_max'].setSingleStep(1)
+
         self.visualization_params['f_max'].setToolTip(
             "Maximum force value for color scaling.\n"
             "Forces above this value will be shown at maximum intensity"
@@ -651,6 +663,7 @@ class FTTCWidget(BaseAnalysisWidget):
         self.lanczos_exp_spin.valueChanged.connect(self._update_parameters)
         self.regularization_spin.valueChanged.connect(self._update_parameters)
         self.load_displacement_btn.clicked.connect(self._load_displacement)
+        self.auto_gcv_checkbox.stateChanged.connect(self._on_auto_gcv_changed)
 
         # Action buttons
         self.calculate_btn.clicked.connect(self.calculate_forces)
@@ -791,50 +804,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
         # Update UI state to handle the calculation buttons
         self._update_ui_state()
-
-    def preview_force(self):
-        """Preview force calculation on current frame."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating forces...", 0)
-
-            # Initialize calculator
-            self._initialize_calculator()
-
-            # Get current frame data
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
-            current_frame = self.viewer.dims.current_step[0]
-            flow = flows[current_frame]
-
-            # Get spatial coordinates
-            x = np.arange(flow.shape[1])
-            y = np.arange(flow.shape[0])
-
-            # Create and start worker
-            worker = self.calculator.calculate_traction(
-                x=x,
-                y=y,
-                u_data=flow[..., 0],
-                v_data=flow[..., 1],
-                dx=self._pixel_size * self._downscale_factor,
-                set_lam=self.regularization
-            )
-
-            # Connect worker signals
-            worker.returned.connect(self._handle_preview_results)
-            worker.finished.connect(lambda: self._set_controls_enabled(True))
-            worker.errored.connect(self._handle_error)
-
-            # Start the worker
-            worker.start()
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self._set_controls_enabled(True)
 
     def _handle_preview_results(self, results):
         """Handle the preview calculation results."""

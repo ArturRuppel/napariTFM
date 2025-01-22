@@ -1,6 +1,7 @@
 import os
 import sys
 
+import numpy as np
 import yaml
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
@@ -190,16 +191,14 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         layout = QVBoxLayout()
         layout.setSpacing(4)
 
-        # Material parameters
-        params = [
+        # Material parameters setup
+        material_params = [
             ("young_modulus", "Young's Modulus (kPa):", 0.1, 1000, 0.1, 10),
             ("poisson_ratio", "Poisson's Ratio:", 0, 0.5, 0.01, 0.49),
-            ("gel_height", "Gel Height (µm):", 0, 1000, 10, 0),
-            ("lanczos_exp", "Lanczos Exponent:", 0, 5, 1, 1),
-            ("regularization", "Regularization (10^x):", -21, 0, 0.5, -17)
+            ("gel_height", "Gel Height (µm):", 0, 1000, 10, 0)
         ]
 
-        for name, label, min_val, max_val, step, default in params:
+        for name, label, min_val, max_val, step, default in material_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             spin = QDoubleSpinBox()
@@ -212,21 +211,50 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             row.addWidget(spin)
             layout.addLayout(row)
 
-        # Auto-GCV checkbox
-        self.parameter_checks['auto_gcv'] = QCheckBox("Auto-GCV per frame")
-        layout.addWidget(self.parameter_checks['auto_gcv'])
+        # Lanczos exponent (integer spinbox)
+        lanczos_row = QHBoxLayout()
+        lanczos_row.addWidget(QLabel("Lanczos Exponent:"))
+        lanczos_spin = QSpinBox()  # Changed to QSpinBox
+        lanczos_spin.setRange(0, 5)
+        lanczos_spin.setValue(1)
+        self.parameter_spins['lanczos_exp'] = lanczos_spin
+        lanczos_row.addWidget(lanczos_spin)
+        layout.addLayout(lanczos_row)
 
-        # Visualization parameters
+        # Regularization parameter (as log10)
+        reg_row = QHBoxLayout()
+        reg_row.addWidget(QLabel("Regularization (10^x):"))
+        reg_spin = QDoubleSpinBox()
+        reg_spin.setRange(-21, 0)
+        reg_spin.setSingleStep(0.5)
+        reg_spin.setValue(-17)
+        reg_spin.setDecimals(1)
+        self.parameter_spins['regularization'] = reg_spin
+        reg_row.addWidget(reg_spin)
+        layout.addLayout(reg_row)
+
+        # Auto-GCV checkbox
+        auto_gcv = QCheckBox("Auto-GCV per frame")
+        self.parameter_checks['auto_gcv'] = auto_gcv
+        layout.addWidget(auto_gcv)
+
+        # Connect auto-GCV checkbox to enable/disable regularization spinbox
+        def toggle_reg_spin(state):
+            reg_spin.setEnabled(not state)
+
+        auto_gcv.stateChanged.connect(toggle_reg_spin)
+
+        # Add visualization parameters
         vis_params = [
             ("force_vector_stride", "Vector Stride:", 1, 100, 1, 20),
             ("force_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1, 1.0),
-            ("f_max", "Max Force (Pa):", 0.1, 10000.0, 0.1, 1000.0)
+            ("f_max", "Max Force (Pa):", 0.1, 10000.0, 1, 1000.0)
         ]
 
         for name, label, min_val, max_val, step, default in vis_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = QDoubleSpinBox()
+            spin = QDoubleSpinBox() if isinstance(step, float) else QSpinBox()
             spin.setRange(min_val, max_val)
             spin.setSingleStep(step)
             spin.setValue(default)
@@ -236,7 +264,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
-
     def _create_stress_params_group(self) -> QGroupBox:
         """Create stress analysis parameters group."""
         group = QGroupBox("Stress Parameters")
@@ -315,107 +342,139 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
     def _connect_parameters(self):
         """Connect widget controls to parameter manager."""
-        # Keep existing spinbox connections
-        for name, spin in self.parameter_spins.items():
-            # Special handling for gel_height
-            if name == 'gel_height':
-                # When spinbox changes, update parameter manager
-                spin.valueChanged.connect(
-                    lambda value, name=name: self.parameter_manager.set_value(
-                        name,
-                        None if value == 0 else value
-                    )
-                )
+        # Special handling for Young's modulus (convert Pa to kPa for display)
+        young_spin = self.parameter_spins['young_modulus']
+        young_spin.valueChanged.connect(
+            lambda value: self.parameter_manager.set_value('young_modulus', value * 1000)
+        )
+        self.parameter_manager.register_callback(
+            'young_modulus',
+            lambda value: young_spin.setValue(value / 1000 if value is not None else 0)
+        )
+        try:
+            value = self.parameter_manager.get_value('young_modulus')
+            young_spin.setValue(value / 1000 if value is not None else 0)
+        except KeyError:
+            print("Warning: Parameter young_modulus not found in parameter manager")
 
-                # When parameter changes, update spinbox
+        # Handle gel height with special "infinity" case
+        gel_height_spin = self.parameter_spins['gel_height']
+        gel_height_spin.valueChanged.connect(
+            lambda value: self.parameter_manager.set_value(
+                'gel_height',
+                None if value == 0 else value
+            )
+        )
+        self.parameter_manager.register_callback(
+            'gel_height',
+            lambda value: gel_height_spin.setValue(0 if value is None else value)
+        )
+        try:
+            value = self.parameter_manager.get_value('gel_height')
+            gel_height_spin.setValue(0 if value is None else value)
+        except KeyError:
+            print("Warning: Parameter gel_height not found in parameter manager")
+
+        # Handle regularization parameter (stored as actual value, displayed as log10)
+        reg_spin = self.parameter_spins['regularization']
+        reg_spin.valueChanged.connect(
+            lambda value: self.parameter_manager.set_value('regularization', 10 ** value)
+        )
+        self.parameter_manager.register_callback(
+            'regularization',
+            lambda value: reg_spin.setValue(np.log10(value) if value and value > 0 else -17)
+        )
+        try:
+            value = self.parameter_manager.get_value('regularization')
+            reg_spin.setValue(np.log10(value) if value and value > 0 else -17)
+        except KeyError:
+            print("Warning: Parameter regularization not found in parameter manager")
+
+        # Handle integer-based parameters (like Lanczos exponent)
+        int_params = ['lanczos_exp', 'force_vector_stride']
+        for name in int_params:
+            if name in self.parameter_spins:
+                spin = self.parameter_spins[name]
+                spin.valueChanged.connect(
+                    lambda value, name=name: self.parameter_manager.set_value(name, int(value))
+                )
                 self.parameter_manager.register_callback(
                     name,
-                    lambda value, spin=spin: spin.setValue(0 if value is None else value)
+                    lambda value, spin=spin: spin.setValue(int(value) if value is not None else 0)
                 )
-
-                # Initialize spinbox value
                 try:
                     value = self.parameter_manager.get_value(name)
-                    spin.setValue(0 if value is None else value)
+                    spin.setValue(int(value) if value is not None else 0)
                 except KeyError:
                     print(f"Warning: Parameter {name} not found in parameter manager")
 
-            else:
-                # Normal handling for other parameters
+        # Handle remaining float-based spinboxes
+        float_params = ['poisson_ratio', 'force_arrow_scale', 'f_max']
+        for name in float_params:
+            if name in self.parameter_spins:
+                spin = self.parameter_spins[name]
                 spin.valueChanged.connect(
-                    lambda value, name=name: self.parameter_manager.set_value(name, value)
+                    lambda value, name=name: self.parameter_manager.set_value(name, float(value))
                 )
-
                 self.parameter_manager.register_callback(
                     name,
-                    lambda value, spin=spin: spin.setValue(value if value is not None else 0)
+                    lambda value, spin=spin: spin.setValue(float(value) if value is not None else 0)
                 )
-
-                # Initialize spinbox value
                 try:
                     value = self.parameter_manager.get_value(name)
-                    spin.setValue(value if value is not None else 0)
+                    spin.setValue(float(value) if value is not None else 0)
                 except KeyError:
                     print(f"Warning: Parameter {name} not found in parameter manager")
 
-        # Connect comboboxes with special handling for registration mode
+        # Handle auto-GCV checkbox and its interaction with regularization
+        if 'auto_gcv' in self.parameter_checks:
+            auto_gcv = self.parameter_checks['auto_gcv']
+            reg_spin = self.parameter_spins['regularization']
+
+            def on_auto_gcv_changed(state):
+                is_checked = state == Qt.Checked
+                self.parameter_manager.set_value('auto_gcv', is_checked)
+                reg_spin.setEnabled(not is_checked)
+
+            auto_gcv.stateChanged.connect(on_auto_gcv_changed)
+
+            def update_auto_gcv(value):
+                auto_gcv.setChecked(bool(value))
+                reg_spin.setEnabled(not bool(value))
+
+            self.parameter_manager.register_callback('auto_gcv', update_auto_gcv)
+
+            try:
+                value = self.parameter_manager.get_value('auto_gcv')
+                auto_gcv.setChecked(bool(value))
+                reg_spin.setEnabled(not bool(value))
+            except KeyError:
+                print("Warning: Parameter auto_gcv not found in parameter manager")
+
+        # Handle comboboxes
         for name, combo in self.parameter_combos.items():
-            if name == 'registration_mode':
-                # When combo changes, convert "No registration" to "none"
-                combo.currentTextChanged.connect(
-                    lambda text, name=name: self.parameter_manager.set_value(
-                        name, text.lower()
-                    )
-                )
-                def update_registration_mode(value, combo=combo):
-                    display_value = value.capitalize()
-                    combo.setCurrentText(display_value)
-
-                self.parameter_manager.register_callback(name, update_registration_mode)
-
-                # Initialize combo value
-                try:
-                    current_value = self.parameter_manager.get_value(name)
-                    display_value = current_value.capitalize()
-                    index = combo.findText(display_value, Qt.MatchFixedString)
-                    if index >= 0:
-                        combo.setCurrentIndex(index)
-                except KeyError:
-                    print(f"Warning: Parameter {name} not found in parameter manager")
-            else:
-                # Normal handling for other combos
-                combo.currentTextChanged.connect(
-                    lambda text, name=name: self.parameter_manager.set_value(name, text.lower())
-                )
-                self.parameter_manager.register_callback(
-                    name,
-                    lambda value, combo=combo: combo.setCurrentText(value.capitalize())
-                )
-                try:
-                    current_value = self.parameter_manager.get_value(name)
-                    index = combo.findText(current_value.capitalize(), Qt.MatchFixedString)
-                    if index >= 0:
-                        combo.setCurrentIndex(index)
-                except KeyError:
-                    print(f"Warning: Parameter {name} not found in parameter manager")
-
-        # Connect parameter checkboxes
-        for name, checkbox in self.parameter_checks.items():
-            checkbox.stateChanged.connect(
-                lambda state, name=name: self.parameter_manager.set_value(
-                    name, state == Qt.Checked
+            combo.currentTextChanged.connect(
+                lambda text, name=name: self.parameter_manager.set_value(
+                    name, text.lower().replace('-', '_')  # Convert display text to parameter format
                 )
             )
             self.parameter_manager.register_callback(
                 name,
-                lambda value, cb=checkbox: cb.setChecked(value)
+                lambda value, combo=combo: combo.setCurrentText(
+                    value.replace('_', '-').title() if value else ''
+                )
             )
             try:
-                checkbox.setChecked(self.parameter_manager.get_value(name))
+                value = self.parameter_manager.get_value(name)
+                if value:
+                    display_value = value.replace('_', '-').title()
+                    index = combo.findText(display_value, Qt.MatchFixedString)
+                    if index >= 0:
+                        combo.setCurrentIndex(index)
             except KeyError:
                 print(f"Warning: Parameter {name} not found in parameter manager")
 
-        # Connect visualization checkboxes
+        # Handle visualization checkboxes
         for viz_name, checkbox in self.visualization_checkboxes.items():
             param_name = f'save_{viz_name}'
             checkbox.stateChanged.connect(
@@ -425,12 +484,12 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             )
             self.parameter_manager.register_callback(
                 param_name,
-                lambda value, cb=checkbox: cb.setChecked(value)
+                lambda value, cb=checkbox: cb.setChecked(bool(value))
             )
             try:
-                checkbox.setChecked(self.parameter_manager.get_value(param_name))
+                value = self.parameter_manager.get_value(param_name)
+                checkbox.setChecked(bool(value))
             except KeyError:
-                print(f"Warning: Visualization parameter {param_name} not found in parameter manager")
                 self.parameter_manager.set_value(param_name, False)
                 checkbox.setChecked(False)
 
