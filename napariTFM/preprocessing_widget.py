@@ -54,19 +54,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Block signals during setup
         self.blockSignals(True)
         try:
-            # Setup UI and connect signals
             self._setup_ui()
             self._connect_signals()
             self._connect_parameters()
-
-            # Initialize parameters with default values
             self._sync_widget_with_parameters()
-
-            # Initialize button states
             self._update_button_states()
             self._update_ui_state()
 
-            # Connect to parameter manager signals only after UI is set up
             if hasattr(self.parameter_manager, 'parameter_changed'):
                 self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
         finally:
@@ -76,6 +70,236 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.viewer.layers.events.inserted.connect(self._on_layer_change)
         self.viewer.layers.events.removed.connect(self._on_layer_change)
         self.viewer.layers.selection.events.changed.connect(self._on_layer_selection_change)
+
+    def run_preprocessing(self):
+        """Run preprocessing on all available data in a separate thread"""
+        if self.preview_enabled:
+            self.preview_check.setChecked(False)
+
+        try:
+            self._set_controls_enabled(False)
+            self._update_status("Starting preprocessing...", 0)
+
+            # Get parameters directly from parameter manager
+            params = PreprocessingParameters(
+                min_intensity_percentile=self.parameter_manager.get_value('min_intensity') / 100,
+                max_intensity_percentile=self.parameter_manager.get_value('max_intensity') / 100,
+                enable_gaussian_filter=self.parameter_manager.get_value('gaussian_sigma') > 0,
+                gaussian_sigma=self.parameter_manager.get_value('gaussian_sigma'),
+                cell_min_intensity_percentile=self.parameter_manager.get_value('cell_min_intensity') / 100,
+                cell_max_intensity_percentile=self.parameter_manager.get_value('cell_max_intensity') / 100,
+                enable_cell_gaussian_filter=self.parameter_manager.get_value('cell_gaussian_sigma') > 0,
+                cell_gaussian_sigma=self.parameter_manager.get_value('cell_gaussian_sigma'),
+                registration_mode=self.parameter_manager.get_value('registration_mode')
+            )
+
+            self.preprocessor.update_parameters(params)
+
+            # Create and start worker with correct data from data manager
+            worker = self.preprocessor.preprocess_all(
+                bead_stack=self.data_manager.input_bead_stack,
+                reference_image=self.data_manager.input_reference,
+                cell_stack=self.data_manager.input_cell_stack,
+            )
+
+            # Connect signals
+            worker.yielded.connect(self._handle_progress)
+            worker.returned.connect(self._handle_results)
+            worker.finished.connect(lambda: self._set_controls_enabled(True))
+            worker.errored.connect(self._handle_error)
+
+            # Start the worker
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.processing_failed.emit(str(e))
+            self._set_controls_enabled(True)
+
+    def toggle_preview(self, enabled: bool):
+        """Toggle preview mode"""
+        try:
+            if enabled:
+                # Get current data type
+                if self.bead_radio.isChecked():
+                    data = self.data_manager.input_bead_stack
+                elif self.reference_radio.isChecked():
+                    data = self.data_manager.input_reference
+                else:
+                    data = self.data_manager.input_cell_stack
+
+                if data is None:
+                    raise ProcessingError(f"No {self.current_data_type} data available")
+
+                # Get current frame if data is a stack, handling both 2D and 3D cases
+                if data.ndim == 3:
+                    # For 3D data, ensure we're within bounds
+                    current_step = min(self.viewer.dims.current_step[0], data.shape[0] - 1)
+                    frame = data[current_step].copy()
+                else:
+                    # For 2D data, use as is
+                    frame = data.copy()
+
+                # Process the frame
+                processed_frame, frame_info = self.preprocessor.preprocess_frame(
+                    frame,
+                    is_cell=(self.current_data_type == 'cells')
+                )
+
+                # Update visualization through manager
+                self.visualization_manager.handle_preview(
+                    frame=processed_frame,
+                    enable=True,
+                    layer_name='Preview'
+                )
+
+                # Update status with frame information
+                info_text = (
+                    f"Preview - Original range: ({frame.min():.1f}, {frame.max():.1f})\n"
+                    f"Applied range: {frame_info['intensity_range']}\n"
+                    f"Mean: {frame_info['final_mean']:.1f}, Std: {frame_info['final_std']:.1f}"
+                )
+                self._update_status(info_text)
+
+            else:
+                # Disable preview through visualization manager
+                self.visualization_manager.handle_preview(
+                    frame=None,
+                    enable=False
+                )
+
+            self.preview_enabled = enabled
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.preview_check.setChecked(False)
+            self.preview_enabled = False
+
+    def _load_active_layer(self, data_type: str):
+        """Load the currently active layer as the specified data type"""
+        active_layer = self._get_active_image_layer()
+        if active_layer is None:
+            QMessageBox.warning(self, "Error", "No active image layer found")
+            return
+
+        try:
+            data = active_layer.data
+
+            # Handle data based on type
+            if data_type == 'beads':
+                # Convert 2D data to 3D with single frame if needed
+                if data.ndim == 2:
+                    data = data[np.newaxis, ...]
+                elif data.ndim != 3:
+                    raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
+                self.data_manager.set_input_bead_stack(data)
+
+            elif data_type == 'reference':
+                if data.ndim != 2:
+                    raise ValueError("Reference image must be 2D (height, width)")
+                self.data_manager.set_input_reference(data)
+
+            elif data_type == 'cells':
+                # Convert 2D data to 3D with single frame if needed
+                if data.ndim == 2:
+                    data = data[np.newaxis, ...]
+                elif data.ndim != 3:
+                    raise ValueError("Cell stack must be 2D or 3D (frames, height, width)")
+                self.data_manager.set_input_cell_stack(data)
+            else:
+                raise ValueError(f"Invalid data type: {data_type}")
+
+            self._update_ui_state()
+            self._update_status(f"Loaded {data_type} data: {data.shape}")
+
+        except Exception as e:
+            QMessageBox.warning(self, "Error", str(e))
+
+    def _update_ui_state(self):
+        """Update UI elements based on available data and current state"""
+        # Update data status indicators with shape information
+        bead_data = self.data_manager.input_bead_stack
+        ref_data = self.data_manager.input_reference
+        cell_data = self.data_manager.input_cell_stack
+
+        bead_shape = bead_data.shape if bead_data is not None else None
+        ref_shape = ref_data.shape if ref_data is not None else None
+        cell_shape = cell_data.shape if cell_data is not None else None
+
+        self.bead_status.setText(f"Loaded: {bead_shape}" if bead_shape else "Not loaded")
+        self.reference_status.setText(f"Loaded: {ref_shape}" if ref_shape else "Not loaded")
+        self.cell_status.setText(f"Loaded: {cell_shape}" if cell_shape else "Not loaded")
+
+        # Update registration note visibility based on data availability
+        can_register = (bead_data is not None and ref_data is not None)
+        self.registration_note.setVisible(not can_register)
+
+        # Update preview radio buttons - always enabled
+        self.bead_radio.setEnabled(True)
+        self.reference_radio.setEnabled(True)
+        self.cell_radio.setEnabled(True)
+
+        # Enable preview checkbox only if we have any data
+        has_data = any([bead_data is not None, ref_data is not None, cell_data is not None])
+        self.preview_check.setEnabled(has_data)
+        if not has_data and self.preview_check.isChecked():
+            self.preview_check.setChecked(False)
+
+        # Enable preprocessing button if we have any data
+        self.preprocess_btn.setEnabled(has_data)
+
+        # Update save button state based on preprocessed data
+        has_preprocessed_data = any([
+            self.data_manager._preprocessed_bead_stack is not None,
+            self.data_manager._preprocessed_reference is not None,
+            self.data_manager._preprocessed_cell_stack is not None
+        ])
+        self.save_btn.setEnabled(has_preprocessed_data)
+
+    def _handle_results(self, results):
+        """Handle the final results from the worker"""
+        try:
+            # Store preprocessing parameters
+            params = {
+                'min_intensity': self.parameter_manager.get_value('min_intensity'),
+                'max_intensity': self.parameter_manager.get_value('max_intensity'),
+                'gaussian_sigma': self.parameter_manager.get_value('gaussian_sigma'),
+                'cell_min_intensity': self.parameter_manager.get_value('cell_min_intensity'),
+                'cell_max_intensity': self.parameter_manager.get_value('cell_max_intensity'),
+                'cell_gaussian_sigma': self.parameter_manager.get_value('cell_gaussian_sigma'),
+                'registration_mode': self.parameter_manager.get_value('registration_mode')
+            }
+
+            # Update data manager with processed results and parameters
+            self.data_manager.set_preprocessing_results(
+                bead_stack=results.get('beads', [None])[0],
+                reference=results.get('reference', [None])[0],
+                cell_stack=results.get('cells', [None])[0],
+                params=params
+            )
+
+            # Update visualization through manager
+            self.visualization_manager.update_preprocessing_visualization(results)
+
+            # Use Qt's single shot timer to ensure layers are created
+            from qtpy.QtCore import QTimer
+            def update_visibility():
+                for layer in self.viewer.layers:
+                    layer.visible = False
+                    if layer.name == 'Bead Overlay':
+                        layer.visible = True
+
+            QTimer.singleShot(100, update_visibility)
+
+            self._update_ui_state()
+            self._update_status("Preprocessing complete", 100)
+            self.preprocessing_completed.emit(results)
+
+        except Exception as e:
+            self._handle_error(f"Error handling preprocessing results: {str(e)}")
+            self.processing_failed.emit(str(e))
+        finally:
+            self._set_controls_enabled(True)
 
     def _on_parameter_changed(self, param_name: str, value: object):
         """Handle parameter changes from the parameter manager"""
@@ -254,6 +478,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         if index >= 0:
             combo.setCurrentIndex(index)
         combo.blockSignals(False)
+
     def _block_parameter_widgets(self, block: bool):
         """Block or unblock signals for all parameter-related widgets"""
         widgets = [
@@ -349,51 +574,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(str(e))
-
-    def run_preprocessing(self):
-        """Run preprocessing on all available data in a separate thread"""
-        if self.preview_enabled:
-            self.preview_check.setChecked(False)
-
-        try:
-            self._set_controls_enabled(False)
-            self._update_status("Starting preprocessing...", 0)
-
-            # Get parameters directly from parameter manager
-            params = PreprocessingParameters(
-                min_intensity_percentile=self.parameter_manager.get_value('min_intensity') / 100,
-                max_intensity_percentile=self.parameter_manager.get_value('max_intensity') / 100,
-                enable_gaussian_filter=self.parameter_manager.get_value('gaussian_sigma') > 0,
-                gaussian_sigma=self.parameter_manager.get_value('gaussian_sigma'),
-                cell_min_intensity_percentile=self.parameter_manager.get_value('cell_min_intensity') / 100,
-                cell_max_intensity_percentile=self.parameter_manager.get_value('cell_max_intensity') / 100,
-                enable_cell_gaussian_filter=self.parameter_manager.get_value('cell_gaussian_sigma') > 0,
-                cell_gaussian_sigma=self.parameter_manager.get_value('cell_gaussian_sigma'),
-                registration_mode=self.parameter_manager.get_value('registration_mode')
-            )
-
-            self.preprocessor.update_parameters(params)
-
-            # Create and start worker
-            worker = self.preprocessor.preprocess_all(
-                bead_stack=self.data_manager.preprocessing_bead_stack,
-                reference_image=self.data_manager.preprocessing_reference_image,
-                cell_stack=self.data_manager.preprocessing_cell_stack,
-            )
-
-            # Connect signals
-            worker.yielded.connect(self._handle_progress)
-            worker.returned.connect(self._handle_results)
-            worker.finished.connect(lambda: self._set_controls_enabled(True))
-            worker.errored.connect(self._handle_error)
-
-            # Start the worker
-            worker.start()
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.processing_failed.emit(str(e))
-            self._set_controls_enabled(True)
 
     def _get_active_image_layer(self):
         """Get currently active image layer"""
@@ -500,129 +680,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         load_group.setLayout(load_layout)
         return load_group
-
-    # def _update_button_tooltips(self, active_layer):
-    #     """Update button tooltips to provide feedback about why they might be disabled"""
-    #     from napari.layers import Image
-    #
-    #     base_tooltips = {
-    #         'beads': "Load a time series of bead images from the active layer in napari",
-    #         'reference': "Load a single reference image for registration from the active layer",
-    #         'cells': "Load a time series of cell images from the active layer"
-    #     }
-    #
-    #     if active_layer is None:
-    #         disabled_msg = " (No image layer selected)"
-    #     elif not isinstance(active_layer, Image):
-    #         disabled_msg = " (Selected layer is not an image)"
-    #     else:
-    #         data_dims = active_layer.data.ndim
-    #         if data_dims not in [2, 3]:
-    #             disabled_msg = f" (Invalid dimensions: {data_dims}D)"
-    #         else:
-    #             disabled_msg = ""
-    #
-    #     # Update each button's tooltip
-    #     buttons = {
-    #         'beads': self.load_beads_btn,
-    #         'reference': self.load_reference_btn,
-    #         'cells': self.load_cells_btn
-    #     }
-    #
-    #     for data_type, button in buttons.items():
-    #         base_tooltip = base_tooltips[data_type]
-    #         if button.isEnabled():
-    #             button.setToolTip(base_tooltip)
-    #         else:
-    #             button.setToolTip(f"{base_tooltip}{disabled_msg}")
-
-    def _handle_results(self, results):
-        """Handle the final results from the worker"""
-        # Update data manager with processed results
-        if 'beads' in results:
-            self.data_manager.preprocessed_bead_stack = results['beads'][0]
-        if 'reference' in results:
-            self.data_manager.preprocessed_reference = results['reference'][0]
-        if 'cells' in results:
-            self.data_manager.preprocessed_cell_stack = results['cells'][0]
-
-        # Update visualization through manager
-        self.visualization_manager.update_preprocessing_visualization(results)
-
-        # Use Qt's single shot timer to ensure layers are created
-        from qtpy.QtCore import QTimer
-        def update_visibility():
-            # Hide all layers
-            for layer in self.viewer.layers:
-                layer.visible = False
-                if layer.name == 'Bead Overlay':  # Original layers
-                    layer.visible = True
-
-        # Wait a brief moment for layers to be created
-        QTimer.singleShot(100, update_visibility)
-
-        # Update UI state to enable save button
-        self._update_ui_state()
-
-        self._update_status("Preprocessing complete", 100)
-        self.preprocessing_completed.emit(results)
-
-    def _update_ui_state(self):
-        """Update UI elements based on available data and current state"""
-        # Update data status indicators with shape information
-        bead_shape = self.data_manager.preprocessing_bead_stack.shape if self.data_manager.preprocessing_bead_stack is not None else None
-        ref_shape = self.data_manager.preprocessing_reference_image.shape if self.data_manager.preprocessing_reference_image is not None else None
-        cell_shape = self.data_manager.preprocessing_cell_stack.shape if self.data_manager.preprocessing_cell_stack is not None else None
-
-        self.bead_status.setText(f"Loaded: {bead_shape}" if bead_shape else "Not loaded")
-        self.reference_status.setText(f"Loaded: {ref_shape}" if ref_shape else "Not loaded")
-        self.cell_status.setText(f"Loaded: {cell_shape}" if cell_shape else "Not loaded")
-
-        # Update registration note visibility based on data availability
-        can_register = (
-                self.data_manager.preprocessing_bead_stack is not None and
-                self.data_manager.preprocessing_reference_image is not None
-        )
-        self.registration_note.setVisible(not can_register)
-
-        # Update preview radio buttons - always enabled
-        self.bead_radio.setEnabled(True)
-        self.reference_radio.setEnabled(True)
-        self.cell_radio.setEnabled(True)
-
-        # Keep all parameter controls enabled
-        self.registration_mode_combo.setEnabled(True)
-        self.cell_intensity_slider.setEnabled(True)
-        self.cell_min_spinbox.setEnabled(True)
-        self.cell_max_spinbox.setEnabled(True)
-        self.cell_gaussian_sigma_spin.setEnabled(True)
-        self.cell_gaussian_sigma_slider.setEnabled(True)
-        self.gaussian_sigma_spin.setEnabled(True)
-        self.gaussian_sigma_slider.setEnabled(True)
-        self.intensity_slider.setEnabled(True)
-        self.min_spinbox.setEnabled(True)
-        self.max_spinbox.setEnabled(True)
-
-        # Enable preview checkbox only if we have any data
-        has_data = any([
-            self.data_manager.preprocessing_bead_stack is not None,
-            self.data_manager.preprocessing_reference_image is not None,
-            self.data_manager.preprocessing_cell_stack is not None
-        ])
-        self.preview_check.setEnabled(has_data)
-        if not has_data and self.preview_check.isChecked():
-            self.preview_check.setChecked(False)
-
-        # Enable preprocessing button if we have any data
-        self.preprocess_btn.setEnabled(has_data)
-
-        # Update save button state based on preprocessed data
-        has_preprocessed_data = any([
-            self.data_manager.preprocessed_bead_stack is not None,
-            self.data_manager.preprocessed_reference is not None,
-            self.data_manager.preprocessed_cell_stack is not None
-        ])
-        self.save_btn.setEnabled(has_preprocessed_data)
 
     def _create_intensity_group(self, title, slider, min_spinbox, max_spinbox, sigma_spinbox, tooltip_prefix=""):
         """Create a parameter group with intensity range and filter controls.
@@ -736,31 +793,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         return sigma_layout
 
-    # def _create_range_spinboxes(self, min_spinbox, max_spinbox, is_cell=False):
-    #     """Create a layout with min/max range spinboxes."""
-    #     spinbox_layout = QHBoxLayout()
-    #
-    #     # Create fixed-width labels
-    #     min_label = QLabel("Min ")
-    #     max_label = QLabel("Max ")
-    #     min_label.setFixedWidth(40)  # Set fixed width for consistent alignment
-    #
-    #     for spinbox in [min_spinbox, max_spinbox]:
-    #         spinbox.setRange(0, 100)
-    #         spinbox.setDecimals(1)
-    #         spinbox.setSingleStep(0.1 if is_cell else 1.0)
-    #         spinbox.setButtonSymbols(QDoubleSpinBox.PlusMinus)
-    #
-    #     max_spinbox.setValue(100)
-    #
-    #     spinbox_layout.addWidget(min_label)
-    #     spinbox_layout.addWidget(min_spinbox)
-    #     spinbox_layout.addStretch()
-    #     spinbox_layout.addWidget(max_spinbox)
-    #     spinbox_layout.addWidget(max_label)
-    #
-    #     return spinbox_layout
-
     def _create_parameters_group(self):
         """Create a group containing all parameter controls."""
         parameters_group = QGroupBox("Parameters")
@@ -843,105 +875,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         self.setLayout(main_layout)
 
-    def toggle_preview(self, enabled: bool):
-        """Toggle preview mode"""
-        try:
-            if enabled:
-                # Get current data type
-                if self.bead_radio.isChecked():
-                    data = self.data_manager.preprocessing_bead_stack
-                elif self.reference_radio.isChecked():
-                    data = self.data_manager.preprocessing_reference_image
-                else:
-                    data = self.data_manager.preprocessing_cell_stack
-
-                if data is None:
-                    raise ProcessingError(f"No {self.current_data_type} data available")
-
-                # Get current frame if data is a stack, handling both 2D and 3D cases
-                if data.ndim == 3:
-                    # For 3D data, ensure we're within bounds
-                    current_step = min(self.viewer.dims.current_step[0], data.shape[0] - 1)
-                    frame = data[current_step].copy()
-                else:
-                    # For 2D data, use as is
-                    frame = data.copy()
-
-                # Process the frame
-                processed_frame, frame_info = self.preprocessor.preprocess_frame(
-                    frame,
-                    is_cell=(self.current_data_type == 'cells')
-                )
-
-                # Update visualization through manager
-                self.visualization_manager.handle_preview(
-                    frame=processed_frame,
-                    enable=True,
-                    layer_name='Preview'
-                )
-
-                # Update status with frame information
-                info_text = (
-                    f"Preview - Original range: ({frame.min():.1f}, {frame.max():.1f})\n"
-                    f"Applied range: {frame_info['intensity_range']}\n"
-                    f"Mean: {frame_info['final_mean']:.1f}, Std: {frame_info['final_std']:.1f}"
-                )
-                self._update_status(info_text)
-
-            else:
-                # Disable preview through visualization manager
-                self.visualization_manager.handle_preview(
-                    frame=None,
-                    enable=False
-                )
-
-            self.preview_enabled = enabled
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.preview_check.setChecked(False)
-            self.preview_enabled = False
-
-    def _load_active_layer(self, data_type: str):
-        """Load the currently active layer as the specified data type"""
-        active_layer = self._get_active_image_layer()
-        if active_layer is None:
-            QMessageBox.warning(self, "Error", "No active image layer found")
-            return
-
-        try:
-            data = active_layer.data
-
-            # Handle data based on type
-            if data_type == 'beads':
-                # Convert 2D data to 3D with single frame
-                if data.ndim == 2:
-                    data = data[np.newaxis, ...]
-                elif data.ndim != 3:
-                    raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
-                self.data_manager.set_preprocessing_bead_stack(data)
-
-            elif data_type == 'reference':
-                if data.ndim != 2:
-                    raise ValueError("Reference image must be 2D (height, width)")
-                self.data_manager.set_preprocessing_reference_image(data)
-
-            elif data_type == 'cells':
-                # Convert 2D data to 3D with single frame
-                if data.ndim == 2:
-                    data = data[np.newaxis, ...]
-                elif data.ndim != 3:
-                    raise ValueError("Cell stack must be 2D or 3D (frames, height, width)")
-                self.data_manager.set_preprocessing_cell_stack(data)
-            else:
-                raise ValueError(f"Invalid data type: {data_type}")
-
-            self._update_ui_state()
-            self._update_status(f"Loaded {data_type} data: {data.shape}")
-
-        except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
-
     def _create_preview_selection_group(self):
         """Create the preview selection group."""
         preview_select_group = QGroupBox("Preview Data Type")
@@ -1011,37 +944,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         progress = update_dict['progress']
         message = update_dict['message']
         self._update_status(message, int(progress))
-
-    # def _register_controls(self):
-    #     """Register all controls with the base widget"""
-    #     controls = [
-    #         self.intensity_slider,
-    #         self.min_spinbox,
-    #         self.max_spinbox,
-    #         self.gaussian_sigma_spin,
-    #         self.gaussian_sigma_slider,  # Add new slider
-    #         self.registration_mode_combo,
-    #         self.preview_check,
-    #         self.preprocess_btn,
-    #         self.reset_btn,
-    #         self.bead_radio,
-    #         self.reference_radio,
-    #         self.cell_radio,
-    #         self.progress_bar,
-    #         self.status_label,
-    #         self.bead_status,
-    #         self.reference_status,
-    #         self.cell_status,
-    #         self.cell_intensity_slider,
-    #         self.cell_min_spinbox,
-    #         self.cell_max_spinbox,
-    #         self.cell_gaussian_sigma_spin,
-    #         self.cell_gaussian_sigma_slider,  # Add new cell slider
-    #         self.save_btn,
-    #     ]
-    #
-    #     for control in controls:
-    #         self.register_control(control)
 
     def _update_sigma_from_slider(self):
         """Update sigma spinbox from slider value"""

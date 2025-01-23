@@ -7,14 +7,17 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog
 )
 
-from .batch_analysis_widget import BatchAnalysisWidget
-from .displacement_analysis_widget import DisplacementAnalysisWidget
-from .fttc_widget import FTTCWidget
 from .parameter_manager import ParameterManager
-from .preprocessing_widget import PreprocessingWidget
 from .data_manager import DataManager
 from .visualization_manager import VisualizationManager
-from .msm_widget import MSMWidget
+
+from .preprocessing_widget import PreprocessingWidget
+# from .displacement_analysis_widget import DisplacementAnalysisWidget
+# from .fttc_widget import FTTCWidget
+# from .msm_widget import MSMWidget
+# from .batch_analysis_widget import BatchAnalysisWidget
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -91,40 +94,40 @@ class napariTFMWidget(QWidget):
         )
         self.preprocessing_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
-        self.displacement_widget = DisplacementAnalysisWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager
-        )
-
-        self.force_widget = FTTCWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager
-        )
-
-        self.msm_widget = MSMWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager
-        )
-
-        self.batch_widget = BatchAnalysisWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager
-        )
+        # self.displacement_widget = DisplacementAnalysisWidget(
+        #     self.viewer,
+        #     self.data_manager,
+        #     self.parameter_manager,
+        #     self.visualization_manager
+        # )
+        #
+        # self.force_widget = FTTCWidget(
+        #     self.viewer,
+        #     self.data_manager,
+        #     self.parameter_manager,
+        #     self.visualization_manager
+        # )
+        #
+        # self.msm_widget = MSMWidget(
+        #     self.viewer,
+        #     self.data_manager,
+        #     self.parameter_manager,
+        #     self.visualization_manager
+        # )
+        #
+        # self.batch_widget = BatchAnalysisWidget(
+        #     self.viewer,
+        #     self.data_manager,
+        #     self.parameter_manager,
+        #     self.visualization_manager
+        # )
 
         # Add widgets to tabs
         tabs.addTab(self.preprocessing_widget, "Preprocessing")
-        tabs.addTab(self.displacement_widget, "Displacement")
-        tabs.addTab(self.force_widget, "Force Analysis")
-        tabs.addTab(self.msm_widget, "Stress Analysis")
-        tabs.addTab(self.batch_widget, "Batch Analysis")
+        # tabs.addTab(self.displacement_widget, "Displacement")
+        # tabs.addTab(self.force_widget, "Force Analysis")
+        # tabs.addTab(self.msm_widget, "Stress Analysis")
+        # tabs.addTab(self.batch_widget, "Batch Analysis")
 
         # Add tabs to container
         container_layout.addWidget(tabs)
@@ -290,12 +293,11 @@ class napariTFMWidget(QWidget):
 
     def connect_signals(self):
         """Connect signals between components"""
-        # Existing signal connections
         self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
-        self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
-        self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
-        self.force_widget.force_calculated.connect(self._on_force_completed)
-        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
+        # self.preprocessing_widget.processing_failed.connect(self._on_preprocessing_failed)
+        # self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
+        # self.force_widget.force_calculated.connect(self._on_force_completed)
+        # self.msm_widget.stress_calculated.connect(self._on_stress_completed)
 
         # Connect parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
@@ -372,18 +374,6 @@ class napariTFMWidget(QWidget):
                 logger.error(f"Error clearing data: {str(e)}")
                 QMessageBox.critical(self, "Error", f"Failed to clear data: {str(e)}")
 
-    # def _on_calibration_changed(self):
-    #     """Handle changes to calibration values"""
-    #     # Notify all widgets that calibration has changed
-    #     for widget in [
-    #         self.preprocessing_widget,
-    #         self.displacement_widget,
-    #         self.force_widget,
-    #         self.msm_widget,
-    #         self.batch_widget
-    #     ]:
-    #         if hasattr(widget, '_update_calibration'):
-    #             widget._update_calibration()
 
     def _on_preprocessing_completed(self, results):
         """Handle completion of preprocessing"""
@@ -409,10 +399,10 @@ class napariTFMWidget(QWidget):
         self.visualization_manager.update_preprocessing_visualization(results)
         self.displacement_widget._update_ui_state()
 
-    def _on_preprocessing_failed(self, error_msg):
-        """Handle preprocessing failure"""
-        logger.error(f"Preprocessing failed: {error_msg}")
-        QMessageBox.critical(self, "Error", f"Preprocessing failed: {error_msg}")
+    # def _on_preprocessing_failed(self, error_msg):
+    #     """Handle preprocessing failure"""
+    #     logger.error(f"Preprocessing failed: {error_msg}")
+    #     QMessageBox.critical(self, "Error", f"Preprocessing failed: {error_msg}")
 
     def _on_displacement_completed(self, results):
         """Handle completion of displacement analysis"""
