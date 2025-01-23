@@ -181,6 +181,42 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 value = self.parameter_manager.get_value(name)
                 self._safe_set_value(spin, value)
 
+            preprocessing_params = [
+                'min_intensity', 'max_intensity', 'gaussian_sigma',
+                'cell_min_intensity', 'cell_max_intensity', 'cell_gaussian_sigma',
+                'registration_mode'
+            ]
+
+            for name in preprocessing_params:
+                if name in self.parameter_spins or name in self.parameter_combos:
+                    if name == 'registration_mode':  # Handle combobox
+                        combo = self.parameter_combos[name]
+                        combo.currentTextChanged.connect(
+                            lambda text, name=name: self.parameter_manager.set_value(name, text)
+                        )
+                        self.parameter_manager.register_callback(
+                            name,
+                            lambda value, combo=combo: self._safe_set_combo_text(combo, value)
+                        )
+                    else:  # Handle spinboxes
+                        spin = self.parameter_spins[name]
+                        spin.valueChanged.connect(
+                            lambda value, name=name: self.parameter_manager.set_value(name, float(value))
+                        )
+                        self.parameter_manager.register_callback(
+                            name,
+                            lambda value, spin=spin: self._safe_set_value(spin, float(value))
+                        )
+                    # Set initial value
+                    try:
+                        value = self.parameter_manager.get_value(name)
+                        if name == 'registration_mode':
+                            self._safe_set_combo_text(combo, value)
+                        else:
+                            self._safe_set_value(spin, value)
+                    except KeyError:
+                        print(f"Warning: Preprocessing parameter {name} not found in parameter manager")
+
             # Special handling for Young's modulus (convert Pa to kPa for display)
             young_spin = self.parameter_spins['young_modulus']
             young_spin.valueChanged.connect(
