@@ -37,6 +37,7 @@ class DataManager:
 
         # 5. Stress results
         self._stress_tensor: Optional[np.ndarray] = None  # (t, x, y, 2, 2)
+        self._mask_data: Optional[np.ndarray] = None  # (t, x, y)
         self._stress_params: Optional[Dict[str, Any]] = None
 
     # Input data setters with validation
@@ -130,13 +131,26 @@ class DataManager:
         for attr in vars(self):
             setattr(self, attr, None)
 
-    def get_data_status(self) -> Dict[str, bool]:
-        """Get status of all data entries."""
-        return {
-            'input_bead_stack': self._input_bead_stack is not None,
-            'input_reference': self._input_reference is not None,
-            'input_cell_stack': self._input_cell_stack is not None,
-            'preprocessed_bead_stack': self._preprocessed_bead_stack is not None,
-            'preprocessed_reference': self._preprocessed_reference is not None,
-            'preprocessed_cell_stack': self._preprocessed_cell_stack is not None,
-        }
+    def get_mask_data(self):
+        """Get the mask data."""
+        return self._mask_data
+
+    def set_mask_data(self, analysis_mask, visualization_mask=None, **kwargs):
+        """Set the mask data."""
+        self._mask_data = analysis_mask
+
+    def get_force_data(self):
+        """Get the force data."""
+        return self._force_data
+
+    def set_force_data(self, force_data):
+        """Set the force data."""
+        self._force_data = force_data
+
+    def get_stress_data(self):
+        """Get the stress data."""
+        return self._stress_data
+
+    def set_stress_data(self, stress_data):
+        """Set the stress data."""
+        self._stress_data = stress_data

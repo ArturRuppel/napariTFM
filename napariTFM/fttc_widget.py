@@ -49,13 +49,226 @@ class FTTCWidget(BaseAnalysisWidget):
         self._update_ui_state()
 
         # Connect to parameter manager signals
-        if hasattr(self.parameter_manager, 'parameter_changed'):
-            self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
-        else:
-            print("Warning: ParameterManager does not have parameter_changed signal")
+
+        self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
 
         # Initialize widget with current parameter values
         self._sync_widget_with_parameters()
+
+    def _validate_input_data(self) -> bool:
+        """Validate required input data is available."""
+        # Get displacement field from data manager
+        displacement_field = getattr(self.data_manager, '_displacement_field', None)
+        displacement_params = getattr(self.data_manager, '_displacement_params', None)
+
+        if displacement_field is None or displacement_params is None:
+            return False
+
+        # Check if displacement field has proper shape and type
+        if not isinstance(displacement_field, np.ndarray):
+            return False
+
+        # Displacement field should be 4D: (time, x, y, 2)
+        if displacement_field.ndim != 4:
+            return False
+
+        # Store parameters for later use
+        self._pixel_size = displacement_params.get('pixel_size')
+        self._downscale_factor = displacement_params.get('downscale_factor', 1)
+
+        return True
+
+    def calculate_forces(self):
+        """Calculate traction forces for all frames."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Starting force calculation...", 0)
+
+            # Get displacement field from data manager
+            displacement_field = self.data_manager._displacement_field
+
+            self._initialize_calculator()
+
+            # Get parameters from parameter manager
+            regularization = self.parameter_manager.get_value('regularization')
+            auto_gcv = self.parameter_manager.get_value('auto_gcv')
+
+            # Prepare data structure to collect results
+            self.force_results = {
+                'tx': [],
+                'ty': []
+            }
+
+            # Create and configure worker for batch processing
+            @thread_worker
+            def process_frames():
+                for frame_idx, frame_data in enumerate(displacement_field):
+                    shape = frame_data.shape[:-1]
+                    x = np.arange(shape[1])
+                    y = np.arange(shape[0])
+                    pos = np.array(np.meshgrid(x, y, indexing='xy'))
+                    vec = np.array([
+                        frame_data[..., 0].flatten(),
+                        frame_data[..., 1].flatten()
+                    ])
+
+                    pix_per_mu = 1 / (self._pixel_size * self._downscale_factor)
+
+                    if auto_gcv:
+                        lam = self.calculator._find_regularization(pos, vec)
+                    else:
+                        lam = regularization
+
+                    results = self.calculator._perform_tfm(pos, vec, pix_per_mu, lam)
+                    yield frame_idx, results
+
+            # Create worker and connect signals
+            worker = process_frames()
+
+            def handle_frame(result):
+                try:
+                    frame_idx, (_, fnorm, f, _, _, energy, force, _, _) = result
+                    self.force_results['tx'].append(f[0])
+                    self.force_results['ty'].append(f[1])
+
+                    progress = (frame_idx + 1) / len(displacement_field) * 100
+                    self._update_status(
+                        f"Processing frame {frame_idx + 1}/{len(displacement_field)}...\n"
+                        f"Energy: {energy:.2e} J\n"
+                        f"Total force: {force:.2e} N",
+                        progress
+                    )
+                except Exception as e:
+                    self._handle_error(f"Error processing frame {frame_idx}: {str(e)}")
+
+            def handle_completion():
+                try:
+                    if not self.force_results['tx']:
+                        raise ValueError("No frames were successfully processed")
+
+                    # Convert lists to arrays
+                    self.force_results['tx'] = np.stack(self.force_results['tx'])
+                    self.force_results['ty'] = np.stack(self.force_results['ty'])
+
+                    # Store results in data manager
+                    force_field = np.stack([self.force_results['tx'], self.force_results['ty']], axis=-1)
+
+                    # Prepare force parameters
+                    force_params = {
+                        'young_modulus': self.parameter_manager.get_value('young_modulus'),
+                        'poisson_ratio': self.parameter_manager.get_value('poisson_ratio'),
+                        'gel_height': self.parameter_manager.get_value('gel_height'),
+                        'pixel_size': self._pixel_size,
+                        'regularization': self.parameter_manager.get_value('regularization'),
+                        'mesh_size': 1,  # hardcoded
+                        'lanczos_exp': self.parameter_manager.get_value('lanczos_exp'),
+                        'downscale_factor': self._downscale_factor,
+                        'visualization': {
+                            'vector_stride': self.parameter_manager.get_value('force_vector_stride'),
+                            'arrow_scale': self.parameter_manager.get_value('force_arrow_scale'),
+                            'f_max': self.parameter_manager.get_value('f_max')
+                        }
+                    }
+
+                    # Update data manager
+                    self.data_manager._force_field = force_field
+                    self.data_manager._force_params = force_params
+
+                    # Handle visualization and UI updates
+                    self._handle_force_results(self.force_results)
+                except Exception as e:
+                    self._handle_error(f"Error finalizing results: {str(e)}")
+                finally:
+                    self._set_controls_enabled(True)
+
+            worker.yielded.connect(handle_frame)
+            worker.finished.connect(handle_completion)
+            worker.errored.connect(self._handle_error)
+
+            # Start processing
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self._set_controls_enabled(True)
+
+    def _load_displacement(self):
+        """Load displacement data from files."""
+        try:
+            # Get file path
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Displacement Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                # Load data using numpy
+                displacement_data = np.load(file_path, allow_pickle=True).item()
+
+                # Validate the loaded data
+                if 'flows' not in displacement_data:
+                    raise ValueError("Invalid displacement data: 'flows' not found")
+
+                flows = np.array(displacement_data['flows'])
+                parameters = displacement_data.get('parameters', {})
+
+                # Handle flow array reshaping if needed
+                if len(flows.shape) == 3:  # If flows is (frames, height*2, width)
+                    frames, height_doubled, width = flows.shape
+                    height = height_doubled // 2
+                    flows = flows.reshape(frames, 2, height, width).transpose(0, 2, 3, 1)
+
+                # Update data manager with new format
+                self.data_manager._displacement_field = flows
+                self.data_manager._displacement_params = parameters
+
+                # Update UI state
+                self._update_ui_state()
+
+                self._update_status(f"Displacement data successfully loaded from:\n{file_path}", 100)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load displacement data: {str(e)}"
+            )
+
+    def _update_ui_state(self):
+        """Update UI elements based on current state."""
+        # Check displacement field availability
+        has_displacement = False
+        displacement_field = getattr(self.data_manager, '_displacement_field', None)
+
+        if displacement_field is not None and isinstance(displacement_field, np.ndarray):
+            try:
+                self.displacement_status.setText(f"Loaded : {displacement_field.shape}")
+                has_displacement = True
+            except Exception as e:
+                self.displacement_status.setText(f"Error ({str(e)})")
+        else:
+            self.displacement_status.setText("Not loaded")
+
+        # Update button states based on data availability and analysis state
+        if self.is_analysis_running:
+            self.calculate_btn.setEnabled(False)
+            self.preview_btn.setEnabled(False)
+            self.gcv_button.setEnabled(False)
+            self.status_label.setText("Analysis in progress...")
+        else:
+            self.calculate_btn.setEnabled(has_displacement)
+            self.preview_btn.setEnabled(has_displacement)
+            self.gcv_button.setEnabled(has_displacement and not self.auto_gcv_checkbox.isChecked())
+
+            if has_displacement:
+                self.status_label.setText("Ready for force calculation")
+            else:
+                self.status_label.setText("Missing required displacement data")
 
     def _sync_widget_with_parameters(self):
         """Sync widget values with parameter manager values"""
@@ -87,15 +300,9 @@ class FTTCWidget(BaseAnalysisWidget):
             self.gcv_button.setEnabled(not auto_gcv)
 
             # Sync visualization parameters
-            self.visualization_params['vector_stride'].setValue(
-                self.parameter_manager.get_value('force_vector_stride') or 20
-            )
-            self.visualization_params['arrow_scale'].setValue(
-                self.parameter_manager.get_value('force_arrow_scale') or 1.0
-            )
-            self.visualization_params['f_max'].setValue(
-                self.parameter_manager.get_value('f_max') or 1000.0
-            )
+            self.vector_stride_spin.setValue(self.parameter_manager.get_value('force_vector_stride'))
+            self.arrow_scale_spin.setValue(self.parameter_manager.get_value('force_arrow_scale'))
+            self.f_max_spin.setValue(self.parameter_manager.get_value('f_max'))
 
         except Exception as e:
             print(f"Error syncing parameters: {str(e)}")
@@ -395,121 +602,6 @@ class FTTCWidget(BaseAnalysisWidget):
         self.setLayout(main_layout)
         self._register_controls()
 
-    def calculate_forces(self):
-        """Calculate traction forces for all frames."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Starting force calculation...", 0)
-
-            flows = self.data_manager.displacement_results['flows']
-            self._initialize_calculator()
-
-            # Get parameters from parameter manager
-            regularization = self.parameter_manager.get_value('regularization')
-            auto_gcv = self.parameter_manager.get_value('auto_gcv')
-
-            # Prepare data structure to collect results
-            self.force_results = {
-                'tx': [],
-                'ty': []
-            }
-
-            # Create and configure worker for batch processing
-            @thread_worker
-            def process_frames():
-                for frame_idx, flow in enumerate(flows):
-                    shape = flow.shape[:-1]
-                    x = np.arange(shape[1])
-                    y = np.arange(shape[0])
-                    pos = np.array(np.meshgrid(x, y, indexing='xy'))
-                    vec = np.array([
-                        flow[..., 0].flatten(),
-                        flow[..., 1].flatten()
-                    ])
-
-                    # Get pixel size and downscale factor
-                    disp_params = self.data_manager.displacement_results.get('parameters', {})
-                    pixel_size = disp_params.get('pixel_size')
-                    downscale_factor = disp_params.get('downscale_factor', 1)
-                    pix_per_mu = 1 / (pixel_size * downscale_factor)
-
-                    if auto_gcv:
-                        lam = self.calculator._find_regularization(pos, vec)
-                    else:
-                        lam = regularization
-
-                    results = self.calculator._perform_tfm(pos, vec, pix_per_mu, lam)
-                    yield frame_idx, results
-
-            # Create worker and connect signals
-            worker = process_frames()
-
-            def handle_frame(result):
-                try:
-                    frame_idx, (_, fnorm, f, _, _, energy, force, _, _) = result
-                    self.force_results['tx'].append(f[0])
-                    self.force_results['ty'].append(f[1])
-
-                    progress = (frame_idx + 1) / len(flows) * 100
-                    self._update_status(
-                        f"Processing frame {frame_idx + 1}/{len(flows)}...\n"
-                        f"Energy: {energy:.2e} J\n"
-                        f"Total force: {force:.2e} N",
-                        progress
-                    )
-                except Exception as e:
-                    self._handle_error(f"Error processing frame {frame_idx}: {str(e)}")
-
-            def handle_completion():
-                try:
-                    if not self.force_results['tx']:
-                        raise ValueError("No frames were successfully processed")
-
-                    # Convert lists to arrays
-                    self.force_results['tx'] = np.stack(self.force_results['tx'])
-                    self.force_results['ty'] = np.stack(self.force_results['ty'])
-
-                    # Add parameters
-                    self.force_results['parameters'] = {
-                        'young_modulus': self.parameter_manager.get_value('young_modulus'),
-                        'poisson_ratio': self.parameter_manager.get_value('poisson_ratio'),
-                        'gel_height': self.parameter_manager.get_value('gel_height'),
-                        'pixel_size': self._pixel_size,
-                        'regularization': 10 ** self.parameter_manager.get_value('regularization'),
-                        'mesh_size': 1,  # hardcoded
-                        'lanczos_exp': self.parameter_manager.get_value('lanczos_exp'),
-                        'downscale_factor': self._downscale_factor,
-                        'visualization': {
-                            'vector_stride': self.parameter_manager.get_value('force_vector_stride'),
-                            'arrow_scale': self.parameter_manager.get_value('force_arrow_scale'),
-                            'f_max': self.parameter_manager.get_value('f_max')
-                        }
-                    }
-
-                    self._handle_force_results(self.force_results)
-                except Exception as e:
-                    self._handle_error(f"Error finalizing results: {str(e)}")
-                finally:
-                    self._set_controls_enabled(True)
-
-            def handle_error(error):
-                self._handle_error(str(error))
-                self._set_controls_enabled(True)
-
-            worker.yielded.connect(handle_frame)
-            worker.finished.connect(handle_completion)
-            worker.errored.connect(handle_error)
-
-            # Start processing
-            worker.start()
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self._set_controls_enabled(True)
-
     def _create_parameters_group(self) -> QGroupBox:
         """Create a consolidated parameters group."""
         # Create all spin boxes first
@@ -692,55 +784,6 @@ class FTTCWidget(BaseAnalysisWidget):
         self.visualization_params['arrow_scale'].valueChanged.connect(self._update_parameters)
         self.visualization_params['f_max'].valueChanged.connect(self._update_parameters)
 
-    def _load_displacement(self):
-        """Load displacement data from files."""
-        try:
-            # Get file path
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select Displacement Data File",
-                os.path.expanduser("~"),
-                "NumPy Files (*.npy)"
-            )
-
-            if file_path:
-                # Load data using numpy
-                displacement_data = np.load(file_path, allow_pickle=True).item()
-
-                # Validate the loaded data
-                if 'flows' not in displacement_data:
-                    raise ValueError("Invalid displacement data: 'flows' not found")
-
-                flows = np.array(displacement_data['flows'])
-                parameters = displacement_data.get('parameters', {})
-
-                # Handle flow array reshaping if needed
-                if len(flows.shape) == 3:  # If flows is (frames, height*2, width)
-                    frames, height_doubled, width = flows.shape
-                    height = height_doubled // 2
-                    flows = flows.reshape(frames, 2, height, width).transpose(0, 2, 3, 1)
-
-                # Create results dictionary
-                results = {
-                    'flows': flows,
-                    'parameters': parameters
-                }
-
-                # Update data manager
-                self.data_manager.displacement_results = results
-
-                # Update UI state
-                self._update_ui_state()
-
-                self._update_status(f"Displacement data successfully loaded from:\n{file_path}", 100)
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to load displacement data: {str(e)}"
-            )
-
     def _toggle_auto_gcv(self, state):
         """Enable or disable automatic GCV calculation per frame."""
         self.regularization_spin.setEnabled(not state)
@@ -766,45 +809,6 @@ class FTTCWidget(BaseAnalysisWidget):
             "Error",
             f"An error occurred during calculation:\n{error_message}"
         )
-
-    def _update_ui_state(self):
-        """Update UI elements based on current state."""
-        # Check displacement results availability
-        has_displacement = False
-        if hasattr(self.data_manager, 'displacement_results'):
-            results = self.data_manager.displacement_results
-            if results and isinstance(results, dict) and 'flows' in results:
-                flows = results['flows']
-                try:
-                    # Convert to numpy array if it isn't already
-                    if not isinstance(flows, np.ndarray):
-                        flows = np.array(flows)
-                    self.displacement_status.setText(f"Loaded : {flows.shape}")
-                    has_displacement = True  # Set to True only if we successfully validated the data
-                except Exception as e:
-                    self.displacement_status.setText(f"Error ({str(e)})")
-            else:
-                self.displacement_status.setText("Not loaded")
-        else:
-            self.displacement_status.setText("Not loaded")
-
-        # Update button states based on data availability and analysis state
-        if self.is_analysis_running:
-            # If analysis is running, disable the buttons regardless of data availability
-            self.calculate_btn.setEnabled(False)
-            self.preview_btn.setEnabled(False)
-            self.gcv_button.setEnabled(False)  # Also disable GCV button during analysis
-            self.status_label.setText("Analysis in progress...")
-        else:
-            # If no analysis is running, enable buttons if we have valid displacement data
-            self.calculate_btn.setEnabled(has_displacement)
-            self.preview_btn.setEnabled(has_displacement)
-            self.gcv_button.setEnabled(has_displacement and not self.auto_gcv_checkbox.isChecked())  # Enable GCV button only if we have data and auto-GCV is off
-
-            if has_displacement:
-                self.status_label.setText("Ready for force calculation")
-            else:
-                self.status_label.setText("Missing required displacement data")
 
     def _set_controls_enabled(self, enabled: bool):
         """Enable or disable all registered controls."""
@@ -1016,30 +1020,6 @@ class FTTCWidget(BaseAnalysisWidget):
             self._handle_error(f"Cleanup failed: {str(e)}")
 
         super().cleanup()
-
-    def _validate_input_data(self) -> bool:
-        """Validate required input data is available."""
-        if not self.data_manager.displacement_results:
-            return False
-
-        if 'flows' not in self.data_manager.displacement_results:
-            return False
-
-        # Get flows data
-        flows = self.data_manager.displacement_results['flows']
-
-        # Check if flows is None or empty
-        if flows is None or not isinstance(flows, (list, np.ndarray)) or len(flows) == 0:
-            return False
-
-        # Ensure proper shape
-        if not isinstance(flows, np.ndarray):
-            flows = np.array(flows)
-
-        if flows.ndim < 4:  # Should be (frames, height, width, 2)
-            return False
-
-        return True
 
     def _save_force_data(self):
         """Save force data to files."""

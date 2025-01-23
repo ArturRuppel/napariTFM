@@ -73,8 +73,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 'vector_stride': self.parameter_manager.get_value('disp_vector_stride'),
                 'arrow_scale': self.parameter_manager.get_value('disp_arrow_scale')
             },
-            'pixel_size': self.pixel_size,
-            'frame_interval': self.frame_length
+            'pixel_size': self.parameter_manager.get_value('pixel_size'),
+            'frame_interval': self.parameter_manager.get_value('frame_length')
         }
 
     def _load_data(self, data_type: str):
@@ -506,7 +506,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 self._update_status(
                     f"Displacement data successfully loaded from:\n"
                     f"{file_path}\n"
-                    f"Pixel size: {self.pixel_size} µm\n"
+                    f"Pixel size: {self.parameter_manager.get_value('pixel_size')} µm\n"
                     f"Frame interval: {self.frame_length} min",
                     100
                 )

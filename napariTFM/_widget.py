@@ -13,9 +13,9 @@ from .visualization_manager import VisualizationManager
 
 from .preprocessing_widget import PreprocessingWidget
 from .displacement_analysis_widget import DisplacementAnalysisWidget
-# from .fttc_widget import FTTCWidget
-# from .msm_widget import MSMWidget
-# from .batch_analysis_widget import BatchAnalysisWidget
+from .fttc_widget import FTTCWidget
+from .msm_widget import MSMWidget
+from .batch_analysis_widget import BatchAnalysisWidget
 
 
 
@@ -100,34 +100,34 @@ class napariTFMWidget(QWidget):
             self.parameter_manager,
             self.visualization_manager
         )
-        #
-        # self.force_widget = FTTCWidget(
-        #     self.viewer,
-        #     self.data_manager,
-        #     self.parameter_manager,
-        #     self.visualization_manager
-        # )
-        #
-        # self.msm_widget = MSMWidget(
-        #     self.viewer,
-        #     self.data_manager,
-        #     self.parameter_manager,
-        #     self.visualization_manager
-        # )
-        #
-        # self.batch_widget = BatchAnalysisWidget(
-        #     self.viewer,
-        #     self.data_manager,
-        #     self.parameter_manager,
-        #     self.visualization_manager
-        # )
+
+        self.force_widget = FTTCWidget(
+            self.viewer,
+            self.data_manager,
+            self.parameter_manager,
+            self.visualization_manager
+        )
+
+        self.msm_widget = MSMWidget(
+            self.viewer,
+            self.data_manager,
+            self.parameter_manager,
+            self.visualization_manager
+        )
+
+        self.batch_widget = BatchAnalysisWidget(
+            self.viewer,
+            self.data_manager,
+            self.parameter_manager,
+            self.visualization_manager
+        )
 
         # Add widgets to tabs
         tabs.addTab(self.preprocessing_widget, "Preprocessing")
         tabs.addTab(self.displacement_widget, "Displacement")
-        # tabs.addTab(self.force_widget, "Force Analysis")
-        # tabs.addTab(self.msm_widget, "Stress Analysis")
-        # tabs.addTab(self.batch_widget, "Batch Analysis")
+        tabs.addTab(self.force_widget, "Force Analysis")
+        tabs.addTab(self.msm_widget, "Stress Analysis")
+        tabs.addTab(self.batch_widget, "Batch Analysis")
 
         # Add tabs to container
         container_layout.addWidget(tabs)
@@ -295,8 +295,8 @@ class napariTFMWidget(QWidget):
         """Connect signals between components"""
         self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
         self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
-        # self.force_widget.force_calculated.connect(self._on_force_completed)
-        # self.msm_widget.stress_calculated.connect(self._on_stress_completed)
+        self.force_widget.force_calculated.connect(self._on_force_completed)
+        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
 
         # Connect parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
@@ -401,8 +401,8 @@ class napariTFMWidget(QWidget):
         """Handle completion of displacement analysis"""
         logger.info("Displacement analysis completed successfully")
         self.data_manager.displacement_results = results
-        # self.force_widget._update_ui_state()
-        # self.msm_widget._update_ui_state()
+        self.force_widget._update_ui_state()
+        self.msm_widget._update_ui_state()
 
     def _on_force_completed(self, results):
         """Handle completion of force calculation"""

@@ -491,7 +491,7 @@ class MSMWidget(BaseAnalysisWidget):
                 }
 
                 # Update data manager
-                self.data_manager.force_results = results
+                self.data_manager.set_force_results(results)
 
                 # Store pixel size and downscale factor as class variables
                 self._pixelsize = results['parameters']['pixel_size']
@@ -904,7 +904,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Update mask status
         has_mask = False
-        mask_stack = self.data_manager.mask_stack
+        mask_stack = self.data_manager.get_mask_data()
         if mask_stack is not None:
             try:
                 mask_shape = mask_stack.shape
@@ -1188,7 +1188,7 @@ class MSMWidget(BaseAnalysisWidget):
         """Preview stress calculation for the current frame."""
         try:
             # Check prerequisites
-            mask_stack = self.data_manager.mask_stack
+            mask_stack = self.data_manager.get_mask_data()
             if mask_stack is None:
                 raise ValueError("No mask loaded. Please load a mask first.")
 
@@ -1266,7 +1266,7 @@ class MSMWidget(BaseAnalysisWidget):
         """Run stress analysis for all frames."""
         try:
             # Validate prerequisites
-            mask_stack = self.data_manager.mask_stack
+            mask_stack = self.data_manager.get_mask_data()
             if mask_stack is None:
                 raise ValueError("No mask loaded. Please load a mask first.")
 
@@ -1386,7 +1386,7 @@ class MSMWidget(BaseAnalysisWidget):
         """Generate and display preview of the triangular mesh for the current frame."""
         try:
             # Get mask from data manager
-            mask_stack = self.data_manager.mask_stack
+            mask_stack = self.data_manager.get_mask_data()
             if mask_stack is None:
                 raise ValueError("No mask loaded. Please create or load a mask first.")
 
