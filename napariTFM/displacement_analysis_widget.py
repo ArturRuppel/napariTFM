@@ -843,7 +843,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         # Add downscale factor to scaling parameters
         downscale_row = QHBoxLayout()
-        downscale_row.addWidget(QLabel("Local Averaging Factor:"))
+        downscale_row.addWidget(QLabel("Downscale Factor:"))
         downscale_spin = QSpinBox()
         downscale_spin.setRange(1, 10)
         downscale_spin.setSingleStep(1)

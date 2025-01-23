@@ -51,28 +51,31 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.current_data_type = 'beads'
         self.colorbar_manager = ColorbarManager()
 
-        # Setup UI and connect signals
-        self._setup_ui()
-        self._connect_signals()
-        self._connect_parameters()
+        # Block signals during setup
+        self.blockSignals(True)
+        try:
+            # Setup UI and connect signals
+            self._setup_ui()
+            self._connect_signals()
+            self._connect_parameters()
 
-        # Connect to parameter manager signals only after UI is set up
-        if hasattr(self.parameter_manager, 'parameter_changed'):
-            self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
-        else:
-            print("Warning: ParameterManager does not have parameter_changed signal")
+            # Initialize parameters with default values
+            self._sync_widget_with_parameters()
+
+            # Initialize button states
+            self._update_button_states()
+            self._update_ui_state()
+
+            # Connect to parameter manager signals only after UI is set up
+            if hasattr(self.parameter_manager, 'parameter_changed'):
+                self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
+        finally:
+            self.blockSignals(False)
 
         # Connect to viewer layer events
         self.viewer.layers.events.inserted.connect(self._on_layer_change)
         self.viewer.layers.events.removed.connect(self._on_layer_change)
         self.viewer.layers.selection.events.changed.connect(self._on_layer_selection_change)
-
-        # Initialize parameters with default values
-        self._sync_widget_with_parameters()
-
-        # Initialize button states
-        self._update_button_states()
-        self._update_ui_state()
 
     def _on_parameter_changed(self, param_name: str, value: object):
         """Handle parameter changes from the parameter manager"""
@@ -154,6 +157,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._block_parameter_widgets(True)
 
         try:
+            # Disconnect any existing connections to avoid duplicates
+            if hasattr(self.parameter_manager, 'parameter_changed'):
+                try:
+                    self.parameter_manager.parameter_changed.disconnect(self._on_parameter_changed)
+                except TypeError:
+                    pass  # Connection didn't exist
+
             # Connect intensity range controls
             self.min_spinbox.valueChanged.connect(
                 lambda value: self.parameter_manager.set_value('min_intensity', value)

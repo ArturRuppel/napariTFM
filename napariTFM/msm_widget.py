@@ -42,12 +42,7 @@ class MSMWidget(BaseAnalysisWidget):
         "Para. Pack": "Parallelogram Packing (experimental)"
     }
 
-    def __init__(
-            self,
-            viewer: "napari.Viewer",
-            data_manager: "DataManager",
-            parameter_manager: ParameterManager,
-            visualization_manager: "VisualizationManager"):
+    def __init__(self, viewer, data_manager, parameter_manager, visualization_manager):
         super().__init__(viewer, data_manager, visualization_manager)
 
         # Store reference to parameter manager
@@ -55,6 +50,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Initialize UI-specific attributes
         self.parameter_spins = {}
+        self.parameter_combos = {}
         self._pixel_size = None
         self._downscale_factor = None
         self.current_mask = None
@@ -63,18 +59,180 @@ class MSMWidget(BaseAnalysisWidget):
         self.analyzer = None
         self.mesh_generator = None
 
-        self._setup_ui()
-        self._connect_signals()
+        # Block signals during setup
+        self.blockSignals(True)
+        try:
+            self._setup_ui()
+            self._connect_signals()
 
-        # Connect to parameter manager signals
-        if hasattr(self.parameter_manager, 'parameter_changed'):
-            self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
-        else:
-            print("Warning: ParameterManager does not have parameter_changed signal")
+            # Ensure parameters are connected before syncing
+            self._connect_parameters()
 
-        # Initialize widget with current parameter values
-        self._sync_widget_with_parameters()
-        self._update_ui_state()
+            # Force an initial sync with parameter manager
+            self._sync_widget_with_parameters()
+
+            self._update_ui_state()
+
+            # Connect to parameter manager signals after everything is set up
+            if hasattr(self.parameter_manager, 'parameter_changed'):
+                self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
+        finally:
+            self.blockSignals(False)
+
+    def _connect_parameters(self):
+        """Connect widget controls to parameter manager."""
+        # Block signals during initial setup
+        self._block_parameter_widgets(True)
+
+        try:
+            # Connect basic parameters
+            basic_params = ['dilation', 'smoothing_sigma', 'density_factor', 'max_stress']
+            for name in basic_params:
+                if name in self.parameter_spins:
+                    spin = self.parameter_spins[name]
+                    # Connect widget to parameter manager
+                    spin.valueChanged.connect(
+                        lambda value, name=name: self.parameter_manager.set_value(name, value)
+                    )
+                    # Connect parameter manager to widget
+                    self.parameter_manager.register_callback(
+                        name,
+                        lambda value, spin=spin: self._safe_set_value(spin, value)
+                    )
+                    # Set initial value
+                    try:
+                        value = self.parameter_manager.get_value(name)
+                        self._safe_set_value(spin, value if value is not None else 0)
+                    except KeyError:
+                        print(f"Warning: Parameter {name} not found in parameter manager")
+
+            # Handle threshold parameter
+            if 'threshold' in self.parameter_spins:
+                threshold_widget = self.parameter_spins['threshold']
+                if isinstance(threshold_widget, tuple):
+                    # Handle tuple case (spinbox, slider)
+                    threshold_spin, threshold_slider = threshold_widget
+                    threshold_spin.valueChanged.connect(
+                        lambda value: self.parameter_manager.set_value('threshold', value)
+                    )
+                    threshold_slider.valueChanged.connect(
+                        lambda value: self.parameter_manager.set_value('threshold', value)
+                    )
+                else:
+                    # Handle single widget case
+                    threshold_widget.valueChanged.connect(
+                        lambda value: self.parameter_manager.set_value('threshold', value)
+                    )
+                # Connect parameter manager to widget(s)
+                self.parameter_manager.register_callback(
+                    'threshold',
+                    lambda value: self._safe_set_threshold(value)
+                )
+                # Set initial value
+                try:
+                    value = self.parameter_manager.get_value('threshold')
+                    self._safe_set_threshold(value if value is not None else 0)
+                except KeyError:
+                    print("Warning: Parameter threshold not found in parameter manager")
+
+            # Connect mesh algorithm combo box
+            if 'algorithm' in self.parameter_combos:
+                combo = self.parameter_combos['algorithm']
+                combo.currentTextChanged.connect(
+                    lambda text: self.parameter_manager.set_value(
+                        'mesh_algorithm',
+                        text.lower().replace('-', '_')
+                    )
+                )
+                self.parameter_manager.register_callback(
+                    'mesh_algorithm',
+                    lambda value: self._safe_set_combo_text(
+                        combo,
+                        value.replace('_', '-').title() if value else ''
+                    )
+                )
+                try:
+                    value = self.parameter_manager.get_value('mesh_algorithm')
+                    if value:
+                        self._safe_set_combo_text(combo, value.replace('_', '-').title())
+                except KeyError:
+                    print("Warning: Parameter mesh_algorithm not found in parameter manager")
+
+            # Connect optimization checkbox
+            if 'use_optimization' in self.parameter_spins:
+                checkbox = self.parameter_spins['use_optimization']
+                checkbox.stateChanged.connect(
+                    lambda state: self.parameter_manager.set_value(
+                        'use_optimization',
+                        state == Qt.Checked
+                    )
+                )
+                self.parameter_manager.register_callback(
+                    'use_optimization',
+                    lambda value: self._safe_set_checked(checkbox, bool(value))
+                )
+                try:
+                    value = self.parameter_manager.get_value('use_optimization')
+                    checkbox.setChecked(bool(value))
+                except KeyError:
+                    print("Warning: Parameter use_optimization not found in parameter manager")
+
+            # Connect sigma (Poisson ratio) spinbox
+            if 'sigma' in self.parameter_spins:
+                spin = self.parameter_spins['sigma']
+                spin.valueChanged.connect(
+                    lambda value: self.parameter_manager.set_value('poisson_ratio', value)
+                )
+                self.parameter_manager.register_callback(
+                    'poisson_ratio',
+                    lambda value: self._safe_set_value(spin, value if value is not None else 0.5)
+                )
+                try:
+                    value = self.parameter_manager.get_value('poisson_ratio')
+                    self._safe_set_value(spin, value if value is not None else 0.5)
+                except KeyError:
+                    print("Warning: Parameter poisson_ratio not found in parameter manager")
+
+        finally:
+            # Restore signal handling
+            self._block_parameter_widgets(False)
+    def _safe_set_threshold(self, value):
+        """Safely set threshold value for both spinbox and slider or single widget."""
+        if value is not None:
+            threshold_widget = self.parameter_spins['threshold']
+            if isinstance(threshold_widget, tuple):
+                threshold_spin, threshold_slider = threshold_widget
+                threshold_spin.blockSignals(True)
+                threshold_slider.blockSignals(True)
+                threshold_spin.setValue(value)
+                threshold_slider.setValue(value)
+                threshold_spin.blockSignals(False)
+                threshold_slider.blockSignals(False)
+            else:
+                threshold_widget.blockSignals(True)
+                threshold_widget.setValue(value)
+                threshold_widget.blockSignals(False)
+
+    def _safe_set_value(self, widget, value):
+        """Safely set widget value with signal blocking."""
+        if value is not None:
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
+
+    def _safe_set_combo_text(self, combo, text):
+        """Safely set combo box text with signal blocking."""
+        combo.blockSignals(True)
+        index = combo.findText(text, Qt.MatchFixedString)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+
+    def _safe_set_checked(self, checkbox, checked):
+        """Safely set checkbox state with signal blocking."""
+        checkbox.blockSignals(True)
+        checkbox.setChecked(checked)
+        checkbox.blockSignals(False)
 
     def _sync_widget_with_parameters(self):
         """Sync widget values with parameter manager values"""
