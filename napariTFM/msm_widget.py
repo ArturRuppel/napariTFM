@@ -160,7 +160,7 @@ class MSMWidget(BaseAnalysisWidget):
                     print("Warning: Parameter mesh_algorithm not found in parameter manager")
 
             # Connect optimization checkbox
-            if 'use_optimization' in self.parameter_spins:
+            if 'use_optimization' in self.parameter_checks:
                 checkbox = self.parameter_checks['use_optimization']
                 checkbox.stateChanged.connect(
                     lambda state: self.parameter_manager.set_value(
