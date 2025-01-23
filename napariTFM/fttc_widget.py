@@ -58,8 +58,8 @@ class FTTCWidget(BaseAnalysisWidget):
     def _validate_input_data(self) -> bool:
         """Validate required input data is available."""
         # Get displacement field from data manager
-        displacement_field = getattr(self.data_manager, '_displacement_field', None)
-        displacement_params = getattr(self.data_manager, '_displacement_params', None)
+        displacement_field = self.data_manager.displacement_field
+        displacement_params = self.data_manager.displacement_params
 
         if displacement_field is None or displacement_params is None:
             return False
@@ -78,6 +78,70 @@ class FTTCWidget(BaseAnalysisWidget):
 
         return True
 
+    def _handle_force_results(self, force_results):
+        try:
+            if not isinstance(force_results, dict):
+                return
+
+            # Create force field array
+            force_field = np.stack([force_results['tx'], force_results['ty']], axis=-1)
+
+            # Create force parameters dictionary
+            force_params = {
+                'young_modulus': self.parameter_manager.get_value('young_modulus'),
+                'poisson_ratio': self.parameter_manager.get_value('poisson_ratio'),
+                'gel_height': self.parameter_manager.get_value('gel_height'),
+                'pixel_size': self._pixel_size,
+                'regularization': self.parameter_manager.get_value('regularization'),
+                'mesh_size': 1,
+                'lanczos_exp': self.parameter_manager.get_value('lanczos_exp'),
+                'downscale_factor': self._downscale_factor,
+                'visualization': {
+                    'vector_stride': self.parameter_manager.get_value('force_vector_stride'),
+                    'arrow_scale': self.parameter_manager.get_value('force_arrow_scale'),
+                    'f_max': self.parameter_manager.get_value('f_max')
+                }
+            }
+
+            self.data_manager.set_force_results(force_field, force_params)
+
+            # Update visualization
+            self.visualization_manager.visualize_force_results(
+                force_results,
+                downscale_factor=force_params['downscale_factor']
+            )
+            self._handle_visualization_layers()
+
+            # Update colorbar
+            f_max = self.parameter_manager.get_value('f_max')
+            if f_max is not None:
+                self.colorbar_manager.update_limits(0, f_max)
+
+            # Get and display statistics from last frame
+            magnitude = np.sqrt(force_results['tx'][-1] ** 2 + force_results['ty'][-1] ** 2)
+            stats = {
+                'mean_force': np.mean(magnitude),
+                'max_force': np.max(magnitude),
+                'median_force': np.median(magnitude)
+            }
+
+            stats_text = (
+                f"Mean force: {stats['mean_force']:.2f} Pa\n"
+                f"Max force: {stats['max_force']:.2f} Pa\n"
+                f"Median force: {stats['median_force']:.2f} Pa"
+            )
+            self._update_status(stats_text, 100)
+
+            # Enable save button and emit results
+            self.save_force_btn.setEnabled(True)
+            self.force_calculated.emit(force_results)
+
+            # Update UI state to show new data status
+            self._update_ui_state()
+
+        except Exception as e:
+            self._handle_error(str(e))
+
     def calculate_forces(self):
         """Calculate traction forces for all frames."""
         try:
@@ -88,7 +152,7 @@ class FTTCWidget(BaseAnalysisWidget):
             self._update_status("Starting force calculation...", 0)
 
             # Get displacement field from data manager
-            displacement_field = self.data_manager._displacement_field
+            displacement_field = self.data_manager.displacement_field
 
             self._initialize_calculator()
 
@@ -174,8 +238,7 @@ class FTTCWidget(BaseAnalysisWidget):
                     }
 
                     # Update data manager
-                    self.data_manager._force_field = force_field
-                    self.data_manager._force_params = force_params
+                    self.data_manager.set_force_results(force_field, force_params)
 
                     # Handle visualization and UI updates
                     self._handle_force_results(self.force_results)
@@ -224,8 +287,27 @@ class FTTCWidget(BaseAnalysisWidget):
                     flows = flows.reshape(frames, 2, height, width).transpose(0, 2, 3, 1)
 
                 # Update data manager with new format
-                self.data_manager._displacement_field = flows
-                self.data_manager._displacement_params = parameters
+                self.data_manager.set_displacement_results(flows, parameters)
+
+                # Create results dictionary for visualization
+                results = {
+                    'flows': displacement_data['flows'],
+                    'parameters': parameters,
+                    'visualization_params': parameters['visualization_params'],
+                    'original_shape': displacement_data['flows'].shape[1:3],
+                    'flow_shape': displacement_data['flows'].shape[1:3],
+                    'units': 'micrometers'
+                }
+
+                # Update visualization
+                self.visualization_manager.visualize_displacement_results(
+                    results,
+                    downscale_factor=parameters.get('downscale_factor', 1)
+                )
+
+                self.colorbar_manager.update_limits(0, parameters.get('d_max', 10.0))
+
+                self._update_parent_calibration(parameters['pixel_size'], parameters.get('frame_interval', 1.0))
 
                 # Update UI state
                 self._update_ui_state()
@@ -299,10 +381,14 @@ class FTTCWidget(BaseAnalysisWidget):
             self.regularization_spin.setEnabled(not auto_gcv)
             self.gcv_button.setEnabled(not auto_gcv)
 
-            # Sync visualization parameters
-            self.vector_stride_spin.setValue(self.parameter_manager.get_value('force_vector_stride'))
-            self.arrow_scale_spin.setValue(self.parameter_manager.get_value('force_arrow_scale'))
-            self.f_max_spin.setValue(self.parameter_manager.get_value('f_max'))
+            # Sync visualization parameters using the dictionary
+            if hasattr(self, 'visualization_params'):
+                self.visualization_params['vector_stride'].setValue(
+                    self.parameter_manager.get_value('force_vector_stride'))
+                self.visualization_params['arrow_scale'].setValue(
+                    self.parameter_manager.get_value('force_arrow_scale'))
+                self.visualization_params['f_max'].setValue(
+                    self.parameter_manager.get_value('f_max'))
 
         except Exception as e:
             print(f"Error syncing parameters: {str(e)}")
@@ -330,29 +416,25 @@ class FTTCWidget(BaseAnalysisWidget):
             # Initialize calculator
             self._initialize_calculator()
 
-            # Get current frame data
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
+            # Get displacement field data and parameters
+            displacement_field = self.data_manager.displacement_field
+            displacement_params = self.data_manager.displacement_params
             current_frame = self.viewer.dims.current_step[0]
-            flow = flows[current_frame]
+            frame_data = displacement_field[current_frame]
 
             # Get spatial coordinates
-            x = np.arange(flow.shape[1])
-            y = np.arange(flow.shape[0])
-
-            # Get pixel size and downscale factor
-            disp_params = displacement_results.get('parameters', {})
-            self._pixel_size = disp_params.get('pixel_size')
-            self._downscale_factor = disp_params.get('downscale_factor', 1)
+            shape = frame_data.shape[:-1]
+            x = np.arange(shape[1])
+            y = np.arange(shape[0])
 
             # Create and start worker
             worker = self.calculator.calculate_traction(
                 x=x,
                 y=y,
-                u_data=flow[..., 0],
-                v_data=flow[..., 1],
-                dx=self._pixel_size * self._downscale_factor,
-                set_lam=10 ** self.parameter_manager.get_value('regularization')
+                u_data=frame_data[..., 0], # convert to pixel
+                v_data=frame_data[..., 1],
+                dx=displacement_params['pixel_size'] * displacement_params.get('downscale_factor', 1),
+                set_lam=self.parameter_manager.get_value('regularization')
             )
 
             # Connect worker signals
@@ -366,7 +448,6 @@ class FTTCWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(str(e))
             self._set_controls_enabled(True)
-
     def _update_parameters(self):
         """Update parameters in the parameter manager"""
         try:
@@ -432,8 +513,7 @@ class FTTCWidget(BaseAnalysisWidget):
             self._initialize_calculator()
 
             # Get current frame data
-            displacement_results = self.data_manager.displacement_results
-            flows = displacement_results['flows']
+            flows = self.data_manager.displacement_field
             current_frame = self.viewer.dims.current_step[0]
             flow = flows[current_frame]
 
@@ -443,8 +523,14 @@ class FTTCWidget(BaseAnalysisWidget):
             vec = np.array([flow[..., 0], flow[..., 1]])
 
             # Get pixel size and downscale factor from displacement results
-            disp_params = displacement_results.get('parameters', {})
+            disp_params = self.data_manager.displacement_params
+            if disp_params is None:
+                raise ValueError("No displacement parameters available")
+
             pixel_size = disp_params.get('pixel_size')
+            if pixel_size is None:
+                raise ValueError("Pixel size not found in displacement parameters")
+
             downscale_factor = disp_params.get('downscale_factor', 1)
 
             # Scale displacements
@@ -465,50 +551,6 @@ class FTTCWidget(BaseAnalysisWidget):
             self._handle_error(str(e))
             self._set_controls_enabled(True)
 
-    def _handle_force_results(self, force_results):
-        """Handle the completed force calculation results."""
-        try:
-            if not isinstance(force_results, dict):
-                return
-
-            # Update data manager and visualization
-            self.data_manager.force_results = force_results
-            self.visualization_manager.visualize_force_results(
-                force_results,
-                downscale_factor=force_results['parameters'].get('downscale_factor', 1)
-            )
-            self._handle_visualization_layers()
-
-            # Update colorbar
-            f_max = self.parameter_manager.get_value('f_max')
-            if f_max is not None:
-                self.colorbar_manager.update_limits(0, f_max)
-
-            # Get and display statistics from last frame
-            magnitude = np.sqrt(force_results['tx'][-1] ** 2 + force_results['ty'][-1] ** 2)
-            stats = {
-                'mean_force': np.mean(magnitude),
-                'max_force': np.max(magnitude),
-                'median_force': np.median(magnitude)
-            }
-
-            stats_text = (
-                f"Mean force: {stats['mean_force']:.2f} Pa\n"
-                f"Max force: {stats['max_force']:.2f} Pa\n"
-                f"Median force: {stats['median_force']:.2f} Pa"
-            )
-            self._update_status(stats_text, 100)
-
-            # Enable save button and emit results
-            self.save_force_btn.setEnabled(True)
-            self.force_calculated.emit(force_results)
-
-            # Update UI state to show new data status
-            self._update_ui_state()
-
-        except Exception as e:
-            self._handle_error(str(e))
-
     def _initialize_calculator(self):
         """Initialize the FTTC calculator with current parameters."""
         try:
@@ -518,22 +560,28 @@ class FTTCWidget(BaseAnalysisWidget):
             gel_height = self.parameter_manager.get_value('gel_height')
             lanczos_exp = self.parameter_manager.get_value('lanczos_exp')
 
-            # Get pixel size and downscale factor from displacement results
-            if self.data_manager.displacement_results:
-                disp_params = self.data_manager.displacement_results.get('parameters', {})
-                pixel_size = disp_params.get('pixel_size')
-                downscale_factor = disp_params.get('downscale_factor', 1)
+            # Get pixel size and downscale factor from displacement parameters
+            disp_params = self.data_manager.displacement_params
+            if disp_params is None:
+                raise ValueError("Displacement parameters are not set")
 
-                # Convert gel height from μm to pixels if specified
-                gel_height_p = None if gel_height is None else gel_height / (pixel_size * downscale_factor)
+            pixel_size = disp_params.get('pixel_size')
+            if pixel_size is None:
+                raise ValueError("Pixel size not found in displacement parameters")
 
-                self.calculator = FTTC(
-                    E=young_modulus,
-                    nu=poisson_ratio,
-                    mesh_size=1,  # hardcoded to 1
-                    lanczos_exp=lanczos_exp,
-                    gel_height=gel_height_p
-                )
+            downscale_factor = disp_params.get('downscale_factor', 1)
+
+            # Convert gel height from μm to pixels if specified
+            gel_height_p = None if gel_height is None else gel_height / (pixel_size * downscale_factor)
+
+            self.calculator = FTTC(
+                E=young_modulus,
+                nu=poisson_ratio,
+                mesh_size=1,  # hardcoded to 1
+                lanczos_exp=lanczos_exp,
+                gel_height=gel_height_p
+            )
+
         except Exception as e:
             self._handle_error(f"Error initializing calculator: {str(e)}")
 
@@ -553,6 +601,7 @@ class FTTCWidget(BaseAnalysisWidget):
 
         except Exception as e:
             self._handle_error(f"Error resetting parameters: {str(e)}")
+
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
@@ -829,12 +878,20 @@ class FTTCWidget(BaseAnalysisWidget):
         """Handle the preview calculation results."""
         try:
             # Unpack results
-            (_, _), fnorm, f, urec, u, energy, force, _, _ = results
+            (_, _), fnorm, f, urec, u, energy, force, _, _ = results # in N / px²
 
-            # Get current visualization parameters
+
+            # Get visualization parameters
             vector_stride = self.visualization_params['vector_stride'].value()
             arrow_scale = self.visualization_params['arrow_scale'].value()
             f_max = self.visualization_params['f_max'].value()
+
+            # Get downscale factor from displacement parameters
+            downscale_factor = 1  # default value
+            if hasattr(self.data_manager, '_displacement_params'):
+                disp_params = self.data_manager.displacement_params
+                if disp_params is not None:
+                    downscale_factor = disp_params.get('downscale_factor', 1)
 
             # Update visualization
             self.visualization_manager.visualize_force_preview(
@@ -842,7 +899,7 @@ class FTTCWidget(BaseAnalysisWidget):
                 f_max=f_max,
                 vector_stride=vector_stride,
                 arrow_scale=arrow_scale,
-                downscale_factor=self.data_manager.displacement_results.get('parameters', {}).get('downscale_factor', 1)
+                downscale_factor=downscale_factor
             )
 
             # Handle layer visibility and ordering
@@ -851,8 +908,11 @@ class FTTCWidget(BaseAnalysisWidget):
             # Update colorbar
             self.colorbar_manager.update_limits(0, f_max)
 
-            # Show statistics
+            # Calculate and show statistics
             magnitude = np.sqrt(f[0] ** 2 + f[1] ** 2)
+
+            print(f"Mean force: {np.mean(np.abs(magnitude)):.2f} Pa\n")
+
             self._update_status(
                 f"Preview statistics:\n"
                 f"Max force: {np.max(magnitude):.2f} Pa\n"
@@ -1054,7 +1114,7 @@ class FTTCWidget(BaseAnalysisWidget):
                         'young_modulus': float(results['parameters']['young_modulus']),
                         'poisson_ratio': float(results['parameters']['poisson_ratio']),
                         'gel_height': gel_height_m,
-                        'pixelsize': float(results['parameters']['pixel_size']),
+                        'pixe_lsize': float(results['parameters']['pixel_size']),
                         'regularization': float(results['parameters']['regularization']),
                         'lanczos_exp': int(results['parameters']['lanczos_exp']),
                         'downscale_factor': int(results['parameters'].get('downscale_factor', 1)),
@@ -1108,7 +1168,7 @@ class FTTCWidget(BaseAnalysisWidget):
                         'young_modulus': parameters['young_modulus'],
                         'poisson_ratio': parameters['poisson_ratio'],
                         'gel_height': None if parameters.get('gel_height') is None else parameters['gel_height'] * 1e6,
-                        'pixel_size': parameters['pixelsize'],
+                        'pixel_size': parameters['pixel_size'],
                         'regularization': parameters['regularization'],
                         'mesh_size': self.mesh_size,
                         'lanczos_exp': parameters['lanczos_exp'],
@@ -1138,6 +1198,8 @@ class FTTCWidget(BaseAnalysisWidget):
                 # Enable save button and emit results
                 self.save_force_btn.setEnabled(True)
                 self.force_calculated.emit(results)
+
+                self._update_parent_calibration(parameters['pixel_size'], parameters.get('frame_interval', 1.0))
 
                 # Update UI state to show new data status
                 self._update_ui_state()
@@ -1184,3 +1246,23 @@ class FTTCWidget(BaseAnalysisWidget):
 
         # Wait a brief moment for layers to be created
         QTimer.singleShot(10, update_visibility)
+
+    def _update_parent_calibration(self, pixel_size: float, frame_interval: float):
+        """Update calibration values in parent widget."""
+        try:
+            # Find parent widget instance
+            parent = self
+            while parent is not None:
+                if hasattr(parent, 'pixel_spin') and hasattr(parent, 'frame_spin'):
+                    break
+                parent = parent.parent()
+
+            if parent is not None:
+                # Update calibration values
+                parent.pixel_spin.setValue(pixel_size)
+                parent.frame_spin.setValue(frame_interval)
+            else:
+                self._update_status("Warning: Could not update calibration in parent widget", 100)
+
+        except Exception as e:
+            self._handle_error(f"Failed to update calibration: {str(e)}")
