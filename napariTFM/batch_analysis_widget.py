@@ -112,6 +112,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             print(f"Error syncing parameters: {str(e)}")
         finally:
             self._block_parameter_widgets(False)
+
     def _block_parameter_widgets(self, block: bool):
         """Block or unblock signals for all parameter widgets."""
         widgets = []
@@ -138,8 +139,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         for widget in widgets:
             widget.blockSignals(block)
 
-
-
     def _on_parameter_changed(self, param_name: str, value: Any):
         """Handle parameter changes from parameter manager."""
         # Only update if the change didn't come from this widget
@@ -148,8 +147,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 self._update_calibration()
             else:
                 self._sync_widget_with_parameters()
-
-
 
     def _connect_parameters(self):
         """Connect widget controls to parameter manager."""
@@ -313,7 +310,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 except KeyError:
                     print("Warning: Parameter use_optimization not found in parameter manager")
 
-
             # Handle comboboxes
             for name, combo in self.parameter_combos.items():
                 combo.currentTextChanged.connect(
@@ -377,24 +373,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         checkbox.setChecked(checked)
         checkbox.blockSignals(False)
 
-    # def _reset_widget(self):
-    #     """Reset widget state completely."""
-    #     # Block signals during reset
-    #     self.blockSignals(True)
-    #     try:
-    #         # Clear folder list
-    #         self.folder_list.clear()
-    #         self.folder_list_widget.clear()
-    #
-    #         # Sync with parameter manager
-    #         self._sync_widget_with_parameters()
-    #
-    #         # Update UI state
-    #         self._update_ui_state()
-    #
-    #     finally:
-    #         self.blockSignals(False)
-
     def _update_calibration(self):
         """Update widget based on calibration parameters."""
         try:
@@ -412,8 +390,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             print(f"Warning: Calibration parameter not found: {str(e)}")
         finally:
             self._block_parameter_widgets(False)
-
-
 
     def _create_general_params_group(self) -> QGroupBox:
         """Create general parameters group."""
@@ -728,7 +704,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         poisson_row.addWidget(poisson_spin)
         layout.addLayout(poisson_row)
 
-
         stress_row = QHBoxLayout()
         stress_row.addWidget(QLabel("Max Stress (mN/m):"))
         max_stress_spin = QDoubleSpinBox()
@@ -742,61 +717,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         group.setLayout(layout)
         return group
-
-    # def _connect_stress_parameters(self):
-    #     """Connect stress parameters to parameter manager."""
-    #     # Connect spinboxes
-    #     for name in ['threshold', 'dilation', 'smoothing_sigma', 'density_factor', 'max_stress']:
-    #         if name in self.parameter_spins:
-    #             spin = self.parameter_spins[name]
-    #             spin.valueChanged.connect(
-    #                 lambda value, name=name: self.parameter_manager.set_value(name, value)
-    #             )
-    #             self.parameter_manager.register_callback(
-    #                 name,
-    #                 lambda value, spin=spin: spin.setValue(value if value is not None else 0)
-    #             )
-    #             # Set initial value
-    #             try:
-    #                 value = self.parameter_manager.get_value(name)
-    #                 spin.setValue(value if value is not None else 0)
-    #             except KeyError:
-    #                 print(f"Warning: Parameter {name} not found in parameter manager")
-    #
-    #     # Connect mesh algorithm combo box
-    #     if 'mesh_algorithm' in self.parameter_combos:
-    #         combo = self.parameter_combos['mesh_algorithm']
-    #         combo.currentTextChanged.connect(
-    #             lambda text: self.parameter_manager.set_value('mesh_algorithm', text, category=ParameterCategory.STRESS)
-    #         )
-    #         self.parameter_manager.register_callback(
-    #             'mesh_algorithm',
-    #             lambda value, combo=combo: self._safe_set_combo_text(combo, value)
-    #         )
-    #         try:
-    #             value = self.parameter_manager.get_value('mesh_algorithm')
-    #             if value:
-    #                 combo.setCurrentText(value)
-    #         except KeyError:
-    #             print("Warning: Parameter mesh_algorithm not found in parameter manager")
-    #
-    #     # Connect optimization checkbox
-    #     if 'use_optimization' in self.parameter_checks:
-    #         checkbox = self.parameter_checks['use_optimization']
-    #         checkbox.stateChanged.connect(
-    #             lambda state: self.parameter_manager.set_value(
-    #                 'use_optimization', state == Qt.Checked
-    #             )
-    #         )
-    #         self.parameter_manager.register_callback(
-    #             'use_optimization',
-    #             lambda value, cb=checkbox: cb.setChecked(bool(value))
-    #         )
-    #         try:
-    #             value = self.parameter_manager.get_value('use_optimization')
-    #             checkbox.setChecked(bool(value))
-    #         except KeyError:
-    #             print("Warning: Parameter use_optimization not found in parameter manager")
 
     def _get_parameter_dict(self) -> dict:
         """Get dictionary of current parameter values."""
@@ -864,14 +784,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Create grid layout for buttons
         button_layout = QGridLayout()
 
-        # Add parameter management buttons (top row)
-        self.save_params_btn = QPushButton("Save Parameters")
-        self.load_params_btn = QPushButton("Load Parameters")
-        self.reset_params_btn = QPushButton("Reset Parameters")
-        button_layout.addWidget(self.save_params_btn, 0, 0)
-        button_layout.addWidget(self.load_params_btn, 0, 1)
-        button_layout.addWidget(self.reset_params_btn, 0, 2)
-
         # Add folder management and run buttons (bottom row)
         self.add_folder_btn = QPushButton("Add Folder")
         self.clear_folders_btn = QPushButton("Clear Folders")
@@ -883,66 +795,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         layout.addLayout(button_layout)
         group.setLayout(layout)
         return group
-
-    def _save_parameters(self):
-        """Save parameters to a YAML file."""
-        try:
-            file_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save Parameters",
-                "",
-                "YAML Files (*.yaml *.yml)",
-            )
-
-            if not file_path:
-                return
-
-            # Add .yaml extension if not present
-            if not file_path.lower().endswith(('.yaml', '.yml')):
-                file_path += '.yaml'
-
-            self.parameter_manager.save_to_file(file_path)
-            QMessageBox.information(self, "Success", "Parameters saved successfully!")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save parameters: {str(e)}")
-
-    def _load_parameters(self):
-        """Load parameters from a YAML file."""
-        try:
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Load Parameters",
-                "",
-                "YAML Files (*.yaml *.yml)",
-            )
-
-            if not file_path:
-                return
-
-            self.parameter_manager.load_from_file(file_path)
-            QMessageBox.information(self, "Success", "Parameters loaded successfully!")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load parameters: {str(e)}")
-
-    def _reset_parameters(self):
-        """Reset parameters to default values."""
-        try:
-            reply = QMessageBox.question(
-                self,
-                "Confirm Reset",
-                "Are you sure you want to reset all parameters to default values?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-
-            if reply == QMessageBox.Yes:
-                self.parameter_manager.reset_to_defaults()
-                QMessageBox.information(self, "Success", "Parameters reset to defaults!")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to reset parameters: {str(e)}")
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -979,40 +831,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self.add_folder_btn.clicked.connect(self._add_folder)
         self.clear_folders_btn.clicked.connect(self._clear_folders)
         self.run_analysis_btn.clicked.connect(self._run_batch_analysis)
-
-        # Add new signal connections
-        self.save_params_btn.clicked.connect(self._save_parameters)
-        self.load_params_btn.clicked.connect(self._load_parameters)
-        self.reset_params_btn.clicked.connect(self._reset_parameters)
-
-    # def _set_parameters(self, params: dict):
-    #     """Set parameter values in UI elements."""
-    #     # Update spinbox values
-    #     for name, value in params.items():
-    #         if name in self.parameter_spins:
-    #             self.parameter_spins[name].setValue(value)
-    #
-    #     # Update checkbox values
-    #     for name, value in params.items():
-    #         if name in self.parameter_checks:
-    #             self.parameter_checks[name].setChecked(value)
-    #
-    #     # Update combobox values
-    #     for name, value in params.items():
-    #         if name in self.parameter_combos:
-    #             index = self.parameter_combos[name].findText(
-    #                 value.capitalize(),
-    #                 Qt.MatchFixedString
-    #             )
-    #             if index >= 0:
-    #                 self.parameter_combos[name].setCurrentIndex(index)
-    #
-    #     # Update visualization checkboxes
-    #     for name, value in params.items():
-    #         if name.startswith('viz_'):
-    #             viz_name = name[4:]  # Remove 'viz_' prefix
-    #             if viz_name in self.visualization_checkboxes:
-    #                 self.visualization_checkboxes[viz_name].setChecked(value)
 
     def _create_status_frame(self) -> QFrame:
         """Create status frame."""
@@ -1471,11 +1289,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         has_folders = len(self.folder_list) > 0
         self.run_analysis_btn.setEnabled(has_folders)
         self.clear_folders_btn.setEnabled(has_folders)
-
-        # Parameter management buttons are always enabled
-        self.save_params_btn.setEnabled(True)
-        self.load_params_btn.setEnabled(True)
-        self.reset_params_btn.setEnabled(True)
 
     def _handle_error(self, error_message: str):
         """Handle error by showing message box."""
