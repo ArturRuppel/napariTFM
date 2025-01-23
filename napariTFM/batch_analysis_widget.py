@@ -97,9 +97,9 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 )
 
             # Sync optimization checkbox
-            if 'use_optimization' in self.parameter_spins:
+            if 'use_optimization' in self.parameter_checks:
                 self._safe_set_checked(
-                    self.parameter_spins['use_optimization'],
+                    self.parameter_checks['use_optimization'],
                     bool(self.parameter_manager.get_value('use_optimization'))
                 )
 
@@ -138,11 +138,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         for widget in widgets:
             widget.blockSignals(block)
 
-    # def _on_parameter_changed(self, param_name: str, value: object):
-    #     """Handle parameter changes from the parameter manager"""
-    #     # Only update if the change didn't come from this widget
-    #     if not self.signalsBlocked():
-    #         self._sync_widget_with_parameters()
+
 
     def _on_parameter_changed(self, param_name: str, value: Any):
         """Handle parameter changes from parameter manager."""
@@ -153,72 +149,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             else:
                 self._sync_widget_with_parameters()
 
-    # def _update_parameters(self):
-    #     """Update parameters in the parameter manager"""
-    #     try:
-    #         # Block signals temporarily
-    #         self.blockSignals(True)
-    #
-    #         # Update basic parameters
-    #         self.parameter_manager.set_value('pixel_size', self.parameter_spins['pixel_size'].value())
-    #         self.parameter_manager.set_value('frame_interval', self.parameter_spins['frame_interval'].value())
-    #
-    #         # Update threshold
-    #         threshold_spin, _ = self.parameter_spins['threshold']
-    #         self.parameter_manager.set_value('threshold', threshold_spin.value())
-    #
-    #         # Update numeric parameters
-    #         numeric_params = [
-    #             'dilation', 'smoothing_sigma', 'density_factor', 'sigma',
-    #             'max_stress', 'force_vector_stride', 'force_arrow_scale',
-    #             'f_max', 'lanczos_exp', 'poisson_ratio'
-    #         ]
-    #
-    #         for name in numeric_params:
-    #             if name in self.parameter_spins:
-    #                 self.parameter_manager.set_value(name, self.parameter_spins[name].value())
-    #
-    #         # Handle special cases
-    #         # Young's modulus (convert kPa to Pa)
-    #         self.parameter_manager.set_value('young_modulus',
-    #                                          self.parameter_spins['young_modulus'].value() * 1000)
-    #
-    #         # Gel height (None for infinite)
-    #         gel_height = self.parameter_spins['gel_height'].value()
-    #         self.parameter_manager.set_value('gel_height',
-    #                                          None if gel_height == 0 else gel_height)
-    #
-    #         # Regularization (convert from log10)
-    #         reg_value = 10 ** self.parameter_spins['regularization'].value()
-    #         if reg_value <= 0:
-    #             reg_value = 1e-4  # Minimum value
-    #         self.parameter_manager.set_value('regularization', reg_value)
-    #
-    #         # Update mesh algorithm
-    #         self.parameter_manager.set_value(
-    #             'mesh_algorithm',
-    #             self.parameter_combos['algorithm'].currentText().lower().replace('-', '_')
-    #         )
-    #
-    #         # Update checkboxes
-    #         for name in ['use_optimization', 'auto_gcv']:
-    #             if name in self.parameter_spins:
-    #                 self.parameter_manager.set_value(
-    #                     name,
-    #                     self.parameter_spins[name].isChecked()
-    #                 )
-    #
-    #         # Update visualization checkboxes
-    #         for viz_name, checkbox in self.visualization_checkboxes.items():
-    #             self.parameter_manager.set_value(
-    #                 f'save_{viz_name}',
-    #                 checkbox.isChecked()
-    #             )
-    #
-    #     except Exception as e:
-    #         print(f"Error updating parameters: {str(e)}")
-    #     finally:
-    #         self.blockSignals(False)
+
 
     def _connect_parameters(self):
         """Connect widget controls to parameter manager."""
@@ -778,7 +709,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             layout.addLayout(row)
 
         # Add optimization checkbox
-        self.parameter_checks['use_optimization'] = QCheckBox("Use Mesh Optimization")
+        self.parameter_checks['use_optimization'] = QCheckBox("Mesh Optimization")
         self.parameter_checks['use_optimization'].setChecked(True)
         self.parameter_checks['use_optimization'].setToolTip(
             "Enable mesh quality optimization after generation"

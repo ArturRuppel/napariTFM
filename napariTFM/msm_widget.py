@@ -51,6 +51,7 @@ class MSMWidget(BaseAnalysisWidget):
         # Initialize UI-specific attributes
         self.parameter_spins = {}
         self.parameter_combos = {}
+        self.parameter_checks = {}
         self._pixel_size = None
         self._downscale_factor = None
         self.current_mask = None
@@ -160,7 +161,7 @@ class MSMWidget(BaseAnalysisWidget):
 
             # Connect optimization checkbox
             if 'use_optimization' in self.parameter_spins:
-                checkbox = self.parameter_spins['use_optimization']
+                checkbox = self.parameter_checks['use_optimization']
                 checkbox.stateChanged.connect(
                     lambda state: self.parameter_manager.set_value(
                         'use_optimization',
@@ -262,7 +263,7 @@ class MSMWidget(BaseAnalysisWidget):
                 self.parameter_manager.get_value('smoothing_sigma'))
             self.parameter_spins['density_factor'].setValue(
                 self.parameter_manager.get_value('density_factor'))
-            self.parameter_spins['use_optimization'].setChecked(
+            self.parameter_checks['use_optimization'].setChecked(
                 self.parameter_manager.get_value('use_optimization'))
             self.parameter_spins['sigma'].setValue(
                 self.parameter_manager.get_value('poisson_ratio'))
@@ -294,7 +295,7 @@ class MSMWidget(BaseAnalysisWidget):
             self.parameter_manager.set_value('mesh_algorithm',
                                              self.parameter_spins['algorithm'].currentText())
             self.parameter_manager.set_value('use_optimization',
-                                             self.parameter_spins['use_optimization'].isChecked())
+                                             self.parameter_checks['use_optimization'].isChecked())
             self.parameter_manager.set_value('poisson_ratio',
                                              self.parameter_spins['sigma'].value())
             self.parameter_manager.set_value('max_stress',
@@ -319,7 +320,7 @@ class MSMWidget(BaseAnalysisWidget):
             self.parameter_spins['smoothing_sigma'],
             self.parameter_spins['density_factor'],
             self.parameter_spins['algorithm'],
-            self.parameter_spins['use_optimization'],
+            self.parameter_checks['use_optimization'],
             self.parameter_spins['sigma'],
             self.parameter_spins['max_stress']
         ]
@@ -342,22 +343,6 @@ class MSMWidget(BaseAnalysisWidget):
         self.parameter_spins['algorithm'].currentTextChanged.connect(
             lambda text: self.parameter_manager.set_value('mesh_algorithm', text)
         )
-
-        # Connect other parameters
-        params_to_connect = [
-            'threshold', 'dilation', 'smoothing_sigma',
-            'density_factor', 'use_optimization', 'sigma', 'max_stress'
-        ]
-        for param in params_to_connect:
-            widget = self.parameter_spins[param]
-            if isinstance(widget, tuple):  # Threshold (spin + slider)
-                spin, slider = widget
-                spin.valueChanged.connect(self._update_parameters)
-                slider.valueChanged.connect(self._update_parameters)
-            elif isinstance(widget, QCheckBox):
-                widget.stateChanged.connect(self._update_parameters)
-            else:
-                widget.valueChanged.connect(self._update_parameters)
 
     def _load_masks(self):
         """Load mask data from the active layer."""
@@ -444,23 +429,6 @@ class MSMWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Failed to load masks: {str(e)}")
             self.progress_bar.setValue(0)
-
-    # def _handle_frame_change(self, event=None):
-    #     """Handle frame changes in the viewer."""
-    #     # Only update if preview is enabled
-    #     if self.parameter_spins['show_preview'].isChecked():
-    #         self._update_mask_preview()
-
-    # def _handle_preview_state(self, state):
-    #     """Handle changes in the preview checkbox state."""
-    #     from qtpy.QtCore import Qt
-    #
-    #     if state == Qt.Checked:
-    #         self._update_mask_preview()
-    #     else:
-    #         # Remove preview layer if it exists
-    #         if 'Mask Preview' in self.viewer.layers:
-    #             self.viewer.layers.remove('Mask Preview')
 
     def _get_active_image_layer(self):
         """Get the currently active image layer."""
@@ -1108,7 +1076,7 @@ class MSMWidget(BaseAnalysisWidget):
                 elif param_name == "use_optimization":
                     spin = QCheckBox()
                     spin.setChecked(default)
-                    self.parameter_spins[param_name] = spin
+                    self.parameter_checks[param_name] = spin
                     param_layout.addWidget(spin)
 
                 elif param_name == "algorithm":
@@ -1260,7 +1228,7 @@ class MSMWidget(BaseAnalysisWidget):
                 young_modulus=1.0,
                 density_factor=self.parameter_spins['density_factor'].value(),
                 algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
-                use_optimization=self.parameter_spins['use_optimization'].isChecked()
+                use_optimization=self.parameter_checks['use_optimization'].isChecked()
             )
 
             self._update_status("Calculating stress field...", 20)
@@ -1353,7 +1321,7 @@ class MSMWidget(BaseAnalysisWidget):
                     young_modulus=1.0,
                     density_factor=self.parameter_spins['density_factor'].value(),
                     algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
-                    use_optimization=self.parameter_spins['use_optimization'].isChecked()
+                    use_optimization=self.parameter_checks['use_optimization'].isChecked()
                 )
 
                 # Calculate stress tensor
@@ -1382,7 +1350,7 @@ class MSMWidget(BaseAnalysisWidget):
                     'poisson_ratio': self.analyzer.sigma,
                     'density_factor': self.parameter_spins['density_factor'].value(),
                     'algorithm': self.parameter_spins['algorithm'].currentText(),
-                    'use_optimization': self.parameter_spins['use_optimization'].isChecked(),
+                    'use_optimization': self.parameter_checks['use_optimization'].isChecked(),
                     'max_stress': max_stress,
                     'downscale_factor': downscale_factor
                 }
@@ -1451,7 +1419,7 @@ class MSMWidget(BaseAnalysisWidget):
                 mask=current_mask,
                 density_factor=self.parameter_spins['density_factor'].value(),
                 algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
-                use_optimization=self.parameter_spins['use_optimization'].isChecked()
+                use_optimization=self.parameter_checks['use_optimization'].isChecked()
             )
 
             # Initialize mesh generator
@@ -1584,7 +1552,7 @@ class MSMWidget(BaseAnalysisWidget):
                         'density_factor': self.parameter_spins['density_factor'].value(),
                         'algorithm': algorithm_id,
                         'algorithm_name': self.parameter_spins['algorithm'].currentText(),
-                        'use_optimization': self.parameter_spins['use_optimization'].isChecked(),
+                        'use_optimization': self.parameter_checks['use_optimization'].isChecked(),
                         'max_stress': self.parameter_spins['max_stress'].value(),
                         'dilation': self.parameter_spins['dilation'].value(),
                         'smoothing_sigma': self.parameter_spins['smoothing_sigma'].value()
@@ -1653,7 +1621,7 @@ class MSMWidget(BaseAnalysisWidget):
 
                 # Update optimization checkbox
                 if 'use_optimization' in parameters:
-                    self.parameter_spins['use_optimization'].setChecked(parameters['use_optimization'])
+                    self.parameter_checks['use_optimization'].setChecked(parameters['use_optimization'])
 
                 # Store pixel size and downscale factor
                 self._pixelsize = parameters['pixel_size']
