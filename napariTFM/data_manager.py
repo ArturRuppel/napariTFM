@@ -69,7 +69,6 @@ class DataManager:
     def input_cell_stack(self) -> Optional[np.ndarray]:
         return self._input_cell_stack
 
-    # Properties for accessing preprocessed data
     @property
     def preprocessed_bead_stack(self) -> Optional[np.ndarray]:
         return self._preprocessed_bead_stack
@@ -82,7 +81,22 @@ class DataManager:
     def preprocessed_cell_stack(self) -> Optional[np.ndarray]:
         return self._preprocessed_cell_stack
 
-    # Methods for setting results with validation
+    @property
+    def displacement_field(self) -> Optional[np.ndarray]:
+        return self._displacement_field
+
+    @property
+    def displacement_params(self) -> Optional[Dict[str, Any]]:
+        return self._displacement_params
+
+    @property
+    def force_field(self) -> Optional[np.ndarray]:
+        return self._force_field
+
+    @property
+    def force_params(self) -> Optional[Dict[str, Any]]:
+        return self._force_params
+
     def set_preprocessing_results(self, bead_stack: Optional[np.ndarray] = None,
                                 reference: Optional[np.ndarray] = None,
                                 cell_stack: Optional[np.ndarray] = None,
@@ -102,6 +116,22 @@ class DataManager:
 
         if params is not None:
             self._preprocessing_params = params.copy()
+
+    def set_force_results(self, force_field: np.ndarray, params: Dict[str, Any]) -> None:
+        """Store force calculation results with validation."""
+        if force_field is not None:
+            self._validate_field_data(force_field, expected_dims=4)  # (t, x, y, 2)
+            self._force_field = force_field
+        if params is not None:
+            self._force_params = params.copy()
+
+    def set_displacement_results(self, displacement_field: np.ndarray, params: Dict[str, Any]) -> None:
+        """Store displacement calculation results with validation."""
+        if displacement_field is not None:
+            self._validate_field_data(displacement_field, expected_dims=4)  # (t, x, y, 2)
+            self._displacement_field = displacement_field
+        if params is not None:
+            self._displacement_params = params.copy()
 
     # Validation methods
     def _validate_input_stack(self, data: np.ndarray, name: str) -> None:
@@ -125,32 +155,15 @@ class DataManager:
         if data.ndim != expected_dims:
             raise ValueError(f"Field data must be {expected_dims}D (got {data.ndim}D)")
 
-    # Utility methods
-    def clear_all(self) -> None:
-        """Clear all stored data."""
-        for attr in vars(self):
-            setattr(self, attr, None)
+
 
     def get_mask_data(self):
         """Get the mask data."""
         return self._mask_data
 
-    def set_mask_data(self, analysis_mask, visualization_mask=None, **kwargs):
-        """Set the mask data."""
-        self._mask_data = analysis_mask
 
-    def get_force_data(self):
-        """Get the force data."""
-        return self._force_data
 
-    def set_force_data(self, force_data):
-        """Set the force data."""
-        self._force_data = force_data
 
-    def get_stress_data(self):
-        """Get the stress data."""
-        return self._stress_data
 
-    def set_stress_data(self, stress_data):
-        """Set the stress data."""
-        self._stress_data = stress_data
+
+

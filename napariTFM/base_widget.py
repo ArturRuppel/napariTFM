@@ -6,6 +6,7 @@ from qtpy.QtCore import Signal
 import napari
 import logging
 from napariTFM.visualization_manager import VisualizationManager
+from napariTFM.data_manager import DataManager
 
 logger = logging.getLogger(__name__)
 
@@ -31,21 +32,6 @@ class BaseAnalysisWidget(QWidget):
         self.visualization_manager = visualization_manager
         self._controls = []
 
-    @property
-    def pixel_size(self) -> float:
-        """Get the current pixel size in µm from the parent widget."""
-        parent_widget = self.get_parent_tfm_widget()
-        if parent_widget is None:
-            return 1.0  # Default value if parent not found
-        return parent_widget.pixel_spin.value()
-
-    @property
-    def frame_length(self) -> float:
-        """Get the current frame length in minutes from the parent widget."""
-        parent_widget = self.get_parent_tfm_widget()
-        if parent_widget is None:
-            return 1.0  # Default value if parent not found
-        return parent_widget.frame_spin.value()
 
     def get_parent_tfm_widget(self) -> Optional["napariTFMWidget"]:
         """Traverse up the widget hierarchy to find the parent napariTFMWidget."""
@@ -150,20 +136,3 @@ class BaseAnalysisWidget(QWidget):
         """Clean up resources before widget is destroyed."""
         pass
 
-    @staticmethod
-    def _validate_input_data(data):
-        """Validate input data format."""
-        if data is None:
-            return False
-        if not hasattr(data, 'shape'):
-            return False
-        if not (2 <= len(data.shape) <= 3):
-            return False
-        return True
-
-    @staticmethod
-    def _ensure_stack_format(data):
-        """Ensure data is in 3D stack format."""
-        if data.ndim == 2:
-            return data[np.newaxis, ...]
-        return data

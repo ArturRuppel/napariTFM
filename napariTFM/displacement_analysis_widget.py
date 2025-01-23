@@ -74,7 +74,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 'arrow_scale': self.parameter_manager.get_value('disp_arrow_scale')
             },
             'pixel_size': self.parameter_manager.get_value('pixel_size'),
-            'frame_interval': self.parameter_manager.get_value('frame_length')
+            'frame_interval': self.parameter_manager.get_value('frame_interval')
         }
 
     def _load_data(self, data_type: str):
@@ -110,10 +110,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         """Handle the completed displacement analysis results."""
         try:
             # Update data manager with separate field and parameters
-            if 'flows' in results:
-                self.data_manager._displacement_field = np.array(results['flows'])
-            if 'parameters' in results:
-                self.data_manager._displacement_params = results['parameters']
+            if 'flows' in results and 'parameters' in results:
+                self.data_manager.set_displacement_results(np.array(results['flows']), results['parameters'])
 
             # Update visualization
             self.visualization_manager.visualize_displacement_results(
@@ -152,7 +150,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _on_frame_changed(self, event=None):
         """Handle frame change events."""
-        if self.data_manager._displacement_field is not None:
+        if self.data_manager.displacement_field is not None:
             self.visualization_manager.update_displacement_frame(
                 self.viewer.dims.current_step[0]
             )
@@ -191,8 +189,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self.current_flow = flow_pixels * params['pixel_size']
 
             # Store preview results in data manager
-            self.data_manager._displacement_field = self.current_flow[np.newaxis, ...]
-            self.data_manager._displacement_params = params
+            self.data_manager.set_displacement_results(self.current_flow[np.newaxis, ...], params)
 
             # Update visualization
             self.visualization_manager.visualize_displacement_preview(
@@ -213,6 +210,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             stats = self.visualization_manager.get_displacement_statistics(self.current_flow)
             original_shape = reference.shape
             downscaled_shape = self.current_flow.shape[:2]
+
             self._update_status(
                 f"Max displacement: {stats['max']:.2f} µm\n"
                 f"Mean displacement: {stats['mean']:.2f} µm\n"
@@ -507,7 +505,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                     f"Displacement data successfully loaded from:\n"
                     f"{file_path}\n"
                     f"Pixel size: {self.parameter_manager.get_value('pixel_size')} µm\n"
-                    f"Frame interval: {self.frame_length} min",
+                    f"Frame interval: {self.parameter_manager.get_value('frame_interval')} min",
                     100
                 )
 
@@ -737,6 +735,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
             # Start the worker
             worker.start()
+
 
         except Exception as e:
             self._handle_error(str(e))
@@ -1018,8 +1017,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
             if save_path:
                 # Get data directly from data manager
-                flows = self.data_manager._displacement_field
-                params = self.data_manager._displacement_params
+                flows = self.data_manager.displacement_field
+                params = self.data_manager.displacement_params
 
                 # Package everything into a single dictionary
                 displacement_data = {

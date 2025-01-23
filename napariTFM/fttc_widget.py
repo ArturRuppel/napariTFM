@@ -153,12 +153,18 @@ class FTTCWidget(BaseAnalysisWidget):
 
             # Get displacement field from data manager
             displacement_field = self.data_manager.displacement_field
+            displacement_params = self.data_manager.displacement_params
 
             self._initialize_calculator()
 
             # Get parameters from parameter manager
             regularization = self.parameter_manager.get_value('regularization')
             auto_gcv = self.parameter_manager.get_value('auto_gcv')
+
+            # Get pixel size and scaling factors
+            pixel_size = displacement_params["pixel_size"]
+            downscale_factor = displacement_params.get("downscale_factor", 1)
+            mu_per_px = pixel_size * downscale_factor
 
             # Prepare data structure to collect results
             self.force_results = {
@@ -170,39 +176,48 @@ class FTTCWidget(BaseAnalysisWidget):
             @thread_worker
             def process_frames():
                 for frame_idx, frame_data in enumerate(displacement_field):
+                    # Convert displacements from micrometers to pixels
+                    u_data = frame_data[..., 0] / mu_per_px
+                    v_data = frame_data[..., 1] / mu_per_px
+
                     shape = frame_data.shape[:-1]
                     x = np.arange(shape[1])
                     y = np.arange(shape[0])
                     pos = np.array(np.meshgrid(x, y, indexing='xy'))
-                    vec = np.array([
-                        frame_data[..., 0].flatten(),
-                        frame_data[..., 1].flatten()
-                    ])
-
-                    pix_per_mu = 1 / (self._pixel_size * self._downscale_factor)
+                    vec = np.array([u_data.flatten(), v_data.flatten()])
 
                     if auto_gcv:
                         lam = self.calculator._find_regularization(pos, vec)
                     else:
                         lam = regularization
 
-                    results = self.calculator._perform_tfm(pos, vec, pix_per_mu, lam)
-                    yield frame_idx, results
+                    # Calculate forces
+                    (_, _), f = self.calculator._perform_tfm(pos, vec, lam)
+
+                    # Reshape force components and convert to Pascal
+                    fx = f[0].reshape(shape)
+                    fy = f[1].reshape(shape)
+                    forces = np.stack([fx, fy]) * (mu_per_px ** 2)  # Convert from N/px² to Pa
+
+                    yield frame_idx, forces
 
             # Create worker and connect signals
             worker = process_frames()
 
             def handle_frame(result):
                 try:
-                    frame_idx, (_, fnorm, f, _, _, energy, force, _, _) = result
-                    self.force_results['tx'].append(f[0])
-                    self.force_results['ty'].append(f[1])
+                    frame_idx, forces = result
+                    self.force_results['tx'].append(forces[0])
+                    self.force_results['ty'].append(forces[1])
+
+                    # Calculate statistics for progress update
+                    magnitude = np.sqrt(forces[0] ** 2 + forces[1] ** 2)
 
                     progress = (frame_idx + 1) / len(displacement_field) * 100
                     self._update_status(
                         f"Processing frame {frame_idx + 1}/{len(displacement_field)}...\n"
-                        f"Energy: {energy:.2e} J\n"
-                        f"Total force: {force:.2e} N",
+                        f"Mean force: {np.mean(magnitude):.2f} Pa\n"
+                        f"Max force: {np.max(magnitude):.2f} Pa\n",
                         progress
                     )
                 except Exception as e:
@@ -217,19 +232,16 @@ class FTTCWidget(BaseAnalysisWidget):
                     self.force_results['tx'] = np.stack(self.force_results['tx'])
                     self.force_results['ty'] = np.stack(self.force_results['ty'])
 
-                    # Store results in data manager
-                    force_field = np.stack([self.force_results['tx'], self.force_results['ty']], axis=-1)
-
-                    # Prepare force parameters
+                    # Store results in data manager with parameters
                     force_params = {
                         'young_modulus': self.parameter_manager.get_value('young_modulus'),
                         'poisson_ratio': self.parameter_manager.get_value('poisson_ratio'),
                         'gel_height': self.parameter_manager.get_value('gel_height'),
-                        'pixel_size': self._pixel_size,
-                        'regularization': self.parameter_manager.get_value('regularization'),
+                        'pixel_size': pixel_size,
+                        'regularization': regularization,
                         'mesh_size': 1,  # hardcoded
                         'lanczos_exp': self.parameter_manager.get_value('lanczos_exp'),
-                        'downscale_factor': self._downscale_factor,
+                        'downscale_factor': downscale_factor,
                         'visualization': {
                             'vector_stride': self.parameter_manager.get_value('force_vector_stride'),
                             'arrow_scale': self.parameter_manager.get_value('force_arrow_scale'),
@@ -237,10 +249,10 @@ class FTTCWidget(BaseAnalysisWidget):
                         }
                     }
 
-                    # Update data manager
-                    self.data_manager.set_force_results(force_field, force_params)
+                    # Update force results with parameters
+                    self.force_results['parameters'] = force_params
 
-                    # Handle visualization and UI updates
+                    # Handle visualization and results
                     self._handle_force_results(self.force_results)
                 except Exception as e:
                     self._handle_error(f"Error finalizing results: {str(e)}")
@@ -427,13 +439,14 @@ class FTTCWidget(BaseAnalysisWidget):
             x = np.arange(shape[1])
             y = np.arange(shape[0])
 
+            mu_per_px = displacement_params["pixel_size"] * displacement_params["downscale_factor"]
+
             # Create and start worker
             worker = self.calculator.calculate_traction(
                 x=x,
                 y=y,
-                u_data=frame_data[..., 0], # convert to pixel
-                v_data=frame_data[..., 1],
-                dx=displacement_params['pixel_size'] * displacement_params.get('downscale_factor', 1),
+                u_data=frame_data[..., 0] / mu_per_px,  # convert to pixel
+                v_data=frame_data[..., 1] / mu_per_px,
                 set_lam=self.parameter_manager.get_value('regularization')
             )
 
@@ -448,6 +461,7 @@ class FTTCWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(str(e))
             self._set_controls_enabled(True)
+
     def _update_parameters(self):
         """Update parameters in the parameter manager"""
         try:
@@ -577,9 +591,8 @@ class FTTCWidget(BaseAnalysisWidget):
             self.calculator = FTTC(
                 E=young_modulus,
                 nu=poisson_ratio,
-                mesh_size=1,  # hardcoded to 1
                 lanczos_exp=lanczos_exp,
-                gel_height=gel_height_p
+                gel_height=gel_height
             )
 
         except Exception as e:
@@ -878,8 +891,11 @@ class FTTCWidget(BaseAnalysisWidget):
         """Handle the preview calculation results."""
         try:
             # Unpack results
-            (_, _), fnorm, f, urec, u, energy, force, _, _ = results # in N / px²
+            (_, _), f = results  # in N / px²
 
+            displacement_params = self.data_manager.displacement_params
+            mu_per_px = displacement_params["pixel_size"] * displacement_params["downscale_factor"]
+            f = f * (mu_per_px ** 2)
 
             # Get visualization parameters
             vector_stride = self.visualization_params['vector_stride'].value()
@@ -917,9 +933,7 @@ class FTTCWidget(BaseAnalysisWidget):
                 f"Preview statistics:\n"
                 f"Max force: {np.max(magnitude):.2f} Pa\n"
                 f"Mean force: {np.mean(magnitude):.2f} Pa\n"
-                f"Median force: {np.median(magnitude):.2f} Pa\n"
-                f"Energy: {energy:.2e} J\n"
-                f"Total force: {force:.2e} N",
+                f"Median force: {np.median(magnitude):.2f} Pa\n",
                 100
             )
 
