@@ -356,16 +356,6 @@ class napariTFMWidget(QWidget):
                 self.msm_widget._update_ui_state()
                 self.batch_widget._update_ui_state()
 
-                # # Reset all widget states
-                # self.preprocessing_widget._reset_widget()
-                # self.displacement_widget._reset_widget()
-                # self.force_widget._reset_widget()
-                # self.msm_widget._reset_widget()
-                # self.batch_widget._reset_widget()
-
-                # # Clear visualizations
-                # self.visualization_manager.clear_all_layers()
-
                 logger.info("All data cleared successfully")
                 QMessageBox.information(self, "Success", "All data has been cleared successfully")
 
@@ -377,40 +367,36 @@ class napariTFMWidget(QWidget):
         """Handle completion of preprocessing"""
         logger.info("Preprocessing completed successfully")
 
-        # Unpack results and update data manager
-        if 'beads' in results:
-            processed_data, preprocessing_info = results['beads']
-            self.data_manager.preprocessed_bead_stack = processed_data
-            self.data_manager.bead_preprocessing_info = preprocessing_info
-
-        if 'reference' in results:
-            processed_data, preprocessing_info = results['reference']
-            self.data_manager.preprocessed_reference = processed_data
-            self.data_manager.reference_preprocessing_info = preprocessing_info
-
-        if 'cells' in results:
-            processed_data, preprocessing_info = results['cells']
-            self.data_manager.preprocessed_cell_stack = processed_data
-            self.data_manager.cell_preprocessing_info = preprocessing_info
-
-        # Update visualization through manager
-        self.visualization_manager.update_preprocessing_visualization(results)
+        self.preprocessing_widget._update_ui_state()
         self.displacement_widget._update_ui_state()
+        self.force_widget._update_ui_state()
+        self.msm_widget._update_ui_state()
+        self.batch_widget._update_ui_state()
 
     def _on_displacement_completed(self, results):
         """Handle completion of displacement analysis"""
         logger.info("Displacement analysis completed successfully")
-        self.data_manager.displacement_results = results
+        self.preprocessing_widget._update_ui_state()
+        self.displacement_widget._update_ui_state()
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
+        self.batch_widget._update_ui_state()
 
     def _on_force_completed(self, results):
         """Handle completion of force calculation"""
         logger.info("Force calculation completed successfully")
-        self.data_manager.force_results = results
+        self.preprocessing_widget._update_ui_state()
+        self.displacement_widget._update_ui_state()
+        self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
+        self.batch_widget._update_ui_state()
 
     def _on_stress_completed(self, results):
         """Handle completion of stress calculation"""
         logger.info("Stress calculation completed successfully")
-        self.data_manager.stress_results = results
+        self.preprocessing_widget._update_ui_state()
+        self.displacement_widget._update_ui_state()
+        self.force_widget._update_ui_state()
+        self.msm_widget._update_ui_state()
+        self.batch_widget._update_ui_state()
+

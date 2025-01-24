@@ -435,8 +435,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 displacement_data = np.load(file_path, allow_pickle=True).item()
 
                 # Update data manager
-                self.data_manager._displacement_field = displacement_data['flows']
-                self.data_manager._displacement_params = displacement_data['parameters']
+                self.set_displacement_results(displacement_data['flows'], displacement_data['parameters'])
 
                 # Update parameter manager with loaded parameters
                 params = displacement_data['parameters']
@@ -689,8 +688,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                     }
 
                     # Update data manager with separate field and parameters
-                    self.data_manager._displacement_field = flows
-                    self.data_manager._displacement_params = params
+                    self.data_manager.set_displacement_results(flows, params)
 
                     # Update visualization
                     self.visualization_manager.visualize_displacement_results(
@@ -1002,7 +1000,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _save_displacement(self):
         """Save displacement data to files."""
-        if self.data_manager._displacement_field is None:
+        if self.data_manager.displacement_field is None:
             QMessageBox.warning(self, "Warning", "No displacement data to save.")
             return
 
