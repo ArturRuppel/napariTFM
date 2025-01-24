@@ -104,9 +104,9 @@ class MSMWidget(BaseAnalysisWidget):
         # Connect frame change event from viewer
         self.viewer.dims.events.current_step.connect(self._handle_frame_change)
 
-        self.viewer.layers.selection.events.active.connect(self._update_button_states)
-        self.viewer.layers.events.inserted.connect(self._update_button_states)
-        self.viewer.layers.events.removed.connect(self._update_button_states)
+        self.viewer.layers.selection.events.active.connect(self._update_ui_state)
+        self.viewer.layers.events.inserted.connect(self._update_ui_state)
+        self.viewer.layers.events.removed.connect(self._update_ui_state)
 
         # Parameter connections
         self.parameter_spins['algorithm'].currentTextChanged.connect(
@@ -315,7 +315,6 @@ class MSMWidget(BaseAnalysisWidget):
             dilation = self.parameter_spins['dilation'].value()
             smoothing_sigma = self.parameter_spins['smoothing_sigma'].value()
             threshold_spin, _ = self.parameter_spins['threshold']
-            threshold = threshold_spin.value()
 
             # Process the mask
             preview_mask = self._process_single_mask(
@@ -845,38 +844,6 @@ class MSMWidget(BaseAnalysisWidget):
     def _update_ui_state(self):
         """Update UI element states based on current data availability."""
         # First update mask-related button states
-        self._update_button_states()
-
-        # Update force data status
-        has_force_data = False
-        if self.data_manager.force_field is not None:
-            force_field = self.data_manager.force_field
-            tx = force_field[..., 0]
-            self.force_status.setText(f"Loaded: {tx.shape}")
-        else:
-            self.force_status.setText("Not loaded")
-
-        # Update mask status
-        has_mask = False
-        if self.data_manager.masks is not None:
-            mask_stack = self.data_manager.masks
-
-            mask_shape = mask_stack.shape
-            self.mask_status.setText(f"Loaded: {mask_shape}")
-            has_mask = True
-
-        else:
-            self.mask_status.setText("Not loaded")
-
-        # Update analysis button states
-        self.preview_mesh_btn.setEnabled(has_mask)
-        self.preview_frame_btn.setEnabled(has_mask and has_force_data)
-        self.analyze_btn.setEnabled(has_mask and has_force_data)
-        self.save_stress_btn.setEnabled(hasattr(self.data_manager, 'stress_results') and
-                                        self.data_manager.stress_tensor is not None)
-
-    def _update_button_states(self, event=None):
-        """Update button states based on layer availability."""
         # Check for valid layers
         has_valid_layer = False
         active_layer = self.viewer.layers.selection.active
@@ -898,6 +865,35 @@ class MSMWidget(BaseAnalysisWidget):
             self.create_mask_btn.setEnabled(has_valid_layer)
         if hasattr(self, 'load_mask_btn'):
             self.load_mask_btn.setEnabled(has_valid_layer)
+
+        # Update force data status
+        has_force_data = False
+        if self.data_manager.force_field is not None:
+            force_field = self.data_manager.force_field
+            tx = force_field[..., 0]
+            self.force_status.setText(f"Loaded: {tx.shape}")
+            has_force_data = True
+        else:
+            self.force_status.setText("Not loaded")
+
+        # Update mask status
+        has_mask = False
+        if self.data_manager.masks is not None:
+            mask_stack = self.data_manager.masks
+
+            mask_shape = mask_stack.shape
+            self.mask_status.setText(f"Loaded: {mask_shape}")
+            has_mask = True
+
+        else:
+            self.mask_status.setText("Not loaded")
+
+        # Update analysis button states
+        self.preview_mesh_btn.setEnabled(has_mask)
+        self.preview_frame_btn.setEnabled(has_mask and has_force_data)
+        self.analyze_btn.setEnabled(has_mask and has_force_data)
+        self.save_stress_btn.setEnabled(hasattr(self.data_manager, 'stress_results') and
+                                        self.data_manager.stress_tensor is not None)
 
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
@@ -1175,7 +1171,6 @@ class MSMWidget(BaseAnalysisWidget):
 
             self.analyzer = MonolayerStressMicroscopy(
                 mask=current_mask,  # Use resized mask
-                pixelsize=pixel_size * downscale_factor * 1e-6,  # Convert to meters
                 sigma=self.parameter_spins['sigma'].value(),
                 young_modulus=1.0,
                 density_factor=self.parameter_spins['density_factor'].value(),
@@ -1186,25 +1181,23 @@ class MSMWidget(BaseAnalysisWidget):
             self._update_status("Calculating stress field...", 20)
 
             # Calculate stress tensor
-            stress_tensor = self.analyzer.calculate_stress_field(tx, ty)
+            stress_tensor, condition_number, residual = self.analyzer.calculate_stress_field(tx, ty)
+            stress_tensor = stress_tensor * params['pixel_size'] * params['downscale_factor'] * 1e-6 # convert to N/m
 
             self._update_status("Updating visualization...", 80)
 
             # Get max stress parameter and visualization parameters
             max_stress = self.parameter_spins['max_stress'].value()
             self.visualization_manager.visualize_stress_preview(
-                stress_tensor[0],  # Get just the tensor from the tuple
+                stress_tensor,  # Get just the tensor from the tuple
                 max_stress,
                 downscale_factor=downscale_factor
             )
 
             # Update status with condition number and residual if available
             status_text = f"Stress preview generated for frame {current_frame}"
-            if len(stress_tensor) == 3:
-                condition_number = stress_tensor[1]
-                residual = stress_tensor[2]
-                status_text += f"\nCondition number: {condition_number:.1e}"
-                status_text += f"\nResidual: {residual:.1e}"
+            status_text += f"\nCondition number: {condition_number:.1e}"
+            status_text += f"\nResidual: {residual:.1e}"
 
             self._handle_visualization_layers()
 
@@ -1264,7 +1257,6 @@ class MSMWidget(BaseAnalysisWidget):
                 # Update analyzer with current frame's mask
                 self.analyzer = MonolayerStressMicroscopy(
                     mask=current_mask,
-                    pixelsize=pixel_size * downscale_factor * 1e-6,  # Convert to meters
                     sigma=self.parameter_spins['sigma'].value(),
                     young_modulus=1.0,
                     density_factor=self.parameter_spins['density_factor'].value(),
@@ -1273,15 +1265,14 @@ class MSMWidget(BaseAnalysisWidget):
                 )
 
                 # Calculate stress tensor
-                result = self.analyzer.calculate_stress_field(current_tx, current_ty)
+                stress_tensor, condition_number, residual = self.analyzer.calculate_stress_field(current_tx, current_ty)
 
                 # Store results
-                stress_tensor = result[0]
+                stress_tensor = stress_tensor * params['pixel_size'] * 1e-6 # convert to N/m
                 stress_results.append(stress_tensor)
 
-                if len(result) == 3:  # If metrics are available
-                    condition_numbers.append(result[1])
-                    residuals.append(result[2])
+                condition_numbers.append(condition_number)
+                residuals.append(residual)
 
             # Convert results to numpy array
             stress_tensor_stack = np.stack(stress_results, axis=0)

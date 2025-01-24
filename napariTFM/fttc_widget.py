@@ -72,10 +72,6 @@ class FTTCWidget(BaseAnalysisWidget):
         if displacement_field.ndim != 4:
             return False
 
-        # Store parameters for later use
-        self._pixel_size = displacement_params.get('pixel_size')
-        self._downscale_factor = displacement_params.get('downscale_factor', 1)
-
         return True
 
     def calculate_forces(self):
@@ -132,7 +128,7 @@ class FTTCWidget(BaseAnalysisWidget):
                     # Reshape force components and convert to Pascal
                     fx = f[0].reshape(shape)
                     fy = f[1].reshape(shape)
-                    forces = np.stack([fx, fy]) * (forcemap_pixel_size ** 2)  # Convert from N/px² to Pa
+                    forces = np.stack([fx, fy])
 
                     force_results['tx'].append(forces[0])
                     force_results['ty'].append(forces[1])
@@ -415,13 +411,16 @@ class FTTCWidget(BaseAnalysisWidget):
             y = np.arange(shape[0])
 
             forcemap_pixel_size = displacement_params["pixel_size"] * displacement_params["downscale_factor"]
+            print(forcemap_pixel_size)
+            print(np.nanmean(np.abs(frame_data)))
 
             # Create and start worker
             worker = self.calculator.calculate_traction(
                 x=x,
                 y=y,
-                u_data=frame_data[..., 0] / forcemap_pixel_size,  # convert to pixel
-                v_data=frame_data[..., 1] / forcemap_pixel_size,
+                u_data=frame_data[..., 0],
+                v_data=frame_data[..., 1],
+                dx=forcemap_pixel_size,
                 set_lam=self.parameter_manager.get_value('regularization')
             )
 
@@ -506,25 +505,17 @@ class FTTCWidget(BaseAnalysisWidget):
             current_frame = self.viewer.dims.current_step[0]
             flow = flows[current_frame]
 
-            # Get spatial coordinates and prepare data
-            shape = flow.shape[:-1]
-            pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
-            vec = np.array([flow[..., 0], flow[..., 1]])
+
 
             # Get pixel size and downscale factor from displacement results
             disp_params = self.data_manager.displacement_params
-            if disp_params is None:
-                raise ValueError("No displacement parameters available")
-
             pixel_size = disp_params.get('pixel_size')
-            if pixel_size is None:
-                raise ValueError("Pixel size not found in displacement parameters")
-
             downscale_factor = disp_params.get('downscale_factor', 1)
 
-            # Scale displacements
-            pix_per_mu = 1 / (pixel_size * downscale_factor)
-            vec = pix_per_mu * vec
+            # Get spatial coordinates and prepare data
+            shape = flow.shape[:-1]
+            pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
+            vec = np.array([flow[..., 0], flow[..., 1]]) / (pixel_size * downscale_factor) # convert to pixel
 
             # Calculate optimal regularization parameter
             lam = self.calculator._find_regularization(pos, vec)
@@ -551,13 +542,7 @@ class FTTCWidget(BaseAnalysisWidget):
 
             # Get pixel size and downscale factor from displacement parameters
             disp_params = self.data_manager.displacement_params
-            if disp_params is None:
-                raise ValueError("Displacement parameters are not set")
-
             pixel_size = disp_params.get('pixel_size')
-            if pixel_size is None:
-                raise ValueError("Pixel size not found in displacement parameters")
-
             downscale_factor = disp_params.get('downscale_factor', 1)
 
             # Convert gel height from μm to pixels if specified
@@ -565,9 +550,10 @@ class FTTCWidget(BaseAnalysisWidget):
 
             self.calculator = FTTC(
                 E=young_modulus,
+                pixelsize=pixel_size * downscale_factor * 1e-6,
                 nu=poisson_ratio,
                 lanczos_exp=lanczos_exp,
-                gel_height=gel_height
+                gel_height=gel_height_p
             )
 
         except Exception as e:
@@ -870,7 +856,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
             displacement_params = self.data_manager.displacement_params
             forcemap_pixel_size = displacement_params["pixel_size"] * displacement_params["downscale_factor"]
-            f = f * (forcemap_pixel_size ** 2)
 
             # Get visualization parameters
             vector_stride = self.visualization_params['vector_stride'].value()
@@ -901,8 +886,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
             # Calculate and show statistics
             magnitude = np.sqrt(f[0] ** 2 + f[1] ** 2)
-
-            print(f"Mean force: {np.mean(np.abs(magnitude)):.2f} Pa\n")
 
             self._update_status(
                 f"Preview statistics:\n"

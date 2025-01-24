@@ -86,7 +86,6 @@ def timer_decorator(func):
 class MonolayerStressMicroscopy:
     def __init__(self,
                  mask: np.ndarray,
-                 pixelsize: float,
                  density_factor: float = 0.02,
                  algorithm: int = 2,
                  use_optimization: bool = False,
@@ -94,7 +93,6 @@ class MonolayerStressMicroscopy:
                  young_modulus: float = 1):
         """Initialize MSM calculator with mask and configurable mesh parameters"""
         self.mask = mask
-        self.pixelsize = pixelsize
         self.sigma = sigma
         self.E = young_modulus
         self.timing_stats = {}
@@ -110,45 +108,6 @@ class MonolayerStressMicroscopy:
 
         self.mesh_generator = MeshGenerator(mesh_params)
         self.nodes, self.elements = self.mesh_generator.generate_mesh(mask)
-
-    def create_mask_from_cells(self, cell_stack, dilation_pixels=0, smoothing_sigma=1.0):
-        """Create masks from cell data by thresholding and morphological operations."""
-        from scipy import ndimage
-
-        if cell_stack.ndim == 2:
-            cell_stack = cell_stack[np.newaxis, ...]
-
-        mask_stack = np.zeros_like(cell_stack, dtype=bool)
-
-        for frame in range(cell_stack.shape[0]):
-            cell_image = cell_stack[frame]
-            mask = cell_image > 0
-            filled_mask = ndimage.binary_fill_holes(mask)
-
-            labels, num_features = ndimage.label(filled_mask)
-            if num_features > 0:
-                sizes = ndimage.sum(filled_mask, labels, range(1, num_features + 1))
-                largest_feature = np.argmax(sizes) + 1
-                filled_mask = labels == largest_feature
-
-            float_mask = filled_mask.astype(float)
-            smoothed = ndimage.gaussian_filter(float_mask, sigma=smoothing_sigma)
-            smoothed_mask = smoothed > 0.5
-            smoothed_mask = ndimage.binary_fill_holes(smoothed_mask)
-
-            if dilation_pixels > 0:
-                struct = ndimage.generate_binary_structure(2, 2)
-                dilated_mask = ndimage.binary_dilation(
-                    smoothed_mask,
-                    structure=struct,
-                    iterations=dilation_pixels
-                )
-            else:
-                dilated_mask = smoothed_mask
-
-            mask_stack[frame] = dilated_mask
-
-        return mask_stack
 
     def _grid_setup(self, nodes_xy, elements, f_x, f_y):
         """Setup triangular mesh with linear force interpolation and proper scaling"""
@@ -543,6 +502,6 @@ class MonolayerStressMicroscopy:
         )
 
         # Scale stress tensor
-        stress_tensor = stress_tensor * self.pixelsize
+        stress_tensor = stress_tensor
 
         return stress_tensor, condition_number, residual

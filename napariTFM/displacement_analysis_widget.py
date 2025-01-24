@@ -106,48 +106,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         except ValueError as e:
             QMessageBox.warning(self, "Error", str(e))
 
-    def _handle_displacement_results(self, results):
-        """Handle the completed displacement analysis results."""
-        try:
-            # Update data manager with separate field and parameters
-            if 'flows' in results and 'parameters' in results:
-                self.data_manager.set_displacement_results(np.array(results['flows']), results['parameters'])
-
-            # Update visualization
-            self.visualization_manager.visualize_displacement_results(
-                results,
-                downscale_factor=results['parameters']['downscale_factor']
-            )
-
-            # Handle layer visibility and ordering
-            self._handle_visualization_layers()
-
-            # Update colorbar with current d_max
-            d_max = results['visualization_params']['d_max']
-            self.colorbar_manager.update_limits(0, d_max)
-
-            # Enable save button and emit results
-            self.save_displacement_btn.setEnabled(True)
-            self.displacement_calculated.emit(results)
-
-            # Update UI state to reflect new results
-            self._update_ui_state()
-
-            # Update status with statistics
-            stats = self.visualization_manager.get_displacement_statistics(results['flows'][0])
-            self._update_status(
-                f"Analysis complete\n"
-                f"Max displacement: {stats['max']:.2f} µm\n"
-                f"Mean displacement: {stats['mean']:.2f} µm\n"
-                f"Flow field resolution: {results['flow_shape']} (from {results['original_shape']})",
-                100
-            )
-
-        except Exception as e:
-            self._handle_error(str(e))
-            import traceback
-            traceback.print_exc()
-
     def _on_frame_changed(self, event=None):
         """Handle frame change events."""
         if self.data_manager.displacement_field is not None:

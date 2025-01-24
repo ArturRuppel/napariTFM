@@ -32,16 +32,22 @@ from napariTFM.fttc_numba_functions import *
 
 
 class FTTC:
-    def __init__(self, E: float, nu: float, lanczos_exp: int = 1, gel_height: float = float('inf')):
+    def __init__(self, E: float, nu: float, mesh_size: int = 1, lanczos_exp: int = 1, gel_height: float = float('inf'), pixelsize: float = float(1e-6)):
         self.E = E
         self.nu = nu
+        self.mesh_size = mesh_size  # This should be the downsample rate
         self.lanczos_exp = lanczos_exp
         self.gel_height = gel_height
+        self.pixelsize = pixelsize
+        self.timing_stats = {}
+        self.detailed_timing = {}
+
 
 
     @thread_worker
     def calculate_traction(self, x: np.ndarray, y: np.ndarray,
-                           u_data: np.ndarray, v_data: np.ndarray, set_lam: Optional[float] = None) -> Tuple:
+                           u_data: np.ndarray, v_data: np.ndarray,
+                           dx: float, set_lam: Optional[float] = None) -> Tuple:
         """
         Calculate traction forces from displacement data
 
@@ -70,14 +76,15 @@ class FTTC:
         pos0 = np.array([xpix.flatten(), ypix.flatten()])
 
         # Scale only the displacement vectors, not the coordinates
-        vec0 = np.array([u_data.flatten(), v_data.flatten()])
+        pix_per_mu = self.mesh_size / dx
+        vec0 = pix_per_mu * np.array([u_data.flatten(), v_data.flatten()])
 
         if set_lam is None:
             lam = self._find_regularization(pos0, vec0)
         else:
             lam = set_lam
 
-        return self._perform_tfm(pos0, vec0, lam)
+        return self._perform_tfm(pos0, vec0, pix_per_mu, lam)
 
     def _calculate_greens_function(self, kx: np.ndarray, ky: np.ndarray):
         """Calculate Green's function in Fourier space with gel height correction"""
@@ -124,7 +131,8 @@ class FTTC:
 
         return GFt_std
 
-    def _perform_tfm(self, pos0: np.ndarray, vec0: np.ndarray, lam: float,
+    def _perform_tfm(self, pos0: np.ndarray, vec0: np.ndarray,
+                     pix_per_mu: float, lam: float,
                      i_max: Optional[int] = None,
                      j_max: Optional[int] = None) -> Tuple:
         """Core TFM calculation with shape matching to input"""
@@ -145,11 +153,16 @@ class FTTC:
         G_inv_yy = G_inv[1, 1]
 
         Ftfx, Ftfy = self._reg_fourier_TFM_L2(u, G_inv_xx, G_inv_xy, G_inv_yy)
+        Ftf = np.array([Ftfx, Ftfy])
 
-        pos, vec, f = self._calculate_stress_field(Ftfx, Ftfy, lanczosx, lanczosy, grid_mat, u, i_max, j_max)
+        urec, Fturec = self._reconstruct_displacement(GFt, Ftfx, Ftfy, lanczosx, lanczosy)
 
-        x = np.reshape(pos[0], (i_max, j_max)).T
-        y = np.reshape(pos[1], (i_max, j_max)).T
+        pos, vec, fnorm, f, energy, force = self._calculate_stress_field(
+            Ftfx, Ftfy, lanczosx, lanczosy, grid_mat, u, i_max, j_max,
+            i_bound_size, j_bound_size, pix_per_mu)
+
+        x = np.reshape(pos[0], (i_max, j_max)).T / pix_per_mu
+        y = np.reshape(pos[1], (i_max, j_max)).T / pix_per_mu
 
         # Pad output arrays to match input dimensions
         def pad_to_shape(arr, target_shape):
@@ -167,14 +180,16 @@ class FTTC:
             return arr
 
         # Pad relevant outputs
+        fnorm = pad_to_shape(fnorm, original_shape)
         f = pad_to_shape(f, original_shape)
+        urec = pad_to_shape(urec, original_shape)
 
         # Create padded coordinate grids to match dimensions
         x_full = np.linspace(x[0, 0], x[-1, -1], original_shape[1])
         y_full = np.linspace(y[0, 0], y[-1, -1], original_shape[0])
         x, y = np.meshgrid(x_full, y_full)
 
-        return (x, y), f
+        return (x, y), fnorm, f, urec, u, energy, force, Ftf, Fturec
 
     @staticmethod
     def _gcvfun(lmbda, s2, beta, delta0, mn):
@@ -258,16 +273,16 @@ class FTTC:
         min_corner = np.array([np.min(pos[0]), np.min(pos[1])])
 
         if i_max is None and j_max is None:
-            i_max = np.round((max_corner[0] - min_corner[0]))
-            j_max = np.round((max_corner[1] - min_corner[1]))
+            i_max = np.round((max_corner[0] - min_corner[0]) / self.mesh_size)
+            j_max = np.round((max_corner[1] - min_corner[1]) / self.mesh_size)
             i_max -= np.int64(np.mod(i_max, 2))
             j_max -= np.int64(np.mod(j_max, 2))
 
         i_max, j_max = np.int64(i_max), np.int64(j_max)
 
         # Create target grid points
-        x = min_corner[0] + np.arange(0.5, i_max, 1)
-        y = min_corner[1] + np.arange(0.5, j_max, 1)
+        x = min_corner[0] + np.arange(0.5, i_max, 1) * self.mesh_size
+        y = min_corner[1] + np.arange(0.5, j_max, 1) * self.mesh_size
         X, Y = np.meshgrid(x, y)
         grid_mat = np.array([X, Y])
 
@@ -320,14 +335,14 @@ class FTTC:
 
     def _calculate_fourier_modes(self, i_max: int, j_max: int):
         """Calculate Fourier modes and Lanczos filter"""
-        kx_vec = 2. * np.pi / i_max * np.append(
+        kx_vec = 2. * np.pi / i_max / self.pixelsize * np.append(
             np.arange(0, (i_max // 2)), np.arange(-i_max // 2, 0))
-        ky_vec = 2. * np.pi / j_max * np.append(
+        ky_vec = 2. * np.pi / j_max / self.pixelsize * np.append(
             np.arange(0, (j_max // 2)), np.arange(-j_max // 2, 0))
         kx, ky = np.meshgrid(kx_vec, ky_vec)
 
-        lanczosx = np.sinc(kx / np.pi) ** self.lanczos_exp
-        lanczosy = np.sinc(ky / np.pi) ** self.lanczos_exp
+        lanczosx = np.sinc(kx * self.mesh_size / np.pi) ** self.lanczos_exp
+        lanczosy = np.sinc(ky * self.mesh_size / np.pi) ** self.lanczos_exp
 
         kx[0, 0] = 1
         ky[0, 0] = 1
@@ -357,7 +372,9 @@ class FTTC:
     def _calculate_stress_field(self, Ftfx: np.ndarray, Ftfy: np.ndarray,
                                 lanczosx: np.ndarray, lanczosy: np.ndarray,
                                 grid_mat: np.ndarray, u: np.ndarray,
-                                i_max: int, j_max: int):
+                                i_max: int, j_max: int,
+                                i_bound_size: int, j_bound_size: int,
+                                pix_per_mu: float):
         """Calculate stress field and related quantities"""
         fx = np.fft.ifft2(lanczosx * Ftfx)
         fy = np.fft.ifft2(lanczosy * Ftfy)
@@ -372,9 +389,34 @@ class FTTC:
         ])
 
         f = np.array([np.real(fx), np.real(fy)])
+        fnorm = (f[0] ** 2 + f[1] ** 2) ** 0.5
 
-        return pos, vec, f
+        if j_bound_size > 0 and i_bound_size > 0:
+            u_slice = u[:, j_bound_size:-j_bound_size, i_bound_size:-i_bound_size]
+            f_slice = f[:, j_bound_size:-j_bound_size, i_bound_size:-i_bound_size]
+            fnorm_slice = fnorm[j_bound_size:-j_bound_size, i_bound_size:-i_bound_size]
+            energy = self._calculate_energy(u_slice, f_slice, pix_per_mu)
+            force = self._calculate_total_force(fnorm_slice, pix_per_mu)
+        else:
+            energy = self._calculate_energy(u, f, pix_per_mu)
+            force = self._calculate_total_force(fnorm, pix_per_mu)
 
+        # # Swap both position and force components before returning
+        # pos = np.array([pos[1], pos[0]])  # Swap position components
+        # f = np.array([f[1], f[0]])  # Swap force components
 
+        return pos, vec, fnorm, f, energy, force
+
+    def _calculate_energy(self, u: np.ndarray, f: np.ndarray, pix_per_mu: float) -> float:
+        """Calculate energy stored in the traction profile"""
+        l = self.mesh_size / pix_per_mu * 1e-6  # nodal distance in m^2
+        energy = 0.5 * l ** 2 * np.sum(u * f) * 1e-6 / pix_per_mu
+        return energy
+
+    def _calculate_total_force(self, fnorm: np.ndarray, pix_per_mu: float) -> float:
+        """Calculate L2 norm of the force field"""
+        unit_factor = self.mesh_size / pix_per_mu * 1e-6
+        total_force = unit_factor ** 2 * np.sum(fnorm)
+        return total_force
 
 

@@ -998,11 +998,12 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # If we have preprocessed data and save button is enabled, update the status
         # to show new calibration values
         if self.save_btn.isEnabled():
-            pixel_size = self.pixel_size
-            frame_length = self.frame_length
+            pixel_size = self.parameter_manager.get_value('pixel_size')
+            frame_interval = self.parameter_manager.get_value('frame_interval')
+
             self._update_status(
                 f"Current calibration: pixel size = {pixel_size:.3f} µm, "
-                f"frame length = {frame_length:.3f} min"
+                f"frame_interval = {frame_interval:.3f} min"
             )
 
     def _connect_signals(self):
