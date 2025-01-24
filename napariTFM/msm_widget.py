@@ -15,6 +15,7 @@ from .colorbar import ColorbarManager
 from .mesh_generator import MeshParameters, MeshGenerator
 from .msm import MonolayerStressMicroscopy
 from .parameter_manager import ParameterManager, ParameterCategory
+from skimage.transform import resize
 
 
 class MSMWidget(BaseAnalysisWidget):
@@ -52,7 +53,6 @@ class MSMWidget(BaseAnalysisWidget):
         self.parameter_spins = {}
         self.parameter_combos = {}
         self.parameter_checks = {}
-        self.mesh = None
         self.colorbar_manager = ColorbarManager()
         self.analyzer = None
         self.mesh_generator = None
@@ -224,7 +224,6 @@ class MSMWidget(BaseAnalysisWidget):
 
                 # Resize mask if needed
                 if target_shape is not None and mask_stack.shape[1:] != target_shape:
-                    from skimage.transform import resize
                     analysis_mask_stack = resize(mask_stack.astype(float), target_shape, order=0, preserve_range=True, anti_aliasing=False) > 0.5
 
                 # Create visualization mask (potentially upscaled)
@@ -237,7 +236,10 @@ class MSMWidget(BaseAnalysisWidget):
                 QMessageBox.warning(
                     self,
                     "No Force Data",
-                    "No force data loaded. Mask shapes may need to be adjusted when force data is loaded."
+                    "No force data loaded.\n"
+                    "Mask shapes will not match force shapes.\n"
+                    "Mesh preview will not correspond to mesh during stress calculations.\n",
+
                 )
 
             # Store the analysis mask in the data manager
@@ -333,7 +335,6 @@ class MSMWidget(BaseAnalysisWidget):
 
             # Resize mask if needed
             if target_shape is not None and preview_mask.shape != target_shape:
-                from skimage.transform import resize
                 preview_mask = resize(
                     preview_mask.astype(float),
                     target_shape,
@@ -1159,7 +1160,6 @@ class MSMWidget(BaseAnalysisWidget):
             # Ensure mask matches force data shape
             current_mask = mask_stack[current_frame]
             if current_mask.shape != tx.shape:
-                from skimage.transform import resize
                 current_mask = resize(
                     current_mask.astype(float),
                     tx.shape,
@@ -1253,7 +1253,6 @@ class MSMWidget(BaseAnalysisWidget):
                 # Ensure mask matches force data shape
                 current_mask = mask_stack[frame]
                 if current_mask.shape != current_tx.shape:
-                    from skimage.transform import resize
                     current_mask = resize(
                         current_mask.astype(float),
                         current_tx.shape,
@@ -1335,7 +1334,7 @@ class MSMWidget(BaseAnalysisWidget):
         """Generate and display preview of the triangular mesh for the current frame."""
         try:
             # Get mask from data manager
-            mask_stack = self.data_manager.masks()
+            mask_stack = self.data_manager.masks
             if mask_stack is None:
                 raise ValueError("No mask loaded. Please create or load a mask first.")
 
@@ -1345,22 +1344,11 @@ class MSMWidget(BaseAnalysisWidget):
 
             self._update_parameters()
 
-            # Get force data shape and downscale factor
-            target_shape = None
             downscale_factor = 1
-
-            # Get downscale factor from class variables
-            if self._downscale_factor is not None:
-                downscale_factor = self._downscale_factor
-
-            # Get target shape from force results if available
-            if self.data_manager.force_field is not None:
-                tx = self.data_manager.force_field[current_frame, :, :, 0]
-                target_shape = tx.shape
-
-            # Resize mask if needed
-            if target_shape is not None and current_mask.shape != target_shape:
-                from skimage.transform import resize
+            forces = self.data_manager.force_field
+            if forces is not None:
+                downscale_factor = self.data_manager.force_params['downscale_factor']
+                target_shape = forces[current_frame, :, :, 0].shape
                 current_mask = resize(current_mask.astype(float), target_shape, order=0) > 0.5
 
             # Initialize mesh parameters
@@ -1424,14 +1412,6 @@ class MSMWidget(BaseAnalysisWidget):
                 opacity=0.7,
                 name='Mesh Nodes'
             )
-
-            # Store mesh for later use
-            self.mesh = {
-                'nodes': nodes,  # Store unscaled coordinates
-                'elements': elements,
-                'frame': current_frame,
-                'scale_factor': downscale_factor
-            }
 
             # Calculate and display mesh quality metrics
             quality_metrics = self.mesh_generator.analyze_mesh_quality(nodes, elements)

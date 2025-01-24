@@ -357,7 +357,6 @@ class napariTFMWidget(QWidget):
                 self.batch_widget._update_ui_state()
 
                 logger.info("All data cleared successfully")
-                QMessageBox.information(self, "Success", "All data has been cleared successfully")
 
             except Exception as e:
                 logger.error(f"Error clearing data: {str(e)}")
