@@ -37,7 +37,7 @@ class DataManager:
 
         # 5. Stress results
         self._stress_tensor: Optional[np.ndarray] = None  # (t, x, y, 2, 2)
-        self._mask_data: Optional[np.ndarray] = None  # (t, x, y)
+        self._masks: Optional[np.ndarray] = None  # (t, x, y)
         self._stress_params: Optional[Dict[str, Any]] = None
 
     # Input data setters with validation
@@ -56,7 +56,6 @@ class DataManager:
         self._validate_input_stack(data, "cell stack")
         self._input_cell_stack = data
 
-    # Properties for accessing input data
     @property
     def input_bead_stack(self) -> Optional[np.ndarray]:
         return self._input_bead_stack
@@ -96,6 +95,18 @@ class DataManager:
     @property
     def force_params(self) -> Optional[Dict[str, Any]]:
         return self._force_params
+    @property
+    def stress_tensor(self) -> Optional[np.ndarray]:
+        return self._stress_tensor
+
+    @property
+    def stress_params(self) -> Optional[Dict[str, Any]]:
+        return self._stress_params
+
+    @property
+    def masks(self) -> Optional[np.ndarray]:
+        """Get the mask data."""
+        return self._masks
 
     def set_preprocessing_results(self, bead_stack: Optional[np.ndarray] = None,
                                 reference: Optional[np.ndarray] = None,
@@ -133,7 +144,12 @@ class DataManager:
         if params is not None:
             self._displacement_params = params.copy()
 
-    # Validation methods
+    def set_masks(self, data: np.ndarray) -> None:
+        """Set and validate masks data.
+        """
+        self._validate_input_stack(data, "masks")
+        self._masks = data
+
     def _validate_input_stack(self, data: np.ndarray, name: str) -> None:
         """Validate dimensions and type of input stack data."""
         if not isinstance(data, np.ndarray):
@@ -157,9 +173,7 @@ class DataManager:
 
 
 
-    def get_mask_data(self):
-        """Get the mask data."""
-        return self._mask_data
+
 
 
 
