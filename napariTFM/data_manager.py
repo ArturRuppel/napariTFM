@@ -171,6 +171,12 @@ class DataManager:
         if data.ndim != expected_dims:
             raise ValueError(f"Field data must be {expected_dims}D (got {data.ndim}D)")
 
+    def clear_all_data(self) -> None:
+        """
+        Reset all data fields to their initial state (None) by reinitializing the instance.
+        """
+        self.__init__()
+
 
 
 

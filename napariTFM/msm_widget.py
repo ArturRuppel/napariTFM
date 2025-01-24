@@ -267,11 +267,18 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _handle_preview_toggle(self, state):
         """Handle preview checkbox state changes."""
+        # Store currently active layer
+        active_layer = self.viewer.layers.selection.active
+
         if not state:  # If unchecked
             if 'Mask Preview' in self.viewer.layers:
                 self.viewer.layers.remove('Mask Preview')
         else:  # If checked
             self._update_mask_preview()
+
+        # Restore the previously active layer
+        if active_layer is not None:
+            self.viewer.layers.selection.active = active_layer
 
     def _handle_frame_change(self, event=None):
         """Handle frame change events."""
