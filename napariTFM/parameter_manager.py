@@ -77,7 +77,7 @@ class ParameterManager(QObject):
         # Force parameters
         force_params = {
             'young_modulus': 10000.0,  # 10 kPa in Pa
-            'poisson_ratio': 0.49,
+            'poisson_ratio_substrate': 0.49,
             'gel_height': None,  # None means infinite
             'lanczos_exp': 1,
             'regularization': 1e-4,
@@ -97,7 +97,7 @@ class ParameterManager(QObject):
             'density_factor': 0.025,
             'mesh_algorithm': 'Frontal-Del.',
             'use_optimization': True,
-            'poisson_ratio': 0.5,
+            'poisson_ratio_cells': 0.5,
             'max_stress': 1.0
         }
         for name, value in stress_params.items():

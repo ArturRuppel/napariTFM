@@ -115,19 +115,19 @@ class napariTFMWidget(QWidget):
             self.visualization_manager
         )
 
-        self.batch_widget = BatchAnalysisWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager
-        )
+        # self.batch_widget = BatchAnalysisWidget(
+        #     self.viewer,
+        #     self.data_manager,
+        #     self.parameter_manager,
+        #     self.visualization_manager
+        # )
 
         # Add widgets to tabs
         tabs.addTab(self.preprocessing_widget, "Preprocessing")
         tabs.addTab(self.displacement_widget, "Displacement")
         tabs.addTab(self.force_widget, "Force Analysis")
         tabs.addTab(self.msm_widget, "Stress Analysis")
-        tabs.addTab(self.batch_widget, "Batch Analysis")
+        # tabs.addTab(self.batch_widget, "Batch Analysis")
 
         # Add tabs to container
         container_layout.addWidget(tabs)

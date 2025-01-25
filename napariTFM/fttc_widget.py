@@ -219,7 +219,7 @@ class FTTCWidget(BaseAnalysisWidget):
             # Create force parameters dictionary
             force_params = {
                 'young_modulus': self.parameter_manager.get_value('young_modulus'),
-                'poisson_ratio': self.parameter_manager.get_value('poisson_ratio'),
+                'poisson_ratio_substrate': self.parameter_manager.get_value('poisson_ratio_substrate'),
                 'gel_height': self.parameter_manager.get_value('gel_height'),
                 'pixel_size': self.data_manager.displacement_params['pixel_size'],
                 'frame_interval': self.parameter_manager.get_value('frame_interval'),
@@ -389,7 +389,7 @@ class FTTCWidget(BaseAnalysisWidget):
         try:
             # Sync material parameters
             self.young_spin.setValue(self.parameter_manager.get_value('young_modulus') / 1000)  # Convert Pa to kPa
-            self.poisson_spin.setValue(self.parameter_manager.get_value('poisson_ratio'))
+            self.poisson_spin.setValue(self.parameter_manager.get_value('poisson_ratio_substrate'))
             self.height_spin.setValue(self.parameter_manager.get_value('gel_height') or 0)
             self.lanczos_exp_spin.setValue(self.parameter_manager.get_value('lanczos_exp'))
 
@@ -473,7 +473,7 @@ class FTTCWidget(BaseAnalysisWidget):
 
             # Update material parameters
             self.parameter_manager.set_value('young_modulus', self.young_spin.value() * 1000)  # Convert kPa to Pa
-            self.parameter_manager.set_value('poisson_ratio', self.poisson_spin.value())
+            self.parameter_manager.set_value('poisson_ratio_substrate', self.poisson_spin.value())
             self.parameter_manager.set_value('gel_height', None if self.height_spin.value() == 0 else self.height_spin.value())
             self.parameter_manager.set_value('lanczos_exp', self.lanczos_exp_spin.value())
 
@@ -522,7 +522,7 @@ class FTTCWidget(BaseAnalysisWidget):
         try:
             # Get parameters from parameter manager
             young_modulus = self.parameter_manager.get_value('young_modulus')
-            poisson_ratio = self.parameter_manager.get_value('poisson_ratio')
+            poisson_ratio_substrate = self.parameter_manager.get_value('poisson_ratio_substrate')
             gel_height = self.parameter_manager.get_value('gel_height')
             lanczos_exp = self.parameter_manager.get_value('lanczos_exp')
 
@@ -531,7 +531,7 @@ class FTTCWidget(BaseAnalysisWidget):
 
             self.calculator = FTTC(
                 E=young_modulus,
-                nu=poisson_ratio,
+                nu=poisson_ratio_substrate,
                 lanczos_exp=lanczos_exp,
                 gel_height=gel_height
             )
@@ -979,8 +979,8 @@ class FTTCWidget(BaseAnalysisWidget):
             # Update spinboxes with loaded values
             if 'young_modulus' in params:
                 self.young_spin.setValue(params['young_modulus'] / 1000)  # convert from Pa to kPa
-            if 'poisson_ratio' in params:
-                self.poisson_spin.setValue(params['poisson_ratio'])
+            if 'poisson_ratio_substrate' in params:
+                self.poisson_spin.setValue(params['poisson_ratio_substrate'])
             if 'gel_height' in params:
                 self.height_spin.setValue(0 if params['gel_height'] is None else params['gel_height'])
             if 'lanczos_exp' in params:

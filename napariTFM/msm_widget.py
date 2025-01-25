@@ -63,6 +63,8 @@ class MSMWidget(BaseAnalysisWidget):
             self._setup_ui()
             self._connect_signals()
 
+            self._update_parameters()
+
             # Ensure parameters are connected before syncing
             self._connect_parameters()
 
@@ -145,7 +147,7 @@ class MSMWidget(BaseAnalysisWidget):
                 density_factor=self.parameter_spins['density_factor'].value(),
                 algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
                 use_optimization=self.parameter_checks['use_optimization'].isChecked(),
-                poisson_ratio=self.parameter_spins['poisson_ratio'].value(),
+                poisson_ratio=self.parameter_spins['poisson_ratio_cells'].value(),
                 nodes=nodes,
                 elements=elements
             )
@@ -179,13 +181,21 @@ class MSMWidget(BaseAnalysisWidget):
         params = {
             'pixel_size': self.data_manager.force_params['pixel_size'],
             'downscale_factor': self.data_manager.force_params['downscale_factor'],
+            'frame_interval': self.parameter_manager.get_value('frame_interval'),
+            'density_factor': self.parameter_manager.get_value('density_factor'),
+            'poisson_ratio_cells': self.parameter_manager.get_value('poisson_ratio_cells'),
+            'algorithm': self.parameter_manager.get_value('mesh_algorithm'),
+            'use_optimization': self.parameter_manager.get_value('use_optimization'),
             'max_stress': self.parameter_manager.get_value('max_stress'),
-            # Include other parameters...
-        }
 
+        }
+        stress_results = {
+            'stress_tensor': stress_tensor_stack,
+            'parameters': params
+        }
         self.data_manager.set_stress_results(stress_tensor_stack, params)
         self.visualization_manager.visualize_stress_results(
-            {"stress_tensor": stress_tensor_stack},
+            stress_results,
             max_stress=params['max_stress']
         )
 
@@ -193,6 +203,7 @@ class MSMWidget(BaseAnalysisWidget):
                       f"Mean condition number: {np.mean(results['condition_numbers']):.1e}\n"
                       f"Mean residual: {np.mean(results['residuals']):.1e}")
         self._update_status(stats_text, 100)
+        self._handle_visualization_layers()
         self._set_controls_enabled(True)
 
     def _handle_analysis_error(self, exc):
@@ -226,6 +237,7 @@ class MSMWidget(BaseAnalysisWidget):
         self.preview_mesh_btn.clicked.connect(self.preview_mesh)
         self.preview_frame_btn.clicked.connect(self.preview_current_frame)
         self.analyze_btn.clicked.connect(self.start_analysis)
+        # self.analyze_btn.clicked.connect(self.analyze_all_frames)
         self.save_stress_btn.clicked.connect(self._save_stress_tensor)
         self.load_stress_btn.clicked.connect(self._load_stress_tensor)
 
@@ -623,21 +635,21 @@ class MSMWidget(BaseAnalysisWidget):
                 except KeyError:
                     print("Warning: Parameter use_optimization not found in parameter manager")
 
-            # Connect poisson_ratio (Poisson ratio) spinbox
-            if 'poisson_ratio' in self.parameter_spins:
-                spin = self.parameter_spins['poisson_ratio']
+            # Connect poisson_ratio_cells (Poisson ratio) spinbox
+            if 'poisson_ratio_cells' in self.parameter_spins:
+                spin = self.parameter_spins['poisson_ratio_cells']
                 spin.valueChanged.connect(
-                    lambda value: self.parameter_manager.set_value('poisson_ratio', value)
+                    lambda value: self.parameter_manager.set_value('poisson_ratio_cells', value)
                 )
                 self.parameter_manager.register_callback(
-                    'poisson_ratio',
+                    'poisson_ratio_cells',
                     lambda value: self._safe_set_value(spin, value if value is not None else 0.5)
                 )
                 try:
-                    value = self.parameter_manager.get_value('poisson_ratio')
+                    value = self.parameter_manager.get_value('poisson_ratio_cells')
                     self._safe_set_value(spin, value if value is not None else 0.5)
                 except KeyError:
-                    print("Warning: Parameter poisson_ratio not found in parameter manager")
+                    print("Warning: Parameter poisson_ratio_cells not found in parameter manager")
 
         finally:
             # Restore signal handling
@@ -711,8 +723,8 @@ class MSMWidget(BaseAnalysisWidget):
                 self.parameter_manager.get_value('density_factor'))
             self.parameter_checks['use_optimization'].setChecked(
                 self.parameter_manager.get_value('use_optimization'))
-            self.parameter_spins['poisson_ratio'].setValue(
-                self.parameter_manager.get_value('poisson_ratio'))
+            self.parameter_spins['poisson_ratio_cells'].setValue(
+                self.parameter_manager.get_value('poisson_ratio_cells'))
             self.parameter_spins['max_stress'].setValue(
                 self.parameter_manager.get_value('max_stress'))
 
@@ -742,8 +754,8 @@ class MSMWidget(BaseAnalysisWidget):
                                              self.parameter_spins['algorithm'].currentText())
             self.parameter_manager.set_value('use_optimization',
                                              self.parameter_checks['use_optimization'].isChecked())
-            self.parameter_manager.set_value('poisson_ratio',
-                                             self.parameter_spins['poisson_ratio'].value())
+            self.parameter_manager.set_value('poisson_ratio_cells',
+                                             self.parameter_spins['poisson_ratio_cells'].value())
             self.parameter_manager.set_value('max_stress',
                                              self.parameter_spins['max_stress'].value())
 
@@ -767,7 +779,7 @@ class MSMWidget(BaseAnalysisWidget):
             self.parameter_spins['density_factor'],
             self.parameter_spins['algorithm'],
             self.parameter_checks['use_optimization'],
-            self.parameter_spins['poisson_ratio'],
+            self.parameter_spins['poisson_ratio_cells'],
             self.parameter_spins['max_stress']
         ]
         for widget in widgets:
@@ -1077,7 +1089,7 @@ class MSMWidget(BaseAnalysisWidget):
             ("dilation", "Mask Dilation (px):", 0, 50, 1, 10,
              "Number of pixels to dilate the mask. Higher values create a larger boundary around the cell."),
             ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 10,
-             "Gaussian smoothing poisson_ratio for the mask boundary. Higher values create smoother boundaries."),
+             "Gaussian smoothing sigma for the mask boundary. Higher values create smoother boundaries."),
             ("show_preview", "Show Preview:", None, None, None, False,
              "Show mask preview in real-time as parameters are adjusted"),
         ]
@@ -1093,7 +1105,7 @@ class MSMWidget(BaseAnalysisWidget):
         ]
 
         material_params = [
-            ("poisson_ratio", "Poisson's Ratio:", 0.0, 1.0, 0.01, 0.5,
+            ("poisson_ratio_cells", "Poisson's Ratio:", 0.0, 1.0, 0.01, 0.5,
              "Material's Poisson ratio. Typical value is 0.5 for incompressible materials."),
         ]
 
@@ -1310,7 +1322,7 @@ class MSMWidget(BaseAnalysisWidget):
 
             self.analyzer = MonolayerStressMicroscopy(mask=current_mask, density_factor=self.parameter_spins['density_factor'].value(),
                                                       algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
-                                                      use_optimization=self.parameter_checks['use_optimization'].isChecked(), poisson_ratio=self.parameter_spins['poisson_ratio'].value(),
+                                                      use_optimization=self.parameter_checks['use_optimization'].isChecked(), poisson_ratio=self.parameter_spins['poisson_ratio_cells'].value(),
                                                       young_modulus=1.0)
 
             self._update_status("Calculating stress field...", 20)
@@ -1392,7 +1404,7 @@ class MSMWidget(BaseAnalysisWidget):
                 # Update analyzer with current frame's mask
                 self.analyzer = MonolayerStressMicroscopy(mask=current_mask, density_factor=self.parameter_spins['density_factor'].value(),
                                                           algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
-                                                          use_optimization=self.parameter_checks['use_optimization'].isChecked(), poisson_ratio=self.parameter_spins['poisson_ratio'].value(),
+                                                          use_optimization=self.parameter_checks['use_optimization'].isChecked(), poisson_ratio=self.parameter_spins['poisson_ratio_cells'].value(),
                                                           young_modulus=1.0)
 
                 # Calculate stress tensor
@@ -1415,7 +1427,7 @@ class MSMWidget(BaseAnalysisWidget):
                     'downscale_factor': downscale_factor,
                     'frame_interval': self.parameter_manager.get_value('frame_interval'),
                     'young_modulus': self.analyzer.E,
-                    'poisson_ratio': self.analyzer.poisson_ratio,
+                    'poisson_ratio_cells': self.analyzer.poisson_ratio,
                     'density_factor': self.parameter_manager.get_value('density_factor'),
                     'algorithm': self.parameter_manager.get_value('mesh_algorithm'),
                     'use_optimization': self.parameter_manager.get_value('use_optimization'),
@@ -1633,7 +1645,7 @@ class MSMWidget(BaseAnalysisWidget):
 
                 # Update UI
                 self.parameter_spins['density_factor'].setValue(parameters['density_factor'])
-                self.parameter_spins['poisson_ratio'].setValue(parameters['poisson_ratio'])
+                self.parameter_spins['poisson_ratio_cells'].setValue(parameters['poisson_ratio_cells'])
                 self.parameter_spins['max_stress'].setValue(parameters['max_stress'])
                 self.parameter_spins['algorithm'].setCurrentText(parameters['algorithm'])
                 self.parameter_checks['use_optimization'].setChecked(parameters['use_optimization'])
