@@ -528,17 +528,12 @@ class FTTCWidget(BaseAnalysisWidget):
 
             # Get pixel size and downscale factor from displacement parameters
             disp_params = self.data_manager.displacement_params
-            pixel_size = disp_params.get('pixel_size')
-            downscale_factor = disp_params.get('downscale_factor', 1)
-
-            # Convert gel height from μm to pixels if specified
-            gel_height_p = None if gel_height is None else gel_height / (pixel_size * downscale_factor)
 
             self.calculator = FTTC(
                 E=young_modulus,
                 nu=poisson_ratio,
                 lanczos_exp=lanczos_exp,
-                gel_height=gel_height_p
+                gel_height=gel_height
             )
 
         except Exception as e:

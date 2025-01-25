@@ -225,7 +225,6 @@ class FTTC:
 
     def _calculate_greens_function(self, kx: np.ndarray, ky: np.ndarray):
         """Calculate Green's function in Fourier space with gel height correction"""
-        # Scale k-vectors by pixel size to get physical units
         V = 2 * (1 + self.nu) / self.E
         kx_sq = kx ** 2
         ky_sq = ky ** 2
@@ -415,7 +414,7 @@ class FTTC:
 
     def _calculate_fourier_modes(self, i_max: int, j_max: int, forcemap_pixel_size: float):
         """Calculate Fourier modes and Lanczos filter"""
-        kx_vec = 2. * np.pi / i_max / forcemap_pixel_size* np.append(
+        kx_vec = 2. * np.pi / i_max / forcemap_pixel_size * np.append(
             np.arange(0, (i_max // 2)), np.arange(-i_max // 2, 0))
         ky_vec = 2. * np.pi / j_max / forcemap_pixel_size * np.append(
             np.arange(0, (j_max // 2)), np.arange(-j_max // 2, 0))
