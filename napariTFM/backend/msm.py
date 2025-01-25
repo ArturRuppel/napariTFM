@@ -89,11 +89,11 @@ class MonolayerStressMicroscopy:
                  density_factor: float = 0.02,
                  algorithm: int = 2,
                  use_optimization: bool = False,
-                 sigma: float = 0.5,
+                 poisson_ratio: float = 0.5,
                  young_modulus: float = 1):
         """Initialize MSM calculator with mask and configurable mesh parameters"""
         self.mask = mask
-        self.sigma = sigma
+        self.poisson_ratio = poisson_ratio
         self.E = young_modulus
         self.timing_stats = {}
         self._nested_calls = {}
@@ -178,7 +178,7 @@ class MonolayerStressMicroscopy:
         loads[:, 2] = y_forces * node_areas
 
         # Setup materials
-        mats = np.array([[self.E, self.sigma]])
+        mats = np.array([[self.E, self.poisson_ratio]])
 
         return nodes, elements_formatted, loads, mats
 

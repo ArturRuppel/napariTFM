@@ -482,9 +482,9 @@ class MSMWidget(BaseAnalysisWidget):
                 except KeyError:
                     print("Warning: Parameter use_optimization not found in parameter manager")
 
-            # Connect sigma (Poisson ratio) spinbox
-            if 'sigma' in self.parameter_spins:
-                spin = self.parameter_spins['sigma']
+            # Connect poisson_ratio (Poisson ratio) spinbox
+            if 'poisson_ratio' in self.parameter_spins:
+                spin = self.parameter_spins['poisson_ratio']
                 spin.valueChanged.connect(
                     lambda value: self.parameter_manager.set_value('poisson_ratio', value)
                 )
@@ -570,7 +570,7 @@ class MSMWidget(BaseAnalysisWidget):
                 self.parameter_manager.get_value('density_factor'))
             self.parameter_checks['use_optimization'].setChecked(
                 self.parameter_manager.get_value('use_optimization'))
-            self.parameter_spins['sigma'].setValue(
+            self.parameter_spins['poisson_ratio'].setValue(
                 self.parameter_manager.get_value('poisson_ratio'))
             self.parameter_spins['max_stress'].setValue(
                 self.parameter_manager.get_value('max_stress'))
@@ -602,7 +602,7 @@ class MSMWidget(BaseAnalysisWidget):
             self.parameter_manager.set_value('use_optimization',
                                              self.parameter_checks['use_optimization'].isChecked())
             self.parameter_manager.set_value('poisson_ratio',
-                                             self.parameter_spins['sigma'].value())
+                                             self.parameter_spins['poisson_ratio'].value())
             self.parameter_manager.set_value('max_stress',
                                              self.parameter_spins['max_stress'].value())
 
@@ -626,7 +626,7 @@ class MSMWidget(BaseAnalysisWidget):
             self.parameter_spins['density_factor'],
             self.parameter_spins['algorithm'],
             self.parameter_checks['use_optimization'],
-            self.parameter_spins['sigma'],
+            self.parameter_spins['poisson_ratio'],
             self.parameter_spins['max_stress']
         ]
         for widget in widgets:
@@ -936,7 +936,7 @@ class MSMWidget(BaseAnalysisWidget):
             ("dilation", "Mask Dilation (px):", 0, 50, 1, 10,
              "Number of pixels to dilate the mask. Higher values create a larger boundary around the cell."),
             ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 10,
-             "Gaussian smoothing sigma for the mask boundary. Higher values create smoother boundaries."),
+             "Gaussian smoothing poisson_ratio for the mask boundary. Higher values create smoother boundaries."),
             ("show_preview", "Show Preview:", None, None, None, False,
              "Show mask preview in real-time as parameters are adjusted"),
         ]
@@ -952,7 +952,7 @@ class MSMWidget(BaseAnalysisWidget):
         ]
 
         material_params = [
-            ("sigma", "Poisson's Ratio:", 0.0, 1.0, 0.01, 0.5,
+            ("poisson_ratio", "Poisson's Ratio:", 0.0, 1.0, 0.01, 0.5,
              "Material's Poisson ratio. Typical value is 0.5 for incompressible materials."),
         ]
 
@@ -1167,14 +1167,10 @@ class MSMWidget(BaseAnalysisWidget):
             if pixel_size is None:
                 raise ValueError("Pixel size not available in force results")
 
-            self.analyzer = MonolayerStressMicroscopy(
-                mask=current_mask,  # Use resized mask
-                sigma=self.parameter_spins['sigma'].value(),
-                young_modulus=1.0,
-                density_factor=self.parameter_spins['density_factor'].value(),
-                algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
-                use_optimization=self.parameter_checks['use_optimization'].isChecked()
-            )
+            self.analyzer = MonolayerStressMicroscopy(mask=current_mask, density_factor=self.parameter_spins['density_factor'].value(),
+                                                      algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
+                                                      use_optimization=self.parameter_checks['use_optimization'].isChecked(), poisson_ratio=self.parameter_spins['poisson_ratio'].value(),
+                                                      young_modulus=1.0)
 
             self._update_status("Calculating stress field...", 20)
 
@@ -1253,14 +1249,10 @@ class MSMWidget(BaseAnalysisWidget):
                     ) > 0.5
 
                 # Update analyzer with current frame's mask
-                self.analyzer = MonolayerStressMicroscopy(
-                    mask=current_mask,
-                    sigma=self.parameter_spins['sigma'].value(),
-                    young_modulus=1.0,
-                    density_factor=self.parameter_spins['density_factor'].value(),
-                    algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
-                    use_optimization=self.parameter_checks['use_optimization'].isChecked()
-                )
+                self.analyzer = MonolayerStressMicroscopy(mask=current_mask, density_factor=self.parameter_spins['density_factor'].value(),
+                                                          algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
+                                                          use_optimization=self.parameter_checks['use_optimization'].isChecked(), poisson_ratio=self.parameter_spins['poisson_ratio'].value(),
+                                                          young_modulus=1.0)
 
                 # Calculate stress tensor
                 stress_tensor, condition_number, residual = self.analyzer.calculate_stress_field(current_tx, current_ty)
@@ -1276,30 +1268,37 @@ class MSMWidget(BaseAnalysisWidget):
             stress_tensor_stack = np.stack(stress_results, axis=0)
 
             # Store results in data manager with all parameters
-            max_stress = self.parameter_spins['max_stress'].value()
-            self.data_manager.stress_results = {
-                'stress_tensor': stress_tensor_stack,
-                'condition_numbers': np.array(condition_numbers) if condition_numbers else None,
-                'residuals': np.array(residuals) if residuals else None,
-                'parameters': {
+            max_stress = self.parameter_manager.get_value('max_stress')
+            params = {
                     'pixel_size': pixel_size,
+                    'downscale_factor': downscale_factor,
+                    'frame_interval': self.parameter_manager.get_value('frame_interval'),
                     'young_modulus': self.analyzer.E,
-                    'poisson_ratio': self.analyzer.sigma,
-                    'density_factor': self.parameter_spins['density_factor'].value(),
-                    'algorithm': self.parameter_spins['algorithm'].currentText(),
-                    'use_optimization': self.parameter_checks['use_optimization'].isChecked(),
+                    'poisson_ratio': self.analyzer.poisson_ratio,
+                    'density_factor': self.parameter_manager.get_value('density_factor'),
+                    'algorithm': self.parameter_manager.get_value('mesh_algorithm'),
+                    'use_optimization': self.parameter_manager.get_value('use_optimization'),
                     'max_stress': max_stress,
-                    'downscale_factor': downscale_factor
+
                 }
+
+            self.data_manager.set_stress_results(stress_tensor_stack, params)
+
+
+            stress_results = {
+                'stress_tensor': stress_tensor_stack,
+                # 'condition_numbers': np.array(condition_numbers) if condition_numbers else None,
+                # 'residuals': np.array(residuals) if residuals else None,
+                'parameters': params
             }
 
             # Emit results
-            self.stress_calculated.emit(self.data_manager.stress_results)
+            self.stress_calculated.emit(stress_results)
 
             # Update visualization
             self._update_status("Updating visualization...", 90)
             self.visualization_manager.visualize_stress_results(
-                self.data_manager.stress_results,
+                stress_results,
                 max_stress=max_stress
             )
 
@@ -1451,31 +1450,11 @@ class MSMWidget(BaseAnalysisWidget):
                 if not file_path.endswith('.npy'):
                     file_path += '.npy'
 
-                # Get the algorithm name from its ID
-                algorithm_id = self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()]
-
-                # Get Young's modulus safely - default to 1.0 if analyzer is not initialized
-                young_modulus = getattr(self.analyzer, 'E', 1.0)
-
                 # Package results with all necessary parameters
                 stress_results = {
-                    'stress_tensor': self.data_manager.stress_results['stress_tensor'],
-                    'condition_numbers': self.data_manager.stress_results.get('condition_numbers'),
-                    'residuals': self.data_manager.stress_results.get('residuals'),
-                    'parameters': {
-                        'pixel_size': self._pixelsize,
-                        'downscale_factor': self._downscale_factor,
-                        'young_modulus': young_modulus,
-                        'sigma': self.parameter_spins['sigma'].value(),
-                        'density_factor': self.parameter_spins['density_factor'].value(),
-                        'algorithm': algorithm_id,
-                        'algorithm_name': self.parameter_spins['algorithm'].currentText(),
-                        'use_optimization': self.parameter_checks['use_optimization'].isChecked(),
-                        'max_stress': self.parameter_spins['max_stress'].value(),
-                        'dilation': self.parameter_spins['dilation'].value(),
-                        'smoothing_sigma': self.parameter_spins['smoothing_sigma'].value()
+                    'stress_tensor': self.data_manager.stress_tensor,
+                    'parameters': self.data_manager.stress_params
                     }
-                }
 
                 # Save file
                 np.save(file_path, stress_results)
@@ -1511,46 +1490,18 @@ class MSMWidget(BaseAnalysisWidget):
 
                 parameters = stress_data['parameters']
 
-                # Extract algorithm name from ID if saved in old format
-                algorithm_name = parameters.get('algorithm_name')
-                if algorithm_name is None:
-                    # Find algorithm name by ID
-                    algorithm_id = parameters['algorithm']
-                    algorithm_name = next(
-                        (name for name, id in self.MESH_ALGORITHMS.items() if id == algorithm_id),
-                        'Frontal-Del.'  # Default if not found
-                    )
+                # Update UI
+                self.parameter_spins['density_factor'].setValue(parameters['density_factor'])
+                self.parameter_spins['poisson_ratio'].setValue(parameters['poisson_ratio'])
+                self.parameter_spins['max_stress'].setValue(parameters['max_stress'])
+                self.parameter_spins['algorithm'].setCurrentText(parameters['algorithm'])
+                self.parameter_checks['use_optimization'].setChecked(parameters['use_optimization'])
+                self._update_parent_calibration(parameters['pixel_size'], parameters.get('frame_interval', 1.0))
 
-                # Update UI parameters with loaded values
-                parameter_mapping = {
-                    'sigma': 'sigma',
-                    'density_factor': 'density_factor',
-                    'max_stress': 'max_stress',
-                    'dilation': 'dilation',
-                    'smoothing_sigma': 'smoothing_sigma'
-                }
 
-                for param_name, spin_name in parameter_mapping.items():
-                    if param_name in parameters:
-                        self.parameter_spins[spin_name].setValue(parameters[param_name])
-
-                # Update algorithm combobox
-                self.parameter_spins['algorithm'].setCurrentText(algorithm_name)
-
-                # Update optimization checkbox
-                if 'use_optimization' in parameters:
-                    self.parameter_checks['use_optimization'].setChecked(parameters['use_optimization'])
-
-                # Store pixel size and downscale factor
-                self._pixelsize = parameters['pixel_size']
-                self._downscale_factor = parameters['downscale_factor']
-
-                # Update analyzer with loaded parameters
-                if self.current_mask is not None:
-                    self._update_parameters()
 
                 # Update data manager and visualization
-                self.data_manager.stress_results = stress_data
+                self.data_manager.set_stress_results(stress_data['stress_tensor'], stress_data['parameters'])
                 self.visualization_manager.visualize_stress_results(
                     stress_data,
                     max_stress=parameters['max_stress']
@@ -1564,6 +1515,8 @@ class MSMWidget(BaseAnalysisWidget):
 
                 # Emit the stress_calculated signal with the results
                 self.stress_calculated.emit(stress_data)
+
+                self._handle_visualization_layers()
 
                 self._update_status(f"Stress tensor data successfully loaded from:\n{file_path}", 100)
 
@@ -1608,3 +1561,23 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Wait a brief moment for layers to be created
         QTimer.singleShot(10, update_visibility)
+
+    def _update_parent_calibration(self, pixel_size: float, frame_interval: float):
+        """Update calibration values in parent widget."""
+        try:
+            # Find parent widget instance (napariTFMWidget)
+            parent = self
+            while parent is not None:
+                if hasattr(parent, 'pixel_spin') and hasattr(parent, 'frame_spin'):
+                    break
+                parent = parent.parent()
+
+            if parent is not None:
+                # Update calibration values
+                parent.pixel_spin.setValue(pixel_size)
+                parent.frame_spin.setValue(frame_interval)
+            else:
+                self._update_status("Warning: Could not update calibration in parent widget", 100)
+
+        except Exception as e:
+            self._handle_error(f"Failed to update calibration: {str(e)}")

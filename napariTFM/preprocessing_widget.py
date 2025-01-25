@@ -423,7 +423,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             # Connect cell intensity slider
             self.cell_intensity_slider.valueChanged.connect(self._update_cell_intensity_labels)
 
-            # Connect Gaussian sigma controls
+            # Connect Gaussian poisson_ratio controls
             self.gaussian_sigma_spin.valueChanged.connect(
                 lambda value: self.parameter_manager.set_value('gaussian_sigma', value)
             )
@@ -433,7 +433,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             )
             self.gaussian_sigma_slider.valueChanged.connect(self._update_sigma_from_slider)
 
-            # Connect cell Gaussian sigma controls
+            # Connect cell Gaussian poisson_ratio controls
             self.cell_gaussian_sigma_spin.valueChanged.connect(
                 lambda value: self.parameter_manager.set_value('cell_gaussian_sigma', value)
             )
@@ -686,7 +686,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             slider: Reference to store the range slider
             min_spinbox: Reference to store the minimum spinbox
             max_spinbox: Reference to store the maximum spinbox
-            sigma_spinbox: Reference to store the gaussian sigma spinbox
+            sigma_spinbox: Reference to store the gaussian poisson_ratio spinbox
             tooltip_prefix: Optional prefix for tooltip text
         """
         group = QGroupBox(title)
@@ -730,7 +730,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         setattr(self, sigma_spinbox, QDoubleSpinBox())
         sigma_spin = getattr(self, sigma_spinbox)
         sigma_spin.setObjectName(sigma_spinbox)  # Set object name for slider reference
-        sigma_spin.setToolTip(f"Set Gaussian blur sigma for {tooltip_prefix}(0 = disabled)")
+        sigma_spin.setToolTip(f"Set Gaussian blur poisson_ratio for {tooltip_prefix}(0 = disabled)")
         sigma_layout = self._create_sigma_control(sigma_spin)
         layout.addLayout(sigma_layout)
 
@@ -761,7 +761,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         return group
 
     def _create_sigma_control(self, sigma_spinbox):
-        """Create a layout with sigma control for Gaussian filter."""
+        """Create a layout with poisson_ratio control for Gaussian filter."""
         sigma_layout = QHBoxLayout()
 
         blur_label = QLabel("Blur")
@@ -943,7 +943,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._update_status(message, int(progress))
 
     def _update_sigma_from_slider(self):
-        """Update sigma spinbox from slider value"""
+        """Update poisson_ratio spinbox from slider value"""
         slider_value = self.gaussian_sigma_slider.value()
         sigma_value = slider_value / 10.0  # Convert 0-100 range to 0-10.0
 
@@ -955,7 +955,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.update_parameters()
 
     def _update_slider_from_sigma(self):
-        """Update slider from sigma spinbox value"""
+        """Update slider from poisson_ratio spinbox value"""
         sigma_value = self.gaussian_sigma_spin.value()
         slider_value = int(sigma_value * 10)  # Convert 0-10.0 range to 0-100
 
@@ -967,7 +967,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.update_parameters()
 
     def _update_cell_sigma_from_slider(self):
-        """Update cell sigma spinbox from slider value"""
+        """Update cell poisson_ratio spinbox from slider value"""
         slider_value = self.cell_gaussian_sigma_slider.value()
         sigma_value = slider_value / 10.0  # Convert 0-100 range to 0-10.0
 
@@ -979,7 +979,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.update_parameters()
 
     def _update_cell_slider_from_sigma(self):
-        """Update cell slider from sigma spinbox value"""
+        """Update cell slider from poisson_ratio spinbox value"""
         sigma_value = self.cell_gaussian_sigma_spin.value()
         slider_value = int(sigma_value * 10)  # Convert 0-10.0 range to 0-100
 

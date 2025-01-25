@@ -144,6 +144,14 @@ class DataManager:
         if params is not None:
             self._displacement_params = params.copy()
 
+    def set_stress_results(self, stress_tensor: np.ndarray, params: Dict[str, Any]) -> None:
+        """Store stress calculation results with validation."""
+        if stress_tensor is not None:
+            self._validate_field_data(stress_tensor, expected_dims=5)  # (t, x, y, 2, 2)
+            self._stress_tensor = stress_tensor
+        if params is not None:
+            self._stress_params = params.copy()
+
     def set_masks(self, data: np.ndarray) -> None:
         """Set and validate masks data.
         """

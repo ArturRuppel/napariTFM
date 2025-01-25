@@ -43,12 +43,12 @@ class PreprocessingParameters:
         if not 0 <= self.cell_min_intensity_percentile < self.cell_max_intensity_percentile <= 1:
             raise ValueError("Invalid cell intensity percentile range")
 
-        # Validate gaussian sigma values - allow 0 for "no filter"
+        # Validate gaussian poisson_ratio values - allow 0 for "no filter"
         if self.enable_gaussian_filter and self.gaussian_sigma < 0:
-            raise ValueError("Gaussian sigma must be non-negative")
+            raise ValueError("Gaussian poisson_ratio must be non-negative")
 
         if self.enable_cell_gaussian_filter and self.cell_gaussian_sigma < 0:
-            raise ValueError("Cell gaussian sigma must be non-negative")
+            raise ValueError("Cell gaussian poisson_ratio must be non-negative")
 
         # Validate registration mode
         if self.registration_mode not in ['translation', 'rigid', 'no registration']:

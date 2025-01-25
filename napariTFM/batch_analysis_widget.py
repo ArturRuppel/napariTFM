@@ -102,10 +102,10 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                     bool(self.parameter_manager.get_value('use_optimization'))
                 )
 
-            # Sync Poisson ratio (sigma)
-            if 'sigma' in self.parameter_spins:
+            # Sync Poisson ratio (poisson_ratio)
+            if 'poisson_ratio' in self.parameter_spins:
                 value = self.parameter_manager.get_value('poisson_ratio')
-                self._safe_set_value(self.parameter_spins['sigma'], value)
+                self._safe_set_value(self.parameter_spins['poisson_ratio'], value)
 
         except Exception as e:
             print(f"Error syncing parameters: {str(e)}")
@@ -1199,7 +1199,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 "            # Initialize MSM calculator",
                 "            msm = MonolayerStressMicroscopy(",
                 "                pixelsize=params['pixelsize'] * params['downscale_factor'],",
-                "                sigma=params['poisson_ratio'],",
+                "                poisson_ratio=params['poisson_ratio'],",
                 "                young_modulus=params['young_modulus'],",
                 "                target_nodes=params['target_nodes'],",
                 "                boundary_refinement=params['boundary_refinement'],",
