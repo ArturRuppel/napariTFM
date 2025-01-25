@@ -891,8 +891,7 @@ class MSMWidget(BaseAnalysisWidget):
         self.preview_mesh_btn.setEnabled(has_mask)
         self.preview_frame_btn.setEnabled(has_mask and has_force_data)
         self.analyze_btn.setEnabled(has_mask and has_force_data)
-        self.save_stress_btn.setEnabled(hasattr(self.data_manager, 'stress_results') and
-                                        self.data_manager.stress_tensor is not None)
+        self.save_stress_btn.setEnabled(self.data_manager.stress_tensor is not None)
 
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
