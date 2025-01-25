@@ -393,7 +393,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 displacement_data = np.load(file_path, allow_pickle=True).item()
 
                 # Update data manager
-                self.set_displacement_results(displacement_data['flows'], displacement_data['parameters'])
+                self.data_manager.set_displacement_results(displacement_data['flows'], displacement_data['parameters'])
 
                 # Update parameter manager with loaded parameters
                 params = displacement_data['parameters']
