@@ -32,59 +32,196 @@ from napariTFM.fttc_numba_functions import *
 
 
 class FTTC:
-    def __init__(self, E: float, nu: float, mesh_size: int = 1, lanczos_exp: int = 1, gel_height: float = float('inf'), pixelsize: float = float(1e-6)):
-        self.E = E
-        self.nu = nu
-        self.mesh_size = mesh_size  # This should be the downsample rate
-        self.lanczos_exp = lanczos_exp
-        self.gel_height = gel_height
-        self.pixelsize = pixelsize
-        self.timing_stats = {}
-        self.detailed_timing = {}
-
-
-
-    @thread_worker
-    def calculate_traction(self, x: np.ndarray, y: np.ndarray,
-                           u_data: np.ndarray, v_data: np.ndarray,
-                           dx: float, set_lam: Optional[float] = None) -> Tuple:
+    def __init__(self, E: float, nu: float, lanczos_exp: int = 1, gel_height: float = float('inf')):
         """
-        Calculate traction forces from displacement data
+        Initialize FTTC calculator.
 
         Args:
-            x: x coordinates
-            y: y coordinates
-            u_data: x displacement data
-            v_data: y displacement data
-            dx: pixel size
-            set_lam: optional regularization parameter
+            E: Young's modulus in Pa
+            nu: Poisson ratio
+            lanczos_exp: Lanczos filter exponent
+            gel_height: Gel height for correction (default: infinity)
+        """
+        self.E = E
+        self.nu = nu
+        self.lanczos_exp = lanczos_exp
+        self.gel_height = gel_height
+    @thread_worker
+    def calculate_traction(self, displacements: Tuple[np.ndarray, np.ndarray],
+                           pixel_size: float,
+                           downsample_factor: int = 1,
+                           regularization: float = None) -> Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]:
+        """
+        Calculate traction forces from displacement field measurements using Fourier Transform
+        Traction Cytometry (FTTC).
+
+        Parameters
+        ----------
+        displacements : np.ndarray (shape: H x W x 2)
+            - dx: x-direction displacements (shape: H x W, displacements[..., 0])
+            - dy: y-direction displacements (shape: H x W, displacements[..., 1])
+            Units: micrometers (μm)
+            The displacement fields should represent how far each point in the gel
+            has moved from its original position.
+
+        pixel_size : float
+            Physical size of each pixel in the displacement field.
+            Units: micrometers (μm)
+            Example: for a 100x objective with 0.1 μm/pixel, use 0.1
+
+        downsample_factor : int
+            Factor representing the spatial downsampling that was already applied
+            to the displacement field data before being passed to this function.
+            This is used to correctly scale the pixel size for force calculations.
+
+        regularization : float, optional (default=None)
+            Tikhonov regularization parameter (λ) for the inverse problem.
+            Units: dimensionless
+            If None, will be automatically determined using Generalized Cross-Validation (GCV).
+            Typical values range from 1e-6 to 1e-3.
+            Higher values give smoother force fields but may underestimate peak forces.
+
+        Returns
+        -------
+        Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]
+            Returns ((x, y), forces) where:
+
+            x, y : np.ndarray
+                2D coordinate grids (shape: H x W each) giving the physical position
+                corresponding to each point in the force field.
+                Units: micrometers (μm)
+                These can be used for plotting or further analysis.
+
+            forces : np.ndarray
+                Calculated traction forces (shape: 2 x H x W)
+                - forces[0]: x-direction forces
+                - forces[1]: y-direction forces
+                Units: N/m² (Pascals)
+                These represent the forces exerted by the cell on the substrate
+                at each point.
+
+        Notes
+        -----
+        The calculation involves several steps:
+        1. Fourier transform of the displacement field
+        2. Application of the Green's function to calculate forces
+        3. Inverse Fourier transform to get the final force field
+
+        The relationship between forces and displacements is given by the
+        Boussinesq solution in Fourier space, modified by the Tikhonov
+        regularization parameter to handle noise in the measurements.
+
+        Examples
+        --------
+        >> fttc = FTTC(E=10000, nu=0.5)  # Initialize with gel properties
+        >> # dx and dy are already in micrometers
+        >> worker = fttc.calculate_traction(
+        ...     displacements=(dx, dy),
+        ...     pixelsize=0.1,  # 0.1 μm per pixel
+        ...     downsample_factor=4  # if data was previously downsampled by factor of 4
+        ... )
+        >> # Set up callbacks
+        >> def handle_result(result):
+        ...     (x, y), forces = result
+        ...     force_magnitude = np.sqrt(forces[0]**2 + forces[1]**2)
+        ...     # Process the results here
+        >> worker.returned.connect(handle_result)
+        >> worker.start()
+        """
+        d_x = displacements[..., 0]
+        d_y = displacements[..., 1]
+
+
+        # Create coordinate grid
+        x = np.arange(d_x.shape[1])
+        y = np.arange(d_x.shape[0])
+
+        # Create position array in pixel coordinates
+        pos = np.array([np.ones(len(y))[:, None] * x,
+                        y[:, None] * np.ones(len(x))])
+
+        # Create displacement vector array, already in physical units
+        vec = np.array([d_x.flatten(), d_y.flatten()])
+
+        # Convert pixel coordinates to physical units inside _perform_tfm
+        effective_pixelsize = pixel_size * downsample_factor
+
+        # Calculate forces
+        if regularization is None:
+            regularization = self._find_regularization(pos, vec)
+
+        return self._perform_tfm(pos, vec, effective_pixelsize, regularization)
+
+    def _perform_tfm(self, pos: np.ndarray, vec: np.ndarray,
+                     pixelsize: float, regularization: float,
+                     i_max: Optional[int] = None,
+                     j_max: Optional[int] = None) -> Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]:
+        """
+        Core TFM calculation.
+
+        Args:
+            pos: Position array in pixel coordinates (2, N)
+            vec: Displacement vector array in physical units (2, N)
+            pixelsize: Effective pixel size in meters (including any downsampling)
+            regularization: Regularization parameter (lambda)
+            i_max, j_max: Optional output grid dimensions
 
         Returns:
             Tuple containing:
-            - (x, y) coordinates
-            - traction magnitude
-            - traction vectors
-            - reconstructed displacement
-            - original displacement
-            - energy
-            - total force
-            - Fourier transform of traction
-            - Fourier transform of reconstructed displacement
+            - (x, y) coordinate grids in physical units
+            - forces array in N/m²
         """
-        # Create grid using original coordinates
-        xpix, ypix = np.meshgrid(x, y, indexing='xy')
-        pos0 = np.array([xpix.flatten(), ypix.flatten()])
+        # Store original input dimensions
+        original_shape = (int(np.sqrt(vec.shape[1])), int(np.sqrt(vec.shape[1])))
 
-        # Scale only the displacement vectors, not the coordinates
-        pix_per_mu = self.mesh_size / dx
-        vec0 = pix_per_mu * np.array([u_data.flatten(), v_data.flatten()])
+        # Interpolate to regular grid
+        grid_mat, u, i_max, j_max, i_bound_size, j_bound_size = self._interp_vec2grid(
+            pos, vec, i_max=i_max, j_max=j_max)
 
-        if set_lam is None:
-            lam = self._find_regularization(pos0, vec0)
-        else:
-            lam = set_lam
+        # Calculate in Fourier space using physical units
+        kx, ky, lanczosx, lanczosy = self._calculate_fourier_modes(i_max, j_max, pixelsize)
+        GFt = self._calculate_greens_function(kx, ky)
 
-        return self._perform_tfm(pos0, vec0, pix_per_mu, lam)
+        G_inv = calculate_traction_2d(GFt, regularization ** 2)
+        G_inv_xx = G_inv[0, 0]
+        G_inv_xy = G_inv[0, 1]
+        G_inv_yy = G_inv[1, 1]
+
+        Ftfx, Ftfy = self._reg_fourier_TFM_L2(u, G_inv_xx, G_inv_xy, G_inv_yy)
+
+        # Calculate final forces
+        pos, vec, f = self._calculate_stress_field(
+            Ftfx, Ftfy, lanczosx, lanczosy, grid_mat, u, i_max, j_max)
+
+        # Convert output coordinates to physical units
+        x = np.reshape(pos[0], (i_max, j_max)).T * pixelsize
+        y = np.reshape(pos[1], (i_max, j_max)).T * pixelsize
+
+        # Pad outputs to match input dimensions if needed
+        f = self._pad_to_shape(f, original_shape)
+
+        # Create full coordinate grids to match dimensions
+        x_full = np.linspace(x[0, 0], x[-1, -1], original_shape[1])
+        y_full = np.linspace(y[0, 0], y[-1, -1], original_shape[0])
+        x, y = np.meshgrid(x_full, y_full)
+
+        return (x, y), f
+
+    @staticmethod
+    def _pad_to_shape(arr: np.ndarray, target_shape: Tuple[int, int]) -> np.ndarray:
+        """Pad array to match target shape."""
+        if isinstance(arr, np.ndarray):
+            current_shape = arr.shape
+            if len(current_shape) == 2:
+                pad_width = [(0, target_shape[0] - current_shape[0]),
+                             (0, target_shape[1] - current_shape[1])]
+                return np.pad(arr, pad_width, mode='constant', constant_values=0)
+            elif len(current_shape) == 3:
+                pad_width = [(0, 0),
+                             (0, target_shape[0] - current_shape[1]),
+                             (0, target_shape[1] - current_shape[2])]
+                return np.pad(arr, pad_width, mode='constant', constant_values=0)
+        return arr
 
     def _calculate_greens_function(self, kx: np.ndarray, ky: np.ndarray):
         """Calculate Green's function in Fourier space with gel height correction"""
@@ -131,65 +268,6 @@ class FTTC:
 
         return GFt_std
 
-    def _perform_tfm(self, pos0: np.ndarray, vec0: np.ndarray,
-                     pix_per_mu: float, lam: float,
-                     i_max: Optional[int] = None,
-                     j_max: Optional[int] = None) -> Tuple:
-        """Core TFM calculation with shape matching to input"""
-
-        # Store original input dimensions
-        original_shape = (int(np.sqrt(vec0.shape[1])), int(np.sqrt(vec0.shape[1])))
-
-        # Original TFM calculation
-        grid_mat, u, i_max, j_max, i_bound_size, j_bound_size = self._interp_vec2grid(
-            pos0, vec0, i_max=i_max, j_max=j_max)
-
-        kx, ky, lanczosx, lanczosy = self._calculate_fourier_modes(i_max, j_max)
-        GFt = self._calculate_greens_function(kx, ky)
-
-        G_inv = calculate_traction_2d(GFt, lam ** 2)
-        G_inv_xx = G_inv[0, 0]
-        G_inv_xy = G_inv[0, 1]
-        G_inv_yy = G_inv[1, 1]
-
-        Ftfx, Ftfy = self._reg_fourier_TFM_L2(u, G_inv_xx, G_inv_xy, G_inv_yy)
-        Ftf = np.array([Ftfx, Ftfy])
-
-        urec, Fturec = self._reconstruct_displacement(GFt, Ftfx, Ftfy, lanczosx, lanczosy)
-
-        pos, vec, fnorm, f, energy, force = self._calculate_stress_field(
-            Ftfx, Ftfy, lanczosx, lanczosy, grid_mat, u, i_max, j_max,
-            i_bound_size, j_bound_size, pix_per_mu)
-
-        x = np.reshape(pos[0], (i_max, j_max)).T / pix_per_mu
-        y = np.reshape(pos[1], (i_max, j_max)).T / pix_per_mu
-
-        # Pad output arrays to match input dimensions
-        def pad_to_shape(arr, target_shape):
-            if isinstance(arr, np.ndarray):
-                current_shape = arr.shape
-                if len(current_shape) == 2:
-                    pad_width = [(0, target_shape[0] - current_shape[0]),
-                                 (0, target_shape[1] - current_shape[1])]
-                    return np.pad(arr, pad_width, mode='constant', constant_values=0)
-                elif len(current_shape) == 3:  # For arrays like f with components
-                    pad_width = [(0, 0),  # Don't pad the components dimension
-                                 (0, target_shape[0] - current_shape[1]),
-                                 (0, target_shape[1] - current_shape[2])]
-                    return np.pad(arr, pad_width, mode='constant', constant_values=0)
-            return arr
-
-        # Pad relevant outputs
-        fnorm = pad_to_shape(fnorm, original_shape)
-        f = pad_to_shape(f, original_shape)
-        urec = pad_to_shape(urec, original_shape)
-
-        # Create padded coordinate grids to match dimensions
-        x_full = np.linspace(x[0, 0], x[-1, -1], original_shape[1])
-        y_full = np.linspace(y[0, 0], y[-1, -1], original_shape[0])
-        x, y = np.meshgrid(x_full, y_full)
-
-        return (x, y), fnorm, f, urec, u, energy, force, Ftf, Fturec
 
     @staticmethod
     def _gcvfun(lmbda, s2, beta, delta0, mn):
@@ -219,18 +297,6 @@ class FTTC:
             disp=0,
         )[0]
         minG = self._gcvfun(reg_min, s2, beta[:s.size], 0., 0)
-
-        if plot:
-            import matplotlib.pyplot as plt
-            plt.plot(reg_param, G, "-")
-            plt.xscale("log")
-            plt.yscale("log")
-            plt.xlabel(r"$\lambda$")
-            plt.ylabel(r"$G(\lambda)$")
-            plt.plot([reg_min], [minG], "*r")
-            plt.plot([reg_min, reg_min], [minG / 1000, minG], ":r")
-            plt.title(r"GCV function, minimum at $\lambda = %.2e$" % reg_min)
-            plt.show()
 
         return float(reg_min), float(minG), G, reg_param
 
@@ -273,16 +339,16 @@ class FTTC:
         min_corner = np.array([np.min(pos[0]), np.min(pos[1])])
 
         if i_max is None and j_max is None:
-            i_max = np.round((max_corner[0] - min_corner[0]) / self.mesh_size)
-            j_max = np.round((max_corner[1] - min_corner[1]) / self.mesh_size)
+            i_max = np.round((max_corner[0] - min_corner[0]))
+            j_max = np.round((max_corner[1] - min_corner[1]))
             i_max -= np.int64(np.mod(i_max, 2))
             j_max -= np.int64(np.mod(j_max, 2))
 
         i_max, j_max = np.int64(i_max), np.int64(j_max)
 
         # Create target grid points
-        x = min_corner[0] + np.arange(0.5, i_max, 1) * self.mesh_size
-        y = min_corner[1] + np.arange(0.5, j_max, 1) * self.mesh_size
+        x = min_corner[0] + np.arange(0.5, i_max, 1)
+        y = min_corner[1] + np.arange(0.5, j_max, 1)
         X, Y = np.meshgrid(x, y)
         grid_mat = np.array([X, Y])
 
@@ -332,17 +398,16 @@ class FTTC:
 
         return grid_mat, u, i_max, j_max, 0, 0
 
-
-    def _calculate_fourier_modes(self, i_max: int, j_max: int):
+    def _calculate_fourier_modes(self, i_max: int, j_max: int, pixelsize: float):
         """Calculate Fourier modes and Lanczos filter"""
-        kx_vec = 2. * np.pi / i_max / self.pixelsize * np.append(
+        kx_vec = 2. * np.pi / i_max / pixelsize * np.append(
             np.arange(0, (i_max // 2)), np.arange(-i_max // 2, 0))
-        ky_vec = 2. * np.pi / j_max / self.pixelsize * np.append(
+        ky_vec = 2. * np.pi / j_max / pixelsize * np.append(
             np.arange(0, (j_max // 2)), np.arange(-j_max // 2, 0))
         kx, ky = np.meshgrid(kx_vec, ky_vec)
 
-        lanczosx = np.sinc(kx * self.mesh_size / np.pi) ** self.lanczos_exp
-        lanczosy = np.sinc(ky * self.mesh_size / np.pi) ** self.lanczos_exp
+        lanczosx = np.sinc(kx / np.pi) ** self.lanczos_exp
+        lanczosy = np.sinc(ky / np.pi) ** self.lanczos_exp
 
         kx[0, 0] = 1
         ky[0, 0] = 1
@@ -357,24 +422,11 @@ class FTTC:
         Ftfy = Ginv_xy * Ftux + Ginv_yy * Ftuy
         return Ftfx, Ftfy
 
-    def _reconstruct_displacement(self, GFt: np.ndarray, Ftfx: np.ndarray,
-                                  Ftfy: np.ndarray, lanczosx: np.ndarray,
-                                  lanczosy: np.ndarray):
-        """Reconstruct displacement field from traction"""
-        Ftux_rec = GFt[0, 0] * Ftfx + GFt[0, 1] * Ftfy
-        Ftuy_rec = GFt[1, 0] * Ftfx + GFt[1, 1] * Ftfy
-        ux_rec = np.fft.ifft2(lanczosx * Ftux_rec)
-        uy_rec = np.fft.ifft2(lanczosy * Ftuy_rec)
-        urec = np.array([np.real(ux_rec), np.real(uy_rec)])
-        Fturec = np.array([Ftux_rec, Ftuy_rec])
-        return urec, Fturec
 
     def _calculate_stress_field(self, Ftfx: np.ndarray, Ftfy: np.ndarray,
                                 lanczosx: np.ndarray, lanczosy: np.ndarray,
                                 grid_mat: np.ndarray, u: np.ndarray,
-                                i_max: int, j_max: int,
-                                i_bound_size: int, j_bound_size: int,
-                                pix_per_mu: float):
+                                i_max: int, j_max: int):
         """Calculate stress field and related quantities"""
         fx = np.fft.ifft2(lanczosx * Ftfx)
         fy = np.fft.ifft2(lanczosy * Ftfy)
@@ -389,34 +441,10 @@ class FTTC:
         ])
 
         f = np.array([np.real(fx), np.real(fy)])
-        fnorm = (f[0] ** 2 + f[1] ** 2) ** 0.5
 
-        if j_bound_size > 0 and i_bound_size > 0:
-            u_slice = u[:, j_bound_size:-j_bound_size, i_bound_size:-i_bound_size]
-            f_slice = f[:, j_bound_size:-j_bound_size, i_bound_size:-i_bound_size]
-            fnorm_slice = fnorm[j_bound_size:-j_bound_size, i_bound_size:-i_bound_size]
-            energy = self._calculate_energy(u_slice, f_slice, pix_per_mu)
-            force = self._calculate_total_force(fnorm_slice, pix_per_mu)
-        else:
-            energy = self._calculate_energy(u, f, pix_per_mu)
-            force = self._calculate_total_force(fnorm, pix_per_mu)
 
-        # # Swap both position and force components before returning
-        # pos = np.array([pos[1], pos[0]])  # Swap position components
-        # f = np.array([f[1], f[0]])  # Swap force components
+        return pos, vec, f
 
-        return pos, vec, fnorm, f, energy, force
 
-    def _calculate_energy(self, u: np.ndarray, f: np.ndarray, pix_per_mu: float) -> float:
-        """Calculate energy stored in the traction profile"""
-        l = self.mesh_size / pix_per_mu * 1e-6  # nodal distance in m^2
-        energy = 0.5 * l ** 2 * np.sum(u * f) * 1e-6 / pix_per_mu
-        return energy
-
-    def _calculate_total_force(self, fnorm: np.ndarray, pix_per_mu: float) -> float:
-        """Calculate L2 norm of the force field"""
-        unit_factor = self.mesh_size / pix_per_mu * 1e-6
-        total_force = unit_factor ** 2 * np.sum(fnorm)
-        return total_force
 
 

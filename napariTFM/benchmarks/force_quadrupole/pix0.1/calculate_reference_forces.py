@@ -210,7 +210,7 @@ if __name__ == "__main__":
     t_y_ref = np.load(current_dir / "t_y.npy")
 
     # Common parameters
-    pixelsize = 1  # micrometers
+    pixelsize = 0.1  # micrometers
     downsamplerate = 4
     E = 10000  # Young's modulus in Pa
     nu = 0.5  # Poisson ratio
@@ -229,22 +229,11 @@ if __name__ == "__main__":
     # 2. Calculate forces using the FTTC method
     fttc = FTTC(
         E=E,  # Young's modulus in Pa
-        pixelsize=pixelsize * downsamplerate,
-        mesh_size=1,
-        nu=nu,  # Poisson ratio
+        nu=nu  # Poisson ratio
     )
 
-    # Create coordinate grid for FTTC
-    x = np.arange(d_x.shape[1])
-    y = np.arange(d_x.shape[0])
-
-    # Calculate forces using FTTC
-    pos = np.array([x[:, None] * np.ones(len(y)), np.ones(len(x))[:, None] * y])
-    vec = np.array([d_x.flatten(), d_y.flatten()])
-    vec = vec * (pixelsize)
-
-    # Calculate forces directly using _perform_tfm
-    (x, y), fnorm, forces_fttc, urec, u, energy, force, Ftf, Fturec = fttc._perform_tfm(pos, vec, pixelsize, lam=0.0001)
+    # Calculate forces with clear parameters
+    (x, y), forces_fttc = fttc.calculate_traction(displacements=(d_x * pixelsize, d_y * pixelsize), pixel_size=pixelsize, downsample_factor=downsamplerate, regularization=0.00000001)
 
     # Reshape forces to match original dimensions
     t_x_fttc = forces_fttc[0].reshape(d_x.shape)

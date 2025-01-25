@@ -108,8 +108,8 @@ class FTTCWidget(BaseAnalysisWidget):
 
                 for frame_idx, frame_data in enumerate(displacement_field):
                     # Convert displacements from micrometers to pixels
-                    u_data = frame_data[..., 0] / forcemap_pixel_size
-                    v_data = frame_data[..., 1] / forcemap_pixel_size
+                    u_data = frame_data[..., 0]
+                    v_data = frame_data[..., 1]
 
                     shape = frame_data.shape[:-1]
                     x = np.arange(shape[1])
@@ -403,26 +403,11 @@ class FTTCWidget(BaseAnalysisWidget):
             displacement_field = self.data_manager.displacement_field
             displacement_params = self.data_manager.displacement_params
             current_frame = self.viewer.dims.current_step[0]
-            frame_data = displacement_field[current_frame]
 
-            # Get spatial coordinates
-            shape = frame_data.shape[:-1]
-            x = np.arange(shape[1])
-            y = np.arange(shape[0])
-
-            forcemap_pixel_size = displacement_params["pixel_size"] * displacement_params["downscale_factor"]
-            print(forcemap_pixel_size)
-            print(np.nanmean(np.abs(frame_data)))
 
             # Create and start worker
-            worker = self.calculator.calculate_traction(
-                x=x,
-                y=y,
-                u_data=frame_data[..., 0],
-                v_data=frame_data[..., 1],
-                dx=forcemap_pixel_size,
-                set_lam=self.parameter_manager.get_value('regularization')
-            )
+            worker = self.calculator.calculate_traction(displacements=displacement_field[current_frame], pixel_size=displacement_params["pixel_size"], downsample_factor=displacement_params["downscale_factor"],
+                                                        regularization=self.parameter_manager.get_value('regularization'))
 
             # Connect worker signals
             worker.returned.connect(self._handle_preview_results)
@@ -550,7 +535,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
             self.calculator = FTTC(
                 E=young_modulus,
-                pixelsize=pixel_size * downscale_factor * 1e-6,
                 nu=poisson_ratio,
                 lanczos_exp=lanczos_exp,
                 gel_height=gel_height_p
