@@ -34,8 +34,13 @@ import solidspy.postprocesor as pos
 from scipy.optimize import least_squares
 from scipy.sparse import csr_matrix, vstack, diags
 from scipy.sparse.linalg import lsqr
+from scipy.ndimage import binary_fill_holes, generate_binary_structure, binary_dilation, label, gaussian_filter, sum as ndimage_sum
+
 
 from skimage.measure import regionprops
+from skimage.transform import resize
+
+
 
 from napariTFM.backend.mesh_generator import MeshParameters, MeshGenerator
 from napariTFM.backend.msm_numba_functions import *
@@ -107,6 +112,153 @@ class MonolayerStressMicroscopy:
         else:
             self.nodes = nodes
             self.elements = elements
+
+    @staticmethod
+    def create_mask_from_image(image, threshold_percentile=0, dilation=10, smoothing_sigma=10.0):
+        """
+        Create a binary mask from an input image using thresholding, dilation, and smoothing.
+
+        Parameters
+        ----------
+        image : np.ndarray
+            Input image
+        threshold_percentile : float
+            Percentile value for thresholding (0-100)
+        dilation : int
+            Number of pixels to dilate the mask
+        smoothing_sigma : float
+            Sigma value for Gaussian smoothing
+
+        Returns
+        -------
+        np.ndarray
+            Binary mask
+        """
+        # Convert image to float for consistent processing
+        image_float = image.astype(float)
+
+        # Calculate threshold value based on percentile
+        # Ignore zero values when calculating percentile
+        if threshold_percentile > 0:
+            nonzero_mask = image_float > 0
+            if np.any(nonzero_mask):
+                threshold_value = np.percentile(image_float[nonzero_mask], threshold_percentile)
+                thresholded_image = np.where(image_float > threshold_value, image_float, 0)
+            else:
+                thresholded_image = image_float
+        else:
+            thresholded_image = image_float
+
+        # Basic thresholding to create binary mask
+        mask = thresholded_image > 0
+
+        # Fill holes
+        filled_mask = binary_fill_holes(mask)
+
+        # Smoothing
+        if smoothing_sigma > 0:
+            float_mask = filled_mask.astype(float)
+            smoothed = gaussian_filter(float_mask, sigma=smoothing_sigma)
+            smoothed_mask = smoothed > 0.5
+            smoothed_mask = binary_fill_holes(smoothed_mask)
+        else:
+            smoothed_mask = filled_mask
+
+        # Dilation
+        if dilation > 0:
+            struct = generate_binary_structure(2, 2)
+            dilated_mask = binary_dilation(
+                smoothed_mask,
+                structure=struct,
+                iterations=dilation
+            )
+        else:
+            dilated_mask = smoothed_mask
+
+        # Get largest connected component
+        labels, num_features = label(dilated_mask)
+        if num_features > 0:
+            # Calculate sizes of each labeled region
+            sizes = ndimage_sum(dilated_mask, labels, index=range(1, num_features + 1))
+            largest_feature = np.argmax(sizes) + 1
+            final_mask = labels == largest_feature
+        else:
+            final_mask = dilated_mask
+
+        return final_mask
+
+    @classmethod
+    def create_mask_stack(cls, image_stack, threshold_percentile=0, dilation=10, smoothing_sigma=10.0,
+                          target_shape=None, downscale_factor=1):
+        """
+        Create a stack of masks from an image stack with optional resizing.
+
+        Parameters
+        ----------
+        image_stack : np.ndarray
+            3D array of images or 2D single image
+        threshold_percentile : float
+            Percentile value for thresholding (0-100)
+        dilation : int
+            Number of pixels to dilate each mask
+        smoothing_sigma : float
+            Sigma value for Gaussian smoothing
+        target_shape : tuple, optional
+            Shape to resize masks to (height, width)
+        downscale_factor : int, optional
+            Factor to downscale masks by for analysis
+
+        Returns
+        -------
+        tuple
+            (analysis_mask_stack, visualization_mask_stack)
+        """
+        # Handle 2D input
+        if image_stack.ndim == 2:
+            image_stack = image_stack[np.newaxis, ...]
+
+        # Create mask stack
+        mask_stack = np.zeros_like(image_stack, dtype=bool)
+
+        # Process each frame
+        for frame in range(image_stack.shape[0]):
+            mask_stack[frame] = cls.create_mask_from_image(
+                image_stack[frame],
+                threshold_percentile=threshold_percentile,
+                dilation=dilation,
+                smoothing_sigma=smoothing_sigma
+            )
+
+        # Initialize both stacks as the original
+        analysis_mask_stack = mask_stack
+        vis_mask_stack = mask_stack
+
+        # Resize analysis masks if target shape is provided
+        if target_shape is not None and mask_stack.shape[1:] != target_shape:
+            analysis_mask_stack = resize(
+                mask_stack.astype(float),
+                (mask_stack.shape[0], *target_shape),
+                order=0,
+                preserve_range=True,
+                anti_aliasing=False
+            ) > 0.5
+
+        # Create visualization masks if downscale factor is greater than 1
+        if downscale_factor > 1:
+            vis_shape = (
+                analysis_mask_stack.shape[0],
+                analysis_mask_stack.shape[1] * downscale_factor,
+                analysis_mask_stack.shape[2] * downscale_factor
+            )
+            vis_mask_stack = resize(
+                mask_stack.astype(float),
+                vis_shape,
+                order=0,
+                preserve_range=True,
+                anti_aliasing=False
+            ) > 0.5
+
+        return analysis_mask_stack, vis_mask_stack
 
     def _grid_setup(self, nodes_xy, elements, f_x, f_y):
         """Setup triangular mesh with linear force interpolation and proper scaling"""

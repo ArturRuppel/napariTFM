@@ -477,7 +477,7 @@ class BatchAnalysis:
                 gel_height = self.config['parameters'].get('gel_height', float('inf'))
             fttc = FTTC(
                 E=self.config['parameters']['young_modulus'],
-                nu=self.config['parameters']['poisson_ratio'],
+                nu=self.config['parameters']['poisson_ratio_substrate'],
                 lanczos_exp=self.config['parameters']['lanczos_exp'],
                 gel_height=gel_height
             )
@@ -513,7 +513,7 @@ class BatchAnalysis:
             # Create parameters dictionary in the expected format
             formatted_params = {
                 'young_modulus': self.config['parameters']['young_modulus'],
-                'poisson_ratio': self.config['parameters']['poisson_ratio'],
+                'poisson_ratio': self.config['parameters']['poisson_ratio_substrate'],
                 'gel_height': self.config['parameters'].get('gel_height', None),
                 'pixel_size': self.config['parameters']['pixel_size'],
                 'frame_interval': self.config['parameters']['frame_interval'],
@@ -568,7 +568,7 @@ class BatchAnalysis:
                 algorithm=2,  # Default to Frontal-Delaunay
                 use_optimization=self.config['parameters']['use_optimization'],
                 young_modulus=self.config['parameters']['young_modulus'],
-                poisson_ratio=self.config['parameters']['poisson_ratio']
+                poisson_ratio=self.config['parameters']['poisson_ratio_cells']
             )
 
             stress_tensor, _, _ = msm.calculate_stress_field(
@@ -582,7 +582,7 @@ class BatchAnalysis:
             'density_factor': self.config['parameters']['density_factor'],
             'use_optimization': self.config['parameters']['use_optimization'],
             'young_modulus': self.config['parameters']['young_modulus'],
-            'poisson_ratio': self.config['parameters']['poisson_ratio']
+            'poisson_ratio': self.config['parameters']['poisson_ratio_cells']
         }
 
         # Save results

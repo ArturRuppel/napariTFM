@@ -124,6 +124,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         return meshes
 
+
     @thread_worker
     def analyze_all_frames_worker(self):
         """Thread worker using pre-generated meshes"""
@@ -266,12 +267,12 @@ class MSMWidget(BaseAnalysisWidget):
         )
 
     def _create_mask_from_images(self):
-        """Create masks from the cell stack using dilation and smoothing."""
+        """Create masks from the cell stack using MSM mask creation."""
         try:
             # Get active layer
-            active_layer = self._get_active_image_layer()
+            active_layer = self._get_active_image_layer() or self._get_active_labels_layer()
             if active_layer is None:
-                raise ValueError("No active image layer selected")
+                raise ValueError(...)
 
             # Update status
             self.status_label.setText("Creating masks...")
@@ -280,30 +281,171 @@ class MSMWidget(BaseAnalysisWidget):
             # Get parameters
             dilation = self.parameter_spins['dilation'].value()
             smoothing_sigma = self.parameter_spins['smoothing_sigma'].value()
+            threshold_spin, _ = self.parameter_spins['threshold']
+            threshold = threshold_spin.value()
 
-            # Process the image stack
-            cell_stack = active_layer.data
+            # Convert layer data to image data
+            cell_stack = (active_layer.data > 0).astype(np.uint8)
+
+            # Get target shape and downscale factor if force data exists
+            target_shape = None
+            downscale_factor = 1
+
+            # Check for force data and show warning if not available
+            if self.data_manager.force_field is not None:
+                tx = self.data_manager.force_field[..., 0]
+                target_shape = tx.shape[1:]
+                downscale_factor = self.data_manager.force_params['downscale_factor']
+            else:
+                QMessageBox.warning(
+                    self,
+                    "No Force Data",
+                    "No force data loaded.\n"
+                    "Mask shapes will not match force shapes.\n"
+                    "Mesh preview will not correspond to mesh during stress calculations."
+                )
+
+            # Ensure proper dimensionality for cell stack
             if cell_stack.ndim == 2:
                 cell_stack = cell_stack[np.newaxis, ...]
 
-            # Create mask stack
-            mask_stack = np.zeros_like(cell_stack, dtype=bool)
+            # Create mask stacks
+            analysis_mask_stack = np.zeros_like(cell_stack, dtype=bool)
 
             # Process each frame
             for frame in range(cell_stack.shape[0]):
-                mask_stack[frame] = self._process_single_mask(
+                analysis_mask_stack[frame] = MonolayerStressMicroscopy.create_mask_from_image(
                     cell_stack[frame],
-                    dilation,
-                    smoothing_sigma
+                    threshold_percentile=threshold,
+                    dilation=dilation,
+                    smoothing_sigma=smoothing_sigma
                 )
 
-            # Call load_masks with the created mask_stack
-            self._load_masks(mask_stack)
+            # Handle resizing for analysis and visualization
+            vis_mask_stack = analysis_mask_stack
+
+            if target_shape is not None and analysis_mask_stack.shape[1:] != target_shape:
+                analysis_mask_stack = resize(
+                    analysis_mask_stack.astype(float),
+                    (analysis_mask_stack.shape[0], *target_shape),
+                    order=0,
+                    preserve_range=True,
+                    anti_aliasing=False
+                ) > 0.5
+
+            if downscale_factor > 1:
+                vis_shape = (
+                    analysis_mask_stack.shape[0],
+                    analysis_mask_stack.shape[1] * downscale_factor,
+                    analysis_mask_stack.shape[2] * downscale_factor
+                )
+                vis_mask_stack = resize(
+                    analysis_mask_stack.astype(float),
+                    vis_shape,
+                    order=0,
+                    preserve_range=True,
+                    anti_aliasing=False
+                ) > 0.5
+
+            # Store analysis masks and update visualization
+            self.data_manager.set_masks(analysis_mask_stack)
+            self._update_mask_visualization(vis_mask_stack)
+
+            # Update UI state and parameters
+            self._update_ui_state()
+            self._update_parameters()
+
+            # Update status
+            num_frames = analysis_mask_stack.shape[0]
+            shape_info = f"{analysis_mask_stack.shape[1]}x{analysis_mask_stack.shape[2]}"
+            vis_shape_info = f"{vis_mask_stack.shape[1]}x{vis_mask_stack.shape[2]}"
+            self.status_label.setText(
+                f"Successfully created {num_frames} masks\n"
+                f"Data resolution: {shape_info}\n"
+                f"Display resolution: {vis_shape_info}"
+            )
+            self.progress_bar.setValue(100)
 
         except Exception as e:
             self._handle_error(f"Failed to create mask from images: {str(e)}")
             self.progress_bar.setValue(0)
 
+    def _update_mask_preview(self):
+        """Update the mask preview based on current parameters."""
+        try:
+            # Check if preview is enabled
+            if not self.parameter_spins['show_preview'].isChecked():
+                if 'Mask Preview' in self.viewer.layers:
+                    self.viewer.layers.remove('Mask Preview')
+                return
+
+            # Get active layer
+            active_layer = self._get_active_image_layer()
+            if active_layer is None:
+                self.status_label.setText("No active image layer found")
+                return
+
+            # Get current frame data
+            current_frame = self.viewer.dims.current_step[0]
+            image = active_layer.data
+            if image.ndim == 3:
+                image = image[current_frame]
+            elif image.ndim != 2:
+                self.status_label.setText("Image must be 2D or 3D")
+                return
+
+            # Get current parameters
+            dilation = self.parameter_spins['dilation'].value()
+            smoothing_sigma = self.parameter_spins['smoothing_sigma'].value()
+            threshold_spin, _ = self.parameter_spins['threshold']
+            threshold = threshold_spin.value()
+
+            # Get target shape and downscale factor if force data exists
+            target_shape = None
+            downscale_factor = 1
+            if self.data_manager.force_field is not None:
+                tx = self.data_manager.force_field[0, :, :, 0]
+                target_shape = tx.shape
+                downscale_factor = self.data_manager.force_params['downscale_factor']
+
+            # Create preview mask using MSM class methods
+            _, preview_mask = MonolayerStressMicroscopy.create_mask_stack(
+                image,
+                threshold_percentile=threshold,
+                dilation=dilation,
+                smoothing_sigma=smoothing_sigma,
+                target_shape=target_shape,
+                downscale_factor=downscale_factor
+            )
+
+            # Ensure we get a 2D mask (create_mask_stack returns 3D)
+            preview_mask = preview_mask[0] if preview_mask.ndim == 3 else preview_mask
+
+            # Update or create preview layer
+            if 'Mask Preview' in self.viewer.layers:
+                self.viewer.layers['Mask Preview'].data = preview_mask
+            else:
+                # Create a color mapping for the labels
+                colors = {
+                    0: 'transparent',
+                    1: [1, 1, 0, 0.5]  # Yellow with 0.5 opacity
+                }
+
+                self.viewer.add_labels(
+                    data=preview_mask.astype(np.uint8),
+                    name='Mask Preview'
+                )
+                # Set the colors after creation
+                self.viewer.layers['Mask Preview'].opacity = 0.5
+                self.viewer.layers['Mask Preview'].color = colors
+
+            self.status_label.setText(f"Preview updated (Frame {current_frame})")
+
+        except Exception as e:
+            self.status_label.setText(f"Preview error: {str(e)}")
+            # Remove preview layer if there's an error
+            if 'Mask Preview' in self.viewer.layers:
+                self.viewer.layers.remove('Mask Preview')
     def _load_masks(self, mask_stack=None):
         """
         Load and process mask data, handling shape matching and data management.
@@ -438,99 +580,6 @@ class MSMWidget(BaseAnalysisWidget):
         """Handle frame change events."""
         if self.parameter_spins['show_preview'].isChecked():
             self._update_mask_preview()
-
-    def _update_mask_preview(self):
-        """Update the mask preview based on current parameters."""
-        try:
-            # Check if preview is enabled
-            if not self.parameter_spins['show_preview'].isChecked():
-                if 'Mask Preview' in self.viewer.layers:
-                    self.viewer.layers.remove('Mask Preview')
-                return
-
-            # Get active layer
-            active_layer = self._get_active_image_layer()
-            if active_layer is None:
-                self.status_label.setText("No active image layer found")
-                return
-
-            # Get current frame data
-            current_frame = self.viewer.dims.current_step[0]
-            image = active_layer.data
-            if image.ndim == 3:
-                image = image[current_frame]
-            elif image.ndim != 2:
-                self.status_label.setText("Image must be 2D or 3D")
-                return
-
-            # Get current parameters
-            dilation = self.parameter_spins['dilation'].value()
-            smoothing_sigma = self.parameter_spins['smoothing_sigma'].value()
-            threshold_spin, _ = self.parameter_spins['threshold']
-
-            # Process the mask
-            preview_mask = self._process_single_mask(
-                image,
-                dilation=dilation,
-                smoothing_sigma=smoothing_sigma
-            )
-
-            # Check if we need to resize the mask for force data resolution
-            target_shape = None
-            downscale_factor = 1
-
-            if self.data_manager.force_field is not None:
-                tx = self.data_manager.force_field[0, :, :, 0]
-                target_shape = tx.shape
-                downscale_factor = self.data_manager.force_params['downscale_factor']
-
-            # Resize mask if needed
-            if target_shape is not None and preview_mask.shape != target_shape:
-                preview_mask = resize(
-                    preview_mask.astype(float),
-                    target_shape,
-                    order=0,
-                    preserve_range=True,
-                    anti_aliasing=False
-                ) > 0.5
-
-            # Scale up for visualization if needed
-            if downscale_factor > 1:
-                vis_shape = (preview_mask.shape[0] * downscale_factor,
-                             preview_mask.shape[1] * downscale_factor)
-                preview_mask = resize(
-                    preview_mask.astype(float),
-                    vis_shape,
-                    order=0,
-                    preserve_range=True,
-                    anti_aliasing=False
-                ) > 0.5
-
-            # Update or create preview layer
-            if 'Mask Preview' in self.viewer.layers:
-                self.viewer.layers['Mask Preview'].data = preview_mask
-            else:
-                # Create a color mapping for the labels
-                colors = {
-                    0: 'transparent',
-                    1: [1, 1, 0, 0.5]  # Yellow with 0.5 opacity
-                }
-
-                self.viewer.add_labels(
-                    data=preview_mask.astype(np.uint8),
-                    name='Mask Preview'
-                )
-                # Set the colors after creation
-                self.viewer.layers['Mask Preview'].opacity = 0.5
-                self.viewer.layers['Mask Preview'].color = colors
-
-            self.status_label.setText(f"Preview updated (Frame {current_frame})")
-
-        except Exception as e:
-            self.status_label.setText(f"Preview error: {str(e)}")
-            # Remove preview layer if there's an error
-            if 'Mask Preview' in self.viewer.layers:
-                self.viewer.layers.remove('Mask Preview')
 
     def _on_frame_changed(self, event):
         """Handle frame change events."""
@@ -796,6 +845,21 @@ class MSMWidget(BaseAnalysisWidget):
         # try to find the first image layer
         for layer in self.viewer.layers:
             if layer._type_string == 'image':
+                return layer
+
+        return None
+
+    def _get_active_labels_layer(self):
+        """Get the currently active labels layer."""
+        # First try to get the selected layer
+        active_layer = self.viewer.layers.selection.active
+        if active_layer is not None and active_layer._type_string == 'labels':
+            return active_layer
+
+        # If no layer is selected or selected layer is not a labels layer,
+        # try to find the first labels layer
+        for layer in self.viewer.layers:
+            if layer._type_string == 'labels':
                 return layer
 
         return None
