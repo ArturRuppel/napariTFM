@@ -146,8 +146,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             # Convert flow to micrometers
             self.current_flow = flow_pixels * params['pixel_size']
 
-            # Store preview results in data manager
-            self.data_manager.set_displacement_results(self.current_flow[np.newaxis, ...], params)
 
             # Update visualization
             self.visualization_manager.visualize_displacement_preview(

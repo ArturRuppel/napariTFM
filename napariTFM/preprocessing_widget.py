@@ -999,8 +999,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
             frame_interval = self.parameter_manager.get_value('frame_interval')
 
             self._update_status(
-                f"Current calibration: pixel size = {pixel_size:.3f} µm, "
-                f"frame_interval = {frame_interval:.3f} min"
+                f"Current calibration: pixel size = {pixel_size:.2f} µm, \n"
+                f"frame_interval = {frame_interval:.1f} min"
             )
 
     def _connect_signals(self):
@@ -1176,8 +1176,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
             files_saved = []
 
             # Get calibration values
-            pixel_size = self.pixel_size  # µm/pixel
-            frame_length = self.frame_length  # minutes/frame
+            pixel_size = self.parameter_manager.get_value('pixel_size')  # µm/pixel
+            frame_interval = self.parameter_manager.get_value('frame_interval')  # minutes/frame
 
             # Function to save a single stack/image
             def save_tiff(data: np.ndarray, filename: str):
@@ -1200,7 +1200,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
                     'ImageJ': '1.53c',
                     'spacing': scale,
                     'unit': 'um',
-                    'frame_interval': frame_length,
+                    'frame_interval': frame_interval,
                     'frame_interval_unit': 'minute'
                 }
 
@@ -1214,7 +1214,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
                 # Create description for ImageJ
                 description = json.dumps({
-                    'Info': f'Scale: {scale} um/pixel, Frame interval: {frame_length} min',
+                    'Info': f'Scale: {scale} um/pixel, Frame interval: {frame_interval} min',
                     **imagej_metadata
                 })
 
@@ -1224,7 +1224,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
                     'PhysicalSizeXUnit': 'um',
                     'PhysicalSizeY': pixel_size,
                     'PhysicalSizeYUnit': 'um',
-                    'TimeIncrement': frame_length,
+                    'TimeIncrement': frame_interval,
                     'TimeIncrementUnit': 'min',
                     **imagej_metadata
                 }
@@ -1258,8 +1258,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
             if files_saved:
                 self._update_status(
-                    f"Saved files with calibration (pixel size: {pixel_size} µm, "
-                    f"frame length: {frame_length} min):\n" + "\n".join(files_saved)
+                    f"Saved files with calibration:\n"
+                    f"pixel size: {pixel_size} µm, frame length: {frame_interval} min:\n" + "\n".join(files_saved)
                 )
             else:
                 self._update_status("No preprocessed data available to save")
