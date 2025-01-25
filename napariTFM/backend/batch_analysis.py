@@ -194,7 +194,9 @@ class BatchAnalysis:
                     print(f"Progress: {progress['progress']:.1f}%, {progress['message']}")
 
             if self.config['analysis_steps']['force']:
-                self._run_force_analysis(folder)
+                print("Starting force analysis")
+                for progress in self._run_force_analysis(folder):
+                    print(f"Progress: {progress['progress']:.1f}%, {progress['message']}")
 
             if self.config['analysis_steps']['stress']:
                 # Only proceed with stress analysis if force data exists
@@ -460,7 +462,7 @@ class BatchAnalysis:
                 self._current_worker = None
                 logger.debug("Cleaned up worker in finally block")
 
-    def _run_preprocessing(self, folder: Path) -> None:
+    def _run_preprocessing(self, folder: Path) -> Generator:
         """Run preprocessing step."""
         print("Starting preprocessing")
 
@@ -652,8 +654,8 @@ class BatchAnalysis:
             logger.error(f"Error during displacement analysis: {str(e)}", exc_info=True)
             raise
 
-    def _run_force_analysis(self, folder: Path) -> None:
-        """Run force analysis step."""
+    def _run_force_analysis(self, folder: Path) -> Generator[dict, None, None]:
+        """Run force analysis step with progress reporting."""
         print("Starting force analysis")
 
         # Load displacement data if not in memory
@@ -681,6 +683,7 @@ class BatchAnalysis:
                 gel_height = None
             else:
                 gel_height = self.config['parameters'].get('gel_height', float('inf'))
+
             fttc = FTTC(
                 E=self.config['parameters']['young_modulus'],
                 nu=self.config['parameters']['poisson_ratio_substrate'],
@@ -688,38 +691,57 @@ class BatchAnalysis:
                 gel_height=gel_height
             )
 
-            # Run force calculation for each frame
-            print("Running force calculations")
+            # Initialize results storage
             forces = []
             total_frames = len(self._displacement_field)
+            processed_frames = 0
 
-            for frame_idx, displacement in enumerate(self._displacement_field):
-                logger.debug(f"Processing frame {frame_idx + 1}/{total_frames}")
+            # Create generator for progress reporting
+            def force_generator():
+                nonlocal processed_frames, forces
+                for frame_idx, displacement in enumerate(self._displacement_field):
+                    logger.debug(f"Processing frame {frame_idx + 1}/{total_frames}")
 
-                # Create and run worker for this frame
-                worker = fttc.calculate_traction(
-                    displacement,
-                    self.config['parameters']['pixel_size'],
-                    downscale_factor=self.config['parameters']['downscale_factor'],
-                    regularization=10 ** self.config['parameters']['regularization']
-                )
+                    # Calculate forces for this frame
+                    result = fttc.calculate_traction(
+                        displacement,
+                        self.config['parameters']['pixel_size'],
+                        downscale_factor=self.config['parameters']['downscale_factor'],
+                        regularization=10 ** self.config['parameters']['regularization']
+                    )
 
-                results = self._run_thread_worker(worker)
+                    # Store results
+                    forces.append(result[1])
+                    processed_frames += 1
 
-                if results is None:
-                    raise RuntimeError(f"Force calculation failed for frame {frame_idx + 1}")
+                    # Calculate progress
+                    progress = (frame_idx + 1) / total_frames * 100
+                    magnitude = np.sqrt(result[1][0] ** 2 + result[1][1] ** 2)
 
-                # Store force field (results[1] contains the forces)
-                forces.append(results[1])
+                    # Yield progress update
+                    yield {
+                        'progress': progress,
+                        'message': (f"Frame {frame_idx + 1}/{total_frames} - "
+                                    f"Mean: {np.mean(magnitude):.2f} Pa | "
+                                    f"Max: {np.max(magnitude):.2f} Pa")
+                    }
 
-                print(f'Calculated forces for frame {frame_idx + 1}/{total_frames} ({(frame_idx + 1) / total_frames * 100:.1f}%)')
+            # Run through the generator
+            generator = force_generator()
+            while True:
+                try:
+                    progress = next(generator)
+                    yield progress
+                except StopIteration:
+                    break
 
+            # Final processing after all frames
             logger.debug("Force calculations completed successfully")
 
-            # Create parameters dictionary in the expected format
+            # Create parameters dictionary
             formatted_params = {
                 'young_modulus': self.config['parameters']['young_modulus'],
-                'poisson_ratio': self.config['parameters']['poisson_ratio_substrate'],
+                'poisson_ratio_substrate': self.config['parameters']['poisson_ratio_substrate'],
                 'gel_height': self.config['parameters'].get('gel_height', None),
                 'pixel_size': self.config['parameters']['pixel_size'],
                 'frame_interval': self.config['parameters']['frame_interval'],
@@ -732,10 +754,12 @@ class BatchAnalysis:
                     'f_max': self.config['parameters']['f_max']
                 }
             }
-            self._force_field = np.moveaxis(np.array(forces), 1, -1)  # reformat to make compatible with widgets
+
+            # Format and store results
+            self._force_field = np.moveaxis(np.array(forces), 1, -1)
             self._force_params = formatted_params
 
-            # Save results in widget-compatible format
+            # Save results
             output_path = folder / self.config['output_files']['force']['data']
             np.save(str(output_path), {
                 'force_field': self._force_field,
@@ -746,7 +770,6 @@ class BatchAnalysis:
         except Exception as e:
             logger.error(f"Error during force analysis: {str(e)}", exc_info=True)
             raise
-
     def _run_stress_analysis(self, folder: Path) -> None:
         """Run stress analysis step."""
         logger.debug("Loading masks")
