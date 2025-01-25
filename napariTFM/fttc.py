@@ -300,21 +300,36 @@ class FTTC:
 
         return float(reg_min), float(minG), G, reg_param
 
-    def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray) -> float:
-        """Find optimal regularization parameter using GCV"""
+    def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray, pixel_size: float) -> float:
+        """Find optimal regularization parameter using GCV
+
+        Args:
+            pos0: Position array in pixel coordinates
+            vec0: Displacement vector array
+            pixel_size: Pixel size in micrometers
+
+        Returns:
+            float: Optimal regularization parameter
+        """
         lamguess = 0.2 / self.E
         lamlow = np.log10(lamguess) - 5.0
         lamhigh = np.log10(lamguess) + 5.0
         lambdarange = np.logspace(lamlow, lamhigh, 50)
 
-        blockU, s, b = self._svd_block(pos0, vec0)
+        blockU, s, b = self._svd_block(pos0, vec0, pixel_size)
         reg_min, _, _, _ = self._gcv_blockdiag(blockU, s, b, lambdarange, plot=False)
         return reg_min
 
-    def _svd_block(self, pos: np.ndarray, vec: np.ndarray):
-        """Prepare SVD representation of the FTTC problem"""
+    def _svd_block(self, pos: np.ndarray, vec: np.ndarray, pixel_size: float):
+        """Prepare SVD representation of the FTTC problem
+
+        Args:
+            pos: Position array
+            vec: Displacement vector array
+            pixel_size: Pixel size in micrometers
+        """
         grid_mat, u, i_max, j_max, _, _ = self._interp_vec2grid(pos, vec)
-        kx, ky, _, _ = self._calculate_fourier_modes(i_max, j_max)
+        kx, ky, _, _ = self._calculate_fourier_modes(i_max, j_max, pixel_size)
         GFt = self._calculate_greens_function(kx, ky)
 
         Ftu = np.fft.fft2(u).reshape(2, -1).T

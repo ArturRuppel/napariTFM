@@ -74,6 +74,49 @@ class FTTCWidget(BaseAnalysisWidget):
 
         return True
 
+    def _auto_select_gcv(self):
+        """Calculate optimal regularization parameter for current frame using GCV."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Calculating optimal regularization parameter...", 0)
+
+            # Initialize calculator if needed
+            self._initialize_calculator()
+
+            # Get current frame data
+            flows = self.data_manager.displacement_field
+            current_frame = self.viewer.dims.current_step[0]
+            flow = flows[current_frame]
+
+            # Get pixel size and downscale factor from displacement results
+            disp_params = self.data_manager.displacement_params
+            pixel_size = disp_params.get('pixel_size')
+            downscale_factor = disp_params.get('downscale_factor', 1)
+
+            # Get spatial coordinates and prepare data
+            shape = flow.shape[:-1]
+            pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
+
+            # Convert displacements from physical units (μm) to pixels
+            vec = np.array([flow[..., 0], flow[..., 1]]) / pixel_size
+
+            # Calculate optimal regularization parameter
+            # Pass pixel_size explicitly to the calculator method
+            lam = self.calculator._find_regularization(pos, vec, pixel_size)
+
+            # Update UI and parameter manager with new value (log scale)
+            self.regularization_spin.setValue(np.log10(lam))
+            self.parameter_manager.set_value('regularization', lam)
+
+            self._set_controls_enabled(True)
+            self._update_status(f"Optimal regularization parameter: {lam:.2e}", 100)
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self._set_controls_enabled(True)
     def calculate_forces(self):
         """Calculate traction forces for all frames."""
         try:
@@ -470,47 +513,6 @@ class FTTCWidget(BaseAnalysisWidget):
         ]
         for widget in widgets:
             widget.blockSignals(block)
-
-    def _auto_select_gcv(self):
-        """Calculate optimal regularization parameter for current frame using GCV."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Calculating optimal regularization parameter...", 0)
-
-            # Initialize calculator if needed
-            self._initialize_calculator()
-
-            # Get current frame data
-            flows = self.data_manager.displacement_field
-            current_frame = self.viewer.dims.current_step[0]
-            flow = flows[current_frame]
-
-            # Get pixel size and downscale factor from displacement results
-            disp_params = self.data_manager.displacement_params
-            pixel_size = disp_params.get('pixel_size')
-            downscale_factor = disp_params.get('downscale_factor', 1)
-
-            # Get spatial coordinates and prepare data
-            shape = flow.shape[:-1]
-            pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
-            vec = np.array([flow[..., 0], flow[..., 1]]) / (pixel_size * downscale_factor)  # convert to pixel
-
-            # Calculate optimal regularization parameter
-            lam = self.calculator._find_regularization(pos, vec)
-
-            # Update UI and parameter manager with new value (log scale)
-            self.regularization_spin.setValue(np.log10(lam))
-            self.parameter_manager.set_value('regularization', lam)
-
-            self._set_controls_enabled(True)
-            self._update_status(f"Optimal regularization parameter: {lam:.2e}", 100)
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self._set_controls_enabled(True)
 
     def _initialize_calculator(self):
         """Initialize the FTTC calculator with current parameters."""
