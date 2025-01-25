@@ -3,7 +3,7 @@ import yaml
 import os
 from pathlib import Path
 import numpy as np
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Generator
 from skimage.transform import resize
 import tifffile
 import sys
@@ -188,7 +188,9 @@ class BatchAnalysis:
                 print("Mask creation completed")
 
             if self.config['analysis_steps']['displacement']:
-                self._run_displacement_analysis(folder)
+                print("Starting displacement analysis")
+                for progress in self._run_displacement_analysis(folder):
+                    print(f"Progress: {progress['progress']:.1f}%, {progress['message']}")
 
             if self.config['analysis_steps']['force']:
                 self._run_force_analysis(folder)
@@ -542,10 +544,8 @@ class BatchAnalysis:
             logger.error(f"Error during preprocessing: {str(e)}", exc_info=True)
             raise
 
-    def _run_displacement_analysis(self, folder: Path) -> None:
-        """Run displacement analysis step."""
-        print("Starting displacement analysis")
-
+    def _run_displacement_analysis(self, folder: Path) -> Generator[dict, None, None]:
+        """Run displacement analysis step with progress reporting."""
         # Load preprocessed data if not in memory
         if self._preprocessed_bead_stack is None:
             try:
@@ -560,16 +560,6 @@ class BatchAnalysis:
 
                 self._preprocessed_bead_stack = tifffile.imread(str(preproc_path))
                 self._preprocessed_reference = tifffile.imread(str(ref_path))
-
-                # Load metadata from TIFF if needed
-                with tifffile.TiffFile(str(preproc_path)) as tif:
-                    if tif.imagej_metadata:
-                        self._preprocessing_params = {
-                            'parameters': {
-                                'pixel_size': tif.imagej_metadata.get('spacing', 1.0),
-                                'frame_interval': tif.imagej_metadata.get('frame_interval', 1.0)
-                            }
-                        }
                 print("Successfully loaded preprocessed data from TIFF files")
 
             except Exception as e:
@@ -593,22 +583,34 @@ class BatchAnalysis:
         )
 
         try:
-            # Run displacement analysis
             print("Running displacement analysis")
             analyzer = DisplacementAnalyzer(params)
-            worker = analyzer.analyze_displacement(
-                self._preprocessed_reference,
-                self._preprocessed_bead_stack,
-                self.config['parameters']['pixel_size'],
-                self.config['parameters']['downscale_factor']
+
+            # Get visualization parameters from config
+            vis_params = {
+                'd_max': self.config['parameters']['d_max'],
+                'vector_stride': self.config['parameters']['disp_vector_stride'],
+                'arrow_scale': self.config['parameters']['disp_arrow_scale']
+            }
+
+            # Create the generator
+            disp_generator = analyzer.analyze_displacement_generator(
+                reference=self._preprocessed_reference,
+                bead_stack=self._preprocessed_bead_stack,
+                pixel_size=self.config['parameters']['pixel_size'],
+                downscale_factor=self.config['parameters']['downscale_factor'],
+                visualization_params=vis_params
             )
 
-            # Run the worker using _run_thread_worker
-            results = self._run_thread_worker(worker)
+            # Yield progress from the generator
+            try:
+                while True:
+                    progress = next(disp_generator)
+                    yield progress
+            except StopIteration as e:
+                results = e.value
 
-            if results is None:
-                raise RuntimeError("Displacement analysis did not return any results")
-
+            # Process final results
             logger.debug("Displacement analysis completed successfully")
 
             # Format parameters to match widget expectations
@@ -628,11 +630,7 @@ class BatchAnalysis:
                 'downscale_factor': self.config['parameters']['downscale_factor'],
                 'pixel_size': self.config['parameters']['pixel_size'],
                 'frame_interval': self.config['parameters']['frame_interval'],
-                'visualization_params': {
-                    'd_max': self.config['parameters']['d_max'],
-                    'vector_stride': self.config['parameters']['disp_vector_stride'],
-                    'arrow_scale': self.config['parameters']['disp_arrow_scale']
-                }
+                'visualization_params': vis_params
             }
 
             # Store results
