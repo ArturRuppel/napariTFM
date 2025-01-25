@@ -1,33 +1,226 @@
 import json
-
 import yaml
 import os
 from pathlib import Path
 import numpy as np
 from typing import Dict, Any, Optional, List, Tuple
+from skimage.transform import resize
 import tifffile
+import sys
+from datetime import datetime
+
+from napariTFM.backend.preprocessing import PreprocessingParameters, ImagePreprocessor
+from napariTFM.backend.displacement_analysis import TVL1Parameters, DisplacementAnalyzer
+from napariTFM.backend.fttc import FTTC
+from napariTFM.backend.msm import MonolayerStressMicroscopy
+
 import logging
+import warnings
 
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
 
-from preprocessing import PreprocessingParameters, ImagePreprocessor
-from displacement_analysis import TVL1Parameters, DisplacementAnalyzer
-from fttc import FTTC
-from msm import MonolayerStressMicroscopy
+class TeeLogger:
+    """Custom logger that captures print statements and logging output to both console and file."""
+
+    def __init__(self, filename: Path, config: dict = None):
+        self.terminal = sys.stdout
+        self.filename = filename
+        self.log = open(filename, 'w', encoding='utf-8')
+        self.start_time = datetime.now()
+
+        # Write header to log file
+        self.log.write(f"Processing started at: {self.start_time}\n")
+        self.log.write("-" * 50 + "\n\n")
+
+        # Log configuration parameters if provided
+        if config:
+            self.log.write("Analysis Parameters:\n")
+            self.log.write("-" * 20 + "\n")
+
+            # Log analysis steps
+            self.log.write("\nEnabled Analysis Steps:\n")
+            for step, enabled in config.get('analysis_steps', {}).items():
+                self.log.write(f"- {step}: {'Yes' if enabled else 'No'}\n")
+
+            # Log key parameters
+            self.log.write("\nKey Parameters:\n")
+            params = config.get('parameters', {})
+            for key, value in sorted(params.items()):
+                self.log.write(f"- {key}: {value}\n")
+
+            self.log.write("\n" + "-" * 50 + "\n\n")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+    def close(self):
+        end_time = datetime.now()
+        duration = end_time - self.start_time
+
+        # Write footer with timing information
+        self.log.write("\n" + "-" * 50 + "\n")
+        self.log.write("Analysis Summary:\n")
+        self.log.write(f"Started:  {self.start_time}\n")
+        self.log.write(f"Finished: {end_time}\n")
+        self.log.write(f"Duration: {duration}\n")
+
+        # Calculate hours, minutes, seconds for more readable format
+        total_seconds = duration.total_seconds()
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = total_seconds % 60
+
+        if hours > 0:
+            self.log.write(f"Total time: {hours}h {minutes}m {seconds:.1f}s\n")
+        elif minutes > 0:
+            self.log.write(f"Total time: {minutes}m {seconds:.1f}s\n")
+        else:
+            self.log.write(f"Total time: {seconds:.1f}s\n")
+
+        self.log.close()
+        sys.stdout = self.terminal
+
+def setup_logging(level: str = "INFO", silent: bool = True, log_file: Optional[Path] = None) -> logging.Logger:
+    """
+    Set up logging with configurable level and optional file output.
+
+    Args:
+        level: Logging level ("DEBUG", "INFO", "WARNING", "ERROR", or "CRITICAL")
+        silent: If True, suppress all output
+        log_file: Optional path to log file
+
+    Returns:
+        Logger instance
+    """
+    logger = logging.getLogger(__name__)
+
+    if silent:
+        # Remove any existing handlers
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+        # Add null handler to suppress all output
+        logger.addHandler(logging.NullHandler())
+        # Set level to CRITICAL+1 to suppress all messages
+        logger.setLevel(logging.CRITICAL + 1)
+    else:
+        # Convert string to logging level
+        numeric_level = getattr(logging, level.upper(), logging.INFO)
+        # Configure logging
+        if log_file:
+            logging.basicConfig(
+                level=numeric_level,
+                format='%(asctime)s - %(levelname)s - %(message)s',
+                handlers=[
+                    logging.StreamHandler(),
+                    logging.FileHandler(log_file)
+                ]
+            )
+        else:
+            logging.basicConfig(level=numeric_level)
+
+    return logger
+
+
+# Default to INFO level and not silent
+logger = setup_logging()
+
+# Create a warning filter for tifffile warnings
+warnings.filterwarnings('ignore', message='.*not writing description to ImageJ file.*',
+                        module='tifffile.tifffile')
 
 
 class BatchAnalysis:
     """Handles batch analysis of TFM data according to YAML configuration."""
+    MESH_ALGORITHMS = {
+        "Frontal-Del.": 6,
+        "Delaunay": 5,
+        "MeshAdapt": 1,
+        "BAMG": 7,
+        "FD Quads": 8,
+        "Para. Pack": 9
+    }
 
     def __init__(self, config_path: str):
         """Initialize batch analysis with configuration file."""
-        logger.info("Initializing BatchAnalysis")
+        print("Initializing BatchAnalysis")
+
+        # Load configuration
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
             logger.debug(f"Loaded configuration from {config_path}")
 
-        # Initialize data containers (previous containers remain the same...)
+        # Initialize data containers
+        self._initialize_data_containers()
+        self._tee_logger = None
+
+    def process_folder(self, folder_path: str) -> None:
+        """Process a single folder according to configuration."""
+        folder = Path(folder_path)
+        log_file = folder / "processing_log.txt"
+
+        # Set up logging to file
+        self._tee_logger = TeeLogger(log_file)
+        sys.stdout = self._tee_logger
+        logger = setup_logging(silent=False, log_file=log_file)
+
+        print(f"Processing folder: {folder_path}")
+
+        # Create output folders
+        tfm_folder = folder / "TFM_data"
+        tfm_folder.mkdir(exist_ok=True)
+        logger.debug(f"Created TFM data folder: {tfm_folder}")
+
+        try:
+            # Execute enabled analysis steps
+            if self.config['analysis_steps']['preprocessing']:
+                print("Starting preprocessing step")
+                self._run_preprocessing(folder)
+
+            if self.config['analysis_steps']['create_masks']:
+                print("Starting mask creation")
+                self._create_masks(folder)
+                print("Mask creation completed")
+
+            if self.config['analysis_steps']['displacement']:
+                self._run_displacement_analysis(folder)
+
+            if self.config['analysis_steps']['force']:
+                self._run_force_analysis(folder)
+
+            if self.config['analysis_steps']['stress']:
+                # Only proceed with stress analysis if force data exists
+                force_path = folder / self.config['output_files']['force']['data']
+                if not force_path.exists():
+                    logger.warning(f"Force data not found at {force_path}, skipping stress analysis")
+                else:
+                    self._run_stress_analysis(folder)
+
+        except Exception as e:
+            logger.error(f"Error processing folder: {str(e)}", exc_info=True)
+            raise
+
+        finally:
+            # Clean up worker and internal storage regardless of success or failure
+            print(f"Cleaning up after processing folder: {folder_path}")
+            self._cleanup_internal_storage()
+
+            # Close and reset the TeeLogger
+            if self._tee_logger:
+                self._tee_logger.close()
+                self._tee_logger = None
+
+            print(f"Finished processing folder: {folder_path}")
+
+    def _initialize_data_containers(self):
+        """Initialize or reset all data containers to their default state."""
+        logger.debug("Initializing/resetting data containers")
+
+        # Initialize all data containers to None
         self._input_bead_stack: Optional[np.ndarray] = None
         self._input_reference: Optional[np.ndarray] = None
         self._input_cell_stack: Optional[np.ndarray] = None
@@ -41,10 +234,34 @@ class BatchAnalysis:
         self._force_params: Optional[Dict[str, Any]] = None
         self._stress_tensor: Optional[np.ndarray] = None
         self._stress_params: Optional[Dict[str, Any]] = None
+        self._current_worker = None
+
+    def _cleanup_internal_storage(self):
+        """Clean up all internal data storage to free memory."""
+        print("Cleaning up internal storage")
+
+        # Clean up worker if it exists
+        if self._current_worker is not None:
+            self._current_worker.quit()
+            self._current_worker = None
+            logger.debug("Cleaned up current worker")
+
+        # Reset all data containers
+        self._initialize_data_containers()
+
+        # Force garbage collection to free memory
+        import gc
+        gc.collect()
+        logger.debug("Garbage collection completed")
+
+    def process_all_folders(self) -> None:
+        """Process all folders specified in configuration."""
+        for folder in self.config['root_folders']:
+            self.process_folder(folder)
 
     def _create_masks(self, folder: Path) -> np.ndarray:
         """Create masks from preprocessed cell images using MSM class."""
-        logger.info("Creating masks from preprocessed cell images")
+        print("Creating masks from preprocessed cell images")
 
         # Load preprocessed cell images if not already in memory
         if self._preprocessed_cell_stack is None:
@@ -85,7 +302,7 @@ class BatchAnalysis:
 
         # Save masks
         output_path = folder / self.config['output_files']['masks']['path']
-        logger.info(f"Saving masks to {output_path}")
+        print(f"Saving masks to {output_path}")
 
         # Also save as TIFF for visualization
         tiff_path = output_path.with_suffix('.tif')
@@ -164,66 +381,11 @@ class BatchAnalysis:
             resolution=(1 / pixel_size, 1 / pixel_size),  # resolution in pixels per unit
             photometric='minisblack'
         )
-        logger.info(f"Saved calibrated TIFF: {filepath}")
-
-    def process_folder(self, folder_path: str) -> None:
-        """Process a single folder according to configuration."""
-        logger.info(f"Processing folder: {folder_path}")
-        folder = Path(folder_path)
-
-        # Create output folders
-        tfm_folder = folder / "TFM_data"
-        tfm_folder.mkdir(exist_ok=True)
-        logger.debug(f"Created TFM data folder: {tfm_folder}")
-
-        # Keep track of active worker
-        self._current_worker = None
-
-        try:
-            # Execute enabled analysis steps
-            if self.config['analysis_steps']['preprocessing']:
-                logger.info("Starting preprocessing step")
-                self._run_preprocessing(folder)
-
-                # Clean up preprocessing worker
-                if hasattr(self, '_current_worker') and self._current_worker is not None:
-                    self._current_worker.quit()
-                    self._current_worker = None
-                    logger.debug("Cleaned up preprocessing worker")
-
-            if self.config['analysis_steps']['create_masks']:
-                logger.info("Starting mask creation")
-                masks = self._create_masks(folder)
-                logger.info("Mask creation completed")
-
-            if self.config['analysis_steps']['displacement']:
-                self._run_displacement_analysis(folder)
-
-            if self.config['analysis_steps']['force']:
-                self._run_force_analysis(folder)
-
-            if self.config['analysis_steps']['stress']:
-                # Only proceed with stress analysis if force data exists
-                force_path = folder / self.config['output_files']['force']['data']
-                if not force_path.exists():
-                    logger.warning(f"Force data not found at {force_path}, skipping stress analysis")
-                else:
-                    self._run_stress_analysis(folder)
-
-        except Exception as e:
-            logger.error(f"Error processing folder: {str(e)}", exc_info=True)
-            raise
-
-        finally:
-            # Ensure worker is cleaned up even if there's an error
-            if hasattr(self, '_current_worker') and self._current_worker is not None:
-                self._current_worker.quit()
-                self._current_worker = None
-                logger.debug("Cleaned up worker in finally block")
+        print(f"Saved calibrated TIFF: {filepath}")
 
     def _load_input_data(self, folder: Path) -> None:
         """Load input data from specified folder."""
-        logger.info("Loading input data")
+        print("Loading input data")
 
         # Load bead images
         bead_path = folder / self.config['input_files']['beads']
@@ -296,7 +458,7 @@ class BatchAnalysis:
 
     def _run_preprocessing(self, folder: Path) -> None:
         """Run preprocessing step."""
-        logger.info("Starting preprocessing")
+        print("Starting preprocessing")
 
         # Load input data
         try:
@@ -319,7 +481,7 @@ class BatchAnalysis:
 
         # Run preprocessing
         try:
-            logger.info("Running preprocessing")
+            print("Running preprocessing")
             preprocessor = ImagePreprocessor(params)
             generator = preprocessor.preprocess_all(
                 self._input_bead_stack,
@@ -378,7 +540,7 @@ class BatchAnalysis:
                     frame_interval
                 )
 
-            logger.info("Preprocessing results saved successfully")
+            print("Preprocessing results saved successfully")
 
         except Exception as e:
             logger.error(f"Error during preprocessing: {str(e)}", exc_info=True)
@@ -386,7 +548,7 @@ class BatchAnalysis:
 
     def _run_displacement_analysis(self, folder: Path) -> None:
         """Run displacement analysis step."""
-        logger.info("Starting displacement analysis")
+        print("Starting displacement analysis")
 
         # Load preprocessed data if not in memory
         if self._preprocessed_bead_stack is None:
@@ -412,7 +574,7 @@ class BatchAnalysis:
                                 'frame_interval': tif.imagej_metadata.get('frame_interval', 1.0)
                             }
                         }
-                logger.info("Successfully loaded preprocessed data from TIFF files")
+                print("Successfully loaded preprocessed data from TIFF files")
 
             except Exception as e:
                 logger.error(f"Error loading preprocessed data: {str(e)}", exc_info=True)
@@ -436,7 +598,7 @@ class BatchAnalysis:
 
         try:
             # Run displacement analysis
-            logger.info("Running displacement analysis")
+            print("Running displacement analysis")
             analyzer = DisplacementAnalyzer(params)
             worker = analyzer.analyze_displacement(
                 self._preprocessed_reference,
@@ -490,7 +652,7 @@ class BatchAnalysis:
                 'flow_shape': self._displacement_field[0].shape[:2],
                 'units': 'micrometers'
             })
-            logger.info("Displacement analysis results saved successfully")
+            print("Displacement analysis results saved successfully")
 
         except Exception as e:
             logger.error(f"Error during displacement analysis: {str(e)}", exc_info=True)
@@ -498,7 +660,7 @@ class BatchAnalysis:
 
     def _run_force_analysis(self, folder: Path) -> None:
         """Run force analysis step."""
-        logger.info("Starting force analysis")
+        print("Starting force analysis")
 
         # Load displacement data if not in memory
         if self._displacement_field is None:
@@ -512,7 +674,7 @@ class BatchAnalysis:
                 loaded = np.load(str(disp_path), allow_pickle=True).item()
                 self._displacement_field = loaded['flows']
                 self._displacement_params = loaded['parameters']
-                logger.info("Successfully loaded displacement data")
+                print("Successfully loaded displacement data")
 
             except Exception as e:
                 logger.error(f"Error loading displacement data: {str(e)}", exc_info=True)
@@ -533,7 +695,7 @@ class BatchAnalysis:
             )
 
             # Run force calculation for each frame
-            logger.info("Running force calculations")
+            print("Running force calculations")
             forces = []
             total_frames = len(self._displacement_field)
 
@@ -556,7 +718,7 @@ class BatchAnalysis:
                 # Store force field (results[1] contains the forces)
                 forces.append(results[1])
 
-                logger.info(f'Calculated forces for frame {frame_idx + 1}/{total_frames} ({(frame_idx + 1) / total_frames * 100:.1f}%)')
+                print(f'Calculated forces for frame {frame_idx + 1}/{total_frames} ({(frame_idx + 1) / total_frames * 100:.1f}%)')
 
             logger.debug("Force calculations completed successfully")
 
@@ -585,7 +747,7 @@ class BatchAnalysis:
                 'force_field': self._force_field,
                 'parameters': self._force_params
             })
-            logger.info("Force analysis results saved successfully")
+            print("Force analysis results saved successfully")
 
         except Exception as e:
             logger.error(f"Error during force analysis: {str(e)}", exc_info=True)
@@ -593,82 +755,81 @@ class BatchAnalysis:
 
     def _run_stress_analysis(self, folder: Path) -> None:
         """Run stress analysis step."""
+        logger.debug("Loading masks")
+        mask_path = folder / self.config['output_files']['masks']['path']
+        masks = tifffile.imread(str(mask_path.with_suffix('.tif'))) > 0
+
+        print("Starting stress analysis")
         # Load force data if not in memory
         if self._force_field is None:
-            force_path = folder / self.config['output_files']['force']['data']
-            loaded = np.load(str(force_path), allow_pickle=True).item()
-            self._force_field = loaded['data']
-            self._force_params = loaded['parameters']
+            try:
+                logger.debug("Loading force data")
+                force_path = folder / self.config['output_files']['force']['data']
+                loaded = np.load(str(force_path), allow_pickle=True).item()
+                self._force_field = loaded['force_field']
+                self._force_params = loaded['parameters']
+            except Exception as e:
+                logger.error(f"Error loading force data: {str(e)}", exc_info=True)
+                raise
 
-        # Load masks if needed
-        if self.config['analysis_steps']['create_masks']:
-            mask_path = folder / self.config['output_files']['masks']['path']
-            masks = np.load(str(mask_path))
-        else:
-            # Create simple mask from preprocessed cell images
-            masks = self._create_default_masks()
+        # Resize masks to match force field dimensions
+        force_shape = self._force_field.shape[1:3]  # Get the spatial dimensions of force field
+        resized_masks = np.zeros((len(masks), *force_shape), dtype=bool)
 
-        # Calculate stress tensors for each frame
-        stress_tensors = []
-        for frame_idx in range(len(self._force_field)):
-            msm = MonolayerStressMicroscopy(
-                mask=masks[frame_idx],
-                density_factor=self.config['parameters']['density_factor'],
-                algorithm=2,  # Default to Frontal-Delaunay
-                use_optimization=self.config['parameters']['use_optimization'],
-                young_modulus=self.config['parameters']['young_modulus'],
-                poisson_ratio=self.config['parameters']['poisson_ratio_cells']
-            )
+        for i in range(len(masks)):
+            # Use resize with order=0 for nearest-neighbor interpolation to preserve binary nature
+            resized_masks[i] = resize(masks[i].astype(float),
+                                      force_shape,
+                                      order=0,
+                                      preserve_range=True,
+                                      anti_aliasing=False) > 0.5
 
-            stress_tensor, _, _ = msm.calculate_stress_field(
-                self._force_field[frame_idx, ..., 0],
-                self._force_field[frame_idx, ..., 1]
-            )
-            stress_tensors.append(stress_tensor)
+        masks = resized_masks
+        logger.debug(f"Resized masks to match force field shape: {force_shape}")
 
-        self._stress_tensor = np.stack(stress_tensors)
-        self._stress_params = {
-            'density_factor': self.config['parameters']['density_factor'],
-            'use_optimization': self.config['parameters']['use_optimization'],
-            'young_modulus': self.config['parameters']['young_modulus'],
-            'poisson_ratio': self.config['parameters']['poisson_ratio_cells']
-        }
+        try:
+            # Calculate stress tensors for each frame
+            print("Calculating stress tensors")
+            stress_tensors = []
+            total_frames = len(self._force_field)
 
-        # Save results
-        output_path = folder / self.config['output_files']['stress']['data']
-        np.save(str(output_path), {
-            'data': self._stress_tensor,
-            'parameters': self._stress_params
-        })
+            for frame_idx in range(total_frames):
+                logger.debug(f"Processing frame {frame_idx + 1}/{total_frames}")
+                msm = MonolayerStressMicroscopy(
+                    mask=masks[frame_idx] if masks.ndim > 2 else masks,
+                    density_factor=self.config['parameters']['density_factor'],
+                    algorithm=self.MESH_ALGORITHMS.get(self.config['parameters']['mesh_algorithm']),
+                    use_optimization=self.config['parameters']['use_optimization'],
+                    young_modulus=1.0,
+                    poisson_ratio=self.config['parameters']['poisson_ratio_cells']
+                )
 
-    def _create_default_masks(self) -> np.ndarray:
-        """Create default masks from preprocessed cell images."""
-        if self._preprocessed_cell_stack is None:
-            raise ValueError("Cell images required for mask creation")
+                stress_tensor, cond_num, residual = msm.calculate_stress_field(
+                    self._force_field[frame_idx, ..., 0],
+                    self._force_field[frame_idx, ..., 1]
+                )
+                stress_tensors.append(stress_tensor)
+                print(f"Completed frame {frame_idx + 1}/{total_frames} (condition number: {cond_num:.2e}, residual: {residual:.2e})")
 
-        from skimage.filters import threshold_otsu
-        from scipy.ndimage import binary_dilation, gaussian_filter
+            self._stress_tensor = np.stack(stress_tensors)
+            self._stress_params = {
+                'density_factor': self.config['parameters']['density_factor'],
+                'use_optimization': self.config['parameters']['use_optimization'],
+                'poisson_ratio_cells': self.config['parameters']['poisson_ratio_cells'],
+                'max_stress': self.config['parameters']['max_stress']
+            }
 
-        masks = []
-        for frame in self._preprocessed_cell_stack:
-            # Apply Gaussian smoothing
-            smoothed = gaussian_filter(frame, self.config['parameters']['smoothing_sigma'])
+            # Save results
+            output_path = folder / self.config['output_files']['stress']['data']
+            np.save(str(output_path), {
+                'stress_tensor': self._stress_tensor,
+                'parameters': self._stress_params
+            })
+            print("Stress analysis results saved successfully")
 
-            # Threshold
-            thresh = np.percentile(smoothed, self.config['parameters']['threshold'])
-            mask = smoothed > thresh
-
-            # Dilate
-            mask = binary_dilation(mask, iterations=self.config['parameters']['dilation'])
-            masks.append(mask)
-
-        return np.stack(masks)
-
-    def process_all_folders(self) -> None:
-        """Process all folders specified in configuration."""
-        for folder in self.config['root_folders']:
-            print(f"Processing folder: {folder}")
-            self.process_folder(folder)
+        except Exception as e:
+            logger.error(f"Error during stress tensor calculation: {str(e)}", exc_info=True)
+            raise
 
 
 if __name__ == "__main__":

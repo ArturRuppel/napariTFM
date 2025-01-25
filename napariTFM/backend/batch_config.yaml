@@ -3,6 +3,7 @@ root_folders:
   - "C:/Users/aruppel/Desktop/test"
   - "C:/Users/aruppel/Desktop/test"
 
+
 # Root data paths
 input_files:
   beads: "beads.tif"              # Required
