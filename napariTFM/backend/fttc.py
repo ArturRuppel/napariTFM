@@ -46,7 +46,6 @@ class FTTC:
         self.nu = nu
         self.lanczos_exp = lanczos_exp
         self.gel_height = gel_height
-    @thread_worker
     def calculate_traction(self, displacements: Tuple[np.ndarray, np.ndarray],
                            pixel_size: float,
                            downscale_factor: int = 1,

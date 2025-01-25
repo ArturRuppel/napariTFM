@@ -117,7 +117,7 @@ class FTTCWidget(BaseAnalysisWidget):
             self._set_controls_enabled(True)
 
     def calculate_forces(self):
-        """Calculate traction forces for all frames."""
+        """Calculate traction forces for all frames using widget-level threading"""
         try:
             if not self._validate_input_data():
                 return
@@ -128,82 +128,68 @@ class FTTCWidget(BaseAnalysisWidget):
             # Initialize calculator
             self._initialize_calculator()
 
-            # Get displacement field data and parameters
+            # Get data and parameters
             displacement_field = self.data_manager.displacement_field
-            displacement_params = self.data_manager.displacement_params
-            pixel_size = displacement_params["pixel_size"]
-            downscale_factor = displacement_params.get("downscale_factor", 1)
+            pixel_size = self.data_manager.displacement_params["pixel_size"]
+            downscale_factor = self.data_manager.displacement_params.get("downscale_factor", 1)
 
-            # Process a single frame and return its forces
+            # Create worker using class-level pattern
             @thread_worker
-            def process_single_frame(frame_data, frame_idx):
-                regularization = None if self.parameter_manager.get_value('auto_gcv') else self.parameter_manager.get_value('regularization')
-                inner_worker = self.calculator.calculate_traction(
-                    displacements=frame_data,
-                    pixel_size=pixel_size,
-                    downscale_factor=downscale_factor,
-                    regularization=regularization
-                )
-                return inner_worker, frame_idx
+            def force_worker():
+                total_frames = len(displacement_field)
+                force_results = {'tx': [], 'ty': []}
 
-            # Track overall progress
-            self.processed_frames = 0
-            self.total_frames = len(displacement_field)
-            self.force_results = {
-                'tx': [],
-                'ty': []
-            }
+                for frame_idx in range(total_frames):
+                    if self.is_analysis_running:  # Allow cancellation
+                        result = self.calculator.calculate_traction(
+                            displacements=displacement_field[frame_idx],
+                            pixel_size=pixel_size,
+                            downscale_factor=downscale_factor,
+                            regularization=self.parameter_manager.get_value('regularization')
+                        )
+                        force_results['tx'].append(result[1][0])
+                        force_results['ty'].append(result[1][1])
 
-            def handle_inner_worker_result(result):
-                # Get forces from the completed calculation
-                (_, _), forces = result
-                frame_idx = self.processed_frames
+                        # Calculate progress
+                        progress = (frame_idx + 1) / total_frames * 100
+                        magnitude = np.sqrt(result[1][0] ** 2 + result[1][1] ** 2)
 
-                # Store results
-                self.force_results['tx'].append(forces[0])
-                self.force_results['ty'].append(forces[1])
+                        # Yield progress updates
+                        yield {
+                            'progress': progress,
+                            'message': (f"Processing frame {frame_idx + 1}/{total_frames}\n"
+                                        f"Mean: {np.mean(magnitude):.2f} Pa | "
+                                        f"Max: {np.max(magnitude):.2f} Pa"),
+                            'results': force_results
+                        }
+                return force_results
 
-                # Calculate statistics for progress update
-                magnitude = np.sqrt(forces[0] ** 2 + forces[1] ** 2)
-                progress = (frame_idx + 1) / self.total_frames * 100
+            # Create and configure worker
+            worker = force_worker()
 
-                self._update_status(
-                    f"Processing frame {frame_idx + 1}/{self.total_frames}...\n"
-                    f"Mean force: {np.mean(magnitude):.2f} Pa\n"
-                    f"Max force: {np.max(magnitude):.2f} Pa\n",
-                    progress
-                )
+            # Connect worker signals
+            worker.yielded.connect(self._handle_force_progress)
+            worker.returned.connect(self._handle_force_results)
+            worker.errored.connect(self._handle_error)
+            worker.finished.connect(lambda: self._set_controls_enabled(True))
 
-                self.processed_frames += 1
-
-                # Start next frame if available
-                if self.processed_frames < self.total_frames:
-                    start_next_frame()
-                else:
-                    # Use the proper method reference with self
-                    self.finalize_results()
-
-            def handle_worker_returned(worker_and_idx):
-                inner_worker, _ = worker_and_idx
-                # Connect to inner worker's signals and start it
-                inner_worker.returned.connect(handle_inner_worker_result)
-                inner_worker.start()
-
-            def start_next_frame():
-                worker = process_single_frame(
-                    displacement_field[self.processed_frames],
-                    self.processed_frames
-                )
-                worker.returned.connect(handle_worker_returned)
-                worker.errored.connect(self._handle_error)
-                worker.start()
-
-            # Start processing the first frame
-            start_next_frame()
+            # Store worker reference for potential cancellation
+            self._current_worker = worker
+            worker.start()
 
         except Exception as e:
             self._handle_error(str(e))
             self._set_controls_enabled(True)
+
+    def _handle_force_progress(self, update_dict):
+        """Handle progress updates during force calculation"""
+        self._update_status(update_dict['message'], update_dict['progress'])
+        self.force_results = update_dict['results']  # Store intermediate results
+
+    def _handle_force_results(self, final_results):
+        """Finalize results when worker completes"""
+        self.force_results = final_results
+        self.finalize_results()
 
     def finalize_results(self):
         try:
@@ -449,9 +435,16 @@ class FTTCWidget(BaseAnalysisWidget):
             # Create and start worker
             regularization = None if self.parameter_manager.get_value('auto_gcv') else self.parameter_manager.get_value('regularization')
 
-            worker = self.calculator.calculate_traction(displacements=displacement_field[current_frame], pixel_size=displacement_params["pixel_size"],
-                                                        downscale_factor=displacement_params["downscale_factor"],
-                                                        regularization=regularization)
+            @thread_worker
+            def run_calculate_traction():
+                return self.calculator.calculate_traction(
+                    displacements=displacement_field[current_frame],
+                    pixel_size=displacement_params["pixel_size"],
+                    downscale_factor=displacement_params["downscale_factor"],
+                    regularization=regularization
+                )
+
+            worker = run_calculate_traction()
 
             # Connect worker signals
             worker.returned.connect(self._handle_preview_results)
