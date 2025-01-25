@@ -26,32 +26,77 @@ class BatchAnalysis:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
             logger.debug(f"Loaded configuration from {config_path}")
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
 
-        # Initialize data containers
-        # 1. Input data
+        # Initialize data containers (previous containers remain the same...)
         self._input_bead_stack: Optional[np.ndarray] = None
         self._input_reference: Optional[np.ndarray] = None
         self._input_cell_stack: Optional[np.ndarray] = None
-
-        # 2. Preprocessed data
         self._preprocessed_bead_stack: Optional[np.ndarray] = None
         self._preprocessed_reference: Optional[np.ndarray] = None
         self._preprocessed_cell_stack: Optional[np.ndarray] = None
         self._preprocessing_params: Optional[Dict[str, Any]] = None
-
-        # 3. Displacement results
         self._displacement_field: Optional[np.ndarray] = None
         self._displacement_params: Optional[Dict[str, Any]] = None
-
-        # 4. Force results
         self._force_field: Optional[np.ndarray] = None
         self._force_params: Optional[Dict[str, Any]] = None
-
-        # 5. Stress results
         self._stress_tensor: Optional[np.ndarray] = None
         self._stress_params: Optional[Dict[str, Any]] = None
+
+    def _create_masks(self, folder: Path) -> np.ndarray:
+        """Create masks from preprocessed cell images using MSM class."""
+        logger.info("Creating masks from preprocessed cell images")
+
+        # Load preprocessed cell images if not already in memory
+        if self._preprocessed_cell_stack is None:
+            cell_path = folder / self.config['output_files']['preprocessing']['cells']
+            if not cell_path.exists():
+                raise FileNotFoundError(f"Preprocessed cell images not found at {cell_path}")
+            logger.debug(f"Loading preprocessed cell images from {cell_path}")
+            self._preprocessed_cell_stack = tifffile.imread(str(cell_path))
+
+        # Get mask parameters from config
+        mask_params = {
+            'threshold_percentile': self.config['parameters']['threshold'],
+            'dilation': self.config['parameters']['dilation'],
+            'smoothing_sigma': self.config['parameters']['smoothing_sigma']
+        }
+
+        logger.debug(f"Creating masks with parameters: {mask_params}")
+
+        # Create masks using MSM class method
+        if self._preprocessed_cell_stack.ndim == 2:
+            # Single frame
+            mask = MonolayerStressMicroscopy.create_mask_from_image(
+                self._preprocessed_cell_stack,
+                **mask_params
+            )
+            masks = mask[np.newaxis, ...]
+        else:
+            # Multiple frames
+            masks = np.zeros_like(self._preprocessed_cell_stack, dtype=bool)
+            total_frames = len(self._preprocessed_cell_stack)
+
+            for frame in range(total_frames):
+                logger.debug(f"Processing frame {frame + 1}/{total_frames}")
+                masks[frame] = MonolayerStressMicroscopy.create_mask_from_image(
+                    self._preprocessed_cell_stack[frame],
+                    **mask_params
+                )
+
+        # Save masks
+        output_path = folder / self.config['output_files']['masks']['path']
+        logger.info(f"Saving masks to {output_path}")
+
+        # Also save as TIFF for visualization
+        tiff_path = output_path.with_suffix('.tif')
+        self._save_calibrated_tiff(
+            masks.astype(np.uint8) * 255,  # Convert to 8-bit
+            tiff_path,
+            self.config['parameters']['pixel_size'],
+            self.config['parameters']['frame_interval']
+        )
+
+        return masks
 
     def _save_calibrated_tiff(self, data: np.ndarray, filepath: Path, pixel_size: float,
                               frame_interval: float) -> None:
@@ -145,6 +190,11 @@ class BatchAnalysis:
                     self._current_worker.quit()
                     self._current_worker = None
                     logger.debug("Cleaned up preprocessing worker")
+
+            if self.config['analysis_steps']['create_masks']:
+                logger.info("Starting mask creation")
+                masks = self._create_masks(folder)
+                logger.info("Mask creation completed")
 
             if self.config['analysis_steps']['displacement']:
                 self._run_displacement_analysis(folder)
@@ -526,9 +576,8 @@ class BatchAnalysis:
                     'f_max': self.config['parameters']['f_max']
                 }
             }
-            self._force_field = np.moveaxis(np.array(forces), 1, -1)   # reformat to make compatible with widgets
+            self._force_field = np.moveaxis(np.array(forces), 1, -1)  # reformat to make compatible with widgets
             self._force_params = formatted_params
-
 
             # Save results in widget-compatible format
             output_path = folder / self.config['output_files']['force']['data']

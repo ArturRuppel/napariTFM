@@ -51,7 +51,6 @@ visualizations:
   sigma_yy: true
   normal_stress: true
   mesh: true
-  shear: false
 
 # Analysis parameters
 parameters:
