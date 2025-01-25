@@ -871,20 +871,13 @@ class VisualizationManager(ErrorHandlingMixin):
         orig_v = original_flow[Y, X, 1]
         magnitudes = np.sqrt(orig_u ** 2 + orig_v ** 2)
 
-        # Filter out small displacements
-        if d_max is not None:
-            threshold = d_max * 0.01
-        else:
-            threshold = magnitudes.max() * 0.01
+        # Flatten the coordinate arrays
+        Y_flat = Y.flatten()
+        X_flat = X.flatten()
+        U_flat = U.flatten()
+        V_flat = V.flatten()
 
-        mask = magnitudes > threshold
-
-        # Create vectors array in correct format (N, 2, D)
-        Y_flat = Y[mask]
-        X_flat = X[mask]
-        U_flat = U[mask]
-        V_flat = V[mask]
-
+        # Create vectors array in correct format (N, 2, 2)
         N = len(Y_flat)
         vectors = np.zeros((N, 2, 2))  # (N, 2, 2) for N vectors with start/end points in 2D
 
@@ -892,14 +885,15 @@ class VisualizationManager(ErrorHandlingMixin):
         vectors[:, 0, 1] = X_flat  # x coordinates
         vectors[:, 0, 0] = Y_flat  # y coordinates
 
-        # End points
-        vectors[:, 1, 1] = U_flat  # x + dx
-        vectors[:, 1, 0] = V_flat  # y + dy
 
-        # Create colors for filtered vectors using specified colormap
+        vectors[:, 1, 1] = U_flat
+        vectors[:, 1, 0] = V_flat
+
+        # Create colors based on magnitudes
         max_mag = d_max if d_max is not None else magnitudes.max()
         if max_mag > 0:
-            colors = plt.cm.get_cmap(colormap)(magnitudes[mask] / max_mag)
+            normalized_magnitudes = np.clip(magnitudes.flatten() / max_mag, 0, 1)
+            colors = plt.cm.get_cmap(colormap)(normalized_magnitudes)
         else:
             colors = plt.cm.get_cmap(colormap)(np.zeros(N))
 
