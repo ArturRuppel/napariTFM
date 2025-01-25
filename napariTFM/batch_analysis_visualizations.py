@@ -1,8 +1,7 @@
-import os
 from pathlib import Path
-import numpy as np
-import tifffile
+
 import imageio
+import numpy as np
 from matplotlib import pyplot as plt
 
 

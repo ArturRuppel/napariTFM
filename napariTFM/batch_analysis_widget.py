@@ -3,7 +3,6 @@ import sys
 from typing import Any
 
 import numpy as np
-import yaml
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QGridLayout,
@@ -12,8 +11,8 @@ from qtpy.QtWidgets import (
     QFileDialog, QComboBox
 )
 
-from .base_widget import BaseAnalysisWidget
-from .parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.base_widget import BaseAnalysisWidget
+from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 
 
 class BatchAnalysisWidget(BaseAnalysisWidget):

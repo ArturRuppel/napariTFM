@@ -1,12 +1,12 @@
+import logging
 from typing import Optional, Tuple
 
-import numpy as np
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTabWidget
-from qtpy.QtCore import Signal
 import napari
-import logging
-from napariTFM.visualization_manager import VisualizationManager
+from qtpy.QtCore import Signal
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTabWidget
+
 from napariTFM.data_manager import DataManager
+from napariTFM.visualization_manager import VisualizationManager
 
 logger = logging.getLogger(__name__)
 

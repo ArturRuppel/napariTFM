@@ -7,15 +7,15 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog
 )
 
-from .parameter_manager import ParameterManager
-from .data_manager import DataManager
-from .visualization_manager import VisualizationManager
+from napariTFM.parameter_manager import ParameterManager
+from napariTFM.data_manager import DataManager
+from napariTFM.visualization_manager import VisualizationManager
 
-from .preprocessing_widget import PreprocessingWidget
-from .displacement_analysis_widget import DisplacementAnalysisWidget
-from .fttc_widget import FTTCWidget
-from .msm_widget import MSMWidget
-from .batch_analysis_widget import BatchAnalysisWidget
+from napariTFM.preprocessing_widget import PreprocessingWidget
+from napariTFM.displacement_analysis_widget import DisplacementAnalysisWidget
+from napariTFM.fttc_widget import FTTCWidget
+from napariTFM.msm_widget import MSMWidget
+from napariTFM.batch_analysis_widget import BatchAnalysisWidget
 
 
 

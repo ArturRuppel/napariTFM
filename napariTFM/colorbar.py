@@ -1,9 +1,6 @@
 import numpy as np
-from vispy import scene
-from vispy.scene import widgets as vp_widgets
 from vispy import color as vp_color
-from qtpy.QtWidgets import QWidget
-from qtpy.QtCore import Qt
+from vispy import scene
 from vispy.scene.widgets import Widget
 from vispy.visuals import ColorBarVisual
 

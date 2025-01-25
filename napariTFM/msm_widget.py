@@ -1,21 +1,20 @@
 import os
-from typing import Tuple
 
+import numpy as np
+from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QSizePolicy, QCheckBox,
     QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QComboBox, QSlider,
     QProgressBar, QMessageBox, QFileDialog
 )
-from qtpy.QtCore import Signal, Qt
-import numpy as np
 from scipy import ndimage
-
-from .base_widget import BaseAnalysisWidget
-from .colorbar import ColorbarManager
-from .mesh_generator import MeshParameters, MeshGenerator
-from .msm import MonolayerStressMicroscopy
-from .parameter_manager import ParameterManager, ParameterCategory
 from skimage.transform import resize
+
+from napariTFM.backend.mesh_generator import MeshParameters, MeshGenerator
+from napariTFM.backend.msm import MonolayerStressMicroscopy
+from napariTFM.base_widget import BaseAnalysisWidget
+from napariTFM.colorbar import ColorbarManager
+from napariTFM.parameter_manager import ParameterCategory
 
 
 class MSMWidget(BaseAnalysisWidget):

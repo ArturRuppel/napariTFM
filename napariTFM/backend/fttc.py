@@ -28,7 +28,7 @@ from napari.qt.threading import thread_worker
 
 from scipy import optimize
 
-from napariTFM.fttc_numba_functions import *
+from napariTFM.backend.fttc_numba_functions import *
 
 
 class FTTC:

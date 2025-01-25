@@ -9,12 +9,12 @@ from qtpy.QtWidgets import (
     QProgressBar, QMessageBox, QSizePolicy, QFileDialog
 )
 
+from napariTFM.backend.displacement_analysis import DisplacementAnalyzer
+from napariTFM.data_manager import DataManager
+from napariTFM.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.visualization_manager import VisualizationManager
 from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager
-from .data_manager import DataManager
-from .displacement_analysis import DisplacementAnalyzer, TVL1Parameters
-from .parameter_manager import ParameterManager, ParameterCategory
-from .visualization_manager import VisualizationManager
 
 
 class DisplacementAnalysisWidget(BaseAnalysisWidget):

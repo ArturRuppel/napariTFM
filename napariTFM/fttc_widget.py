@@ -1,8 +1,8 @@
 import os
 from typing import Optional
-from napari.qt.threading import thread_worker
 
 import numpy as np
+from napari.qt.threading import thread_worker
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QFileDialog, QCheckBox,
@@ -10,13 +10,12 @@ from qtpy.QtWidgets import (
     QWidget, QSizePolicy, QSpinBox
 )
 
-from .base_widget import BaseAnalysisWidget
-from .colorbar import ColorbarManager
-from .data_manager import DataManager
-from .displacement_analysis_widget import DisplacementAnalysisWidget
-from .fttc import FTTC
-from .parameter_manager import ParameterManager, ParameterCategory
-from .visualization_manager import VisualizationManager
+from napariTFM.backend.fttc import FTTC
+from napariTFM.base_widget import BaseAnalysisWidget
+from napariTFM.colorbar import ColorbarManager
+from napariTFM.data_manager import DataManager
+from napariTFM.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.visualization_manager import VisualizationManager
 
 
 class FTTCWidget(BaseAnalysisWidget):

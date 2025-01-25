@@ -9,7 +9,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from napari.layers import Layer
 
-from .error_handling import ErrorHandlingMixin, ErrorSeverity
+from napariTFM.error_handling import ErrorHandlingMixin, ErrorSeverity
 
 logger = logging.getLogger(__name__)
 
