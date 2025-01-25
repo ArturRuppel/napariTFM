@@ -83,164 +83,162 @@ class FTTCWidget(BaseAnalysisWidget):
             self._set_controls_enabled(False)
             self._update_status("Starting force calculation...", 0)
 
-            # Get displacement field from data manager
-            displacement_field = self.data_manager.displacement_field
-            displacement_params = self.data_manager.displacement_params
-
+            # Initialize calculator
             self._initialize_calculator()
 
-            # Get parameters from parameter manager
-            regularization = self.parameter_manager.get_value('regularization')
-            auto_gcv = self.parameter_manager.get_value('auto_gcv')
-
-            # Get pixel size and scaling factors
+            # Get displacement field data and parameters
+            displacement_field = self.data_manager.displacement_field
+            displacement_params = self.data_manager.displacement_params
             pixel_size = displacement_params["pixel_size"]
             downscale_factor = displacement_params.get("downscale_factor", 1)
-            forcemap_pixel_size = pixel_size * downscale_factor
 
-            # Create and configure worker for batch processing
+            # Process a single frame and return its forces
             @thread_worker
-            def process_frames():
-                force_results = {
-                    'tx': [],
-                    'ty': []
-                }
+            def process_single_frame(frame_data, frame_idx):
+                inner_worker = self.calculator.calculate_traction(
+                    displacements=frame_data,
+                    pixel_size=pixel_size,
+                    downsample_factor=downscale_factor,
+                    regularization=self.parameter_manager.get_value('regularization')
+                )
+                return inner_worker, frame_idx
 
-                for frame_idx, frame_data in enumerate(displacement_field):
-                    # Convert displacements from micrometers to pixels
-                    u_data = frame_data[..., 0]
-                    v_data = frame_data[..., 1]
+            # Track overall progress
+            self.processed_frames = 0
+            self.total_frames = len(displacement_field)
+            self.force_results = {
+                'tx': [],
+                'ty': []
+            }
 
-                    shape = frame_data.shape[:-1]
-                    x = np.arange(shape[1])
-                    y = np.arange(shape[0])
-                    pos = np.array(np.meshgrid(x, y, indexing='xy'))
-                    vec = np.array([u_data.flatten(), v_data.flatten()])
+            def handle_inner_worker_result(result):
+                # Get forces from the completed calculation
+                (_, _), forces = result
+                frame_idx = self.processed_frames
 
-                    if auto_gcv:
-                        lam = self.calculator._find_regularization(pos, vec)
-                    else:
-                        lam = regularization
+                # Store results
+                self.force_results['tx'].append(forces[0])
+                self.force_results['ty'].append(forces[1])
 
-                    # Calculate forces
-                    (_, _), f = self.calculator._perform_tfm(pos, vec, lam)
+                # Calculate statistics for progress update
+                magnitude = np.sqrt(forces[0] ** 2 + forces[1] ** 2)
+                progress = (frame_idx + 1) / self.total_frames * 100
 
-                    # Reshape force components and convert to Pascal
-                    fx = f[0].reshape(shape)
-                    fy = f[1].reshape(shape)
-                    forces = np.stack([fx, fy])
+                self._update_status(
+                    f"Processing frame {frame_idx + 1}/{self.total_frames}...\n"
+                    f"Mean force: {np.mean(magnitude):.2f} Pa\n"
+                    f"Max force: {np.max(magnitude):.2f} Pa\n",
+                    progress
+                )
 
-                    force_results['tx'].append(forces[0])
-                    force_results['ty'].append(forces[1])
+                self.processed_frames += 1
 
-                    yield frame_idx, forces
+                # Start next frame if available
+                if self.processed_frames < self.total_frames:
+                    start_next_frame()
+                else:
+                    # Use the proper method reference with self
+                    self.finalize_results()
 
-                return force_results
+            def handle_worker_returned(worker_and_idx):
+                inner_worker, _ = worker_and_idx
+                # Connect to inner worker's signals and start it
+                inner_worker.returned.connect(handle_inner_worker_result)
+                inner_worker.start()
 
-            # Create worker and connect signals
-            worker = process_frames()
+            def start_next_frame():
+                worker = process_single_frame(
+                    displacement_field[self.processed_frames],
+                    self.processed_frames
+                )
+                worker.returned.connect(handle_worker_returned)
+                worker.errored.connect(self._handle_error)
+                worker.start()
 
-            def handle_frame(result):
-                try:
-                    frame_idx, forces = result
-                    # Calculate statistics for progress update
-                    magnitude = np.sqrt(forces[0] ** 2 + forces[1] ** 2)
-
-                    progress = (frame_idx + 1) / len(displacement_field) * 100
-                    self._update_status(
-                        f"Processing frame {frame_idx + 1}/{len(displacement_field)}...\n"
-                        f"Mean force: {np.mean(magnitude):.2f} Pa\n"
-                        f"Max force: {np.max(magnitude):.2f} Pa\n",
-                        progress
-                    )
-                except Exception as e:
-                    self._handle_error(f"Error processing frame {frame_idx}: {str(e)}")
-
-            def handle_completion(force_results):
-                try:
-                    if not force_results['tx']:
-                        raise ValueError("No frames were successfully processed")
-
-                    # Convert lists to arrays
-                    force_results['tx'] = np.stack(force_results['tx'])
-                    force_results['ty'] = np.stack(force_results['ty'])
-
-                    # Create force parameters dictionary
-                    force_params = {
-                        'young_modulus': self.parameter_manager.get_value('young_modulus'),
-                        'poisson_ratio': self.parameter_manager.get_value('poisson_ratio'),
-                        'gel_height': self.parameter_manager.get_value('gel_height'),
-                        'pixel_size': pixel_size,
-                        'frame_interval': self.parameter_manager.get_value('frame_interval'),
-                        'regularization': regularization,
-                        'lanczos_exp': self.parameter_manager.get_value('lanczos_exp'),
-                        'downscale_factor': downscale_factor,
-                        'visualization': {
-                            'vector_stride': self.parameter_manager.get_value('force_vector_stride'),
-                            'arrow_scale': self.parameter_manager.get_value('force_arrow_scale'),
-                            'f_max': self.parameter_manager.get_value('f_max')
-                        }
-                    }
-
-                    # Add parameters to results
-                    force_results['parameters'] = force_params
-
-                    # Store results in data manager
-                    self.data_manager.set_force_results(
-                        np.stack([force_results['tx'], force_results['ty']], axis=-1),
-                        force_params
-                    )
-
-                    # Update visualization
-                    self.visualization_manager.visualize_force_results(
-                        force_results,
-                        downscale_factor=force_params['downscale_factor']
-                    )
-                    self._handle_visualization_layers()
-
-                    # Update colorbar
-                    f_max = self.parameter_manager.get_value('f_max')
-                    if f_max is not None:
-                        self.colorbar_manager.update_limits(0, f_max)
-
-                    # Get and display statistics from last frame
-                    magnitude = np.sqrt(force_results['tx'][-1] ** 2 + force_results['ty'][-1] ** 2)
-                    stats = {
-                        'mean_force': np.mean(magnitude),
-                        'max_force': np.max(magnitude),
-                        'median_force': np.median(magnitude)
-                    }
-
-                    stats_text = (
-                        f"Mean force: {stats['mean_force']:.2f} Pa\n"
-                        f"Max force: {stats['max_force']:.2f} Pa\n"
-                        f"Median force: {stats['median_force']:.2f} Pa"
-                    )
-                    self._update_status(stats_text, 100)
-
-                    # Enable save button and emit results
-                    self.save_force_btn.setEnabled(True)
-                    self.force_calculated.emit(force_results)
-
-                    # Update UI state to show new data status
-                    self._update_ui_state()
-
-                except Exception as e:
-                    self._handle_error(f"Error finalizing results: {str(e)}")
-                finally:
-                    self._set_controls_enabled(True)
-
-            worker.yielded.connect(handle_frame)
-            worker.returned.connect(handle_completion)
-            worker.errored.connect(self._handle_error)
-
-            # Start processing
-            worker.start()
+            # Start processing the first frame
+            start_next_frame()
 
         except Exception as e:
             self._handle_error(str(e))
             self._set_controls_enabled(True)
 
+    def finalize_results(self):
+        try:
+            # Convert lists to arrays
+            self.force_results['tx'] = np.stack(self.force_results['tx'])
+            self.force_results['ty'] = np.stack(self.force_results['ty'])
+
+            # Get visualization parameters
+            vector_stride = self.parameter_manager.get_value('force_vector_stride')
+            arrow_scale = self.parameter_manager.get_value('force_arrow_scale')
+            f_max = self.parameter_manager.get_value('f_max')
+
+            # Create force parameters dictionary
+            force_params = {
+                'young_modulus': self.parameter_manager.get_value('young_modulus'),
+                'poisson_ratio': self.parameter_manager.get_value('poisson_ratio'),
+                'gel_height': self.parameter_manager.get_value('gel_height'),
+                'pixel_size': self.data_manager.displacement_params['pixel_size'],
+                'frame_interval': self.parameter_manager.get_value('frame_interval'),
+                'regularization': self.parameter_manager.get_value('regularization'),
+                'lanczos_exp': self.parameter_manager.get_value('lanczos_exp'),
+                'downscale_factor': self.data_manager.displacement_params.get('downscale_factor', 1),
+                'visualization': {
+                    'vector_stride': vector_stride,
+                    'arrow_scale': arrow_scale,
+                    'f_max': f_max
+                }
+            }
+
+            # Store results in data manager
+            self.data_manager.set_force_results(
+                np.stack([self.force_results['tx'], self.force_results['ty']], axis=-1),
+                force_params
+            )
+
+            # Package results for visualization
+            visualization_results = {
+                'tx': self.force_results['tx'],
+                'ty': self.force_results['ty'],
+                'parameters': force_params  # Include all parameters including visualization settings
+            }
+
+            # Update visualization with packaged results
+            self.visualization_manager.visualize_force_results(
+                visualization_results,
+                downscale_factor=force_params['downscale_factor']
+            )
+            self._handle_visualization_layers()
+
+            # Update colorbar with the specified f_max
+            self.colorbar_manager.update_limits(0, f_max)
+
+            # Get and display statistics from last frame
+            magnitude = np.sqrt(self.force_results['tx'][-1] ** 2 + self.force_results['ty'][-1] ** 2)
+            stats = {
+                'mean_force': np.mean(magnitude),
+                'max_force': np.max(magnitude),
+                'median_force': np.median(magnitude)
+            }
+
+            stats_text = (
+                f"Mean force: {stats['mean_force']:.2f} Pa\n"
+                f"Max force: {stats['max_force']:.2f} Pa\n"
+                f"Median force: {stats['median_force']:.2f} Pa"
+            )
+            self._update_status(stats_text, 100)
+
+            # Enable save button and emit results
+            self.save_force_btn.setEnabled(True)
+            self.force_calculated.emit(self.force_results)
+
+            # Update UI state to show new data status
+            self._update_ui_state()
+
+        except Exception as e:
+            self._handle_error(f"Error finalizing results: {str(e)}")
+        finally:
+            self._set_controls_enabled(True)
     def _load_displacement(self):
         """Load displacement data from files."""
         try:
@@ -404,9 +402,9 @@ class FTTCWidget(BaseAnalysisWidget):
             displacement_params = self.data_manager.displacement_params
             current_frame = self.viewer.dims.current_step[0]
 
-
             # Create and start worker
-            worker = self.calculator.calculate_traction(displacements=displacement_field[current_frame], pixel_size=displacement_params["pixel_size"], downsample_factor=displacement_params["downscale_factor"],
+            worker = self.calculator.calculate_traction(displacements=displacement_field[current_frame], pixel_size=displacement_params["pixel_size"],
+                                                        downsample_factor=displacement_params["downscale_factor"],
                                                         regularization=self.parameter_manager.get_value('regularization'))
 
             # Connect worker signals
@@ -490,8 +488,6 @@ class FTTCWidget(BaseAnalysisWidget):
             current_frame = self.viewer.dims.current_step[0]
             flow = flows[current_frame]
 
-
-
             # Get pixel size and downscale factor from displacement results
             disp_params = self.data_manager.displacement_params
             pixel_size = disp_params.get('pixel_size')
@@ -500,7 +496,7 @@ class FTTCWidget(BaseAnalysisWidget):
             # Get spatial coordinates and prepare data
             shape = flow.shape[:-1]
             pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
-            vec = np.array([flow[..., 0], flow[..., 1]]) / (pixel_size * downscale_factor) # convert to pixel
+            vec = np.array([flow[..., 0], flow[..., 1]]) / (pixel_size * downscale_factor)  # convert to pixel
 
             # Calculate optimal regularization parameter
             lam = self.calculator._find_regularization(pos, vec)
@@ -982,7 +978,7 @@ class FTTCWidget(BaseAnalysisWidget):
 
             # Update spinboxes with loaded values
             if 'young_modulus' in params:
-                self.young_spin.setValue(params['young_modulus'] / 1000) # convert from Pa to kPa
+                self.young_spin.setValue(params['young_modulus'] / 1000)  # convert from Pa to kPa
             if 'poisson_ratio' in params:
                 self.poisson_spin.setValue(params['poisson_ratio'])
             if 'gel_height' in params:
@@ -1123,8 +1119,6 @@ class FTTCWidget(BaseAnalysisWidget):
                 f_max = parameters.get('visualization', {}).get('f_max')
                 self.colorbar_manager.update_limits(0, f_max)
 
-
-
                 # Enable save button and emit results
                 self.save_force_btn.setEnabled(True)
                 self.force_calculated.emit(results)
@@ -1148,6 +1142,7 @@ class FTTCWidget(BaseAnalysisWidget):
             )
             import traceback
             traceback.print_exc()
+
     def _handle_visualization_layers(self):
         """Handle layer visibility and ordering for better force visualization."""
         from qtpy.QtCore import QTimer
