@@ -156,7 +156,7 @@ class BatchAnalysis:
             logger.debug(f"Loaded configuration from {config_path}")
 
         # Initialize data containers
-        self._initialize_data_containers()
+        self._cleanup_internal_storage()
         self._tee_logger = None
 
     def process_folder(self, folder_path: str) -> None:
@@ -222,7 +222,11 @@ class BatchAnalysis:
 
             print(f"Finished processing folder: {folder_path}")
 
-    def _initialize_data_containers(self):
+    def _cleanup_internal_storage(self):
+        """Clean up all internal data storage to free memory."""
+        print("Cleaning up internal storage")
+
+        # Reset all data containers
         """Initialize or reset all data containers to their default state."""
         logger.debug("Initializing/resetting data containers")
 
@@ -240,20 +244,6 @@ class BatchAnalysis:
         self._force_params: Optional[Dict[str, Any]] = None
         self._stress_tensor: Optional[np.ndarray] = None
         self._stress_params: Optional[Dict[str, Any]] = None
-        self._current_worker = None
-
-    def _cleanup_internal_storage(self):
-        """Clean up all internal data storage to free memory."""
-        print("Cleaning up internal storage")
-
-        # Clean up worker if it exists
-        if self._current_worker is not None:
-            self._current_worker.quit()
-            self._current_worker = None
-            logger.debug("Cleaned up current worker")
-
-        # Reset all data containers
-        self._initialize_data_containers()
 
         # Force garbage collection to free memory
         import gc
@@ -412,55 +402,6 @@ class BatchAnalysis:
                 logger.debug(f"Loading cell images from: {cell_path}")
                 self._input_cell_stack = tifffile.imread(str(cell_path))
                 logger.debug(f"Loaded cell stack with shape: {self._input_cell_stack.shape}")
-
-    def _run_thread_worker(self, worker):
-        """
-        Helper function to run a thread_worker and collect its results.
-        """
-        logger.debug("Starting thread worker")
-
-        # Clean up any existing worker
-        if hasattr(self, '_current_worker') and self._current_worker is not None:
-            self._current_worker.quit()
-            self._current_worker = None
-            logger.debug("Cleaned up previous worker")
-
-        # Store current worker
-        self._current_worker = worker
-
-        # Set up result container
-        final_result = None
-
-        def _on_returned(result):
-            nonlocal final_result
-            final_result = result
-            logger.debug("Thread worker completed successfully")
-
-        def _on_errored(error):
-            logger.error(f"Thread worker error: {str(error)}", exc_info=True)
-            raise error
-
-        try:
-            # Connect worker signals
-            worker.returned.connect(_on_returned)
-            worker.errored.connect(_on_errored)
-
-            # Start worker
-            worker.start()
-            worker.run()  # This will block until completion
-
-            return final_result
-
-        except Exception as e:
-            logger.error(f"Error in thread worker: {str(e)}", exc_info=True)
-            raise
-
-        finally:
-            # Clean up worker
-            if self._current_worker is not None:
-                self._current_worker.quit()
-                self._current_worker = None
-                logger.debug("Cleaned up worker in finally block")
 
     def _run_preprocessing(self, folder: Path) -> Generator:
         """Run preprocessing step."""
@@ -770,6 +711,7 @@ class BatchAnalysis:
         except Exception as e:
             logger.error(f"Error during force analysis: {str(e)}", exc_info=True)
             raise
+
     def _run_stress_analysis(self, folder: Path) -> None:
         """Run stress analysis step."""
         logger.debug("Loading masks")
