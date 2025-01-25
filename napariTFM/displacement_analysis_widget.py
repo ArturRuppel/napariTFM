@@ -377,102 +377,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(f"Error resetting parameters: {str(e)}")
 
-    def _load_displacement(self):
-        """Load displacement data from files."""
-        try:
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select Displacement Data File",
-                os.path.expanduser("~"),
-                "NumPy Files (*.npy)"
-            )
-
-            if file_path:
-                displacement_data = np.load(file_path, allow_pickle=True).item()
-
-                # Update data manager
-                self.data_manager.set_displacement_results(displacement_data['flows'], displacement_data['parameters'])
-
-                # Update parameter manager with loaded parameters
-                params = displacement_data['parameters']
-
-                # Update TVL1 parameters
-                if 'tvl1_params' in params:
-                    tvl1_params = params['tvl1_params']
-                    param_mapping = {
-                        'tau': 'tau',
-                        'lambda': 'lambda_',
-                        'theta': 'theta',
-                        'nscales': 'nscales',
-                        'warps': 'warps',
-                        'epsilon': 'epsilon',
-                        'inner_iterations': 'inner_iterations',
-                        'outer_iterations': 'outer_iterations',
-                        'scale_step': 'scale_step',
-                        'median_filtering': 'median_filtering'
-                    }
-
-                    for saved_name, param_name in param_mapping.items():
-                        if saved_name in tvl1_params:
-                            self.parameter_manager.set_value(param_name, tvl1_params[saved_name])
-
-                # Update other parameters
-                if 'downscale_factor' in params:
-                    self.parameter_manager.set_value('downscale_factor', params['downscale_factor'])
-
-                # Update visualization parameters
-                if 'visualization_params' in params:
-                    vis_params = params['visualization_params']
-                    if 'arrow_scale' in vis_params:
-                        self.parameter_manager.set_value('disp_arrow_scale', vis_params['arrow_scale'])
-                    if 'vector_stride' in vis_params:
-                        self.parameter_manager.set_value('disp_vector_stride', vis_params['vector_stride'])
-                    if 'd_max' in vis_params:
-                        self.parameter_manager.set_value('d_max', vis_params['d_max'])
-
-                # Update calibration if available
-                if 'pixel_size' in params and 'frame_interval' in params:
-                    self._update_parent_calibration(params['pixel_size'], params['frame_interval'])
-
-                # Create results dictionary for visualization
-                results = {
-                    'flows': displacement_data['flows'],
-                    'parameters': params,
-                    'visualization_params': params['visualization_params'],
-                    'original_shape': displacement_data['flows'].shape[1:3],
-                    'flow_shape': displacement_data['flows'].shape[1:3],
-                    'units': 'micrometers'
-                }
-
-                # Update visualization
-                self.visualization_manager.visualize_displacement_results(
-                    results,
-                    downscale_factor=params.get('downscale_factor', 1)
-                )
-
-                self._handle_visualization_layers()
-                self.colorbar_manager.update_limits(0, params.get('d_max', 10.0))
-                self.save_displacement_btn.setEnabled(True)
-                self._update_ui_state()
-                self.displacement_calculated.emit(results)
-
-                self._update_status(
-                    f"Displacement data successfully loaded from:\n"
-                    f"{file_path}\n"
-                    f"Pixel size: {self.parameter_manager.get_value('pixel_size')} µm\n"
-                    f"Frame interval: {self.parameter_manager.get_value('frame_interval')} min",
-                    100
-                )
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to load displacement data: {str(e)}"
-            )
-            import traceback
-            traceback.print_exc()
-
     def _create_data_loading_group(self) -> QGroupBox:
         """Create the data loading group."""
         load_group = QGroupBox("Input Data")
@@ -597,103 +501,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.viewer.layers.events.inserted.connect(self._on_layer_change)
         self.viewer.layers.events.removed.connect(self._on_layer_change)
         self.viewer.layers.selection.events.changed.connect(self._on_layer_selection_change)
-
-    def analyze_all_frames(self):
-        """Analyze displacement for all frames using a thread worker."""
-        try:
-            if not self._validate_input_data():
-                return
-
-            self._set_controls_enabled(False)
-            self._update_status("Starting analysis...", 0)
-
-            # Get all parameters from parameter manager
-            params = self._get_analysis_parameters()
-
-            # Get input data
-            reference = self.data_manager.preprocessed_reference
-            bead_stack = self.data_manager.preprocessed_bead_stack
-
-            # Store original shape for results
-            original_shape = reference.shape
-
-            # Create and start worker
-            worker = self.analyzer.analyze_displacement(
-                reference=reference,
-                bead_stack=bead_stack,
-                pixel_size=params['pixel_size'],
-                downscale_factor=params['downscale_factor'],
-                visualization_params=params['visualization_params']
-            )
-
-            # Create a completion handler that includes the parameters
-            def handle_results(worker_results):
-                """Handle the completed displacement analysis results."""
-                try:
-                    # Convert flows to numpy array if it's a list
-                    flows = np.array(worker_results['flows'])
-
-                    # Add parameters to results
-                    full_results = {
-                        'flows': flows,
-                        'parameters': params,  # Include all parameters
-                        'visualization_params': params['visualization_params'],
-                        'original_shape': original_shape,
-                        'flow_shape': flows.shape[1:3],
-                        'units': 'micrometers'
-                    }
-
-                    # Update data manager with separate field and parameters
-                    self.data_manager.set_displacement_results(flows, params)
-
-                    # Update visualization
-                    self.visualization_manager.visualize_displacement_results(
-                        full_results,
-                        downscale_factor=params['downscale_factor']
-                    )
-
-                    # Handle layer visibility and ordering
-                    self._handle_visualization_layers()
-
-                    # Update colorbar with current d_max
-                    self.colorbar_manager.update_limits(0, params['visualization_params']['d_max'])
-
-                    # Enable save button and emit results
-                    self.save_displacement_btn.setEnabled(True)
-                    self.displacement_calculated.emit(full_results)
-
-                    # Update UI state to reflect new results
-                    self._update_ui_state()
-
-                    # Update status with statistics
-                    stats = self.visualization_manager.get_displacement_statistics(flows[0])
-                    self._update_status(
-                        f"Analysis complete\n"
-                        f"Max displacement: {stats['max']:.2f} µm\n"
-                        f"Mean displacement: {stats['mean']:.2f} µm\n"
-                        f"Flow field resolution: {flows.shape[1:3]} "
-                        f"(from {original_shape})",
-                        100
-                    )
-
-                except Exception as e:
-                    self._handle_error(str(e))
-                    import traceback
-                    traceback.print_exc()
-
-            # Connect worker signals
-            worker.yielded.connect(self._handle_progress)
-            worker.returned.connect(handle_results)
-            worker.finished.connect(lambda: self._set_controls_enabled(True))
-            worker.errored.connect(self._handle_error)
-
-            # Start the worker
-            worker.start()
-
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self._set_controls_enabled(True)
 
     def _handle_progress(self, update_dict):
         """Handle progress updates from the worker."""
@@ -1059,3 +866,206 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         for control in controls:
             self.register_control(control)
+
+    def analyze_all_frames(self):
+        """Analyze displacement for all frames using a thread worker."""
+        try:
+            if not self._validate_input_data():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Starting analysis...", 0)
+
+            # Get all parameters from parameter manager
+            params = self._get_analysis_parameters()
+
+            # Get input data
+            reference = self.data_manager.preprocessed_reference
+            bead_stack = self.data_manager.preprocessed_bead_stack
+
+            # Store original shape for results
+            original_shape = reference.shape
+
+            # Create and start worker
+            worker = self.analyzer.analyze_displacement(
+                reference=reference,
+                bead_stack=bead_stack,
+                pixel_size=params['pixel_size'],
+                downscale_factor=params['downscale_factor'],
+                visualization_params=params['visualization_params']
+            )
+
+            def handle_results(worker_results):
+                """Handle the completed displacement analysis results."""
+                try:
+                    # Convert flows to numpy array if it's a list
+                    flows = np.array(worker_results['flows'])
+
+                    # Create the complete parameter set in standardized format
+                    complete_params = {
+                        'tvl1_params': params['tvl1_params'],
+                        'downscale_factor': params['downscale_factor'],
+                        'pixel_size': params['pixel_size'],
+                        'frame_interval': params['frame_interval'],
+                        'visualization_params': {  # Standardize visualization params
+                            'd_max': params['visualization_params']['d_max'],
+                            'vector_stride': params['visualization_params']['vector_stride'],
+                            'arrow_scale': params['visualization_params']['arrow_scale']
+                        }
+                    }
+
+                    # Update data manager with flows and complete parameter set
+                    self.data_manager.set_displacement_results(flows, complete_params)
+
+                    # Create results package for visualization
+                    results = {
+                        'flows': flows,
+                        'parameters': complete_params,  # Use the same parameter format
+                        'original_shape': original_shape,
+                        'flow_shape': flows.shape[1:3],
+                        'units': 'micrometers'
+                    }
+
+                    # Update visualization using standardized format
+                    self.visualization_manager.visualize_displacement_results(results)
+
+                    # Handle layer visibility and ordering
+                    self._handle_visualization_layers()
+
+                    # Update colorbar with current d_max
+                    self.colorbar_manager.update_limits(0, complete_params['visualization_params']['d_max'])
+
+                    # Enable save button and emit results
+                    self.save_displacement_btn.setEnabled(True)
+                    self.displacement_calculated.emit(results)
+
+                    # Update UI state to reflect new results
+                    self._update_ui_state()
+
+                    # Update status with statistics
+                    stats = self.visualization_manager.get_displacement_statistics(flows[0])
+                    self._update_status(
+                        f"Analysis complete\n"
+                        f"Max displacement: {stats['max']:.2f} µm\n"
+                        f"Mean displacement: {stats['mean']:.2f} µm\n"
+                        f"Flow field resolution: {flows.shape[1:3]} "
+                        f"(from {original_shape})",
+                        100
+                    )
+
+                except Exception as e:
+                    self._handle_error(str(e))
+                    import traceback
+                    traceback.print_exc()
+
+            # Connect worker signals
+            worker.yielded.connect(self._handle_progress)
+            worker.returned.connect(handle_results)
+            worker.finished.connect(lambda: self._set_controls_enabled(True))
+            worker.errored.connect(self._handle_error)
+
+            # Start the worker
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self._set_controls_enabled(True)
+
+    def _load_displacement(self):
+        """Load displacement data from files."""
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Displacement Data File",
+                os.path.expanduser("~"),
+                "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                displacement_data = np.load(file_path, allow_pickle=True).item()
+
+                # Update data manager with standardized parameter format
+                self.data_manager.set_displacement_results(
+                    displacement_data['flows'],
+                    displacement_data['parameters']
+                )
+
+                # Create results package for visualization using the same format
+                results = {
+                    'flows': displacement_data['flows'],
+                    'parameters': displacement_data['parameters'],
+                    'original_shape': displacement_data['flows'].shape[1:3],
+                    'flow_shape': displacement_data['flows'].shape[1:3],
+                    'units': 'micrometers'
+                }
+
+                # Update visualization using standardized format
+                self.visualization_manager.visualize_displacement_results(results)
+
+                # Update UI and parameters
+                self._handle_visualization_layers()
+                self.colorbar_manager.update_limits(
+                    0,
+                    displacement_data['parameters']['visualization_params']['d_max']
+                )
+                self.save_displacement_btn.setEnabled(True)
+                self._update_ui_state()
+                self.displacement_calculated.emit(results)
+
+                # Update parameter manager with loaded parameters
+                params = displacement_data['parameters']
+
+                # Update TVL1 parameters
+                if 'tvl1_params' in params:
+                    tvl1_params = params['tvl1_params']
+                    param_mapping = {
+                        'tau': 'tau',
+                        'lambda': 'lambda_',
+                        'theta': 'theta',
+                        'nscales': 'nscales',
+                        'warps': 'warps',
+                        'epsilon': 'epsilon',
+                        'inner_iterations': 'inner_iterations',
+                        'outer_iterations': 'outer_iterations',
+                        'scale_step': 'scale_step',
+                        'median_filtering': 'median_filtering'
+                    }
+
+                    for saved_name, param_name in param_mapping.items():
+                        if saved_name in tvl1_params:
+                            self.parameter_manager.set_value(param_name, tvl1_params[saved_name])
+
+                # Update other parameters
+                if 'downscale_factor' in params:
+                    self.parameter_manager.set_value('downscale_factor', params['downscale_factor'])
+
+                # Update visualization parameters
+                if 'visualization_params' in params:
+                    vis_params = params['visualization_params']
+                    if 'arrow_scale' in vis_params:
+                        self.parameter_manager.set_value('disp_arrow_scale', vis_params['arrow_scale'])
+                    if 'vector_stride' in vis_params:
+                        self.parameter_manager.set_value('disp_vector_stride', vis_params['vector_stride'])
+                    if 'd_max' in vis_params:
+                        self.parameter_manager.set_value('d_max', vis_params['d_max'])
+
+                # Update calibration if available
+                if 'pixel_size' in params and 'frame_interval' in params:
+                    self._update_parent_calibration(params['pixel_size'], params['frame_interval'])
+
+                self._update_status(
+                    f"Displacement data successfully loaded from:\n"
+                    f"{file_path}\n"
+                    f"Pixel size: {params['pixel_size']} µm\n"
+                    f"Frame interval: {params['frame_interval']} min",
+                    100
+                )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to load displacement data: {str(e)}"
+            )
+            import traceback
+            traceback.print_exc()
