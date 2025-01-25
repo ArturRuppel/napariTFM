@@ -144,13 +144,13 @@ class FTTC:
         vec = np.array([d_x.flatten(), d_y.flatten()])
 
         # Convert pixel coordinates to physical units inside _perform_tfm
-        effective_pixelsize = pixel_size * downsample_factor
+        forcemap_pixel_size = pixel_size * downsample_factor
 
         # Calculate forces
         if regularization is None:
-            regularization = self._find_regularization(pos, vec)
+            regularization = self._find_regularization(pos, vec, forcemap_pixel_size)
 
-        return self._perform_tfm(pos, vec, effective_pixelsize, regularization)
+        return self._perform_tfm(pos, vec, forcemap_pixel_size, regularization)
 
     def _perform_tfm(self, pos: np.ndarray, vec: np.ndarray,
                      pixelsize: float, regularization: float,
@@ -300,13 +300,13 @@ class FTTC:
 
         return float(reg_min), float(minG), G, reg_param
 
-    def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray, pixel_size: float) -> float:
+    def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray, forcemap_pixel_size: float) -> float:
         """Find optimal regularization parameter using GCV
 
         Args:
             pos0: Position array in pixel coordinates
             vec0: Displacement vector array
-            pixel_size: Pixel size in micrometers
+             forcemap_pixel_size: Pixel size in micrometers
 
         Returns:
             float: Optimal regularization parameter
@@ -316,20 +316,20 @@ class FTTC:
         lamhigh = np.log10(lamguess) + 5.0
         lambdarange = np.logspace(lamlow, lamhigh, 50)
 
-        blockU, s, b = self._svd_block(pos0, vec0, pixel_size)
+        blockU, s, b = self._svd_block(pos0, vec0, forcemap_pixel_size)
         reg_min, _, _, _ = self._gcv_blockdiag(blockU, s, b, lambdarange, plot=False)
         return reg_min
 
-    def _svd_block(self, pos: np.ndarray, vec: np.ndarray, pixel_size: float):
+    def _svd_block(self, pos: np.ndarray, vec: np.ndarray, forcemap_pixel_size: float):
         """Prepare SVD representation of the FTTC problem
 
         Args:
             pos: Position array
             vec: Displacement vector array
-            pixel_size: Pixel size in micrometers
+             forcemap_pixel_size: Pixel size in micrometers
         """
         grid_mat, u, i_max, j_max, _, _ = self._interp_vec2grid(pos, vec)
-        kx, ky, _, _ = self._calculate_fourier_modes(i_max, j_max, pixel_size)
+        kx, ky, _, _ = self._calculate_fourier_modes(i_max, j_max, forcemap_pixel_size)
         GFt = self._calculate_greens_function(kx, ky)
 
         Ftu = np.fft.fft2(u).reshape(2, -1).T
@@ -413,11 +413,11 @@ class FTTC:
 
         return grid_mat, u, i_max, j_max, 0, 0
 
-    def _calculate_fourier_modes(self, i_max: int, j_max: int, pixelsize: float):
+    def _calculate_fourier_modes(self, i_max: int, j_max: int, forcemap_pixel_size: float):
         """Calculate Fourier modes and Lanczos filter"""
-        kx_vec = 2. * np.pi / i_max / pixelsize * np.append(
+        kx_vec = 2. * np.pi / i_max / forcemap_pixel_size* np.append(
             np.arange(0, (i_max // 2)), np.arange(-i_max // 2, 0))
-        ky_vec = 2. * np.pi / j_max / pixelsize * np.append(
+        ky_vec = 2. * np.pi / j_max / forcemap_pixel_size * np.append(
             np.arange(0, (j_max // 2)), np.arange(-j_max // 2, 0))
         kx, ky = np.meshgrid(kx_vec, ky_vec)
 

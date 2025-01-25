@@ -100,12 +100,11 @@ class FTTCWidget(BaseAnalysisWidget):
             shape = flow.shape[:-1]
             pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
 
-            # Convert displacements from physical units (μm) to pixels
-            vec = np.array([flow[..., 0], flow[..., 1]]) / pixel_size
+            vec = np.array([flow[..., 0], flow[..., 1]])
 
             # Calculate optimal regularization parameter
             # Pass pixel_size explicitly to the calculator method
-            lam = self.calculator._find_regularization(pos, vec, pixel_size)
+            lam = self.calculator._find_regularization(pos, vec, pixel_size * downscale_factor)
 
             # Update UI and parameter manager with new value (log scale)
             self.regularization_spin.setValue(np.log10(lam))
@@ -117,6 +116,7 @@ class FTTCWidget(BaseAnalysisWidget):
         except Exception as e:
             self._handle_error(str(e))
             self._set_controls_enabled(True)
+
     def calculate_forces(self):
         """Calculate traction forces for all frames."""
         try:
@@ -138,11 +138,12 @@ class FTTCWidget(BaseAnalysisWidget):
             # Process a single frame and return its forces
             @thread_worker
             def process_single_frame(frame_data, frame_idx):
+                regularization = None if self.parameter_manager.get_value('auto_gcv') else self.parameter_manager.get_value('regularization')
                 inner_worker = self.calculator.calculate_traction(
                     displacements=frame_data,
                     pixel_size=pixel_size,
                     downsample_factor=downscale_factor,
-                    regularization=self.parameter_manager.get_value('regularization')
+                    regularization=regularization
                 )
                 return inner_worker, frame_idx
 
@@ -282,6 +283,7 @@ class FTTCWidget(BaseAnalysisWidget):
             self._handle_error(f"Error finalizing results: {str(e)}")
         finally:
             self._set_controls_enabled(True)
+
     def _load_displacement(self):
         """Load displacement data from files."""
         try:
@@ -446,9 +448,11 @@ class FTTCWidget(BaseAnalysisWidget):
             current_frame = self.viewer.dims.current_step[0]
 
             # Create and start worker
+            regularization = None if self.parameter_manager.get_value('auto_gcv') else self.parameter_manager.get_value('regularization')
+
             worker = self.calculator.calculate_traction(displacements=displacement_field[current_frame], pixel_size=displacement_params["pixel_size"],
                                                         downsample_factor=displacement_params["downscale_factor"],
-                                                        regularization=self.parameter_manager.get_value('regularization'))
+                                                        regularization=regularization)
 
             # Connect worker signals
             worker.returned.connect(self._handle_preview_results)
