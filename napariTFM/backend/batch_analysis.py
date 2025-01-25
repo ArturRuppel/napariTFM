@@ -153,7 +153,12 @@ class BatchAnalysis:
                 self._run_force_analysis(folder)
 
             if self.config['analysis_steps']['stress']:
-                self._run_stress_analysis(folder)
+                # Only proceed with stress analysis if force data exists
+                force_path = folder / self.config['output_files']['force']['data']
+                if not force_path.exists():
+                    logger.warning(f"Force data not found at {force_path}, skipping stress analysis")
+                else:
+                    self._run_stress_analysis(folder)
 
         except Exception as e:
             logger.error(f"Error processing folder: {str(e)}", exc_info=True)
@@ -165,6 +170,7 @@ class BatchAnalysis:
                 self._current_worker.quit()
                 self._current_worker = None
                 logger.debug("Cleaned up worker in finally block")
+
     def _load_input_data(self, folder: Path) -> None:
         """Load input data from specified folder."""
         logger.info("Loading input data")
@@ -204,43 +210,28 @@ class BatchAnalysis:
         # Store current worker
         self._current_worker = worker
 
-        # Set up result storage
-        result_store = {'result': None, 'error': None}
-
-        def _on_yielded(yielded):
-            if isinstance(yielded, dict) and 'progress' in yielded:
-                logger.info(f"{yielded['message']} ({yielded['progress']:.1f}%)")
+        # Set up result container
+        final_result = None
 
         def _on_returned(result):
-            result_store['result'] = result
+            nonlocal final_result
+            final_result = result
             logger.debug("Thread worker completed successfully")
 
         def _on_errored(error):
             logger.error(f"Thread worker error: {str(error)}", exc_info=True)
-            result_store['error'] = error
             raise error
 
         try:
             # Connect worker signals
-            worker.yielded.connect(_on_yielded)
             worker.returned.connect(_on_returned)
             worker.errored.connect(_on_errored)
 
             # Start worker
             worker.start()
+            worker.run()  # This will block until completion
 
-            # Process events until worker finishes
-            worker._gen.send(None)  # Initialize the generator
-            try:
-                while True:
-                    next(worker._gen)
-            except StopIteration as e:
-                result_store['result'] = e.value
-
-            if result_store['error'] is not None:
-                raise result_store['error']
-
-            return result_store['result']
+            return final_result
 
         except Exception as e:
             logger.error(f"Error in thread worker: {str(e)}", exc_info=True)
@@ -252,6 +243,7 @@ class BatchAnalysis:
                 self._current_worker.quit()
                 self._current_worker = None
                 logger.debug("Cleaned up worker in finally block")
+
     def _run_preprocessing(self, folder: Path) -> None:
         """Run preprocessing step."""
         logger.info("Starting preprocessing")
@@ -456,44 +448,99 @@ class BatchAnalysis:
 
     def _run_force_analysis(self, folder: Path) -> None:
         """Run force analysis step."""
+        logger.info("Starting force analysis")
+
         # Load displacement data if not in memory
         if self._displacement_field is None:
-            disp_path = folder / self.config['output_files']['displacement']['data']
-            loaded = np.load(str(disp_path), allow_pickle=True).item()
-            self._displacement_field = loaded['data']
-            self._displacement_params = loaded['parameters']
+            try:
+                logger.debug("Loading displacement data from NPY file")
+                disp_path = folder / self.config['output_files']['displacement']['data']
 
-        # Configure FTTC calculator
-        fttc = FTTC(
-            E=self.config['parameters']['young_modulus'],
-            nu=self.config['parameters']['poisson_ratio'],
-            lanczos_exp=self.config['parameters']['lanczos_exp']
-        )
+                if not disp_path.exists():
+                    raise FileNotFoundError(f"Displacement data not found at {disp_path}")
 
-        # Run force calculation for each frame
-        forces = []
-        for displacement in self._displacement_field:
-            worker = fttc.calculate_traction(
-                displacement,
-                self.config['parameters']['pixel_size'],
-                regularization=10 ** self.config['parameters']['regularization']
+                loaded = np.load(str(disp_path), allow_pickle=True).item()
+                self._displacement_field = loaded['flows']
+                self._displacement_params = loaded['parameters']
+                logger.info("Successfully loaded displacement data")
+
+            except Exception as e:
+                logger.error(f"Error loading displacement data: {str(e)}", exc_info=True)
+                raise
+
+        try:
+            # Configure FTTC calculator
+            logger.debug("Configuring FTTC calculator")
+            if self.config['parameters'].get('gel_height', float('inf')) == 0:
+                gel_height = None
+            else:
+                gel_height = self.config['parameters'].get('gel_height', float('inf'))
+            fttc = FTTC(
+                E=self.config['parameters']['young_modulus'],
+                nu=self.config['parameters']['poisson_ratio'],
+                lanczos_exp=self.config['parameters']['lanczos_exp'],
+                gel_height=gel_height
             )
-            result = worker.run()
-            forces.append(result[1])  # Store force field
 
-        self._force_field = np.stack(forces)
-        self._force_params = {
-            'young_modulus': self.config['parameters']['young_modulus'],
-            'poisson_ratio': self.config['parameters']['poisson_ratio'],
-            'regularization': self.config['parameters']['regularization']
-        }
+            # Run force calculation for each frame
+            logger.info("Running force calculations")
+            forces = []
+            total_frames = len(self._displacement_field)
 
-        # Save results
-        output_path = folder / self.config['output_files']['force']['data']
-        np.save(str(output_path), {
-            'data': self._force_field,
-            'parameters': self._force_params
-        })
+            for frame_idx, displacement in enumerate(self._displacement_field):
+                logger.debug(f"Processing frame {frame_idx + 1}/{total_frames}")
+
+                # Create and run worker for this frame
+                worker = fttc.calculate_traction(
+                    displacement,
+                    self.config['parameters']['pixel_size'],
+                    downscale_factor=self.config['parameters']['downscale_factor'],
+                    regularization=10 ** self.config['parameters']['regularization']
+                )
+
+                results = self._run_thread_worker(worker)
+
+                if results is None:
+                    raise RuntimeError(f"Force calculation failed for frame {frame_idx + 1}")
+
+                # Store force field (results[1] contains the forces)
+                forces.append(results[1])
+
+                logger.info(f'Calculated forces for frame {frame_idx + 1}/{total_frames} ({(frame_idx + 1) / total_frames * 100:.1f}%)')
+
+            logger.debug("Force calculations completed successfully")
+
+            # Create parameters dictionary in the expected format
+            formatted_params = {
+                'young_modulus': self.config['parameters']['young_modulus'],
+                'poisson_ratio': self.config['parameters']['poisson_ratio'],
+                'gel_height': self.config['parameters'].get('gel_height', None),
+                'pixel_size': self.config['parameters']['pixel_size'],
+                'frame_interval': self.config['parameters']['frame_interval'],
+                'regularization': 10 ** self.config['parameters']['regularization'],
+                'lanczos_exp': self.config['parameters']['lanczos_exp'],
+                'downscale_factor': self.config['parameters']['downscale_factor'],
+                'visualization': {
+                    'vector_stride': self.config['parameters']['force_vector_stride'],
+                    'arrow_scale': self.config['parameters']['force_arrow_scale'],
+                    'f_max': self.config['parameters']['f_max']
+                }
+            }
+            self._force_field = np.moveaxis(np.array(forces), 1, -1)   # reformat to make compatible with widgets
+            self._force_params = formatted_params
+
+
+            # Save results in widget-compatible format
+            output_path = folder / self.config['output_files']['force']['data']
+            np.save(str(output_path), {
+                'force_field': self._force_field,
+                'parameters': self._force_params
+            })
+            logger.info("Force analysis results saved successfully")
+
+        except Exception as e:
+            logger.error(f"Error during force analysis: {str(e)}", exc_info=True)
+            raise
 
     def _run_stress_analysis(self, folder: Path) -> None:
         """Run stress analysis step."""

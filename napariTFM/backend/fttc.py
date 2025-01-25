@@ -49,7 +49,7 @@ class FTTC:
     @thread_worker
     def calculate_traction(self, displacements: Tuple[np.ndarray, np.ndarray],
                            pixel_size: float,
-                           downsample_factor: int = 1,
+                           downscale_factor: int = 1,
                            regularization: float = None) -> Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]:
         """
         Calculate traction forces from displacement field measurements using Fourier Transform
@@ -69,7 +69,7 @@ class FTTC:
             Units: micrometers (μm)
             Example: for a 100x objective with 0.1 μm/pixel, use 0.1
 
-        downsample_factor : int
+        downscale_factor : int
             Factor representing the spatial downsampling that was already applied
             to the displacement field data before being passed to this function.
             This is used to correctly scale the pixel size for force calculations.
@@ -118,7 +118,7 @@ class FTTC:
         >> worker = fttc.calculate_traction(
         ...     displacements=(dx, dy),
         ...     pixelsize=0.1,  # 0.1 μm per pixel
-        ...     downsample_factor=4  # if data was previously downsampled by factor of 4
+        ...     downscale_factor=4  # if data was previously downsampled by factor of 4
         ... )
         >> # Set up callbacks
         >> def handle_result(result):
@@ -144,7 +144,7 @@ class FTTC:
         vec = np.array([d_x.flatten(), d_y.flatten()])
 
         # Convert pixel coordinates to physical units inside _perform_tfm
-        forcemap_pixel_size = pixel_size * downsample_factor
+        forcemap_pixel_size = pixel_size * downscale_factor
 
         # Calculate forces
         if regularization is None:
@@ -171,6 +171,7 @@ class FTTC:
             - (x, y) coordinate grids in physical units
             - forces array in N/m²
         """
+
         # Store original input dimensions
         original_shape = (int(np.sqrt(vec.shape[1])), int(np.sqrt(vec.shape[1])))
 

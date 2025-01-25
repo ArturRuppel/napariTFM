@@ -141,7 +141,7 @@ class FTTCWidget(BaseAnalysisWidget):
                 inner_worker = self.calculator.calculate_traction(
                     displacements=frame_data,
                     pixel_size=pixel_size,
-                    downsample_factor=downscale_factor,
+                    downscale_factor=downscale_factor,
                     regularization=regularization
                 )
                 return inner_worker, frame_idx
@@ -450,7 +450,7 @@ class FTTCWidget(BaseAnalysisWidget):
             regularization = None if self.parameter_manager.get_value('auto_gcv') else self.parameter_manager.get_value('regularization')
 
             worker = self.calculator.calculate_traction(displacements=displacement_field[current_frame], pixel_size=displacement_params["pixel_size"],
-                                                        downsample_factor=displacement_params["downscale_factor"],
+                                                        downscale_factor=displacement_params["downscale_factor"],
                                                         regularization=regularization)
 
             # Connect worker signals
