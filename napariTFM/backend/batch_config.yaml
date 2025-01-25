@@ -1,0 +1,114 @@
+# List of folders to analyze
+root_folders:
+  - "C:/Users/aruppel/Desktop/test"
+  - "C:/Users/aruppel/Desktop/test"
+
+# Root data paths
+input_files:
+  beads: "beads.tif"              # Required
+  reference: "reference.tif"      # Required
+  cells: "cells.tif"             # Optional, needed for mask creation & stress analysis
+
+# Output paths (relative to analysis folder)
+output_files:
+  preprocessing:
+    beads: "TFM_data/preprocessed_beads.tif"
+    reference: "TFM_data/preprocessed_reference.tif"
+    cells: "TFM_data/preprocessed_cells.tif"
+  masks:
+    path: "TFM_data/masks.tif"
+  displacement:
+    data: "TFM_data/displacement.npy"
+  force:
+    data: "TFM_data/traction_forces.npy"
+  stress:
+    data: "TFM_data/stress_tensor.npy"
+  visualizations:
+    bead_overlay: "visualizations/bead_overlay.tif"
+    displacement_map: "visualizations/displacement_map.tif"
+    force_map: "visualizations/force_map.tif"
+    force_cell_overlay: "visualizations/force_cell_overlay.tif"
+    sigma_xx: "visualizations/sigma_xx.tif"
+    sigma_yy: "visualizations/sigma_yy.tif"
+    normal_stress: "visualizations/normal_stress.tif"
+    mesh: "visualizations/mesh.tif"
+
+# Analysis steps to perform
+analysis_steps:
+  preprocessing: true
+  displacement: true
+  force: true
+  create_masks: true
+  stress: true
+
+# Visualization outputs to generate
+visualizations:
+  bead_overlay: true
+  displacement_map: true
+  force_map: true
+  force_cell_overlay: true
+  sigma_xx: true
+  sigma_yy: true
+  normal_stress: true
+  mesh: true
+  shear: false
+
+# Analysis parameters
+parameters:
+  # General parameters
+  pixel_size: 0.1           # µm
+  frame_interval: 2.5       # minutes
+
+  # Preprocessing parameters
+  min_intensity: 80.0        # percentile
+  max_intensity: 99.9       # percentile
+  gaussian_sigma: 0
+  cell_min_intensity: 80.0   # percentile
+  cell_max_intensity: 99.9  # percentile
+  cell_gaussian_sigma: 0
+  registration_mode: "translation"  # Options: translation, rigid, none
+
+  # Displacement parameters
+  tau: 0.20
+  lambda_: 0.3
+  theta: 0.2
+  nscales: 4
+  warps: 4
+  epsilon: 0.02
+  inner_iterations: 10
+  outer_iterations: 3
+  scale_step: 0.5
+  median_filtering: 3
+  downscale_factor: 4
+  disp_vector_stride: 25
+  disp_arrow_scale: 1.0
+  d_max: 0.4               # µm
+
+  # Force parameters
+  young_modulus: 10000     # Pa
+  poisson_ratio: 0.49
+  gel_height: 0            # µm, 0 = infinite
+  lanczos_exp: 1
+  regularization: -4       # log10
+  auto_gcv: true
+  force_vector_stride: 20
+  force_arrow_scale: 1.0
+  f_max: 1000.0           # Pa
+
+  # Mask creation parameters
+  threshold: 50.0           # percentile
+  dilation: 10             # pixels
+  smoothing_sigma: 2.0     # pixels
+
+  # Stress parameters
+  mesh_algorithm: "Frontal-Del."  # Options: Frontal-Del., Delaunay, MeshAdapt, BAMG, FD Quads, Para. Pack
+  density_factor: 0.025
+  use_optimization: true
+  max_stress: 1.0         # mN/m
+
+# Optional metadata
+metadata:
+  experiment_date: "2024-01-25"
+  cell_type: "NIH-3T3"
+  substrate: "PA gel"
+  notes: "Example experiment configuration"

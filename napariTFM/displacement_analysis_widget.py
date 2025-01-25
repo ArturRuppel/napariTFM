@@ -1053,6 +1053,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 if 'pixel_size' in params and 'frame_interval' in params:
                     self._update_parent_calibration(params['pixel_size'], params['frame_interval'])
 
+                self._sync_widget_with_parameters()
+
                 self._update_status(
                     f"Displacement data successfully loaded from:\n"
                     f"{file_path}\n"
