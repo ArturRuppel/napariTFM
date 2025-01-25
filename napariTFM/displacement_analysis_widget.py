@@ -8,6 +8,7 @@ from qtpy.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QPushButton, QFrame,
     QProgressBar, QMessageBox, QSizePolicy, QFileDialog
 )
+from napari.qt.threading import thread_worker
 
 from napariTFM.backend.displacement_analysis import DisplacementAnalyzer
 from napariTFM.data_manager import DataManager
@@ -145,7 +146,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
             # Convert flow to micrometers
             self.current_flow = flow_pixels * params['pixel_size']
-
 
             # Update visualization
             self.visualization_manager.visualize_displacement_preview(
@@ -867,8 +867,65 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         for control in controls:
             self.register_control(control)
 
+    def _handle_displacement_results(self, worker_results):
+        """Handle the completed displacement analysis results."""
+        try:
+            # Convert flows to numpy array if it's a list
+            flows = np.array(worker_results['flows'])
+
+            # Create the complete parameter set in standardized format
+            complete_params = {
+                'tvl1_params': worker_results['parameters']['tvl1_params'],
+                'downscale_factor': worker_results['parameters']['downscale_factor'],
+                'pixel_size': worker_results['parameters']['pixel_size'],
+                'visualization_params': worker_results['visualization_params']
+            }
+
+            # Update data manager with flows and complete parameter set
+            self.data_manager.set_displacement_results(flows, complete_params)
+
+            # Create results package for visualization
+            results = {
+                'flows': flows,
+                'parameters': complete_params,
+                'original_shape': worker_results['original_shape'],
+                'flow_shape': flows[0].shape[:2],
+                'units': 'micrometers'
+            }
+
+            # Update visualization using standardized format
+            self.visualization_manager.visualize_displacement_results(results)
+
+            # Handle layer visibility and ordering
+            self._handle_visualization_layers()
+
+            # Update colorbar with current d_max
+            self.colorbar_manager.update_limits(0, complete_params['visualization_params']['d_max'])
+
+            # Enable save button and emit results
+            self.save_displacement_btn.setEnabled(True)
+            self.displacement_calculated.emit(results)
+
+            # Update UI state to reflect new results
+            self._update_ui_state()
+
+            # Update status with statistics
+            stats = self.visualization_manager.get_displacement_statistics(flows[0])
+            self._update_status(
+                f"Analysis complete\n"
+                f"Max displacement: {stats['max']:.2f} µm\n"
+                f"Mean displacement: {stats['mean']:.2f} µm\n"
+                f"Flow field resolution: {flows[0].shape[:2]} "
+                f"(from {worker_results['original_shape']})",
+                100
+            )
+
+        except Exception as e:
+            self._handle_error(str(e))
+            import traceback
+            traceback.print_exc()
+
     def analyze_all_frames(self):
-        """Analyze displacement for all frames using a thread worker."""
         try:
             if not self._validate_input_data():
                 return
@@ -876,100 +933,47 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self._set_controls_enabled(False)
             self._update_status("Starting analysis...", 0)
 
-            # Get all parameters from parameter manager
+            # Get parameters and data
             params = self._get_analysis_parameters()
-
-            # Get input data
             reference = self.data_manager.preprocessed_reference
             bead_stack = self.data_manager.preprocessed_bead_stack
 
-            # Store original shape for results
-            original_shape = reference.shape
-
-            # Create and start worker
-            worker = self.analyzer.analyze_displacement(
-                reference=reference,
-                bead_stack=bead_stack,
-                pixel_size=params['pixel_size'],
-                downscale_factor=params['downscale_factor'],
-                visualization_params=params['visualization_params']
+            # Create thread worker
+            worker = self._create_displacement_worker(
+                reference, bead_stack, params['pixel_size'],
+                params['downscale_factor'], params['visualization_params']
             )
 
-            def handle_results(worker_results):
-                """Handle the completed displacement analysis results."""
-                try:
-                    # Convert flows to numpy array if it's a list
-                    flows = np.array(worker_results['flows'])
-
-                    # Create the complete parameter set in standardized format
-                    complete_params = {
-                        'tvl1_params': params['tvl1_params'],
-                        'downscale_factor': params['downscale_factor'],
-                        'pixel_size': params['pixel_size'],
-                        'frame_interval': params['frame_interval'],
-                        'visualization_params': {  # Standardize visualization params
-                            'd_max': params['visualization_params']['d_max'],
-                            'vector_stride': params['visualization_params']['vector_stride'],
-                            'arrow_scale': params['visualization_params']['arrow_scale']
-                        }
-                    }
-
-                    # Update data manager with flows and complete parameter set
-                    self.data_manager.set_displacement_results(flows, complete_params)
-
-                    # Create results package for visualization
-                    results = {
-                        'flows': flows,
-                        'parameters': complete_params,  # Use the same parameter format
-                        'original_shape': original_shape,
-                        'flow_shape': flows.shape[1:3],
-                        'units': 'micrometers'
-                    }
-
-                    # Update visualization using standardized format
-                    self.visualization_manager.visualize_displacement_results(results)
-
-                    # Handle layer visibility and ordering
-                    self._handle_visualization_layers()
-
-                    # Update colorbar with current d_max
-                    self.colorbar_manager.update_limits(0, complete_params['visualization_params']['d_max'])
-
-                    # Enable save button and emit results
-                    self.save_displacement_btn.setEnabled(True)
-                    self.displacement_calculated.emit(results)
-
-                    # Update UI state to reflect new results
-                    self._update_ui_state()
-
-                    # Update status with statistics
-                    stats = self.visualization_manager.get_displacement_statistics(flows[0])
-                    self._update_status(
-                        f"Analysis complete\n"
-                        f"Max displacement: {stats['max']:.2f} µm\n"
-                        f"Mean displacement: {stats['mean']:.2f} µm\n"
-                        f"Flow field resolution: {flows.shape[1:3]} "
-                        f"(from {original_shape})",
-                        100
-                    )
-
-                except Exception as e:
-                    self._handle_error(str(e))
-                    import traceback
-                    traceback.print_exc()
-
-            # Connect worker signals
+            # Connect worker signals (keep existing connections)
             worker.yielded.connect(self._handle_progress)
-            worker.returned.connect(handle_results)
+            worker.returned.connect(self._handle_displacement_results)
             worker.finished.connect(lambda: self._set_controls_enabled(True))
             worker.errored.connect(self._handle_error)
 
-            # Start the worker
             worker.start()
 
         except Exception as e:
             self._handle_error(str(e))
             self._set_controls_enabled(True)
+
+    @thread_worker
+    def _create_displacement_worker(self, reference, bead_stack, pixel_size,
+                                    downscale_factor, visualization_params):
+        """Thread worker wrapping the analyzer's generator"""
+        generator = self.analyzer.analyze_displacement_generator(
+            reference=reference,
+            bead_stack=bead_stack,
+            pixel_size=pixel_size,
+            downscale_factor=downscale_factor,
+            visualization_params=visualization_params
+        )
+
+        try:
+            while True:
+                progress = next(generator)
+                yield progress
+        except StopIteration as e:
+            return e.value
 
     def _load_displacement(self):
         """Load displacement data from files."""

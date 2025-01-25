@@ -1,6 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Dict
-from napari.qt.threading import thread_worker
+from typing import Optional, Dict, Generator
 
 import cv2
 import numpy as np
@@ -42,78 +41,43 @@ class DisplacementAnalyzer:
             self.params.median_filtering, self.params.use_initial_flow
         )
 
-    @thread_worker
-    def analyze_displacement(
-            self,
-            reference: np.ndarray,
-            bead_stack: np.ndarray,
-            pixel_size: float,
-            downscale_factor: int = 1,
-            visualization_params: Optional[Dict] = None
-    ) -> Dict:
-        """
-        Analyze displacement for all frames in a separate thread.
-
-        Args:
-            reference: Reference image for displacement calculation
-            bead_stack: Stack of bead images
-            pixel_size: Size of pixel in micrometers
-            downscale_factor: Factor for spatial averaging of displacement field
-            visualization_params: Optional parameters for visualization
-
-        Returns:
-            Dictionary containing displacement results
-        """
+    def analyze_displacement_generator(self, reference: np.ndarray, bead_stack: np.ndarray,
+                                       pixel_size: float, downscale_factor: int = 1,
+                                       visualization_params: Optional[Dict] = None) -> Generator:
+        """Generator version for external threading"""
         total_frames = len(bead_stack)
         flows = []
 
-        # Process all frames
         for i in range(total_frames):
-            # Yield progress update
-            yield {
+            yield {  # Progress updates
                 'progress': (i + 1) / total_frames * 100,
                 'message': f"Processing frame {i + 1}/{total_frames}...\nComputing optical flow..."
             }
 
-            # Calculate flow in pixels
             flow_pixels = self.calculate_flow(reference, bead_stack[i])
 
-            # Downscale if requested
             if downscale_factor > 1:
                 flow_pixels = self.downscale_flow(flow_pixels, downscale_factor)
 
-            # Convert to micrometers and store
-            flow_microns = flow_pixels * pixel_size
-            flows.append(flow_microns)
+            flows.append(flow_pixels * pixel_size)
 
-        # Package results
-        if visualization_params is None:
-            visualization_params = {
-                'd_max': 10.0,
-                'vector_stride': 20,
-                'arrow_scale': 1.0
-            }
-
-        results = {
+        # Package final results
+        return {
             'flows': flows,
             'parameters': {
                 'tvl1_params': self.params.__dict__,
                 'downscale_factor': downscale_factor,
                 'pixel_size': pixel_size
             },
-            'visualization_params': visualization_params,
+            'visualization_params': visualization_params or {
+                'd_max': 10.0,
+                'vector_stride': 20,
+                'arrow_scale': 1.0
+            },
             'original_shape': reference.shape,
             'flow_shape': flows[0].shape[:2],
             'units': 'micrometers'
         }
-
-        # Final progress update
-        yield {
-            'progress': 100,
-            'message': "Analysis complete"
-        }
-
-        return results
 
     def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
         """Calculate optical flow between reference and moving image at full resolution."""

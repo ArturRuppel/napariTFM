@@ -9,7 +9,7 @@ import tifffile
 import sys
 from datetime import datetime
 
-from preprocessing import PreprocessingParameters, ImagePreprocessor
+from napariTFM.backend.preprocessing import PreprocessingParameters, ImagePreprocessor
 from napariTFM.backend.displacement_analysis import TVL1Parameters, DisplacementAnalyzer
 from napariTFM.backend.fttc import FTTC
 from napariTFM.backend.msm import MonolayerStressMicroscopy
@@ -485,11 +485,7 @@ class BatchAnalysis:
         try:
             print("Running preprocessing")
             preprocessor = ImagePreprocessor(params)
-            results = yield from preprocessor.preprocess_all(
-                self._input_bead_stack,
-                self._input_reference,
-                self._input_cell_stack
-            )
+            results = yield from preprocessor.preprocess_all_generator(self._input_bead_stack, self._input_reference, self._input_cell_stack)
 
             if results is None:
                 raise RuntimeError("Preprocessing did not return any results")

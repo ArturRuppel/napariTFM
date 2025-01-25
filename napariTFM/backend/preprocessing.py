@@ -1,5 +1,5 @@
 import logging
-from typing import Tuple, Optional, List, Dict
+from typing import Tuple, Optional, List, Dict, Generator
 
 import cv2
 import numpy as np
@@ -173,12 +173,12 @@ class ImagePreprocessor:
 
         return registered, warp_matrix
 
-    def preprocess_all(
+    def preprocess_all_generator(
             self,
             bead_stack: Optional[np.ndarray] = None,
             reference_image: Optional[np.ndarray] = None,
             cell_stack: Optional[np.ndarray] = None,
-    ) -> Dict[str, Tuple[np.ndarray, List[Dict]]]:
+    ) -> Generator :
         """Preprocess all available data in a separate thread."""
         results = {}
         self.transform_matrices = []

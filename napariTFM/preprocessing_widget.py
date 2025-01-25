@@ -100,11 +100,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 'errored': self._handle_error
             })
             def _processing_worker():
-                generator = self.preprocessor.preprocess_all(
-                    bead_stack=self.data_manager.input_bead_stack,
-                    reference_image=self.data_manager.input_reference,
-                    cell_stack=self.data_manager.input_cell_stack,
-                )
+                generator = self.preprocessor.preprocess_all_generator(bead_stack=self.data_manager.input_bead_stack, reference_image=self.data_manager.input_reference,
+                                                                       cell_stack=self.data_manager.input_cell_stack)
                 try:
                     while True:
                         progress = next(generator)
