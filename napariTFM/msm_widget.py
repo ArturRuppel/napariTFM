@@ -9,6 +9,7 @@ from qtpy.QtWidgets import (
 )
 from scipy import ndimage
 from skimage.transform import resize
+from napari.qt.threading import thread_worker
 
 from napariTFM.backend.mesh_generator import MeshParameters, MeshGenerator
 from napariTFM.backend.msm import MonolayerStressMicroscopy
@@ -76,6 +77,146 @@ class MSMWidget(BaseAnalysisWidget):
         finally:
             self.blockSignals(False)
 
+    def start_analysis(self):
+        """Start the stress analysis with proper thread handling for GMSH"""
+        try:
+            if not self._validate_prerequisites():
+                return
+
+            self._set_controls_enabled(False)
+            self._update_status("Preparing meshes...", 0)
+
+            # Pre-generate meshes in main thread (GMSH requires main thread)
+            mask_stack = self.data_manager.masks
+            self.mesh_data = self._pre_generate_meshes(mask_stack)
+
+            # Start analysis in background thread
+            self._update_status("Starting stress analysis...", 0)
+            worker = self.analyze_all_frames_worker()
+            worker.yielded.connect(self._handle_analysis_progress)
+            worker.returned.connect(self._handle_analysis_result)
+            worker.errored.connect(self._handle_analysis_error)
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(f"Failed to start analysis: {str(e)}")
+            self._set_controls_enabled(True)
+
+    def _pre_generate_meshes(self, mask_stack):
+        """Generate all meshes in the main thread before analysis"""
+        meshes = []
+        density_factor = self.parameter_spins['density_factor'].value()
+        algorithm = self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()]
+        use_optimization = self.parameter_checks['use_optimization'].isChecked()
+
+        for frame in range(mask_stack.shape[0]):
+            mesh_params = MeshParameters(
+                mask=mask_stack[frame],
+                density_factor=density_factor,
+                algorithm=algorithm,
+                use_optimization=use_optimization
+            )
+            generator = MeshGenerator(mesh_params)
+            nodes, elements = generator.generate_mesh(mask_stack[frame])
+            meshes.append((nodes, elements))
+
+        return meshes
+
+    @thread_worker
+    def analyze_all_frames_worker(self):
+        """Thread worker using pre-generated meshes"""
+        tx = self.data_manager.force_field[..., 0]
+        ty = self.data_manager.force_field[..., 1]
+        params = self.data_manager.force_params
+        num_frames = tx.shape[0]
+
+        stress_results = []
+        condition_numbers = []
+        residuals = []
+
+        for frame in range(num_frames):
+            current_tx = tx[frame]
+            current_ty = ty[frame]
+            nodes, elements = self.mesh_data[frame]
+
+            # Use pre-generated mesh
+            analyzer = MonolayerStressMicroscopy(
+                mask=self.data_manager.masks[frame],  # Not used for mesh generation
+                density_factor=self.parameter_spins['density_factor'].value(),
+                algorithm=self.MESH_ALGORITHMS[self.parameter_spins['algorithm'].currentText()],
+                use_optimization=self.parameter_checks['use_optimization'].isChecked(),
+                poisson_ratio=self.parameter_spins['poisson_ratio'].value(),
+                nodes=nodes,
+                elements=elements
+            )
+
+            stress_tensor, cond_num, residual = analyzer.calculate_stress_field(current_tx, current_ty)
+            stress_tensor *= params['pixel_size'] * 1e-6  # Convert to N/m
+
+            stress_results.append(stress_tensor)
+            condition_numbers.append(cond_num)
+            residuals.append(residual)
+
+            progress = int((frame + 1) / num_frames * 100)
+            yield {"progress": progress, "current_frame": frame + 1}
+
+        return {
+            "stress_tensor_stack": np.stack(stress_results, axis=0),
+            "condition_numbers": condition_numbers,
+            "residuals": residuals
+        }
+
+    def _handle_analysis_progress(self, progress_data):
+        """Update progress during analysis."""
+        self.progress_bar.setValue(progress_data["progress"])
+        self.status_label.setText(
+            f"Processing frame {progress_data['current_frame']}..."
+        )
+
+    def _handle_analysis_result(self, results):
+        """Handle successful completion of analysis."""
+        stress_tensor_stack = results["stress_tensor_stack"]
+        params = {
+            'pixel_size': self.data_manager.force_params['pixel_size'],
+            'downscale_factor': self.data_manager.force_params['downscale_factor'],
+            'max_stress': self.parameter_manager.get_value('max_stress'),
+            # Include other parameters...
+        }
+
+        self.data_manager.set_stress_results(stress_tensor_stack, params)
+        self.visualization_manager.visualize_stress_results(
+            {"stress_tensor": stress_tensor_stack},
+            max_stress=params['max_stress']
+        )
+
+        stats_text = (f"Stress analysis completed for {stress_tensor_stack.shape[0]} frames\n"
+                      f"Mean condition number: {np.mean(results['condition_numbers']):.1e}\n"
+                      f"Mean residual: {np.mean(results['residuals']):.1e}")
+        self._update_status(stats_text, 100)
+        self._set_controls_enabled(True)
+
+    def _handle_analysis_error(self, exc):
+        """Handle errors during analysis."""
+        self._handle_error(f"Analysis error: {str(exc)}")
+        self._set_controls_enabled(True)
+
+    def _set_controls_enabled(self, enabled: bool):
+        """Enable/disable analysis controls."""
+        self.analyze_btn.setEnabled(enabled)
+        self.preview_mesh_btn.setEnabled(enabled)
+        self.preview_frame_btn.setEnabled(enabled)
+        self.save_stress_btn.setEnabled(enabled)
+
+    def _validate_prerequisites(self):
+        """Check required data is loaded."""
+        if self.data_manager.masks is None:
+            self._handle_error("No mask loaded. Please load a mask first.")
+            return False
+        if self.data_manager.force_field is None:
+            self._handle_error("No force data available. Please calculate forces first.")
+            return False
+        return True
+
     def _connect_signals(self):
         """Connect widget signals."""
         # Existing connections
@@ -84,7 +225,7 @@ class MSMWidget(BaseAnalysisWidget):
         self.create_mask_btn.clicked.connect(self._create_mask_from_images)
         self.preview_mesh_btn.clicked.connect(self.preview_mesh)
         self.preview_frame_btn.clicked.connect(self.preview_current_frame)
-        self.analyze_btn.clicked.connect(self.analyze_all_frames)
+        self.analyze_btn.clicked.connect(self.start_analysis)
         self.save_stress_btn.clicked.connect(self._save_stress_tensor)
         self.load_stress_btn.clicked.connect(self._load_stress_tensor)
 

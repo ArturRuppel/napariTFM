@@ -84,30 +84,29 @@ def timer_decorator(func):
 
 
 class MonolayerStressMicroscopy:
-    def __init__(self,
-                 mask: np.ndarray,
-                 density_factor: float = 0.02,
-                 algorithm: int = 2,
-                 use_optimization: bool = False,
-                 poisson_ratio: float = 0.5,
-                 young_modulus: float = 1):
-        """Initialize MSM calculator with mask and configurable mesh parameters"""
+    def __init__(self, mask, density_factor=0.02, algorithm=2,
+                 use_optimization=False, poisson_ratio=0.5,
+                 young_modulus=1, nodes=None, elements=None):
+        """Initialize with optional pre-generated nodes/elements"""
         self.mask = mask
         self.poisson_ratio = poisson_ratio
         self.E = young_modulus
         self.timing_stats = {}
         self._nested_calls = {}
 
-        # Initialize mesh parameters and generator
-        mesh_params = MeshParameters(
-            mask=mask,
-            density_factor=density_factor,
-            algorithm=algorithm,
-            use_optimization=use_optimization
-        )
-
-        self.mesh_generator = MeshGenerator(mesh_params)
-        self.nodes, self.elements = self.mesh_generator.generate_mesh(mask)
+        if nodes is None or elements is None:
+            # Fallback to generating mesh if not provided
+            mesh_params = MeshParameters(
+                mask=mask,
+                density_factor=density_factor,
+                algorithm=algorithm,
+                use_optimization=use_optimization
+            )
+            self.mesh_generator = MeshGenerator(mesh_params)
+            self.nodes, self.elements = self.mesh_generator.generate_mesh(mask)
+        else:
+            self.nodes = nodes
+            self.elements = elements
 
     def _grid_setup(self, nodes_xy, elements, f_x, f_y):
         """Setup triangular mesh with linear force interpolation and proper scaling"""
