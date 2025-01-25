@@ -9,7 +9,7 @@ import tifffile
 import sys
 from datetime import datetime
 
-from napariTFM.backend.preprocessing import PreprocessingParameters, ImagePreprocessor
+from preprocessing import PreprocessingParameters, ImagePreprocessor
 from napariTFM.backend.displacement_analysis import TVL1Parameters, DisplacementAnalyzer
 from napariTFM.backend.fttc import FTTC
 from napariTFM.backend.msm import MonolayerStressMicroscopy
@@ -179,7 +179,8 @@ class BatchAnalysis:
             # Execute enabled analysis steps
             if self.config['analysis_steps']['preprocessing']:
                 print("Starting preprocessing step")
-                self._run_preprocessing(folder)
+                for progress in self._run_preprocessing(folder):
+                    print(f"Progress: {progress['progress']:.1f}%, {progress['message']}")
 
             if self.config['analysis_steps']['create_masks']:
                 print("Starting mask creation")
@@ -456,6 +457,7 @@ class BatchAnalysis:
                 self._current_worker = None
                 logger.debug("Cleaned up worker in finally block")
 
+
     def _run_preprocessing(self, folder: Path) -> None:
         """Run preprocessing step."""
         print("Starting preprocessing")
@@ -483,13 +485,11 @@ class BatchAnalysis:
         try:
             print("Running preprocessing")
             preprocessor = ImagePreprocessor(params)
-            generator = preprocessor.preprocess_all(
+            results = yield from preprocessor.preprocess_all(
                 self._input_bead_stack,
                 self._input_reference,
                 self._input_cell_stack
             )
-
-            results = self._run_thread_worker(generator)
 
             if results is None:
                 raise RuntimeError("Preprocessing did not return any results")
@@ -513,7 +513,7 @@ class BatchAnalysis:
 
             # Get calibration values from config
             pixel_size = self.config['parameters']['pixel_size']
-            frame_interval = self.config.get('parameters', {}).get('frame_interval', 1.0)  # default 1 min if not specified
+            frame_interval = self.config.get('parameters', {}).get('frame_interval', 1.0)
 
             # Save calibrated TIFFs
             if self._preprocessed_bead_stack is not None:
