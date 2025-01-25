@@ -14,6 +14,7 @@ from qtpy.QtWidgets import (
     QComboBox
 )
 from qtrangeslider import QRangeSlider
+from napari.qt.threading import thread_worker
 
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
@@ -92,27 +93,32 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
             self.preprocessor.update_parameters(params)
 
-            # Create and start worker with correct data from data manager
-            worker = self.preprocessor.preprocess_all(
-                bead_stack=self.data_manager.input_bead_stack,
-                reference_image=self.data_manager.input_reference,
-                cell_stack=self.data_manager.input_cell_stack,
-            )
-
-            # Connect signals
-            worker.yielded.connect(self._handle_progress)
-            worker.returned.connect(self._handle_results)
-            worker.finished.connect(lambda: self._set_controls_enabled(True))
-            worker.errored.connect(self._handle_error)
+            @thread_worker(connect={
+                'yielded': self._handle_progress,
+                'returned': self._handle_results,
+                'finished': lambda: self._set_controls_enabled(True),
+                'errored': self._handle_error
+            })
+            def _processing_worker():
+                generator = self.preprocessor.preprocess_all(
+                    bead_stack=self.data_manager.input_bead_stack,
+                    reference_image=self.data_manager.input_reference,
+                    cell_stack=self.data_manager.input_cell_stack,
+                )
+                try:
+                    while True:
+                        progress = next(generator)
+                        yield progress
+                except StopIteration as e:
+                    return e.value  # This is the results dictionary
 
             # Start the worker
-            worker.start()
+            _processing_worker()
 
         except Exception as e:
             self._handle_error(str(e))
             self.processing_failed.emit(str(e))
             self._set_controls_enabled(True)
-
     def toggle_preview(self, enabled: bool):
         """Toggle preview mode"""
         try:

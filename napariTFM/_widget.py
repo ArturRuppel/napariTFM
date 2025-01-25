@@ -370,7 +370,7 @@ class napariTFMWidget(QWidget):
         self.displacement_widget._update_ui_state()
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
-        self.batch_widget._update_ui_state()
+        # self.batch_widget._update_ui_state()
 
     def _on_displacement_completed(self, results):
         """Handle completion of displacement analysis"""
@@ -379,7 +379,7 @@ class napariTFMWidget(QWidget):
         self.displacement_widget._update_ui_state()
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
-        self.batch_widget._update_ui_state()
+        # self.batch_widget._update_ui_state()
 
     def _on_force_completed(self, results):
         """Handle completion of force calculation"""
@@ -388,7 +388,7 @@ class napariTFMWidget(QWidget):
         self.displacement_widget._update_ui_state()
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
-        self.batch_widget._update_ui_state()
+        # self.batch_widget._update_ui_state()
 
     def _on_stress_completed(self, results):
         """Handle completion of stress calculation"""
@@ -397,5 +397,5 @@ class napariTFMWidget(QWidget):
         self.displacement_widget._update_ui_state()
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
-        self.batch_widget._update_ui_state()
+        # self.batch_widget._update_ui_state()
 

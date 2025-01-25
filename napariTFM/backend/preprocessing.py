@@ -1,6 +1,5 @@
 import logging
 from typing import Tuple, Optional, List, Dict
-from napari.qt.threading import thread_worker
 
 import cv2
 import numpy as np
@@ -174,7 +173,6 @@ class ImagePreprocessor:
 
         return registered, warp_matrix
 
-    @thread_worker
     def preprocess_all(
             self,
             bead_stack: Optional[np.ndarray] = None,
