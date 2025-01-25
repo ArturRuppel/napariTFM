@@ -85,6 +85,7 @@ class TeeLogger:
         self.log.close()
         sys.stdout = self.terminal
 
+
 def setup_logging(level: str = "INFO", silent: bool = True, log_file: Optional[Path] = None) -> logging.Logger:
     """
     Set up logging with configurable level and optional file output.
@@ -458,7 +459,6 @@ class BatchAnalysis:
                 self._current_worker.quit()
                 self._current_worker = None
                 logger.debug("Cleaned up worker in finally block")
-
 
     def _run_preprocessing(self, folder: Path) -> None:
         """Run preprocessing step."""

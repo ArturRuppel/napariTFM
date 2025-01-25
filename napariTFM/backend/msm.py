@@ -36,11 +36,8 @@ from scipy.sparse import csr_matrix, vstack, diags
 from scipy.sparse.linalg import lsqr
 from scipy.ndimage import binary_fill_holes, generate_binary_structure, binary_dilation, label, gaussian_filter, sum as ndimage_sum
 
-
 from skimage.measure import regionprops
 from skimage.transform import resize
-
-
 
 from napariTFM.backend.mesh_generator import MeshParameters, MeshGenerator
 from napariTFM.backend.msm_numba_functions import *
@@ -444,6 +441,7 @@ class MonolayerStressMicroscopy:
         stress_tensor = self._interpolate_stress_field(nodes, nodal_stresses, mask)
 
         return stress_tensor, condition_number, residual
+
     def _interpolate_stress_field(self, nodes, nodal_stresses, mask):
         """
         Simple linear interpolation of nodal stresses to regular grid.
