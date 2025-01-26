@@ -112,7 +112,8 @@ class ParameterManager(QObject):
             'save_sigma_xx': False,
             'save_sigma_yy': False,
             'save_shear': False,
-            'save_normal_stress': False
+            'save_normal_stress': False,
+            'save_mesh': True
         }
         for name, value in viz_params.items():
             self._add_parameter(name, value, ParameterCategory.VISUALIZATION)

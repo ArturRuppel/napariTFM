@@ -297,6 +297,10 @@ class BatchAnalysis:
         #######################
         # Setup and Logging
         #######################
+        # Create output directories
+        tfm_folder = folder / "TFM_data"
+        tfm_folder.mkdir(exist_ok=True)
+
         log_file = folder / "TFM_data/processing_log.txt"
         self._tee_logger = TeeLogger(log_file)
         sys.stdout = self._tee_logger
@@ -304,10 +308,6 @@ class BatchAnalysis:
         print(f"\nProcessing folder: {folder_path} with the following parameters:")
         self._print_parameters()
 
-
-        # Create output directories
-        tfm_folder = folder / "TFM_data"
-        tfm_folder.mkdir(exist_ok=True)
         logger.debug(f"Created TFM data folder: {tfm_folder}")
         viz_saver = BatchVisualizationSaver(folder)
 

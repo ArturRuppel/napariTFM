@@ -115,19 +115,19 @@ class napariTFMWidget(QWidget):
             self.visualization_manager
         )
 
-        # self.batch_widget = BatchAnalysisWidget(
-        #     self.viewer,
-        #     self.data_manager,
-        #     self.parameter_manager,
-        #     self.visualization_manager
-        # )
+        self.batch_widget = BatchAnalysisWidget(
+            self.viewer,
+            self.data_manager,
+            self.parameter_manager,
+            self.visualization_manager
+        )
 
         # Add widgets to tabs
         tabs.addTab(self.preprocessing_widget, "Preprocessing")
         tabs.addTab(self.displacement_widget, "Displacement")
         tabs.addTab(self.force_widget, "Force Analysis")
         tabs.addTab(self.msm_widget, "Stress Analysis")
-        # tabs.addTab(self.batch_widget, "Batch Analysis")
+        tabs.addTab(self.batch_widget, "Batch Analysis")
 
         # Add tabs to container
         container_layout.addWidget(tabs)
@@ -370,7 +370,7 @@ class napariTFMWidget(QWidget):
         self.displacement_widget._update_ui_state()
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
-        # self.batch_widget._update_ui_state()
+        self.batch_widget._update_ui_state()
 
     def _on_displacement_completed(self, results):
         """Handle completion of displacement analysis"""
@@ -379,7 +379,7 @@ class napariTFMWidget(QWidget):
         self.displacement_widget._update_ui_state()
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
-        # self.batch_widget._update_ui_state()
+        self.batch_widget._update_ui_state()
 
     def _on_force_completed(self, results):
         """Handle completion of force calculation"""
@@ -388,7 +388,7 @@ class napariTFMWidget(QWidget):
         self.displacement_widget._update_ui_state()
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
-        # self.batch_widget._update_ui_state()
+        self.batch_widget._update_ui_state()
 
     def _on_stress_completed(self, results):
         """Handle completion of stress calculation"""
@@ -397,5 +397,5 @@ class napariTFMWidget(QWidget):
         self.displacement_widget._update_ui_state()
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
-        # self.batch_widget._update_ui_state()
+        self.batch_widget._update_ui_state()
 

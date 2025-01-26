@@ -1,13 +1,16 @@
 import os
+import subprocess
 import sys
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
-
+import yaml
 import numpy as np
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QGridLayout,
     QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QScrollArea,
-    QProgressBar, QMessageBox, QListWidget, QCheckBox,
+    QProgressBar, QMessageBox, QListWidget, QCheckBox, QLineEdit,
     QFileDialog, QComboBox
 )
 
@@ -60,6 +63,327 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         finally:
             self.blockSignals(False)
 
+    def _create_visualization_group(self) -> QGroupBox:
+        """Create visualization options group."""
+        group = QGroupBox("Visualizations")
+        layout = QVBoxLayout()
+
+        # Update visualization options to match parameter manager
+        # Using tuples of (ui_key, display_label, param_name) where param_name includes 'save_' prefix
+        viz_options = [
+            ("bead_overlay", "Bead Overlay", "save_bead_overlay"),
+            ("displacement_map", "Displacement Map", "save_displacement_map"),
+            ("force_map", "Force Map", "save_force_map"),
+            ("force_cell_overlay", "Force Cell Overlay", "save_force_cell_overlay"),
+            ("sigma_xx", "Sigma XX", "save_sigma_xx"),
+            ("sigma_yy", "Sigma YY", "save_sigma_yy"),
+            ("normal_stress", "Normal Stress", "save_normal_stress"),
+            ("mesh", "Mesh", "save_mesh")
+        ]
+
+        self.visualization_checkboxes = {}
+        for ui_key, label, param_name in viz_options:
+            checkbox = QCheckBox(label)
+            # Get initial state from parameter manager
+            try:
+                checkbox.setChecked(self.parameter_manager.get_value(param_name))
+            except KeyError:
+                print(f"Warning: Parameter {param_name} not found in parameter manager")
+                checkbox.setChecked(True)  # Default to True if parameter not found
+
+            # Store checkbox with parameter name (including 'save_' prefix)
+            self.visualization_checkboxes[param_name] = checkbox
+
+            # Connect checkbox to parameter manager
+            def make_callback(param_name=param_name):
+                def callback(state):
+                    self.parameter_manager.set_value(param_name, state == Qt.Checked)
+
+                return callback
+
+            checkbox.stateChanged.connect(make_callback())
+            layout.addWidget(checkbox)
+
+        group.setLayout(layout)
+        return group
+
+    def _run_batch_analysis(self):
+        """Run batch analysis by creating config and launching in new Python console."""
+        if not self.folder_list:
+            QMessageBox.warning(self, "No Folders", "Please add folders to analyze first.")
+            return
+
+        try:
+            # Generate configuration dictionary
+            config = self.generate_config()
+
+            # Create temporary YAML file to store configuration
+            with NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_yaml:
+                yaml.safe_dump(config, temp_yaml, default_flow_style=False)
+                config_path = temp_yaml.name
+
+            # Convert paths to use forward slashes
+            config_path_forward = str(Path(config_path)).replace('\\', '/')
+
+            # Create Python script content
+            script_content = f'''
+import sys
+from pathlib import Path
+
+# Add parent directory to Python path to find napariTFM package
+parent_dir = str(Path(__file__).resolve().parent.parent)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from napariTFM.backend.batch_analysis import BatchAnalysis
+
+# Create analyzer instance and process folders
+config_path = "{config_path_forward}"  # Using forward slashes
+analyzer = BatchAnalysis.from_yaml(config_path)
+analyzer.process_all_folders()
+
+# Clean up temporary config file
+Path(config_path).unlink()
+'''
+
+            # Create temporary Python script file
+            with NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_script:
+                temp_script.write(script_content)
+                script_path = temp_script.name
+
+            # Launch new Python console running the script
+            python_executable = sys.executable
+            if sys.platform == 'win32':
+                # On Windows, use start command to open new console window
+                subprocess.Popen(['start', 'cmd', '/k', python_executable, script_path],
+                                 shell=True)
+            else:
+                # On Unix-like systems, use terminal emulator
+                if sys.platform == 'darwin':
+                    # macOS
+                    subprocess.Popen(['open', '-a', 'Terminal',
+                                      python_executable, script_path])
+                else:
+                    # Linux - try common terminal emulators
+                    terminals = ['gnome-terminal', 'xterm', 'konsole']
+                    for terminal in terminals:
+                        try:
+                            subprocess.Popen([terminal, '--', python_executable,
+                                              script_path])
+                            break
+                        except FileNotFoundError:
+                            continue
+                    else:
+                        raise RuntimeError("No suitable terminal emulator found")
+
+            QMessageBox.information(
+                self,
+                "Analysis Started",
+                "Batch analysis has been started in a new console window.\n"
+                "The analysis will continue running even if you close napari."
+            )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to start batch analysis: {str(e)}"
+            )
+            # Clean up temporary files if they exist
+            for path in [config_path, script_path]:
+                try:
+                    Path(path).unlink()
+                except:
+                    pass
+    def generate_config(self) -> dict:
+        """Generate configuration dictionary based on UI state."""
+        config = {
+            "root_folders": self.folder_list,
+
+            "input_files": {
+                key: input.text()
+                for key, input in self.file_inputs.items()
+            },
+
+            "analysis_steps": {
+                key: checkbox.isChecked()
+                for key, checkbox in self.analysis_checkboxes.items()
+            },
+
+            "visualizations": {
+                # Remove 'save_' prefix when generating config
+                key.replace('save_', ''): checkbox.isChecked()
+                for key, checkbox in self.visualization_checkboxes.items()
+            },
+
+            "parameters": {
+                # Get calibration parameters
+                "pixel_size": self.parameter_spins['pixel_size'].value(),
+                "frame_interval": self.parameter_spins['frame_interval'].value(),
+
+                # Get preprocessing parameters
+                "min_intensity": self.parameter_spins['min_intensity'].value(),
+                "max_intensity": self.parameter_spins['max_intensity'].value(),
+                "gaussian_sigma": self.parameter_spins['gaussian_sigma'].value(),
+                "cell_min_intensity": self.parameter_spins['cell_min_intensity'].value(),
+                "cell_max_intensity": self.parameter_spins['cell_max_intensity'].value(),
+                "cell_gaussian_sigma": self.parameter_spins['cell_gaussian_sigma'].value(),
+                "registration_mode": self.parameter_combos['registration_mode'].currentText(),
+
+                # Get displacement parameters
+                "tau": self.parameter_spins['tau'].value(),
+                "lambda_": self.parameter_spins['lambda_'].value(),
+                "theta": self.parameter_spins['theta'].value(),
+                "nscales": self.parameter_spins['nscales'].value(),
+                "warps": self.parameter_spins['warps'].value(),
+                "epsilon": self.parameter_spins['epsilon'].value(),
+                "inner_iterations": self.parameter_spins['inner_iterations'].value(),
+                "outer_iterations": self.parameter_spins['outer_iterations'].value(),
+                "scale_step": self.parameter_spins['scale_step'].value(),
+                "median_filtering": self.parameter_spins['median_filtering'].value(),
+                "downscale_factor": self.parameter_spins['downscale_factor'].value(),
+
+                # Get force parameters
+                "young_modulus": self.parameter_spins['young_modulus'].value() * 1000,  # Convert kPa to Pa
+                "poisson_ratio_substrate": self.parameter_spins['poisson_ratio'].value(),
+                "gel_height": None if self.parameter_spins['gel_height'].value() == 0 else self.parameter_spins['gel_height'].value(),
+                "regularization": 10 ** self.parameter_spins['regularization'].value(),
+                "lanczos_exp": self.parameter_spins['lanczos_exp'].value(),
+
+                # Get stress parameters
+                "threshold": self.parameter_spins['threshold'].value(),
+                "dilation": self.parameter_spins['dilation'].value(),
+                "smoothing_sigma": self.parameter_spins['smoothing_sigma'].value(),
+                "density_factor": self.parameter_spins['density_factor'].value(),
+                "mesh_algorithm": self.parameter_combos['mesh_algorithm'].currentText(),
+                "use_optimization": self.parameter_checks['use_optimization'].isChecked(),
+                "poisson_ratio_cells": self.parameter_spins['poisson_ratio'].value(),
+
+                # Get visualization parameters
+                "disp_vector_stride": self.parameter_spins['disp_vector_stride'].value(),
+                "disp_arrow_scale": self.parameter_spins['disp_arrow_scale'].value(),
+                "d_max": self.parameter_spins['d_max'].value(),
+                "force_vector_stride": self.parameter_spins['force_vector_stride'].value(),
+                "force_arrow_scale": self.parameter_spins['force_arrow_scale'].value(),
+                "f_max": self.parameter_spins['f_max'].value(),
+                "max_stress": self.parameter_spins['max_stress'].value()
+            }
+        }
+
+        return config
+
+    def _create_file_paths_group(self) -> QGroupBox:
+        """Create group for input/output file paths."""
+        group = QGroupBox("File Paths")
+        layout = QVBoxLayout()
+        layout.setSpacing(4)
+
+        # Input files section
+        input_label = QLabel("Input Files:")
+        input_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(input_label)
+
+        input_files = [
+            ("beads", "Beads File:", "beads.tif"),
+            ("reference", "Reference File:", "reference.tif"),
+            ("cells", "Cells File (optional):", "cells.tif")
+        ]
+
+        self.file_inputs = {}
+        for key, label, default in input_files:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            line_edit = QLineEdit(default)
+            self.file_inputs[key] = line_edit
+            row.addWidget(line_edit)
+            layout.addLayout(row)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_metadata_group(self) -> QGroupBox:
+        """Create group for metadata fields."""
+        group = QGroupBox("Metadata")
+        layout = QVBoxLayout()
+        layout.setSpacing(4)
+
+        metadata_fields = [
+            ("experiment_date", "Experiment Date:"),
+            ("cell_type", "Cell Type:"),
+            ("substrate", "Substrate:", "PA gel"),  # Default value from config
+            ("notes", "Notes:")
+        ]
+
+        self.metadata_inputs = {}
+        for key, label, *default in metadata_fields:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            line_edit = QLineEdit()
+            if default:  # Set default value if provided
+                line_edit.setText(default[0])
+            self.metadata_inputs[key] = line_edit
+            row.addWidget(line_edit)
+            layout.addLayout(row)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_analysis_steps_group(self) -> QGroupBox:
+        """Create analysis steps group with checkboxes."""
+        group = QGroupBox("Analysis Steps")
+        layout = QVBoxLayout()
+
+        steps = [
+            ("preprocessing", "Preprocessing"),
+            ("displacement", "Displacement"),
+            ("force", "Force"),
+            ("create_masks", "Create Masks"),
+            ("stress", "Stress")
+        ]
+
+        self.analysis_checkboxes = {}
+        for key, label in steps:
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(False)  # Default to False as per config
+            self.analysis_checkboxes[key] = checkbox
+            layout.addWidget(checkbox)
+
+        group.setLayout(layout)
+        return group
+
+    def _setup_ui(self):
+        """Set up the user interface."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        container = QWidget()
+        main_layout = QVBoxLayout()
+
+        # Add new file paths and metadata groups first
+        main_layout.addWidget(self._create_file_paths_group())
+        main_layout.addWidget(self._create_metadata_group())
+
+        # Add existing parameter groups
+        main_layout.addWidget(self._create_general_params_group())
+        main_layout.addWidget(self._create_preprocessing_params_group())
+        main_layout.addWidget(self._create_displacement_params_group())
+        main_layout.addWidget(self._create_force_params_group())
+        main_layout.addWidget(self._create_stress_params_group())
+
+        # Add modified analysis steps and visualization groups
+        main_layout.addWidget(self._create_analysis_steps_group())
+        main_layout.addWidget(self._create_visualization_group())
+        main_layout.addWidget(self._create_folder_management_group())
+        main_layout.addWidget(self._create_status_frame())
+
+        container.setLayout(main_layout)
+        scroll.setWidget(container)
+
+        layout = QVBoxLayout()
+        layout.addWidget(scroll)
+        self.setLayout(layout)
+
     def _sync_widget_with_parameters(self):
         """Sync widget values with parameter manager values"""
         if not hasattr(self, 'parameter_manager') or self.parameter_manager is None:
@@ -104,8 +428,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
             # Sync Poisson ratio (poisson_ratio)
             if 'poisson_ratio' in self.parameter_spins:
-                value = self.parameter_manager.get_value('poisson_ratio')
-                self._safe_set_value(self.parameter_spins['poisson_ratio'], value)
+                value = self.parameter_manager.get_value('poisson_ratio_cells')
+                self._safe_set_value(self.parameter_spins['poisson_ratio_cells'], value)
 
         except Exception as e:
             print(f"Error syncing parameters: {str(e)}")
@@ -284,7 +608,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
             # Handle float-based parameters
             float_params = [
-                'poisson_ratio', 'force_arrow_scale', 'f_max',
+                'poisson_ratio_cells', 'poisson_ratio_substrate', 'force_arrow_scale', 'f_max',
                 'disp_arrow_scale', 'd_max', 'tau', 'lambda_',
                 'theta', 'epsilon', 'scale_step', 'threshold', 'dilation',
                 'smoothing_sigma', 'density_factor', 'max_stress'
@@ -365,23 +689,26 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                     print(f"Warning: Parameter {name} not found in parameter manager")
 
             # Handle visualization checkboxes
-            for viz_name, checkbox in self.visualization_checkboxes.items():
-                param_name = f'save_{viz_name}'
+            for param_name, checkbox in self.visualization_checkboxes.items():
+                # param_name already includes 'save_' prefix
                 checkbox.stateChanged.connect(
-                    lambda state, name=param_name: self.parameter_manager.set_value(
-                        name, state == Qt.Checked
-                    )
+                    lambda state, name=param_name:
+                    self.parameter_manager.set_value(name, state == Qt.Checked)
                 )
+
                 self.parameter_manager.register_callback(
                     param_name,
                     lambda value, cb=checkbox: self._safe_set_checked(cb, bool(value))
                 )
+
                 try:
                     value = self.parameter_manager.get_value(param_name)
                     self._safe_set_checked(checkbox, bool(value))
                 except KeyError:
+                    print(f"Warning: Parameter {param_name} not found in parameter manager")
                     self.parameter_manager.set_value(param_name, False)
                     self._safe_set_checked(checkbox, False)
+
 
         finally:
             # Restore signal handling
@@ -765,48 +1092,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         return params
 
-    def _create_analysis_steps_group(self) -> QGroupBox:
-        """Create analysis steps group with checkboxes."""
-        group = QGroupBox("Analysis Steps")
-        layout = QVBoxLayout()
-
-        steps = [
-            "preprocessing", "displacement", "force", "stress"
-        ]
-
-        for step in steps:
-            checkbox = QCheckBox(step.capitalize())
-            checkbox.setChecked(True)
-            self.analysis_checkboxes[step] = checkbox
-            layout.addWidget(checkbox)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_visualization_group(self) -> QGroupBox:
-        """Create visualization options group."""
-        group = QGroupBox("Save Visualizations")
-        layout = QVBoxLayout()
-
-        viz_options = [
-            "bead_overlay",
-            "displacement_map",
-            "force_map",
-            "force_cell_overlay",
-            "sigma_xx",
-            "sigma_yy",
-            "shear",
-            "normal_stress"
-        ]
-
-        for viz in viz_options:
-            checkbox = QCheckBox(viz.replace("_", " ").title())
-            self.visualization_checkboxes[viz] = checkbox
-            layout.addWidget(checkbox)
-
-        group.setLayout(layout)
-        return group
-
     def _create_folder_management_group(self) -> QGroupBox:
         """Create folder management group."""
         group = QGroupBox("Folder Management")
@@ -831,35 +1116,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
-    def _setup_ui(self):
-        """Set up the user interface."""
-        # Keep existing scroll area setup
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        # Main container
-        container = QWidget()
-        main_layout = QVBoxLayout()
-
-        # Add widget groups
-        main_layout.addWidget(self._create_general_params_group())
-        main_layout.addWidget(self._create_preprocessing_params_group())
-        main_layout.addWidget(self._create_displacement_params_group())
-        main_layout.addWidget(self._create_force_params_group())
-        main_layout.addWidget(self._create_stress_params_group())
-        main_layout.addWidget(self._create_analysis_steps_group())
-        main_layout.addWidget(self._create_visualization_group())
-        main_layout.addWidget(self._create_folder_management_group())
-        main_layout.addWidget(self._create_status_frame())
-
-        container.setLayout(main_layout)
-        scroll.setWidget(container)
-
-        layout = QVBoxLayout()
-        layout.addWidget(scroll)
-        self.setLayout(layout)
-
     def _connect_signals(self):
         """Connect widget signals."""
         # Keep existing signal connections
@@ -881,10 +1137,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         frame.setLayout(layout)
         return frame
-
-    def _run_batch_analysis(self):
-        """Run batch analysis by launching a new Python console."""
-        pass
 
     def _add_folder(self):
         """Add folder to analysis queue."""
