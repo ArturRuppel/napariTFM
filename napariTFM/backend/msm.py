@@ -102,7 +102,7 @@ class MonolayerStressMicroscopy:
             # Validate density_factor before mesh generation
             if density_factor < 0.005:
                 warnings.warn(
-                    "Density factor is very low (below 0.005), which may lead to numerical instabilities and long runtimes.",
+                    "Density factor is very low (< 0.005), which may lead to numerical instabilities and long runtimes.",
                     UserWarning
                 )
 
@@ -502,39 +502,6 @@ class MonolayerStressMicroscopy:
 
         return stress_tensor
 
-    def print_timing_stats(self):
-        """Print detailed timing statistics"""
-        print("\nDetailed Timing Statistics:")
-        print("-" * 50)
-
-        # Define parent functions to exclude from detailed stats
-        parent_functions = {'calculate_stress_field', '_fem_simulation'}
-
-        # Filter out parent functions for the detailed statistics
-        filtered_stats = {op: duration for op, duration in self.timing_stats.items()
-                          if op not in parent_functions}
-
-        # Calculate total time using only leaf operations
-        total_time = sum(filtered_stats.values())
-
-        # Sort operations by duration
-        sorted_stats = sorted(filtered_stats.items(),
-                              key=lambda x: x[1],
-                              reverse=True)
-
-        # Print each operation's timing
-        for operation, duration in sorted_stats:
-            percentage = (duration / total_time) * 100
-            print(f"{operation:20s}: {duration:8.4f} s ({percentage:5.1f}%)")
-
-        print("-" * 50)
-        print(f"{'Total time':20s}: {total_time:8.4f} s")
-
-        # Optionally print overall execution time if available
-        if hasattr(self, 'total_start_time'):
-            overall_time = time.time() - self.total_start_time
-            print(f"Total script execution time: {overall_time:.4f} seconds")
-
     def _find_eq_position(self, nodes, IBC, neq):
         """Find equilibrium positions for nodes with proper DOF handling"""
         nloads = IBC.shape[0]
@@ -603,8 +570,8 @@ class MonolayerStressMicroscopy:
 
         # Solve system and get residual
         solution = lsqr(KG_constrained, RHSG_constrained,
-                        atol=1e-16, btol=1e-16,
-                        iter_lim=5000000,
+                        atol=1e-12, btol=1e-12,
+                        iter_lim=100000,
                         show=False)
         x_scaled = solution[0]
         residual_norm = solution[3]  # Get the residual norm from LSQR output
@@ -640,26 +607,36 @@ class MonolayerStressMicroscopy:
 
     def calculate_stress_field(self, traction_x, traction_y):
         """Calculate stress field and return quality metrics"""
-        if np.all(np.isnan(traction_x)) or np.all(np.isnan(traction_y)):
-            raise ValueError("Input tractions are all NaN")
+        try:
+            if np.all(np.isnan(traction_x)) or np.all(np.isnan(traction_y)):
+                raise ValueError("Input tractions are all NaN")
 
-        # Prepare forces
-        f_x, f_y = self._prepare_forces(traction_x, traction_y, self.mask)
+            # Prepare forces
+            f_x, f_y = self._prepare_forces(traction_x, traction_y, self.mask)
 
-        # Format mesh for FEM solver
-        nodes_formatted, elements_formatted, loads, mats = self._grid_setup(
-            nodes_xy=self.nodes,
-            elements=self.elements,
-            f_x=-f_x,
-            f_y=-f_y
-        )
+            # Format mesh for FEM solver
+            nodes_formatted, elements_formatted, loads, mats = self._grid_setup(
+                nodes_xy=self.nodes,
+                elements=self.elements,
+                f_x=-f_x,
+                f_y=-f_y
+            )
 
-        # Calculate stress tensor and get metrics
-        stress_tensor, condition_number, residual = self._fem_simulation(
-            nodes_formatted, elements_formatted, loads, mats, self.mask
-        )
+            # Calculate stress tensor and get metrics
+            stress_tensor, condition_number, residual = self._fem_simulation(
+                nodes_formatted, elements_formatted, loads, mats, self.mask
+            )
 
-        # Scale stress tensor
-        stress_tensor = stress_tensor
+            # Check if stress tensor is invalid (all zeros might indicate failure)
+            if np.all(stress_tensor == 0):
+                warnings.warn("Solver returned zero stress tensor. Check inputs and mesh.",
+                              RuntimeWarning)
 
-        return stress_tensor, condition_number, residual
+            return stress_tensor, condition_number, residual
+
+        except Exception as e:
+            warnings.warn(f"Error in stress calculation: {str(e)}. Returning zero stress tensor.",
+                          RuntimeWarning)
+            stress_shape = (*self.mask.shape, 2, 2)
+            zero_stress = np.zeros(stress_shape)
+            return zero_stress, np.inf, np.inf

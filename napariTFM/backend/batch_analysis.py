@@ -13,6 +13,7 @@ from napariTFM.backend.preprocessing import PreprocessingParameters, ImagePrepro
 from napariTFM.backend.displacement_analysis import TVL1Parameters, DisplacementAnalyzer
 from napariTFM.backend.fttc import FTTC
 from napariTFM.backend.msm import MonolayerStressMicroscopy
+from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
 
 
 import logging
@@ -176,36 +177,125 @@ class BatchAnalysis:
         tfm_folder = folder / "TFM_data"
         tfm_folder.mkdir(exist_ok=True)
         logger.debug(f"Created TFM data folder: {tfm_folder}")
+        viz_saver = BatchVisualizationSaver(folder)
 
         try:
-            # Execute enabled analysis steps
             if self.config['analysis_steps']['preprocessing']:
                 print("Starting preprocessing step")
                 for progress in self._run_preprocessing(folder):
                     print(f"Progress: {progress['progress']:.1f}%, {progress['message']}")
+
+            if self.config['visualizations']['bead_overlay']:
+                viz_saver.save_bead_overlay(self._preprocessed_bead_stack, self._preprocessed_reference)
+                print("Bead overlay animation saved succesfully")
 
             if self.config['analysis_steps']['create_masks']:
                 print("Starting mask creation")
                 self._create_masks(folder)
                 print("Mask creation completed")
 
+            # load input data if needed and not already present
+            if self.config['analysis_steps']['displacement'] or self.config['visualizations']['displacement_map']:
+                if self._preprocessed_bead_stack is None:
+                    try:
+                        logger.debug("Loading preprocessed data from TIFF files")
+                        preproc_path = folder / "TFM_data/preprocessed_beads.tif"
+                        ref_path = folder / "TFM_data/preprocessed_reference.tif"
+
+                        if not preproc_path.exists():
+                            raise FileNotFoundError(f"Preprocessed bead stack not found at {preproc_path}")
+                        if not ref_path.exists():
+                            raise FileNotFoundError(f"Preprocessed reference not found at {ref_path}")
+
+                        self._preprocessed_bead_stack = tifffile.imread(str(preproc_path))
+                        self._preprocessed_reference = tifffile.imread(str(ref_path))
+                        print("Successfully loaded preprocessed data from TIFF files")
+
+                    except Exception as e:
+                        logger.error(f"Error loading preprocessed data: {str(e)}", exc_info=True)
+                        raise
+
             if self.config['analysis_steps']['displacement']:
                 print("Starting displacement analysis")
                 for progress in self._run_displacement_analysis(folder):
                     print(f"Progress: {progress['progress']:.1f}%, {progress['message']}")
+
+            if self.config['visualizations']['displacement_map']:
+                viz_saver.save_displacement_visualization({'flows': self._displacement_field, 'parameters': self._displacement_params})
+
+            # load input data if needed and not already present
+            if self.config['analysis_steps']['force'] or self.config['visualizations']['force_map'] or self.config['visualizations']['force_cell_overlay']:
+                if self._displacement_field is None:
+                    try:
+                        logger.debug("Loading displacement data from NPY file")
+                        disp_path = folder / self.config['output_files']['displacement']['data']
+
+                        if not disp_path.exists():
+                            raise FileNotFoundError(f"Displacement data not found at {disp_path}")
+
+                        loaded = np.load(str(disp_path), allow_pickle=True).item()
+                        self._displacement_field = loaded['flows']
+                        self._displacement_params = loaded['parameters']
+                        print("Successfully loaded displacement data")
+
+                    except Exception as e:
+                        logger.error(f"Error loading displacement data: {str(e)}", exc_info=True)
+                        raise
+
 
             if self.config['analysis_steps']['force']:
                 print("Starting force analysis")
                 for progress in self._run_force_analysis(folder):
                     print(f"Progress: {progress['progress']:.1f}%, {progress['message']}")
 
+            if self.config['visualizations']['force_map']:
+                viz_saver.save_force_visualization({'tx': self._force_field[..., 0], 'ty': self._force_field[..., 1], 'parameters': self._force_params})
+            if self.config['visualizations']['force_cell_overlay']:
+                if self._preprocessed_cell_stack is None:
+                    try:
+                        logger.debug("Loading preprocessed cell images from TIFF files")
+                        cells_path = folder / "TFM_data/preprocessed_cells.tif"
+
+                        if not cells_path.exists():
+                            raise FileNotFoundError(f"Cell images not found at {cells_path}")
+                        self._preprocessed_cell_stack = tifffile.imread(str(cells_path))
+                        print("Successfully loaded preprocessed data from TIFF files")
+
+                    except Exception as e:
+                        logger.error(f"Error loading cell images: {str(e)}", exc_info=True)
+                        raise
+                viz_saver.save_force_cell_overlay({'tx': self._force_field[..., 0], 'ty': self._force_field[..., 1], 'parameters': self._force_params}, self._preprocessed_cell_stack)
+
+
+            # load input data if needed and not already present
+            if (self.config['analysis_steps']['stress'] or
+                self.config['visualizations']['sigma_xx'] or
+                self.config['visualizations']['sigma_yy'] or
+                self.config['visualizations']['normal_stress']):
+                    # Load force data if not in memory
+                    if self._force_field is None:
+                        try:
+                            logger.debug("Loading force data")
+                            force_path = folder / self.config['output_files']['force']['data']
+                            loaded = np.load(str(force_path), allow_pickle=True).item()
+                            self._force_field = loaded['force_field']
+                            self._force_params = loaded['parameters']
+                        except Exception as e:
+                            logger.error(f"Error loading force data: {str(e)}", exc_info=True)
+                            raise
+
             if self.config['analysis_steps']['stress']:
-                # Only proceed with stress analysis if force data exists
-                force_path = folder / self.config['output_files']['force']['data']
-                if not force_path.exists():
-                    logger.warning(f"Force data not found at {force_path}, skipping stress analysis")
-                else:
-                    self._run_stress_analysis(folder)
+                self._run_stress_analysis(folder)
+
+            if (self.config['visualizations']['sigma_xx'] or
+                self.config['visualizations']['sigma_yy'] or
+                self.config['visualizations']['normal_stress']):
+                viz_saver.save_stress_visualization(
+                    {'stress_tensor': self._stress_tensor, 'parameters': self._stress_params},
+                    plot_sigma_xx=self.config['visualizations']['sigma_xx'],
+                    plot_sigma_yy=self.config['visualizations']['sigma_yy'],
+                    plot_normal_stress=self.config['visualizations']['normal_stress']
+                )
 
         except Exception as e:
             logger.error(f"Error processing folder: {str(e)}", exc_info=True)
@@ -490,26 +580,6 @@ class BatchAnalysis:
 
     def _run_displacement_analysis(self, folder: Path) -> Generator[dict, None, None]:
         """Run displacement analysis step with progress reporting."""
-        # Load preprocessed data if not in memory
-        if self._preprocessed_bead_stack is None:
-            try:
-                logger.debug("Loading preprocessed data from TIFF files")
-                preproc_path = folder / "TFM_data/preprocessed_beads.tif"
-                ref_path = folder / "TFM_data/preprocessed_reference.tif"
-
-                if not preproc_path.exists():
-                    raise FileNotFoundError(f"Preprocessed bead stack not found at {preproc_path}")
-                if not ref_path.exists():
-                    raise FileNotFoundError(f"Preprocessed reference not found at {ref_path}")
-
-                self._preprocessed_bead_stack = tifffile.imread(str(preproc_path))
-                self._preprocessed_reference = tifffile.imread(str(ref_path))
-                print("Successfully loaded preprocessed data from TIFF files")
-
-            except Exception as e:
-                logger.error(f"Error loading preprocessed data: {str(e)}", exc_info=True)
-                raise
-
         # Configure displacement parameters
         logger.debug("Configuring displacement parameters")
         params = TVL1Parameters(
@@ -598,26 +668,6 @@ class BatchAnalysis:
 
     def _run_force_analysis(self, folder: Path) -> Generator[dict, None, None]:
         """Run force analysis step with progress reporting."""
-        print("Starting force analysis")
-
-        # Load displacement data if not in memory
-        if self._displacement_field is None:
-            try:
-                logger.debug("Loading displacement data from NPY file")
-                disp_path = folder / self.config['output_files']['displacement']['data']
-
-                if not disp_path.exists():
-                    raise FileNotFoundError(f"Displacement data not found at {disp_path}")
-
-                loaded = np.load(str(disp_path), allow_pickle=True).item()
-                self._displacement_field = loaded['flows']
-                self._displacement_params = loaded['parameters']
-                print("Successfully loaded displacement data")
-
-            except Exception as e:
-                logger.error(f"Error loading displacement data: {str(e)}", exc_info=True)
-                raise
-
         try:
             # Configure FTTC calculator
             logger.debug("Configuring FTTC calculator")
@@ -720,17 +770,7 @@ class BatchAnalysis:
         masks = tifffile.imread(str(mask_path.with_suffix('.tif'))) > 0
 
         print("Starting stress analysis")
-        # Load force data if not in memory
-        if self._force_field is None:
-            try:
-                logger.debug("Loading force data")
-                force_path = folder / self.config['output_files']['force']['data']
-                loaded = np.load(str(force_path), allow_pickle=True).item()
-                self._force_field = loaded['force_field']
-                self._force_params = loaded['parameters']
-            except Exception as e:
-                logger.error(f"Error loading force data: {str(e)}", exc_info=True)
-                raise
+
 
         # Resize masks to match force field dimensions
         force_shape = self._force_field.shape[1:3]  # Get the spatial dimensions of force field
@@ -771,7 +811,7 @@ class BatchAnalysis:
                 stress_tensors.append(stress_tensor)
                 print(f"Completed frame {frame_idx + 1}/{total_frames} (condition number: {cond_num:.2e}, residual: {residual:.2e})")
 
-            self._stress_tensor = np.stack(stress_tensors)
+            self._stress_tensor = np.stack(stress_tensors) * self._force_params['pixel_size'] * self._force_params['downscale_factor'] * 1e-6
             self._stress_params = {
                 'density_factor': self.config['parameters']['density_factor'],
                 'use_optimization': self.config['parameters']['use_optimization'],

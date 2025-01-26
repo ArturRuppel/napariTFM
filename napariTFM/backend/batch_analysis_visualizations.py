@@ -3,6 +3,7 @@ from pathlib import Path
 import imageio
 import numpy as np
 from matplotlib import pyplot as plt
+from skimage.transform import resize
 
 
 class BatchVisualizationSaver:
@@ -86,160 +87,62 @@ class BatchVisualizationSaver:
         return legend_img
 
     def save_displacement_visualization(self, displacement_results: dict, fps: int = 10) -> None:
-        """
-        Create and save a GIF of displacement magnitudes with vectors.
-
-        Parameters
-        ----------
-        displacement_results : dict
-            Dictionary containing displacement analysis results including flows
-        fps : int, optional
-            Frames per second for the GIF
-        """
         flows = displacement_results['flows']
         params = displacement_results.get('parameters', {})
 
-        # Get visualization parameters from the parameters dictionary
-        d_max = params.get('d_max', 10.0)  # µm
-        vector_stride = params.get('vector_stride', 20)
-        arrow_scale = params.get('arrow_scale', 1.0)
+        downscale_factor = params['downscale_factor']
+        d_max = params['visualization_params']['d_max']
+        arrow_scale = params['visualization_params']['arrow_scale']
+        vector_stride = params['visualization_params']['vector_stride']
+
+        vector_scale = arrow_scale / d_max * 50 / downscale_factor
+        vector_stride_scaled = vector_stride // downscale_factor
 
         frames = []
         for flow in flows:
-            # Create figure with two subplots - one for vectors, one for colorbar
-            fig, (ax_map, ax_cbar) = plt.subplots(2, 1, figsize=(8, 10),
-                                                  gridspec_kw={'height_ratios': [20, 1]})  # Increased ratio for thinner colorbar
-
-            # Set font properties for better visibility
-            plt.rcParams.update({'font.size': 18, 'text.color': 'black'})
-
-            # Calculate and display magnitude
-            magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))  # Convert to µm
-            im = ax_map.imshow(magnitude, cmap='viridis', vmin=0, vmax=d_max)
-
-            # Add vectors
-            h, w = flow.shape[:2]
-            y_points = np.arange(vector_stride // 2, h - vector_stride // 2, vector_stride)
-            x_points = np.arange(vector_stride // 2, w - vector_stride // 2, vector_stride)
-            Y, X = np.meshgrid(y_points, x_points, indexing='ij')
-
-            # Get flow components and scale them by arrow_scale parameter
-            U = flow[Y, X, 0] * arrow_scale
-            V = flow[Y, X, 1] * arrow_scale
-
-            # Calculate magnitudes for vector filtering
-            magnitudes = np.sqrt(U ** 2 + V ** 2)
-            mask = magnitudes > -1
-
-            # Plot filtered vectors
-            ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
-                          magnitudes[mask], cmap='viridis',
-                          scale=1.0, scale_units='xy',
-                          angles='xy', width=0.003)
-
-            # Add colorbar with improved styling
-            cbar = plt.colorbar(im, cax=ax_cbar, orientation='horizontal',
-                                label='Displacement (µm)')
-
-            # Style the colorbar
-            cbar.ax.tick_params(labelsize=16, labelcolor='black')
-            cbar.set_label('Displacement (µm)', size=20, color='black')
-
-            # Remove axes and adjust layout
-            ax_map.set_xticks([])
-            ax_map.set_yticks([])
-            plt.tight_layout()
-
-            # Convert figure to image
-            fig.canvas.draw()
-            frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-            frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-            frames.append(frame)
-
-            plt.close(fig)
-
-        # Save as GIF with looping enabled
-        output_path = self.viz_folder / 'displacement_map.gif'
-        imageio.mimsave(
-            str(output_path),
-            frames,
-            fps=fps,
-            optimize=False,  # Disable optimization to prevent per-frame palette
-            palettesize=256,  # Use maximum palette size
-            loop=0  # Enable infinite looping
-        )
-
-    def save_force_visualization(self, force_results: dict, fps: int = 10) -> None:
-        """
-        Create and save a GIF of force magnitudes with vectors.
-
-        Parameters
-        ----------
-        force_results : dict
-            Dictionary containing force analysis results including tx and ty components
-        fps : int, optional
-            Frames per second for the GIF
-        """
-        # Extract force components and parameters
-        tx = force_results['tx']
-        ty = force_results['ty']
-        params = force_results.get('parameters', {})
-
-        # Get visualization parameters
-        f_max = params.get('f_max', 1000.0)  # Pa
-        vector_stride = params.get('vector_stride', 20)
-        arrow_scale = params.get('arrow_scale', 1.0)
-
-        frames = []
-        for frame_idx in range(len(tx)):
-            # Create figure with two subplots - one for vectors, one for colorbar
             fig, (ax_map, ax_cbar) = plt.subplots(2, 1, figsize=(8, 10),
                                                   gridspec_kw={'height_ratios': [20, 1]})
 
-            # Set font properties for better visibility
             plt.rcParams.update({'font.size': 18, 'text.color': 'black'})
 
             # Calculate and display magnitude
-            force_magnitude = np.sqrt(tx[frame_idx] ** 2 + ty[frame_idx] ** 2)
-            im = ax_map.imshow(force_magnitude, cmap='inferno', vmin=0, vmax=f_max)
+            magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
+            im = ax_map.imshow(magnitude, cmap='viridis', vmin=0, vmax=d_max)
 
-            # Add vectors
-            h, w = tx[frame_idx].shape
-            y_points = np.arange(vector_stride // 2, h - vector_stride // 2, vector_stride)
-            x_points = np.arange(vector_stride // 2, w - vector_stride // 2, vector_stride)
+            # Sample points for vectors
+            h, w = flow.shape[:2]
+            y_points = np.arange(vector_stride_scaled // 2, h - vector_stride_scaled // 2, vector_stride_scaled)
+            x_points = np.arange(vector_stride_scaled // 2, w - vector_stride_scaled // 2, vector_stride_scaled)
             Y, X = np.meshgrid(y_points, x_points, indexing='ij')
 
-            # Get force components at grid points
-            U = tx[frame_idx][Y, X] * arrow_scale / 1000  # Scale down for visualization
-            V = ty[frame_idx][Y, X] * arrow_scale / 1000
+            # Get sampled magnitudes for coloring
+            sampled_magnitude = magnitude[Y, X]
 
-            # Calculate magnitudes for vector filtering and coloring
-            magnitudes = np.sqrt(tx[frame_idx][Y, X] ** 2 + ty[frame_idx][Y, X] ** 2)  # Original magnitudes in Pa
-            mask = magnitudes > -1
+            # Get flow components and scale them
+            U = flow[Y, X, 0] * vector_scale
+            V = flow[Y, X, 1] * vector_scale
 
-            # Get colors for vectors based on magnitude
-            colors = plt.cm.inferno(magnitudes[mask] / f_max)  # Normalize by f_max
+            # Calculate magnitudes for vector filtering
+            mask = sampled_magnitude > 0
 
-            # Plot filtered vectors
+            # Plot filtered vectors with colors based on magnitude
+            colors = plt.cm.viridis(sampled_magnitude[mask] / d_max)
+
             ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
                           color=colors,
                           scale=1.0, scale_units='xy',
                           angles='xy', width=0.003)
 
-            # Add colorbar with improved styling
             cbar = plt.colorbar(im, cax=ax_cbar, orientation='horizontal',
-                                label='Force (Pa)')
+                                label='Displacement (µm)')
 
-            # Style the colorbar
             cbar.ax.tick_params(labelsize=16, labelcolor='black')
-            cbar.set_label('Force (Pa)', size=20, color='black')
+            cbar.set_label('Displacement (µm)', size=20, color='black')
 
-            # Remove axes and adjust layout
             ax_map.set_xticks([])
             ax_map.set_yticks([])
             plt.tight_layout()
 
-            # Convert figure to image
             fig.canvas.draw()
             frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
             frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
@@ -247,109 +150,134 @@ class BatchVisualizationSaver:
 
             plt.close(fig)
 
-        # Save as GIF
+        output_path = self.viz_folder / 'displacement_map.gif'
+        imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, palettesize=256, loop=0)
+
+    def save_force_visualization(self, force_results: dict, fps: int = 10) -> None:
+        tx = force_results['tx']
+        ty = force_results['ty']
+        params = force_results.get('parameters', {})
+
+        downscale_factor = params['downscale_factor']
+        f_max = params['visualization']['f_max']
+        arrow_scale = params['visualization']['arrow_scale']
+        vector_stride = params['visualization']['vector_stride']
+
+        vector_scale = arrow_scale / f_max * 50 / downscale_factor
+        vector_stride_scaled = vector_stride // downscale_factor
+
+        frames = []
+        for frame_idx in range(len(tx)):
+            fig, (ax_map, ax_cbar) = plt.subplots(2, 1, figsize=(8, 10),
+                                                  gridspec_kw={'height_ratios': [20, 1]})
+
+            plt.rcParams.update({'font.size': 18, 'text.color': 'black'})
+
+            force_magnitude = np.sqrt(tx[frame_idx] ** 2 + ty[frame_idx] ** 2)
+            im = ax_map.imshow(force_magnitude, cmap='inferno', vmin=0, vmax=f_max)
+
+            h, w = tx[frame_idx].shape
+            y_points = np.arange(vector_stride_scaled // 2, h - vector_stride_scaled // 2, vector_stride_scaled)
+            x_points = np.arange(vector_stride_scaled // 2, w - vector_stride_scaled // 2, vector_stride_scaled)
+            Y, X = np.meshgrid(y_points, x_points, indexing='ij')
+
+            # Sample magnitude values at vector positions
+            sampled_magnitude = force_magnitude[Y, X]
+
+            U = tx[frame_idx][Y, X] * vector_scale
+            V = ty[frame_idx][Y, X] * vector_scale
+
+            mask = sampled_magnitude > f_max * 0.01
+
+            # Use sampled magnitude for coloring
+            colors = plt.cm.inferno(sampled_magnitude[mask] / f_max)
+
+            ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
+                          color=colors,
+                          scale=1.0, scale_units='xy',
+                          angles='xy', width=0.003)
+
+            cbar = plt.colorbar(im, cax=ax_cbar, orientation='horizontal',
+                                label='Force (Pa)')
+
+            cbar.ax.tick_params(labelsize=16, labelcolor='black')
+            cbar.set_label('Force (Pa)', size=20, color='black')
+
+            ax_map.set_xticks([])
+            ax_map.set_yticks([])
+            plt.tight_layout()
+
+            fig.canvas.draw()
+            frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+            frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            frames.append(frame)
+
+            plt.close(fig)
+
         output_path = self.viz_folder / 'force_map.gif'
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
 
     def save_force_cell_overlay(self, force_results: dict, cell_images: np.ndarray, fps: int = 10) -> None:
-        """
-        Create and save a GIF of force vectors overlaid on the cell images.
 
-        Parameters
-        ----------
-        force_results : dict
-            Dictionary containing force analysis results including tx and ty components
-        cell_images : np.ndarray
-            Stack of cell images with shape (n_frames, height, width)
-        fps : int, optional
-            Frames per second for the GIF
-        """
-        # Extract force components and parameters
         tx = force_results['tx']
         ty = force_results['ty']
         params = force_results.get('parameters', {})
 
-        # Get visualization parameters
-        f_max = params.get('f_max', 1000.0)  # Pa
-        vector_stride = params.get('vector_stride', 20)
-        arrow_scale = params.get('arrow_scale', 1.0)
+        downscale_factor = params['downscale_factor']
+        f_max = params['visualization']['f_max']
+        arrow_scale = params['visualization']['arrow_scale']
+        vector_stride = params['visualization']['vector_stride']
 
-        # Ensure cell_images has at least as many frames as traction forces
-        n_frames = min(len(tx), len(cell_images))
-        cell_images = cell_images[:n_frames]
+        vector_scale = arrow_scale / f_max * 50 / downscale_factor
+        vector_stride_scaled = vector_stride // downscale_factor
 
         frames = []
-        for frame_idx in range(n_frames):
-            # Create figure with two subplots - one for vectors, one for colorbar
+        for frame_idx in range(len(tx)):
             fig, (ax_map, ax_cbar) = plt.subplots(2, 1, figsize=(8, 10),
                                                   gridspec_kw={'height_ratios': [20, 1]})
 
-            # Set font properties for better visibility
             plt.rcParams.update({'font.size': 18, 'text.color': 'black'})
 
-            # Normalize and invert cell image
+            # Resize cell image to match force map dimensions
             cell_img = cell_images[frame_idx].astype(float)
-            cell_img = (cell_img - cell_img.min()) / (cell_img.max() - cell_img.min())
-            cell_img = 1 - cell_img
+            h, w = tx[frame_idx].shape
+            resized_cell = resize(cell_img, (h, w), order=3, anti_aliasing=True)
 
-            # Display cell image
-            ax_map.imshow(cell_img, cmap='gray')
+            # Normalize cell image
+            resized_cell = 1 - resized_cell
+            ax_map.imshow(resized_cell, cmap='gray')
 
-            # Calculate force magnitude for colormap
             force_magnitude = np.sqrt(tx[frame_idx] ** 2 + ty[frame_idx] ** 2)
 
-            # Create a dummy mappable for the colorbar
-            dummy_mappable = plt.cm.ScalarMappable(cmap='inferno', norm=plt.Normalize(vmin=0, vmax=f_max))
-
-            # Calculate scaling factors between force grid and cell image
-            scale_y = cell_img.shape[0] / tx[frame_idx].shape[0]
-            scale_x = cell_img.shape[1] / tx[frame_idx].shape[1]
-
-            # Add vectors using the same stride as in save_force_visualization
-            h, w = tx[frame_idx].shape
-            y_points = np.arange(vector_stride // 2, h - vector_stride // 2, vector_stride)
-            x_points = np.arange(vector_stride // 2, w - vector_stride // 2, vector_stride)
+            y_points = np.arange(vector_stride_scaled // 2, h - vector_stride_scaled // 2, vector_stride_scaled)
+            x_points = np.arange(vector_stride_scaled // 2, w - vector_stride_scaled // 2, vector_stride_scaled)
             Y, X = np.meshgrid(y_points, x_points, indexing='ij')
 
-            # Scale grid points to match cell image dimensions
-            Y_scaled = Y * scale_y
-            X_scaled = X * scale_x
+            sampled_magnitude = force_magnitude[Y, X]
 
-            # Get force components and scale them
-            U = tx[frame_idx][Y, X] * arrow_scale / 1000  # Scale down for visualization
-            V = ty[frame_idx][Y, X] * arrow_scale / 1000
+            U = tx[frame_idx][Y, X] * vector_scale
+            V = ty[frame_idx][Y, X] * vector_scale
 
-            # Scale the vectors by the same factor as the grid
-            U_scaled = U * scale_x
-            V_scaled = V * scale_y
+            mask = sampled_magnitude > f_max * 0.2
 
-            # Calculate magnitudes for vector filtering and coloring
-            magnitudes = np.sqrt(tx[frame_idx][Y, X] ** 2 + ty[frame_idx][Y, X] ** 2)  # Original magnitudes in Pa
-            mask = magnitudes > f_max * 0.01  # Filter threshold in Pa
+            colors = plt.cm.inferno(sampled_magnitude[mask] / f_max)
 
-            # Get colors for vectors based on magnitude
-            colors = plt.cm.inferno(magnitudes[mask] / f_max)  # Normalize by f_max without scaling
-
-            # Plot filtered vectors with scaled grid and vectors
-            ax_map.quiver(X_scaled[mask], Y_scaled[mask], U_scaled[mask], V_scaled[mask],
+            ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
                           color=colors,
                           scale=1.0, scale_units='xy',
                           angles='xy', width=0.003)
 
-            # Add colorbar with improved styling
+            dummy_mappable = plt.cm.ScalarMappable(cmap='inferno', norm=plt.Normalize(vmin=0, vmax=f_max))
             cbar = plt.colorbar(dummy_mappable, cax=ax_cbar, orientation='horizontal',
                                 label='Force (Pa)')
 
-            # Style the colorbar
             cbar.ax.tick_params(labelsize=16, labelcolor='black')
             cbar.set_label('Force (Pa)', size=20, color='black')
 
-            # Remove axes and adjust layout
             ax_map.set_xticks([])
             ax_map.set_yticks([])
             plt.tight_layout()
 
-            # Convert figure to image
             fig.canvas.draw()
             frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
             frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
@@ -357,11 +285,12 @@ class BatchVisualizationSaver:
 
             plt.close(fig)
 
-        # Save as GIF
         output_path = self.viz_folder / 'force_cell_overlay.gif'
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
 
-    def save_stress_visualization(self, stress_results: dict, fps: int = 10) -> None:
+    def save_stress_visualization(self, stress_results: dict, plot_sigma_xx: bool = True,
+                                  plot_sigma_yy: bool = True, plot_normal_stress: bool = True,
+                                  fps: int = 10) -> None:
         """
         Create and save GIFs of stress tensor components.
 
@@ -369,35 +298,36 @@ class BatchVisualizationSaver:
         ----------
         stress_results : dict
             Dictionary containing stress tensor results and parameters
+        plot_sigma_xx : bool
+            Whether to plot sigma_xx component
+        plot_sigma_yy : bool
+            Whether to plot sigma_yy component
+        plot_normal_stress : bool
+            Whether to plot normal stress
         fps : int, optional
             Frames per second for the GIF
         """
         # Extract stress tensor and parameters
         stress_tensor = stress_results['stress_tensor']
-        params = stress_results.get('parameters', {})
-        max_stress = params.get('max_stress', 10.0)  # mN/m
+        params = stress_results['parameters']
+        max_stress = params['max_stress']  # mN/m
 
         # Define components and their corresponding visualization parameters
         components = {
             'sigma_xx': {
                 'data': stress_tensor[..., 0, 0] * 1e3,  # Convert to mN/m
                 'label': 'Normal Stress XX (mN/m)',
-                'enabled': params.get('save_sigma_xx', False)
+                'enabled': plot_sigma_xx
             },
             'sigma_yy': {
                 'data': stress_tensor[..., 1, 1] * 1e3,  # Convert to mN/m
                 'label': 'Normal Stress YY (mN/m)',
-                'enabled': params.get('save_sigma_yy', False)
-            },
-            'shear': {
-                'data': stress_tensor[..., 0, 1] * 1e3,  # Convert to mN/m
-                'label': 'Shear Stress (mN/m)',
-                'enabled': params.get('save_shear', False)
+                'enabled': plot_sigma_yy
             },
             'normal_stress': {
                 'data': (stress_tensor[..., 0, 0] + stress_tensor[..., 1, 1]) * 0.5e3,  # Convert to mN/m
                 'label': 'Average Normal Stress (mN/m)',
-                'enabled': params.get('save_normal_stress', False)
+                'enabled': plot_normal_stress
             }
         }
 

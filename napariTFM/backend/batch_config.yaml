@@ -43,12 +43,12 @@ analysis_steps:
 
 # Visualization outputs to generate
 visualizations:
-  bead_overlay: true
-  displacement_map: true
-  force_map: true
-  force_cell_overlay: true
-  sigma_xx: true
-  sigma_yy: true
+  bead_overlay: false
+  displacement_map: false
+  force_map: false
+  force_cell_overlay: false
+  sigma_xx: false
+  sigma_yy: false
   normal_stress: true
   mesh: true
 
@@ -101,7 +101,7 @@ parameters:
 
   # Stress parameters
   mesh_algorithm: "Frontal-Del."  # Options: Frontal-Del., Delaunay, MeshAdapt, BAMG, FD Quads, Para. Pack
-  density_factor: 0.0025
+  density_factor: 0.005
   use_optimization: true
   poisson_ratio_cells: 0.5
   max_stress: 1.0         # mN/m
