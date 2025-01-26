@@ -27,6 +27,7 @@ resulting system of equations.
 """
 
 import time
+import warnings
 from functools import wraps
 
 import solidspy.assemutil as ass
@@ -98,7 +99,14 @@ class MonolayerStressMicroscopy:
         self._nested_calls = {}
 
         if nodes is None or elements is None:
-            # Fallback to generating mesh if not provided
+            # Validate density_factor before mesh generation
+            if density_factor < 0.005:
+                warnings.warn(
+                    "Density factor is very low (below 0.005), which may lead to numerical instabilities and long runtimes.",
+                    UserWarning
+                )
+
+            # Proceed with mesh generation
             mesh_params = MeshParameters(
                 mask=mask,
                 density_factor=density_factor,

@@ -1159,7 +1159,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Rest of the parameters remain the same
         mesh_params = [
-            ("density_factor", "Density Factor:", 0.001, 0.1, 0.001, 0.025,
+            ("density_factor", "Density Factor:", 0.005, 0.05, 0.001, 0.025,
              "Controls mesh density. Lower values create finer meshes with more elements."),
             ("algorithm", "Mesh Algorithm:", None, None, None, "Frontal-Del.",
              "Algorithm used for mesh generation. Frontal-Delaunay is recommended for most cases."),

@@ -1,6 +1,6 @@
 # List of folders to analyze
 root_folders:
-  - "D:/2023-02-16/position5/newnewTFM"
+  - "C:/Users/aruppel/Desktop/test"
 
 
 # Root data paths
@@ -35,10 +35,10 @@ output_files:
 
 # Analysis steps to perform
 analysis_steps:
-  preprocessing: true
-  displacement: true
-  force: true
-  create_masks: true
+  preprocessing: false
+  displacement: false
+  force: false
+  create_masks: false
   stress: true
 
 # Visualization outputs to generate
@@ -101,7 +101,7 @@ parameters:
 
   # Stress parameters
   mesh_algorithm: "Frontal-Del."  # Options: Frontal-Del., Delaunay, MeshAdapt, BAMG, FD Quads, Para. Pack
-  density_factor: 0.005
+  density_factor: 0.0025
   use_optimization: true
   poisson_ratio_cells: 0.5
   max_stress: 1.0         # mN/m
