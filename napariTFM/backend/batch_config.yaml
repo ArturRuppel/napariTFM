@@ -11,44 +11,23 @@ input_files:
 
 # Output paths (relative to analysis folder)
 output_files:
-  preprocessing:
-    beads: "TFM_data/preprocessed_beads.tif"
-    reference: "TFM_data/preprocessed_reference.tif"
-    cells: "TFM_data/preprocessed_cells.tif"
-  masks:
-    path: "TFM_data/masks.tif"
-  displacement:
-    data: "TFM_data/displacement.npy"
-  force:
-    data: "TFM_data/traction_forces.npy"
-  stress:
-    data: "TFM_data/stress_tensor.npy"
-  visualizations:
-    bead_overlay: "visualizations/bead_overlay.tif"
-    displacement_map: "visualizations/displacement_map.tif"
-    force_map: "visualizations/force_map.tif"
-    force_cell_overlay: "visualizations/force_cell_overlay.tif"
-    sigma_xx: "visualizations/sigma_xx.tif"
-    sigma_yy: "visualizations/sigma_yy.tif"
-    normal_stress: "visualizations/normal_stress.tif"
-    mesh: "visualizations/mesh.tif"
 
 # Analysis steps to perform
 analysis_steps:
-  preprocessing: false
-  displacement: false
-  force: false
-  create_masks: false
+  preprocessing: true
+  displacement: true
+  force: true
+  create_masks: true
   stress: true
 
 # Visualization outputs to generate
 visualizations:
-  bead_overlay: false
-  displacement_map: false
-  force_map: false
-  force_cell_overlay: false
-  sigma_xx: false
-  sigma_yy: false
+  bead_overlay: true
+  displacement_map: true
+  force_map: true
+  force_cell_overlay: true
+  sigma_xx: true
+  sigma_yy: true
   normal_stress: true
   mesh: true
 

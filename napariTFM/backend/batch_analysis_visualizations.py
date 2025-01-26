@@ -19,7 +19,7 @@ class BatchVisualizationSaver:
             Base folder where data is located
         """
         self.base_folder = Path(base_folder)
-        self.viz_folder = self.base_folder / "visualizations"
+        self.viz_folder = self.base_folder / "TFM_visualizations"
         self.viz_folder.mkdir(exist_ok=True)
 
     def save_bead_overlay(self, bead_stack: np.ndarray, reference_image: np.ndarray, fps: int = 10) -> None:
