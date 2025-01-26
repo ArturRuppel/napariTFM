@@ -8,7 +8,7 @@ import yaml
 import numpy as np
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QGridLayout,
+    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QGridLayout, QButtonGroup, QRadioButton,
     QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QScrollArea,
     QProgressBar, QMessageBox, QListWidget, QCheckBox, QLineEdit,
     QFileDialog, QComboBox
@@ -16,6 +16,7 @@ from qtpy.QtWidgets import (
 
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.backend.batch_analysis import BatchAnalysis
 
 
 class BatchAnalysisWidget(BaseAnalysisWidget):
@@ -107,8 +108,50 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
+    def _create_folder_management_group(self) -> QGroupBox:
+        """Create folder management group."""
+        group = QGroupBox("Folder Management")
+        layout = QVBoxLayout()
+
+        # Folder list first
+        self.folder_list_widget = QListWidget()
+        layout.addWidget(self.folder_list_widget)
+
+        # Create grid layout for buttons
+        button_layout = QGridLayout()
+
+        # Add folder management buttons
+        self.add_folder_btn = QPushButton("Add Folder")
+        self.clear_folders_btn = QPushButton("Clear Folders")
+        button_layout.addWidget(self.add_folder_btn, 0, 0)
+        button_layout.addWidget(self.clear_folders_btn, 0, 1)
+
+        # Add console selection radio buttons
+        console_group = QHBoxLayout()
+        self.console_group = QButtonGroup()
+
+        self.napari_console_radio = QRadioButton("Run in Napari Console")
+        self.new_console_radio = QRadioButton("Run in New Console")
+        self.napari_console_radio.setChecked(True)  # Default to napari console
+
+        self.console_group.addButton(self.napari_console_radio)
+        self.console_group.addButton(self.new_console_radio)
+
+        console_group.addWidget(self.napari_console_radio)
+        console_group.addWidget(self.new_console_radio)
+
+        layout.addLayout(console_group)
+
+        # Add run button
+        self.run_analysis_btn = QPushButton("Run Analysis")
+        layout.addWidget(self.run_analysis_btn)
+
+        layout.addLayout(button_layout)
+        group.setLayout(layout)
+        return group
+
     def _run_batch_analysis(self):
-        """Run batch analysis by creating config and launching in new Python console."""
+        """Run batch analysis according to selected console option."""
         if not self.folder_list:
             QMessageBox.warning(self, "No Folders", "Please add folders to analyze first.")
             return
@@ -122,11 +165,29 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 yaml.safe_dump(config, temp_yaml, default_flow_style=False)
                 config_path = temp_yaml.name
 
-            # Convert paths to use forward slashes
-            config_path_forward = str(Path(config_path)).replace('\\', '/')
+            if self.napari_console_radio.isChecked():
+                # Run directly in napari console
+                print("Starting batch analysis in napari console...")
 
-            # Create Python script content
-            script_content = f'''
+                # Create output directories
+                for folder in config["root_folders"]:
+                    tfm_data_dir = Path(folder) / "TFM_data"
+                    tfm_data_dir.mkdir(exist_ok=True)
+
+                # Run analysis
+                analyzer = BatchAnalysis(config)
+                analyzer.process_all_folders()
+
+                # Clean up config file
+                Path(config_path).unlink()
+
+            else:
+                # Run in new console
+                # Convert paths to use forward slashes
+                config_path_forward = str(Path(config_path)).replace('\\', '/')
+
+                # Create Python script content
+                script_content = f'''
 import sys
 from pathlib import Path
 
@@ -137,6 +198,11 @@ if parent_dir not in sys.path:
 
 from napariTFM.backend.batch_analysis import BatchAnalysis
 
+# Create output directories for each folder before starting analysis
+for folder in {config["root_folders"]}:
+    tfm_data_dir = Path(folder) / "TFM_data"
+    tfm_data_dir.mkdir(exist_ok=True)
+
 # Create analyzer instance and process folders
 config_path = "{config_path_forward}"  # Using forward slashes
 analyzer = BatchAnalysis.from_yaml(config_path)
@@ -146,42 +212,38 @@ analyzer.process_all_folders()
 Path(config_path).unlink()
 '''
 
-            # Create temporary Python script file
-            with NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_script:
-                temp_script.write(script_content)
-                script_path = temp_script.name
+                # Create temporary Python script file
+                with NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_script:
+                    temp_script.write(script_content)
+                    script_path = temp_script.name
 
-            # Launch new Python console running the script
-            python_executable = sys.executable
-            if sys.platform == 'win32':
-                # On Windows, use start command to open new console window
-                subprocess.Popen(['start', 'cmd', '/k', python_executable, script_path],
-                                 shell=True)
-            else:
-                # On Unix-like systems, use terminal emulator
-                if sys.platform == 'darwin':
-                    # macOS
-                    subprocess.Popen(['open', '-a', 'Terminal',
-                                      python_executable, script_path])
+                # Launch new Python console running the script
+                python_executable = sys.executable
+                if sys.platform == 'win32':
+                    subprocess.Popen(['start', 'cmd', '/k', python_executable, script_path],
+                                     shell=True)
                 else:
-                    # Linux - try common terminal emulators
-                    terminals = ['gnome-terminal', 'xterm', 'konsole']
-                    for terminal in terminals:
-                        try:
-                            subprocess.Popen([terminal, '--', python_executable,
-                                              script_path])
-                            break
-                        except FileNotFoundError:
-                            continue
+                    if sys.platform == 'darwin':
+                        subprocess.Popen(['open', '-a', 'Terminal',
+                                          python_executable, script_path])
                     else:
-                        raise RuntimeError("No suitable terminal emulator found")
+                        terminals = ['gnome-terminal', 'xterm', 'konsole']
+                        for terminal in terminals:
+                            try:
+                                subprocess.Popen([terminal, '--', python_executable,
+                                                  script_path])
+                                break
+                            except FileNotFoundError:
+                                continue
+                        else:
+                            raise RuntimeError("No suitable terminal emulator found")
 
-            QMessageBox.information(
-                self,
-                "Analysis Started",
-                "Batch analysis has been started in a new console window.\n"
-                "The analysis will continue running even if you close napari."
-            )
+                QMessageBox.information(
+                    self,
+                    "Analysis Started",
+                    "Batch analysis has been started in a new console window.\n"
+                    "The analysis will continue running even if you close napari."
+                )
 
         except Exception as e:
             QMessageBox.critical(
@@ -190,11 +252,16 @@ Path(config_path).unlink()
                 f"Failed to start batch analysis: {str(e)}"
             )
             # Clean up temporary files if they exist
-            for path in [config_path, script_path]:
+            try:
+                Path(config_path).unlink()
+            except:
+                pass
+            if 'script_path' in locals():
                 try:
-                    Path(path).unlink()
+                    Path(script_path).unlink()
                 except:
                     pass
+
     def generate_config(self) -> dict:
         """Generate configuration dictionary based on UI state."""
         config = {
@@ -1091,30 +1158,6 @@ Path(config_path).unlink()
         params.update(self.parameter_manager.get_category_parameters(ParameterCategory.VISUALIZATION))
 
         return params
-
-    def _create_folder_management_group(self) -> QGroupBox:
-        """Create folder management group."""
-        group = QGroupBox("Folder Management")
-        layout = QVBoxLayout()
-
-        # Folder list first
-        self.folder_list_widget = QListWidget()
-        layout.addWidget(self.folder_list_widget)
-
-        # Create grid layout for buttons
-        button_layout = QGridLayout()
-
-        # Add folder management and run buttons (bottom row)
-        self.add_folder_btn = QPushButton("Add Folder")
-        self.clear_folders_btn = QPushButton("Clear Folders")
-        self.run_analysis_btn = QPushButton("Run Analysis")
-        button_layout.addWidget(self.add_folder_btn, 1, 0)
-        button_layout.addWidget(self.clear_folders_btn, 1, 1)
-        button_layout.addWidget(self.run_analysis_btn, 1, 2)
-
-        layout.addLayout(button_layout)
-        group.setLayout(layout)
-        return group
 
     def _connect_signals(self):
         """Connect widget signals."""

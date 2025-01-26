@@ -258,7 +258,7 @@ class BatchVisualizationSaver:
             U = tx[frame_idx][Y, X] * vector_scale
             V = ty[frame_idx][Y, X] * vector_scale
 
-            mask = sampled_magnitude > f_max * 0.2
+            mask = sampled_magnitude > f_max * 0.1
 
             colors = plt.cm.inferno(sampled_magnitude[mask] / f_max)
 
