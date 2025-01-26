@@ -148,18 +148,126 @@ class BatchAnalysis:
         "Para. Pack": 9
     }
 
-    def __init__(self, config_path: str):
-        """Initialize batch analysis with configuration file."""
-        print("Initializing BatchAnalysis")
+    def __init__(self, config: dict):
+        """Initialize batch analysis with configuration dictionary.
 
-        # Load configuration
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
-            logger.debug(f"Loaded configuration from {config_path}")
+        Args:
+            config (dict): Configuration dictionary containing analysis parameters
+        """
+        logger.debug("Initializing BatchAnalysis")
+        self.config = config
+        logger.debug("Loaded configuration")
 
         # Initialize data containers
         self._cleanup_internal_storage()
         self._tee_logger = None
+
+    @classmethod
+    def from_yaml(cls, yaml_path: str) -> 'BatchAnalysis':
+        """Create BatchAnalysis instance from YAML file.
+
+        Args:
+            yaml_path (str): Path to YAML configuration file
+
+        Returns:
+            BatchAnalysis: New instance initialized with the YAML configuration
+        """
+        with open(yaml_path, 'r') as f:
+            config = yaml.safe_load(f)
+        return cls(config)
+
+    def _print_parameters(self) -> None:
+        """Print all configuration parameters in a formatted way."""
+        print("\nAnalysis Parameters:")
+        print("-" * 50)
+
+        # Print enabled analysis steps
+        print("\nEnabled Analysis Steps:")
+        for step, enabled in self.config['analysis_steps'].items():
+            print(f"- {step:<20}: {'Yes' if enabled else 'No'}")
+
+        # Print parameters
+        print("\nPhysical Parameters:")
+        params = self.config['parameters']
+        physical_params = {
+            'pixel_size': ('Pixel Size', 'µm/pixel'),
+            'young_modulus': ('Young\'s Modulus', 'Pa'),
+            'poisson_ratio_substrate': ('Poisson Ratio (Substrate)', ''),
+            'poisson_ratio_cells': ('Poisson Ratio (Cells)', ''),
+            'frame_interval': ('Frame Interval', 'min'),
+            'gel_height': ('Gel Height', 'µm')
+        }
+        for key, (name, unit) in physical_params.items():
+            if key in params:
+                value = params[key]
+                if unit:
+                    print(f"- {name:<25}: {value} {unit}")
+                else:
+                    print(f"- {name:<25}: {value}")
+
+        print("\nPreprocessing Parameters:")
+        preproc_params = {
+            'min_intensity': ('Min Intensity Percentile', '%'),
+            'max_intensity': ('Max Intensity Percentile', '%'),
+            'gaussian_sigma': ('Gaussian Sigma', 'pixels'),
+            'registration_mode': ('Registration Mode', '')
+        }
+        for key, (name, unit) in preproc_params.items():
+            if key in params:
+                value = params[key]
+                if unit:
+                    print(f"- {name:<25}: {value} {unit}")
+                else:
+                    print(f"- {name:<25}: {value}")
+
+        print("\nDisplacement Analysis Parameters:")
+        disp_params = {
+            'tau': ('Tau', ''),
+            'lambda_': ('Lambda', ''),
+            'theta': ('Theta', ''),
+            'nscales': ('Number of Scales', ''),
+            'warps': ('Warps', ''),
+            'epsilon': ('Epsilon', ''),
+            'inner_iterations': ('Inner Iterations', ''),
+            'outer_iterations': ('Outer Iterations', ''),
+            'scale_step': ('Scale Step', ''),
+            'median_filtering': ('Median Filtering', ''),
+            'downscale_factor': ('Downscale Factor', '')
+        }
+        for key, (name, unit) in disp_params.items():
+            if key in params:
+                value = params[key]
+                print(f"- {name:<25}: {value}")
+
+        print("\nForce Analysis Parameters:")
+        force_params = {
+            'regularization': ('Regularization', ''),
+            'lanczos_exp': ('Lanczos Exponent', '')
+        }
+        for key, (name, unit) in force_params.items():
+            if key in params:
+                value = params[key]
+                print(f"- {name:<25}: {value}")
+
+        print("\nVisualization Parameters:")
+        viz_params = {
+            'd_max': ('Max Displacement', 'µm'),
+            'disp_vector_stride': ('Displacement Vector Stride', ''),
+            'disp_arrow_scale': ('Displacement Arrow Scale', ''),
+            'f_max': ('Max Force', 'Pa'),
+            'force_vector_stride': ('Force Vector Stride', ''),
+            'force_arrow_scale': ('Force Arrow Scale', ''),
+            'max_stress': ('Max Stress', 'mN/m')
+        }
+        for key, (name, unit) in viz_params.items():
+            if key in params:
+                value = params[key]
+                if unit:
+                    print(f"- {name:<25}: {value} {unit}")
+                else:
+                    print(f"- {name:<25}: {value}")
+
+        print("\n" + "-" * 50 + "\n")
 
     def process_folder(self, folder_path: str) -> None:
         """Process a single folder according to configuration.
@@ -189,11 +297,13 @@ class BatchAnalysis:
         #######################
         # Setup and Logging
         #######################
-        log_file = folder / "processing_log.txt"
+        log_file = folder / "TFM_data/processing_log.txt"
         self._tee_logger = TeeLogger(log_file)
         sys.stdout = self._tee_logger
         logger = setup_logging(silent=True, log_file=log_file)
-        print(f"Processing folder: {folder_path}")
+        print(f"\nProcessing folder: {folder_path} with the following parameters:")
+        self._print_parameters()
+
 
         # Create output directories
         tfm_folder = folder / "TFM_data"
@@ -206,7 +316,6 @@ class BatchAnalysis:
             # Preprocessing Step
             #######################
             if self.config['analysis_steps']['preprocessing']:
-                print("Starting preprocessing step")
                 try:
                     for progress in self._run_preprocessing(folder):
                         print(f"Progress: {progress['progress']:.1f}%, {progress['message']}")
@@ -357,6 +466,64 @@ class BatchAnalysis:
                         print(f"Force-cell overlay visualization failed: {str(e)}. Skipping this step.")
 
             #######################
+            # Mesh Visualization
+            #######################
+            if self.config['visualizations']['mesh']:
+                # Check for required data
+                have_masks = Path(folder / 'TFM_data/masks.tif').exists()
+                have_force_data = self._force_field is not None or Path(folder / 'TFM_data/traction_forces.npy').exists()
+
+                if not have_masks:
+                    print("Could not load masks for mesh visualization. Skipping this step.")
+                elif not have_force_data:
+                    print("No force data available for mesh visualization. Skipping this step.")
+                else:
+                    try:
+                        # Load masks if not already in memory
+                        if not hasattr(self, '_masks') or self._masks is None:
+                            masks = tifffile.imread(str(folder / 'TFM_data/masks.tif')) > 0
+                        else:
+                            masks = self._masks
+
+                        # Load force data if not already in memory
+                        if self._force_field is None:
+                            force_data = np.load(str(folder / 'TFM_data/traction_forces.npy'),
+                                                 allow_pickle=True).item()
+                            force_shape = force_data['force_field'].shape[1:3]
+                        else:
+                            force_shape = self._force_field.shape[1:3]
+
+                        # Resize masks to match force field dimensions
+                        if masks.ndim == 2:
+                            resized_mask = resize(masks.astype(float), force_shape,
+                                                  order=0, preserve_range=True,
+                                                  anti_aliasing=False) > 0.5
+                        else:
+                            resized_masks = np.zeros((len(masks), *force_shape), dtype=bool)
+                            for i in range(len(masks)):
+                                resized_masks[i] = resize(masks[i].astype(float),
+                                                          force_shape,
+                                                          order=0,
+                                                          preserve_range=True,
+                                                          anti_aliasing=False) > 0.5
+                            resized_mask = resized_masks
+
+                        # Update mesh generation parameters from config
+                        mesh_params = {
+                            'density_factor': self.config['parameters']['density_factor'],
+                            'algorithm': self.MESH_ALGORITHMS.get(
+                                self.config['parameters']['mesh_algorithm'], 6),
+                            'use_optimization': self.config['parameters']['use_optimization']
+                        }
+
+                        # Create and save mesh visualization
+                        viz_saver.save_mesh_visualization(resized_mask, **mesh_params)
+                        print("Mesh visualization saved successfully.")
+
+                    except Exception as e:
+                        print(f"Mesh visualization failed: {str(e)}. Skipping this step.")
+
+            #######################
             # Stress Analysis
             #######################
             have_masks = Path(folder / 'TFM_data/masks.tif').exists()
@@ -411,7 +578,7 @@ class BatchAnalysis:
 
         finally:
             # Clean up worker and internal storage regardless of success or failure
-            print(f"Cleaning up after processing folder: {folder_path}")
+            logger.debug(f"Cleaning up after processing folder: {folder_path}")
             self._cleanup_internal_storage()
 
             # Close and reset the TeeLogger
@@ -470,7 +637,7 @@ class BatchAnalysis:
 
     def _cleanup_internal_storage(self):
         """Clean up all internal data storage to free memory."""
-        print("Cleaning up internal storage")
+        logger.debug("Cleaning up internal storage")
 
         # Reset all data containers
         """Initialize or reset all data containers to their default state."""
@@ -988,7 +1155,5 @@ class BatchAnalysis:
 
 
 if __name__ == "__main__":
-    # Example usage
-    config_path = "batch_config.yaml"
-    analyzer = BatchAnalysis(config_path)
+    analyzer = BatchAnalysis.from_yaml("C:/Users/aruppel/Documents/python_projects/napariTFM/napariTFM/backend/batch_config.yaml")
     analyzer.process_all_folders()

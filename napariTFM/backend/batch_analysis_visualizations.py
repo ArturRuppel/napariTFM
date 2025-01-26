@@ -376,3 +376,138 @@ class BatchVisualizationSaver:
                 # Save as GIF
                 output_path = self.viz_folder / f'{component_name}.gif'
                 imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
+
+    def save_mesh_visualization(self, masks: np.ndarray, density_factor: float = 0.01,
+                                algorithm: int = 6, use_optimization: bool = True,
+                                fps: int = 10) -> None:
+        """
+        Create and save a GIF of mesh visualizations for each frame.
+
+        Parameters
+        ----------
+        masks : np.ndarray
+            Stack of binary masks
+        density_factor : float, optional
+            Controls mesh density (smaller = denser mesh)
+        algorithm : int, optional
+            Mesh generation algorithm (default: 6 for Frontal-Delaunay)
+        use_optimization : bool, optional
+            Whether to optimize the mesh
+        fps : int, optional
+            Frames per second for the GIF
+        """
+        from napariTFM.backend.mesh_generator import MeshGenerator, MeshParameters
+
+        frames = []
+        total_frames = len(masks) if masks.ndim > 2 else 1
+
+        # Handle single mask case
+        if masks.ndim == 2:
+            masks = masks[np.newaxis, ...]
+
+        # Get mask shape for consistent frame size
+        mask_height, mask_width = masks[0].shape
+        aspect_ratio = mask_width / mask_height
+
+        # Calculate figure size to maintain aspect ratio with higher resolution
+        base_size = 6
+        if aspect_ratio > 1:
+            figsize = (base_size, base_size / aspect_ratio)
+        else:
+            figsize = (base_size * aspect_ratio, base_size)
+
+        # Create mesh parameters with user-specified values
+        params = MeshParameters(
+            mask=masks[0],  # Placeholder mask
+            density_factor=density_factor,
+            algorithm=algorithm,
+            use_optimization=use_optimization
+        )
+
+        # Initialize mesh generator
+        mesh_gen = MeshGenerator(params)
+
+        # Process each frame
+        for frame_idx in range(total_frames):
+            print(f"Processing mesh frame {frame_idx + 1}/{total_frames}")
+
+            # Create figure with high DPI for better resolution
+            fig = plt.figure(figsize=figsize, dpi=300)
+            ax = fig.add_axes([0.1, 0.1, 0.8, 0.8])  # Add axes with padding
+
+            try:
+                # Generate mesh for current frame
+                points, triangles = mesh_gen.generate_mesh(masks[frame_idx])
+
+                # Create our own visualization instead of using mesh_gen.plot_mesh
+                # Plot edges
+                edges = []
+                for triangle in triangles:
+                    # Add all three edges of the triangle
+                    edges.append(np.array([points[triangle[0]], points[triangle[1]]]))
+                    edges.append(np.array([points[triangle[1]], points[triangle[2]]]))
+                    edges.append(np.array([points[triangle[2]], points[triangle[0]]]))
+
+                # Create line collection with thinner lines
+                lc = plt.matplotlib.collections.LineCollection(edges, colors='b', alpha=1.0, linewidth=0.4)
+                ax.add_collection(lc)
+
+                # Plot nodes with smaller markers
+                ax.plot(points[:, 0], points[:, 1], 'r.', markersize=0.6, alpha=1.0)
+
+                # Calculate mesh quality metrics
+                quality_metrics = mesh_gen.analyze_mesh_quality(points, triangles)
+
+                # Add quality metrics text with adjusted font size
+                metrics_text = (
+                    f"Elements: {quality_metrics['n_elements']}\n"
+                    f"Min Angle: {quality_metrics['min_angle']:.1f}°\n"
+                    f"Mean Quality: {quality_metrics['mean_quality']:.2f}\n"
+                    f"Max Aspect Ratio: {quality_metrics['max_aspect_ratio']:.2f}"
+                )
+                ax.text(0.02, 0.98, metrics_text,
+                        transform=ax.transAxes,
+                        verticalalignment='top',
+                        fontsize=8,
+                        bbox=dict(facecolor='white', alpha=1.0, pad=0.5))
+
+                # Set title with adjusted font size
+                ax.set_title(f"Frame {frame_idx + 1}/{total_frames}", fontsize=10, pad=10)
+
+                # Configure axes
+                ax.set_xlim(-0.02 * mask_width, 1.02 * mask_width)
+                ax.set_ylim(-0.02 * mask_height, 1.02 * mask_height)
+                ax.set_aspect('equal')
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_frame_on(False)
+
+                # Convert figure to image with high resolution
+                fig.canvas.draw()
+                # Get the RGBA buffer from the figure
+                w, h = fig.canvas.get_width_height()
+                buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+                frame = buf.reshape((h, w, 3))
+                frames.append(frame)
+
+            except Exception as e:
+                print(f"Warning: Failed to generate mesh for frame {frame_idx + 1}: {str(e)}")
+                # Create error frame
+                ax.text(0.5, 0.5, f"Mesh generation failed:\n{str(e)}",
+                        ha='center', va='center', transform=ax.transAxes,
+                        fontsize=10)
+                fig.canvas.draw()
+                w, h = fig.canvas.get_width_height()
+                buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+                frame = buf.reshape((h, w, 3))
+                frames.append(frame)
+
+            plt.close(fig)
+
+        if frames:
+            # Save as GIF with higher quality settings
+            output_path = self.viz_folder / 'mesh_visualization.gif'
+            imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, quality=95, loop=0)
+            print(f"Saved mesh visualization to {output_path}")
+        else:
+            print("No frames were generated. Mesh visualization failed.")

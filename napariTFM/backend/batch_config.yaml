@@ -14,11 +14,11 @@ output_files:
 
 # Analysis steps to perform
 analysis_steps:
-  preprocessing: true
-  displacement: true
-  force: true
-  create_masks: true
-  stress: true
+  preprocessing: false
+  displacement: false
+  force: false
+  create_masks: false
+  stress: false
 
 # Visualization outputs to generate
 visualizations:
