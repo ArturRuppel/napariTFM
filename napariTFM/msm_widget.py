@@ -124,7 +124,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         return meshes
 
-
     @thread_worker
     def analyze_all_frames_worker(self):
         """Thread worker using pre-generated meshes"""

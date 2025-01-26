@@ -22,9 +22,7 @@ Paper references:
   Choosing a Good Ridge Parameter (2012)
 """
 
-import time
 from typing import Tuple, Optional
-from napari.qt.threading import thread_worker
 
 from scipy import optimize
 

@@ -43,6 +43,7 @@ from napariTFM.backend.mesh_generator import MeshParameters, MeshGenerator
 from napariTFM.backend.msm_numba_functions import *
 
 
+
 def timer_decorator(func):
     @wraps(func)
     def wrapper(self, *args, **kwargs):
