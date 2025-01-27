@@ -393,29 +393,37 @@ class MSMActionPanel(QWidget):
     def _setup_ui(self):
         layout = QVBoxLayout()
 
-        # Action buttons
+        # Create grid of button pairs
+        button_layout = QVBoxLayout()
+        button_layout.setSpacing(8)  # Add some spacing between rows
+
+        # Row 1: Create Masks and Preview Mesh
+        row1_layout = QHBoxLayout()
         self.create_mask_btn = QPushButton("Create Masks from Image")
-        layout.addWidget(self.create_mask_btn)
-
-        button_layout = QHBoxLayout()
-        # Left column
-        left_col = QVBoxLayout()
         self.preview_mesh_btn = QPushButton("Preview Mesh")
+        row1_layout.addWidget(self.create_mask_btn)
+        row1_layout.addWidget(self.preview_mesh_btn)
+        button_layout.addLayout(row1_layout)
+
+        # Row 2: Preview Frame and Calculate Stress
+        row2_layout = QHBoxLayout()
         self.preview_frame_btn = QPushButton("Preview Current Frame")
-        left_col.addWidget(self.preview_mesh_btn)
-        left_col.addWidget(self.preview_frame_btn)
-
-        # Right column
-        right_col = QVBoxLayout()
         self.analyze_btn = QPushButton("Calculate Stress Tensors")
-        self.save_btn = QPushButton("Save Results")
-        right_col.addWidget(self.analyze_btn)
-        right_col.addWidget(self.save_btn)
+        row2_layout.addWidget(self.preview_frame_btn)
+        row2_layout.addWidget(self.analyze_btn)
+        button_layout.addLayout(row2_layout)
 
-        button_layout.addLayout(left_col)
-        button_layout.addLayout(right_col)
+        # Row 3: Save and Load Stress
+        row3_layout = QHBoxLayout()
+        self.save_btn = QPushButton("Save Stress Tensors")
+        self.load_stress_btn = QPushButton("Load Stress Tensors")
+        row3_layout.addWidget(self.save_btn)
+        row3_layout.addWidget(self.load_stress_btn)
+        button_layout.addLayout(row3_layout)
+
         layout.addLayout(button_layout)
 
+        # Cancel button (full width)
         self.cancel_btn = QPushButton("Cancel All Operations")
         layout.addWidget(self.cancel_btn)
 
@@ -430,8 +438,8 @@ class MSMActionPanel(QWidget):
         self.setLayout(layout)
 
     def update_button_states(self, active_layer_exists: bool = False,
-                           force_data: bool = False, mask_data: bool = False,
-                           stress_data: bool = False):
+                             force_data: bool = False, mask_data: bool = False,
+                             stress_data: bool = False):
         """Update button states based on current data availability."""
         # Ensure all parameters are boolean, defaulting to False if None
         active_layer_exists = bool(active_layer_exists)
@@ -463,6 +471,10 @@ class MSMActionPanel(QWidget):
                 "Load both mask and force data first" if not (mask_data and force_data)
                 else btn.text()
             )
+
+        # Load Stress button is always enabled
+        self.load_stress_btn.setEnabled(True)
+        self.load_stress_btn.setToolTip("Load pre-calculated stress tensor results")
 
         # Save Results button
         self.save_btn.setEnabled(stress_data)
