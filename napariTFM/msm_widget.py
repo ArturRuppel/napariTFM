@@ -211,6 +211,29 @@ class MSMDataPanel(QWidget):
         self.controller = None
         self._setup_ui()
 
+    def _get_active_layer_data(self):
+        """Get the data from currently active napari layer."""
+        active_layer = self.viewer.layers.selection.active
+        if active_layer is None:
+            QMessageBox.warning(
+                self,
+                "No Layer Selected",
+                "Please select an image layer to create masks from."
+            )
+            return None
+
+        # Get the actual numpy array from the layer
+        if hasattr(active_layer, 'data') and isinstance(active_layer.data, np.ndarray):
+            return active_layer.data
+        return None
+    def _handle_load_mask_button(self):
+        """Handle the Load Masks button click by getting data from active layer."""
+        mask_data = self._get_active_layer_data()
+        if mask_data is not None:
+            self._load_mask_data(mask_data)
+            # Let the controller handle visualization
+            if self.controller:
+                self.controller.mask_creation_completed.emit()
     def update_button_states(self, has_active_image: bool):
         """Update button states based on current conditions."""
         # Update Load Masks button
@@ -248,7 +271,7 @@ class MSMDataPanel(QWidget):
     def _connect_signals(self):
         """Connect UI signals to controller methods."""
         self.load_force_btn.clicked.connect(self._load_force_data)
-        self.load_mask_btn.clicked.connect(self._load_mask_data)
+        self.load_mask_btn.clicked.connect(self._handle_load_mask_button)
 
     def _setup_ui(self):
         layout = QVBoxLayout()
@@ -447,6 +470,7 @@ class MSMActionPanel(QWidget):
             "Calculate stress tensors first" if not stress_data
             else "Save results"
         )
+
 
     def _connect_signals(self):
         """Connect action panel buttons to controller methods."""
@@ -876,7 +900,7 @@ class MSMWidget(BaseAnalysisWidget):
         # Initialize service and panels first
         self.service = MSMService()
         self.parameter_panel = MSMParameterPanel(parameter_manager)
-        self.data_panel = MSMDataPanel(data_manager, viewer)  # Create without controller
+        self.data_panel = MSMDataPanel(data_manager, viewer)
 
         # Initialize controller with data_panel
         self.controller = MSMController(
@@ -894,6 +918,9 @@ class MSMWidget(BaseAnalysisWidget):
         self.action_panel = MSMActionPanel(self.controller)
         self._setup_ui()
         self._connect_signals()
+
+        # Add layer selection monitoring
+        self.viewer.layers.selection.events.active.connect(self._update_ui_state)
 
 
     def _setup_ui(self):
@@ -1049,11 +1076,9 @@ class MSMWidget(BaseAnalysisWidget):
         has_stress = (self.data_manager.stress_tensor is not None and
                       self.data_manager.stress_params is not None)
 
-        # Update data panel buttons
+        # Update panels
         self.data_panel.update_button_states(has_active_image)
         self.data_panel.update_data_status()
-
-        # Update action panel buttons
         self.action_panel.update_button_states(
             active_layer_exists=has_active_image,
             force_data=has_force,
