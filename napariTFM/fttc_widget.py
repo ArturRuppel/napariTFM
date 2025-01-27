@@ -101,8 +101,8 @@ class FTTCParameterPanel(QWidget):
         layout = QVBoxLayout()
 
         params = [
-            ("vector_stride", "Vector Stride:", 1, 100, 1, 20),
-            ("arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1, 1.0),
+            ("force_vector_stride", "Vector Stride:", 1, 100, 1, 20),
+            ("force_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1, 1.0),
             ("f_max", "Max Force (Pa):", 0.1, 10000.0, 1, 1000.0)
         ]
 
@@ -365,296 +365,296 @@ class FTTCController(QObject):
             self.action_panel.freeze_ui(False)
         self.ui_frozen.emit(False)
 
-        def start_analysis(self):
-            """Start the force calculation process."""
-            try:
-                if not self._validate_prerequisites():
-                    return
+    def start_analysis(self):
+        """Start the force calculation process."""
+        try:
+            if not self._validate_prerequisites():
+                return
 
-                self.analysis_started.emit()
-                self._update_progress(0, "Starting force calculation...")
+            self.analysis_started.emit()
+            self._update_progress(0, "Starting force calculation...")
 
-                # Get current parameters
-                params = self._get_current_parameters()
+            # Get current parameters
+            params = self._get_current_parameters()
 
-                # Initialize service
-                self.service.initialize_calculator(params)
+            # Initialize service
+            self.service.initialize_calculator(params)
 
-                # Get displacement data
-                displacement_field = self.data_manager.displacement_field
-                pixel_size = self.data_manager.displacement_params['pixel_size']
-                downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
+            # Get displacement data
+            displacement_field = self.data_manager.displacement_field
+            pixel_size = self.data_manager.displacement_params['pixel_size']
+            downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
 
-                @thread_worker
-                def force_worker():
-                    # Start force calculation generator
-                    force_generator = self.service.calculate_force_stack(
-                        displacement_field=displacement_field,
-                        pixel_size=pixel_size,
-                        downscale_factor=downscale_factor,
-                        regularization=None if params.auto_gcv else params.regularization,
-                        use_gcv=params.auto_gcv
-                    )
-
-                    try:
-                        while True:
-                            progress_info, current_frame, total_frames = next(force_generator)
-                            progress = int((current_frame) / total_frames * 100)
-
-                            # Format progress message
-                            message = (
-                                f"Processing frame {current_frame}/{total_frames}\n"
-                                f"Mean force: {progress_info['mean_force']:.2f} Pa\n"
-                                f"Max force: {progress_info['max_force']:.2f} Pa"
-                            )
-
-                            yield progress, message, progress_info
-
-                    except StopIteration as e:
-                        return e.value
-
-                # Create and configure worker
-                worker = force_worker()
-                worker.started.connect(self.freeze_ui)
-                worker.yielded.connect(self._handle_force_progress)
-                worker.returned.connect(self._handle_force_results)
-                worker.errored.connect(self._handle_error)
-                worker.finished.connect(self.unfreeze_ui)
-
-                self.active_workers.append(worker)
-                worker.start()
-
-            except Exception as e:
-                self._handle_error(str(e))
-
-        def preview_force(self):
-            """Preview force calculation for current frame."""
-            try:
-                if not self._validate_prerequisites():
-                    return
-
-                self._update_progress(0, "Calculating forces for preview...")
-
-                # Get current parameters and initialize service
-                params = self._get_current_parameters()
-                self.service.initialize_calculator(params)
-
-                # Get current frame data
-                current_frame = self.viewer.dims.current_step[0]
-                displacement_field = self.data_manager.displacement_field[current_frame]
-                pixel_size = self.data_manager.displacement_params['pixel_size']
-                downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
-
-                @thread_worker
-                def preview_worker():
-                    tx, ty = self.service.calculate_forces(
-                        displacement_field=displacement_field,
-                        pixel_size=pixel_size,
-                        downscale_factor=downscale_factor,
-                        regularization=None if params.auto_gcv else params.regularization,
-                        use_gcv=params.auto_gcv
-                    )
-                    return tx, ty
-
-                # Create and configure worker
-                worker = preview_worker()
-                worker.started.connect(self.freeze_ui)
-                worker.returned.connect(self._handle_preview_results)
-                worker.errored.connect(self._handle_error)
-                worker.finished.connect(self.unfreeze_ui)
-
-                self.active_workers.append(worker)
-                worker.start()
-
-            except Exception as e:
-                self._handle_error(str(e))
-
-        def _handle_preview_results(self, results):
-            """Handle preview calculation results."""
-            try:
-                tx, ty = results
-
-                # Get visualization parameters
-                params = self._get_current_parameters()
-                downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
-
-                # Update visualization
-                self.visualization_manager.visualize_force_preview(
-                    tx, ty,
-                    f_max=params.f_max,
-                    vector_stride=params.vector_stride,
-                    arrow_scale=params.arrow_scale,
-                    downscale_factor=downscale_factor
+            @thread_worker
+            def force_worker():
+                # Start force calculation generator
+                force_generator = self.service.calculate_force_stack(
+                    displacement_field=displacement_field,
+                    pixel_size=pixel_size,
+                    downscale_factor=downscale_factor,
+                    regularization=None if params.auto_gcv else params.regularization,
+                    use_gcv=params.auto_gcv
                 )
 
-                # Calculate and show statistics
-                magnitude = np.sqrt(tx ** 2 + ty ** 2)
-                stats_message = (
-                    f"Preview statistics:\n"
-                    f"Max force: {np.max(magnitude):.2f} Pa\n"
-                    f"Mean force: {np.mean(magnitude):.2f} Pa\n"
-                    f"Median force: {np.median(magnitude):.2f} Pa"
+                try:
+                    while True:
+                        progress_info, current_frame, total_frames = next(force_generator)
+                        progress = int((current_frame) / total_frames * 100)
+
+                        # Format progress message
+                        message = (
+                            f"Processing frame {current_frame}/{total_frames}\n"
+                            f"Mean force: {progress_info['mean_force']:.2f} Pa\n"
+                            f"Max force: {progress_info['max_force']:.2f} Pa"
+                        )
+
+                        yield progress, message, progress_info
+
+                except StopIteration as e:
+                    return e.value
+
+            # Create and configure worker
+            worker = force_worker()
+            worker.started.connect(self.freeze_ui)
+            worker.yielded.connect(self._handle_force_progress)
+            worker.returned.connect(self._handle_force_results)
+            worker.errored.connect(self._handle_error)
+            worker.finished.connect(self.unfreeze_ui)
+
+            self.active_workers.append(worker)
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def preview_force(self):
+        """Preview force calculation for current frame."""
+        try:
+            if not self._validate_prerequisites():
+                return
+
+            self._update_progress(0, "Calculating forces for preview...")
+
+            # Get current parameters and initialize service
+            params = self._get_current_parameters()
+            self.service.initialize_calculator(params)
+
+            # Get current frame data
+            current_frame = self.viewer.dims.current_step[0]
+            displacement_field = self.data_manager.displacement_field[current_frame]
+            pixel_size = self.data_manager.displacement_params['pixel_size']
+            downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
+
+            @thread_worker
+            def preview_worker():
+                tx, ty = self.service.calculate_forces(
+                    displacement_field=displacement_field,
+                    pixel_size=pixel_size,
+                    downscale_factor=downscale_factor,
+                    regularization=None if params.auto_gcv else params.regularization,
+                    use_gcv=params.auto_gcv
                 )
-                self._update_progress(100, stats_message)
+                return tx, ty
 
-            except Exception as e:
-                self._handle_error(str(e))
+            # Create and configure worker
+            worker = preview_worker()
+            worker.started.connect(self.freeze_ui)
+            worker.returned.connect(self._handle_preview_results)
+            worker.errored.connect(self._handle_error)
+            worker.finished.connect(self.unfreeze_ui)
 
-        def _handle_force_progress(self, progress_data):
-            """Handle progress updates during force calculation."""
-            progress, message, _ = progress_data
-            self._update_progress(progress, message)
+            self.active_workers.append(worker)
+            worker.start()
 
-        def _handle_force_results(self, results):
-            """Handle completed force calculation results."""
-            try:
-                # Get parameters for results packaging
-                params = self._get_current_parameters()
-                pixel_size = self.data_manager.displacement_params['pixel_size']
-                downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
+        except Exception as e:
+            self._handle_error(str(e))
 
-                # Create force field array
-                force_field = np.stack([results['tx'], results['ty']], axis=-1)
+    def _handle_preview_results(self, results):
+        """Handle preview calculation results."""
+        try:
+            tx, ty = results
 
-                # Package parameters
-                force_params = {
-                    'young_modulus': params.young_modulus,
-                    'poisson_ratio_substrate': params.poisson_ratio_substrate,
-                    'gel_height': params.gel_height,
-                    'pixel_size': pixel_size,
-                    'frame_interval': params.frame_interval,
-                    'regularization': params.regularization,
-                    'lanczos_exp': params.lanczos_exp,
-                    'downscale_factor': downscale_factor,
-                    'visualization': {
-                        'vector_stride': params.vector_stride,
-                        'arrow_scale': params.arrow_scale,
-                        'f_max': params.f_max
-                    }
+            # Get visualization parameters
+            params = self._get_current_parameters()
+            downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
+
+            # Update visualization
+            self.visualization_manager.visualize_force_preview(
+                tx, ty,
+                f_max=params.f_max,
+                vector_stride=params.force_vector_stride,
+                arrow_scale=params.force_arrow_scale,
+                downscale_factor=downscale_factor
+            )
+
+            # Calculate and show statistics
+            magnitude = np.sqrt(tx ** 2 + ty ** 2)
+            stats_message = (
+                f"Preview statistics:\n"
+                f"Max force: {np.max(magnitude):.2f} Pa\n"
+                f"Mean force: {np.mean(magnitude):.2f} Pa\n"
+                f"Median force: {np.median(magnitude):.2f} Pa"
+            )
+            self._update_progress(100, stats_message)
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def _handle_force_progress(self, progress_data):
+        """Handle progress updates during force calculation."""
+        progress, message, _ = progress_data
+        self._update_progress(progress, message)
+
+    def _handle_force_results(self, results):
+        """Handle completed force calculation results."""
+        try:
+            # Get parameters for results packaging
+            params = self._get_current_parameters()
+            pixel_size = self.data_manager.displacement_params['pixel_size']
+            downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
+
+            # Create force field array
+            force_field = np.stack([results['tx'], results['ty']], axis=-1)
+
+            # Package parameters
+            force_params = {
+                'young_modulus': params.young_modulus,
+                'poisson_ratio_substrate': params.poisson_ratio_substrate,
+                'gel_height': params.gel_height,
+                'pixel_size': pixel_size,
+                'frame_interval': params.frame_interval,
+                'regularization': params.regularization,
+                'lanczos_exp': params.lanczos_exp,
+                'downscale_factor': downscale_factor,
+                'visualization': {
+                    'force_vector_stride': params.force_vector_stride,
+                    'force_arrow_scale': params.force_arrow_scale,
+                    'f_max': params.f_max
+                }
+            }
+
+            # Update data manager
+            self.data_manager.set_force_results(force_field, force_params)
+
+            # Update visualization
+            self.visualization_manager.visualize_force_results(
+                results,
+                downscale_factor=downscale_factor
+            )
+
+            self._update_progress(100, "Force calculation completed successfully")
+            self.analysis_completed.emit(results)
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def save_results(self):
+        """Save force calculation results to file."""
+        try:
+            if self.data_manager.force_field is None:
+                raise ValueError("No force data to save")
+
+            file_path, _ = QFileDialog.getSaveFileName(
+                None, "Save Force Data", "", "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                if not file_path.endswith('.npy'):
+                    file_path += '.npy'
+
+                force_results = {
+                    'force_field': self.data_manager.force_field,
+                    'parameters': self.data_manager.force_params
                 }
 
+                np.save(file_path, force_results)
+                self._update_progress(100, f"Results saved to:\n{file_path}")
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def load_force_data(self):
+        """Load force data from file."""
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                None, "Load Force Data", "", "NumPy Files (*.npy)"
+            )
+
+            if file_path:
+                force_data = np.load(file_path, allow_pickle=True).item()
+                force_field, parameters, warnings = self.service.process_force_data(force_data)
+
+                # Show any warnings
+                for warning in warnings:
+                    QMessageBox.warning(None, "Warning", warning)
+
                 # Update data manager
-                self.data_manager.set_force_results(force_field, force_params)
+                self.data_manager.set_force_results(force_field, parameters)
 
                 # Update visualization
                 self.visualization_manager.visualize_force_results(
-                    results,
-                    downscale_factor=downscale_factor
+                    {'tx': force_field[..., 0], 'ty': force_field[..., 1], 'parameters': parameters},
+                    downscale_factor=parameters.get('downscale_factor', 1)
                 )
 
-                self._update_progress(100, "Force calculation completed successfully")
-                self.analysis_completed.emit(results)
+                self._update_progress(100, f"Force data loaded from:\n{file_path}")
+                self.data_updated.emit('force')
 
-            except Exception as e:
-                self._handle_error(str(e))
+        except Exception as e:
+            self._handle_error(str(e))
 
-        def save_results(self):
-            """Save force calculation results to file."""
+    def cancel_all_operations(self):
+        """Cancel all running background operations."""
+        for worker in self.active_workers:
             try:
-                if self.data_manager.force_field is None:
-                    raise ValueError("No force data to save")
+                worker.quit()
+                worker.wait()
+                worker.deleteLater()
+            except Exception:
+                pass
+        self.active_workers.clear()
+        self._update_progress(0, "Operations cancelled")
+        self.unfreeze_ui()
 
-                file_path, _ = QFileDialog.getSaveFileName(
-                    None, "Save Force Data", "", "NumPy Files (*.npy)"
-                )
+    def _get_current_parameters(self) -> FTTCParameters:
+        """Get current FTTC parameters from parameter manager."""
+        return FTTCParameters(
+            young_modulus=self.parameter_manager.get_value('young_modulus'),
+            poisson_ratio_substrate=self.parameter_manager.get_value('poisson_ratio_substrate'),
+            gel_height=self.parameter_manager.get_value('gel_height'),
+            lanczos_exp=self.parameter_manager.get_value('lanczos_exp'),
+            regularization=self.parameter_manager.get_value('regularization'),
+            auto_gcv=self.parameter_manager.get_value('auto_gcv'),
+            force_vector_stride=self.parameter_manager.get_value('force_vector_stride'),
+            force_arrow_scale=self.parameter_manager.get_value('force_arrow_scale'),
+            f_max=self.parameter_manager.get_value('f_max'),
+            frame_interval=self.parameter_manager.get_value('frame_interval')
+        )
 
-                if file_path:
-                    if not file_path.endswith('.npy'):
-                        file_path += '.npy'
+    def _validate_prerequisites(self) -> bool:
+        """Check if required data and parameters are available."""
+        if self.data_manager.displacement_field is None:
+            QMessageBox.warning(None, "Warning", "No displacement data loaded")
+            return False
 
-                    force_results = {
-                        'force_field': self.data_manager.force_field,
-                        'parameters': self.data_manager.force_params
-                    }
+        params = self._get_current_parameters()
+        is_valid, error_message = self.service.validate_parameters(params)
+        if not is_valid:
+            QMessageBox.warning(None, "Invalid Parameters", error_message)
+            return False
 
-                    np.save(file_path, force_results)
-                    self._update_progress(100, f"Results saved to:\n{file_path}")
+        return True
 
-            except Exception as e:
-                self._handle_error(str(e))
+    def _handle_error(self, error_message: str):
+        """Handle errors during operations."""
+        self._update_progress(0, f"Error: {error_message}")
+        self.analysis_failed.emit(error_message)
+        QMessageBox.critical(None, "Error", error_message)
+        self.unfreeze_ui()
 
-        def load_force_data(self):
-            """Load force data from file."""
-            try:
-                file_path, _ = QFileDialog.getOpenFileName(
-                    None, "Load Force Data", "", "NumPy Files (*.npy)"
-                )
-
-                if file_path:
-                    force_data = np.load(file_path, allow_pickle=True).item()
-                    force_field, parameters, warnings = self.service.process_force_data(force_data)
-
-                    # Show any warnings
-                    for warning in warnings:
-                        QMessageBox.warning(None, "Warning", warning)
-
-                    # Update data manager
-                    self.data_manager.set_force_results(force_field, parameters)
-
-                    # Update visualization
-                    self.visualization_manager.visualize_force_results(
-                        {'tx': force_field[..., 0], 'ty': force_field[..., 1], 'parameters': parameters},
-                        downscale_factor=parameters.get('downscale_factor', 1)
-                    )
-
-                    self._update_progress(100, f"Force data loaded from:\n{file_path}")
-                    self.data_updated.emit('force')
-
-            except Exception as e:
-                self._handle_error(str(e))
-
-        def cancel_all_operations(self):
-            """Cancel all running background operations."""
-            for worker in self.active_workers:
-                try:
-                    worker.quit()
-                    worker.wait()
-                    worker.deleteLater()
-                except Exception:
-                    pass
-            self.active_workers.clear()
-            self._update_progress(0, "Operations cancelled")
-            self.unfreeze_ui()
-
-        def _get_current_parameters(self) -> FTTCParameters:
-            """Get current FTTC parameters from parameter manager."""
-            return FTTCParameters(
-                young_modulus=self.parameter_manager.get_value('young_modulus'),
-                poisson_ratio_substrate=self.parameter_manager.get_value('poisson_ratio_substrate'),
-                gel_height=self.parameter_manager.get_value('gel_height'),
-                lanczos_exp=self.parameter_manager.get_value('lanczos_exp'),
-                regularization=self.parameter_manager.get_value('regularization'),
-                auto_gcv=self.parameter_manager.get_value('auto_gcv'),
-                vector_stride=self.parameter_manager.get_value('vector_stride'),
-                arrow_scale=self.parameter_manager.get_value('arrow_scale'),
-                f_max=self.parameter_manager.get_value('f_max'),
-                frame_interval=self.parameter_manager.get_value('frame_interval')
-            )
-
-        def _validate_prerequisites(self) -> bool:
-            """Check if required data and parameters are available."""
-            if self.data_manager.displacement_field is None:
-                QMessageBox.warning(None, "Warning", "No displacement data loaded")
-                return False
-
-            params = self._get_current_parameters()
-            is_valid, error_message = self.service.validate_parameters(params)
-            if not is_valid:
-                QMessageBox.warning(None, "Invalid Parameters", error_message)
-                return False
-
-            return True
-
-        def _handle_error(self, error_message: str):
-            """Handle errors during operations."""
-            self._update_progress(0, f"Error: {error_message}")
-            self.analysis_failed.emit(error_message)
-            QMessageBox.critical(None, "Error", error_message)
-            self.unfreeze_ui()
-
-        def _update_progress(self, progress: int, message: str):
-            """Update progress information."""
-            self.progress_updated.emit(progress, message)
+    def _update_progress(self, progress: int, message: str):
+        """Update progress information."""
+        self.progress_updated.emit(progress, message)
 
 
 class FTTCWidget(BaseAnalysisWidget):

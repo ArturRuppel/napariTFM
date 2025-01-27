@@ -19,8 +19,8 @@ class FTTCParameters:
     auto_gcv: bool
 
     # Visualization parameters
-    vector_stride: int
-    arrow_scale: float
+    force_vector_stride: int
+    force_arrow_scale: float
     f_max: float
 
     # Time parameters
@@ -264,10 +264,10 @@ class FTTCService:
         if params.regularization <= 0:
             return False, "Regularization parameter must be positive"
 
-        if params.vector_stride < 1:
+        if params.force_vector_stride < 1:
             return False, "Vector stride must be at least 1"
 
-        if params.arrow_scale <= 0:
+        if params.force_arrow_scale <= 0:
             return False, "Arrow scale must be positive"
 
         if params.f_max <= 0:
