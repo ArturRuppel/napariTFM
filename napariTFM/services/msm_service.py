@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Generator
 import numpy as np
 from napari.layers import Layer
 from dataclasses import dataclass
@@ -71,17 +71,93 @@ class MSMService:
             params: MSMParameters,
             target_shape: Optional[Tuple[int, int]] = None,
             downscale_factor: int = 1
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Create analysis and visualization mask stacks."""
-        analysis_masks, vis_masks = MonolayerStressMicroscopy.create_mask_stack(
-            image_stack,
-            threshold_percentile=params.threshold,
-            dilation=params.dilation,
-            smoothing_sigma=params.smoothing_sigma,
-            target_shape=target_shape,
-            downscale_factor=downscale_factor
-        )
-        return analysis_masks, vis_masks
+    ) -> Generator[Tuple[np.ndarray, np.ndarray, int, int], None, Tuple[np.ndarray, np.ndarray]]:
+        """
+        Create analysis and visualization mask stacks as a generator that yields intermediate results.
+
+        Parameters
+        ----------
+        image_stack : np.ndarray
+            3D array of images (frames, height, width) or 2D single image
+        params : MSMParameters
+            Parameters containing threshold, dilation, and smoothing settings
+        target_shape : tuple, optional
+            Shape to resize analysis masks to (height, width)
+        downscale_factor : int, optional
+            Factor to downscale masks by for visualization
+
+        Yields
+        ------
+        Tuple[np.ndarray, np.ndarray, int, int]
+            (analysis_mask, visualization_mask, current_frame, total_frames)
+            Yields each processed frame's masks along with progress information
+
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            (analysis_mask_stack, visualization_mask_stack)
+            Final complete stacks after all processing
+        """
+        # Handle 2D input
+        if image_stack.ndim == 2:
+            image_stack = image_stack[np.newaxis, ...]
+
+        total_frames = image_stack.shape[0]
+
+        # Initialize mask stacks
+        analysis_masks = []
+        vis_masks = []
+
+        # Process each frame
+        for frame in range(total_frames):
+            # Create base mask using MSM class method
+            base_mask = MonolayerStressMicroscopy.create_mask_from_image(
+                image_stack[frame],
+                threshold_percentile=params.threshold,
+                dilation=params.dilation,
+                smoothing_sigma=params.smoothing_sigma
+            )
+
+            # Handle analysis mask resizing
+            if target_shape is not None and base_mask.shape != target_shape:
+                analysis_mask = resize(
+                    base_mask.astype(float),
+                    target_shape,
+                    order=0,
+                    preserve_range=True,
+                    anti_aliasing=False
+                ) > 0.5
+            else:
+                analysis_mask = base_mask
+
+            # Handle visualization mask resizing
+            if downscale_factor > 1:
+                vis_shape = (
+                    analysis_mask.shape[0] * downscale_factor,
+                    analysis_mask.shape[1] * downscale_factor
+                )
+                vis_mask = resize(
+                    base_mask.astype(float),
+                    vis_shape,
+                    order=0,
+                    preserve_range=True,
+                    anti_aliasing=False
+                ) > 0.5
+            else:
+                vis_mask = base_mask
+
+            # Store masks
+            analysis_masks.append(analysis_mask)
+            vis_masks.append(vis_mask)
+
+            # Yield intermediate results
+            yield analysis_mask, vis_mask, frame, total_frames
+
+        # Convert lists to arrays for final return
+        analysis_stack = np.stack(analysis_masks)
+        vis_stack = np.stack(vis_masks)
+
+        return analysis_stack, vis_stack
 
     def calculate_stress_field(
             self,

@@ -49,7 +49,6 @@ class MSMParameterPanel(QWidget):
         layout.addWidget(self._create_material_parameters())
         layout.addWidget(self._create_visualization_parameters())
 
-        layout.addStretch()
         self.setLayout(layout)
 
     def _create_parameter_widget(self, name: str, label: str,
@@ -492,23 +491,37 @@ class MSMController(QObject):
                 raise ValueError("No valid image layer selected.")
 
             image_data = active_layer.data
-            params = self._get_current_parameters()  # Reuse parameter fetch logic
+            params = self._get_current_parameters()
 
-            # Generate masks using the service
-            masks, vis_masks = self.service.create_mask_stack(image_data, params)
+            # Generate masks using the service's generator
+            mask_generator = self.service.create_mask_stack(image_data, params)
+            total_frames = None
 
-            # Update DataManager without triggering external signals
-            self.data_manager.set_masks(masks)
+            try:
+                while True:
+                    # Process each frame to update progress
+                    _, _, current_frame, total_frames = next(mask_generator)
+                    progress = int((current_frame + 1) / total_frames * 100)
+                    self.mask_creation_progress.emit(
+                        progress,
+                        f"Creating masks: Frame {current_frame + 1}/{total_frames}"
+                    )
+            except StopIteration as e:
+                # Get final stacks from generator return value
+                analysis_stack, _ = e.value
 
+            # Update DataManager with the final analysis masks
+            self.data_manager.set_masks(analysis_stack)
+
+            # Emit completion signals
             self.mask_creation_completed.emit()
-
-            # Update UI status via the action panel
-            self.progress_updated.emit(100, "Masks created successfully.")
+            self.mask_creation_progress.emit(100, "Masks created successfully.")
 
         except Exception as e:
-            self.progress_updated.emit(0, f"Mask creation failed: {str(e)}")
-            QMessageBox.critical(None, "Error", str(e))
-
+            error_msg = f"Mask creation failed: {str(e)}"
+            self.mask_creation_progress.emit(0, error_msg)
+            self.mask_creation_failed.emit(error_msg)
+            QMessageBox.critical(None, "Error", error_msg)
     def _handle_progress(self, current: int, total: int, status: str):
         """Handle progress updates during analysis."""
         progress = int((current + 1) / total * 100)
@@ -689,7 +702,7 @@ class MSMWidget(BaseAnalysisWidget):
         colorbar_container = QWidget()
         colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(6, 6, 6, 6)
+        colorbar_layout.setContentsMargins(4, 4, 4, 4)
 
         self.colorbar_manager = ColorbarManager()
         colorbar_group = self.create_colorbar_widget(
@@ -701,7 +714,6 @@ class MSMWidget(BaseAnalysisWidget):
         colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        colorbar_layout.addStretch()
         colorbar_container.setLayout(colorbar_layout)
 
         main_layout.addWidget(colorbar_container)
@@ -717,7 +729,7 @@ class MSMWidget(BaseAnalysisWidget):
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout()
         scroll_layout.setSpacing(8)
-        scroll_layout.setContentsMargins(6, 6, 6, 6)
+        scroll_layout.setContentsMargins(4, 4, 4, 4)
 
         # Add panels to the scroll area
         scroll_layout.addWidget(self.data_panel)
@@ -740,7 +752,7 @@ class MSMWidget(BaseAnalysisWidget):
         scroll_area.setWidget(scroll_content)
 
         main_layout.addWidget(scroll_area)
-        main_layout.addStretch(1)
+        # main_layout.addStretch(1)
 
         self.setLayout(main_layout)
 
