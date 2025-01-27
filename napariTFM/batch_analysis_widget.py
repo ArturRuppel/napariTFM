@@ -312,7 +312,7 @@ Path(config_path).unlink()
 
                 # Get force parameters
                 "young_modulus": self.parameter_spins['young_modulus'].value() * 1000,  # Convert kPa to Pa
-                "poisson_ratio_substrate": self.parameter_spins['poisson_ratio'].value(),
+                "poisson_ratio_substrate": self.parameter_spins['poisson_ratio_substrate'].value(),
                 "gel_height": None if self.parameter_spins['gel_height'].value() == 0 else self.parameter_spins['gel_height'].value(),
                 "regularization": 10 ** self.parameter_spins['regularization'].value(),
                 "lanczos_exp": self.parameter_spins['lanczos_exp'].value(),
@@ -324,7 +324,7 @@ Path(config_path).unlink()
                 "density_factor": self.parameter_spins['density_factor'].value(),
                 "mesh_algorithm": self.parameter_combos['mesh_algorithm'].currentText(),
                 "use_optimization": self.parameter_checks['use_optimization'].isChecked(),
-                "poisson_ratio_cells": self.parameter_spins['poisson_ratio'].value(),
+                "poisson_ratio_cells": self.parameter_spins['poisson_ratio_cells'].value(),
 
                 # Get visualization parameters
                 "disp_vector_stride": self.parameter_spins['disp_vector_stride'].value(),
@@ -482,7 +482,7 @@ Path(config_path).unlink()
             algo_value = self.parameter_manager.get_value('mesh_algorithm')
             if algo_value and 'algorithm' in self.parameter_combos:
                 self._safe_set_combo_text(
-                    self.parameter_combos['algorithm'],
+                    self.parameter_combos['mesh_algorithm'],
                     algo_value.replace('_', '-').title()
                 )
 
@@ -494,7 +494,7 @@ Path(config_path).unlink()
                 )
 
             # Sync Poisson ratio (poisson_ratio)
-            if 'poisson_ratio' in self.parameter_spins:
+            if 'poisson_ratio_cells' in self.parameter_spins:
                 value = self.parameter_manager.get_value('poisson_ratio_cells')
                 self._safe_set_value(self.parameter_spins['poisson_ratio_cells'], value)
 
@@ -978,7 +978,7 @@ Path(config_path).unlink()
         # Material parameters setup
         material_params = [
             ("young_modulus", "Young's Modulus (kPa):", 0.1, 1000, 0.1, 10),
-            ("poisson_ratio", "Poisson's Ratio:", 0, 0.5, 0.01, 0.49),
+            ("poisson_ratio_substrate", "Poisson's Ratio:", 0, 0.5, 0.01, 0.49),
             ("gel_height", "Gel Height (µm):", 0, 1000, 10, 0)
         ]
 
@@ -1129,7 +1129,7 @@ Path(config_path).unlink()
         poisson_spin.setSingleStep(0.01)
         poisson_spin.setValue(1.0)
         poisson_spin.setDecimals(2)
-        self.parameter_spins['poisson_ratio'] = poisson_spin
+        self.parameter_spins['poisson_ratio_cells'] = poisson_spin
         poisson_row.addWidget(poisson_spin)
         layout.addLayout(poisson_row)
 

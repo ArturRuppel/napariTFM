@@ -40,7 +40,7 @@ class DataManager:
         self._masks: Optional[np.ndarray] = None  # (t, x, y)
         self._stress_params: Optional[Dict[str, Any]] = None
 
-    # Input data setters with validation
+
     def set_input_bead_stack(self, data: np.ndarray) -> None:
         """Set and validate input bead stack."""
         self._validate_input_stack(data, "bead stack")
@@ -128,14 +128,22 @@ class DataManager:
         if params is not None:
             self._preprocessing_params = params.copy()
 
-    def set_force_results(self, force_field: np.ndarray, params: Dict[str, Any]) -> None:
-        """Store force calculation results with validation."""
-        if force_field is not None:
-            self._validate_field_data(force_field, expected_dims=4)  # (t, x, y, 2)
-            self._force_field = force_field
-        if params is not None:
-            self._force_params = params.copy()
+    def set_force_results(self, force_field, parameters):
+        """Set force field data and parameters."""
+        self._orce_field = force_field
+        self._force_params = parameters
+        return True  # Indicate successful update
 
+    def set_masks(self, masks):
+        """Set mask data."""
+        self._masks = masks
+        return True  # Indicate successful update
+
+    def set_stress_results(self, stress_tensor, parameters):
+        """Set stress tensor results and parameters."""
+        self._stress_tensor = stress_tensor
+        self._stress_params = parameters
+        return True  # Indicate successful update
     def set_displacement_results(self, displacement_field: np.ndarray, params: Dict[str, Any]) -> None:
         """Store displacement calculation results with validation."""
         if displacement_field is not None:
@@ -144,19 +152,6 @@ class DataManager:
         if params is not None:
             self._displacement_params = params.copy()
 
-    def set_stress_results(self, stress_tensor: np.ndarray, params: Dict[str, Any]) -> None:
-        """Store stress calculation results with validation."""
-        if stress_tensor is not None:
-            self._validate_field_data(stress_tensor, expected_dims=5)  # (t, x, y, 2, 2)
-            self._stress_tensor = stress_tensor
-        if params is not None:
-            self._stress_params = params.copy()
-
-    def set_masks(self, data: np.ndarray) -> None:
-        """Set and validate masks data.
-        """
-        self._validate_input_stack(data, "masks")
-        self._masks = data
 
 
     def _validate_input_stack(self, data: np.ndarray, name: str) -> None:

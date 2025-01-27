@@ -111,7 +111,7 @@ class MSMParameterPanel(QWidget):
         algo_layout.addWidget(QLabel("Algorithm:"))
         algo_combo = QComboBox()
         algo_combo.addItems(self.MESH_ALGORITHMS.keys())
-        self.parameter_widgets["algorithm"] = algo_combo
+        self.parameter_widgets["mesh_algorithm"] = algo_combo
         algo_layout.addWidget(algo_combo)
         layout.addLayout(algo_layout)
 
@@ -204,9 +204,10 @@ class MSMDataPanel(QWidget):
     mask_data_loaded = Signal(object)
     data_load_failed = Signal(str)
 
-    def __init__(self, data_manager, viewer):
+    def __init__(self, data_manager, controller, viewer):
         super().__init__()
         self.data_manager = data_manager
+        self.controller = controller
         self.viewer = viewer
         self._setup_ui()
         self._connect_signals()
@@ -273,35 +274,36 @@ class MSMDataPanel(QWidget):
             )
             if file_path:
                 force_data = np.load(file_path, allow_pickle=True).item()
-                self.data_manager.set_force_results(
+                self.controller.set_force_data(
                     force_data["force_field"],
                     force_data["parameters"]
                 )
                 self.force_status.setText(f"Loaded: {force_data['force_field'].shape}")
-                self.data_loaded.emit('force')
-                self.force_data_loaded.emit(force_data)
         except Exception as e:
             error_msg = f"Failed to load force data: {str(e)}"
             self.force_status.setText("Error loading")
-            self.data_load_failed.emit(error_msg)
             QMessageBox.critical(self, "Error", error_msg)
 
     def _load_mask_data(self):
         """Load mask data from active layer."""
         try:
-            # Implementation of mask loading
+            # Check if we have force data first
+            if self.controller.data_manager.force_field is None:
+                QMessageBox.warning(
+                    self,
+                    "No Force Data",
+                    "It's recommended to load force data first to ensure proper mask scaling."
+                )
+
             active_layer = self._get_active_layer()
             if active_layer is not None:
                 mask_data = self._process_mask_layer(active_layer)
                 if mask_data is not None:
-                    self.data_manager.set_masks(mask_data)
+                    self.controller.set_mask_data(mask_data)
                     self.mask_status.setText(f"Loaded: {mask_data.shape}")
-                    self.data_loaded.emit('mask')
-                    self.mask_data_loaded.emit(mask_data)
         except Exception as e:
             error_msg = f"Failed to load mask data: {str(e)}"
             self.mask_status.setText("Error loading")
-            self.data_load_failed.emit(error_msg)
             QMessageBox.critical(self, "Error", error_msg)
 
     def _process_mask_layer(self, layer):
@@ -322,7 +324,24 @@ class MSMDataPanel(QWidget):
                 f"Mask data must be 2D or 3D, got shape {mask_data.shape}"
             )
 
+        # If force data exists, scale mask to match force shape
+        if self.data_manager.force_field is not None:
+            force_shape = self.data_manager.force_field.shape[1:3]  # Get height, width
+            if mask_data.shape[1:] != force_shape:
+                from skimage.transform import resize
+                mask_data = np.stack([
+                    resize(
+                        frame.astype(float),
+                        force_shape,
+                        order=0,
+                        preserve_range=True,
+                        anti_aliasing=False
+                    ) > 0.5
+                    for frame in mask_data
+                ])
+
         return mask_data
+
 
 
 class MSMActionPanel(QWidget):
@@ -375,7 +394,7 @@ class MSMActionPanel(QWidget):
 
     def _connect_signals(self):
         """Connect action panel buttons to controller methods."""
-        # Existing connections
+        # Connect buttons to controller methods
         self.preview_mesh_btn.clicked.connect(self.controller.preview_mesh)
         self.preview_frame_btn.clicked.connect(self.controller.preview_current_frame)
         self.analyze_btn.clicked.connect(self._handle_analyze_click)
@@ -383,6 +402,20 @@ class MSMActionPanel(QWidget):
         self.create_mask_btn.clicked.connect(self.controller.create_masks_from_images)
         self.cancel_btn.clicked.connect(self.controller.cancel_all_operations)
 
+        # Listen to controller signals for data updates
+        self.controller.data_updated.connect(self._update_button_states)
+
+    def _update_button_states(self, data_type=None):
+        """Update button states based on data availability."""
+        has_force_data = self.controller.data_manager.force_field is not None
+        has_mask_data = self.controller.data_manager.masks is not None
+        has_stress_data = self.controller.data_manager.stress_tensor is not None
+
+        # Enable/disable buttons based on data availability
+        self.preview_mesh_btn.setEnabled(has_force_data and has_mask_data)
+        self.preview_frame_btn.setEnabled(has_force_data and has_mask_data)
+        self.analyze_btn.setEnabled(has_force_data and has_mask_data)
+        self.save_btn.setEnabled(has_stress_data)
     def _handle_analyze_click(self):
         """Handle analyze button click by disabling buttons and starting analysis."""
         self.set_buttons_enabled(False)
@@ -400,10 +433,12 @@ class MSMActionPanel(QWidget):
             btn.setEnabled(enabled)
 
 
+
 class MSMController(QObject):
     """Coordinates interactions between UI components, service, and managers."""
 
     # Define signals as class attributes
+    data_updated = Signal(str)
     progress_updated = Signal(int, str)  # (progress_value, status_message)
     analysis_started = Signal()
     analysis_completed = Signal(object)  # Results object
@@ -424,13 +459,14 @@ class MSMController(QObject):
         self.active_workers = []
 
     # TODO implement freeze UI method and call it while heavy processes are running
+    # TODO Think about how to handle resizing of masks
 
     def _update_progress(self, progress: int, status: str):
         """Update progress and emit signal."""
         self.progress_updated.emit(progress, status)
 
     def start_analysis(self):
-        """Start the stress analysis."""
+        """Start the stress analysis by first generating meshes then calculating stresses."""
         try:
             if not self._validate_prerequisites():
                 return
@@ -439,22 +475,89 @@ class MSMController(QObject):
             self._update_progress(0, "Starting analysis...")
 
             params = self._get_current_parameters()
-
-            # Get all required data
             masks = self.data_manager.masks
-            force_field = self.data_manager.force_field
+
+            # Start mesh generation
+            self._start_mesh_generation(masks, params)
+
+        except Exception as e:
+            error_msg = f"Analysis failed: {str(e)}"
+            self._update_progress(0, error_msg)
+            self.analysis_failed.emit(error_msg)
+            QMessageBox.critical(None, "Error", error_msg)
+            return None
+
+    def _start_mesh_generation(self, masks, params):
+        """Start thread worker for mesh generation."""
+
+        @thread_worker
+        def mesh_generation_worker():
+            mesh_generator = self.service.generate_mesh_stack(masks, params)
+            total_frames = masks.shape[0]
+            try:
+                while True:
+                    # Yield progress from mesh generator
+                    _, _, _, current_frame, total_frames = next(mesh_generator)
+                    progress = int((current_frame + 1) / total_frames * 100)
+                    yield (progress, f"Generating mesh: Frame {current_frame + 1}/{total_frames}")
+            except StopIteration as e:
+                return e.value  # Returns List[MeshPreviewResult]
+
+        worker = mesh_generation_worker()
+        worker.running = True
+        self.active_workers.append(worker)
+
+        def on_yielded(progress_data):
+            progress, message = progress_data
+            self._update_progress(progress, message)
+
+        def on_returned(mesh_results):
+            # Start stress calculation with generated meshes
+            self._start_stress_calculation(mesh_results, params)
+
+        def on_errored(exc):
+            error_msg = f"Mesh generation failed: {str(exc)}"
+            self._update_progress(0, error_msg)
+            self.analysis_failed.emit(error_msg)
+            QMessageBox.critical(None, "Error", error_msg)
+
+        worker.yielded.connect(on_yielded)
+        worker.returned.connect(on_returned)
+        worker.errored.connect(on_errored)
+        worker.start()
+
+    def _start_stress_calculation(self, mesh_results, params):
+        """Start thread worker for stress calculation."""
+
+        @thread_worker
+        def stress_calculation_worker():
+            stress_generator = self.service.calculate_stress_stack(
+                force_field=self.data_manager.force_field,
+                params=params,
+                mesh_results=mesh_results
+            )
+            total_frames = self.data_manager.force_field.shape[0]
+            try:
+                while True:
+                    # Yield progress from stress generator
+                    result, current_frame, total_frames = next(stress_generator)
+                    progress = int((current_frame + 1) / total_frames * 100)
+                    yield (progress, f"Calculating stress: Frame {current_frame + 1}/{total_frames}")
+            except StopIteration as e:
+                return e.value  # Returns List[MSMCalculationResult]
+
+        worker = stress_calculation_worker()
+        worker.running = True
+        self.active_workers.append(worker)
+
+        def on_yielded(progress_data):
+            progress, message = progress_data
+            self._update_progress(progress, message)
+
+        def on_returned(results):
+            # Process results
             pixel_size = self.data_manager.force_params['pixel_size']
             downscale_factor = self.data_manager.force_params['downscale_factor']
-
-            # Calculate stress fields
-            results = self.service.calculate_stress_stack(
-                masks=masks,
-                force_field=force_field,
-                params=params,
-                progress_callback=self._handle_progress
-            )
-
-            # Process results
             stress_tensors = [r.stress_tensor for r in results]
             stress_tensor_stack = np.stack(stress_tensors) * pixel_size * downscale_factor * 1e-6
 
@@ -479,14 +582,17 @@ class MSMController(QObject):
 
             self._update_progress(100, "Analysis completed successfully")
             self.analysis_completed.emit(results)
-            return results
 
-        except Exception as e:
-            error_msg = f"Analysis failed: {str(e)}"
+        def on_errored(exc):
+            error_msg = f"Stress calculation failed: {str(exc)}"
             self._update_progress(0, error_msg)
             self.analysis_failed.emit(error_msg)
             QMessageBox.critical(None, "Error", error_msg)
-            return None
+
+        worker.yielded.connect(on_yielded)
+        worker.returned.connect(on_returned)
+        worker.errored.connect(on_errored)
+        worker.start()
 
     def create_masks_from_images(self):
         """Handle mask creation from the active image layer using a thread worker."""
@@ -539,8 +645,6 @@ class MSMController(QObject):
                 self.mask_creation_progress.emit(0, error_msg)
                 self.mask_creation_failed.emit(error_msg)
                 QMessageBox.critical(None, "Error", error_msg)
-
-
 
             # Connect worker signals
             worker.yielded.connect(on_yielded)
@@ -707,7 +811,6 @@ class MSMController(QObject):
         self.progress_updated.emit(0, "Operations cancelled")
         QApplication.processEvents()
 
-
     def _validate_prerequisites(self) -> bool:
         """Check if required data is available."""
         if self.data_manager.masks is None:
@@ -717,6 +820,21 @@ class MSMController(QObject):
             QMessageBox.warning(None, "Warning", "No force data available. Please calculate forces first.")
             return False
         return True
+
+    def set_force_data(self, force_field, parameters):
+        """Handle force data updates."""
+        if self.data_manager.set_force_results(force_field, parameters):
+            self.data_updated.emit('force')
+
+    def set_mask_data(self, masks):
+        """Handle mask data updates."""
+        if self.data_manager.set_masks(masks):
+            self.data_updated.emit('mask')
+
+    def set_stress_results(self, stress_tensor, parameters):
+        """Handle stress results updates."""
+        if self.data_manager.set_stress_results(stress_tensor, parameters):
+            self.data_updated.emit('stress')
 
 
 class MSMWidget(BaseAnalysisWidget):
@@ -731,7 +849,6 @@ class MSMWidget(BaseAnalysisWidget):
         self.parameter_manager = parameter_manager
         self.service = MSMService()
         self.parameter_panel = MSMParameterPanel(parameter_manager)
-        self.data_panel = MSMDataPanel(data_manager, viewer)
         self.controller = MSMController(
             viewer=viewer,
             service=self.service,
@@ -739,6 +856,7 @@ class MSMWidget(BaseAnalysisWidget):
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager
         )
+        self.data_panel = MSMDataPanel(data_manager, self.controller, viewer)
         self.action_panel = MSMActionPanel(self.controller)
 
         # Setup UI
