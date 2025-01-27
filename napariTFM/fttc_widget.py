@@ -18,7 +18,7 @@ from napariTFM.services.fttc_service import FTTCService, FTTCParameters
 
 
 # TODO colorbar doesn't update
-# TODO colorbar doesn't update
+# TODO button enabling/disabling logic is not on point
 class FTTCParameterPanel(QWidget):
     """Panel for handling all FTTC parameter inputs."""
 
