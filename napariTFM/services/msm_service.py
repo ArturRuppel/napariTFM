@@ -159,6 +159,94 @@ class MSMService:
 
         return analysis_stack, vis_stack
 
+    def generate_mesh(
+            self,
+            mask: np.ndarray,
+            params: MSMParameters
+    ) -> MeshPreviewResult:
+        """Generate mesh for preview/visualization."""
+        mesh_params = MeshParameters(
+            mask=mask,
+            density_factor=params.density_factor,
+            algorithm=self._get_algorithm_code(params.algorithm),
+            use_optimization=params.use_optimization
+        )
+
+        mesh_generator = MeshGenerator(mesh_params)
+        nodes, elements = mesh_generator.generate_mesh(mask)
+        quality_metrics = mesh_generator.analyze_mesh_quality(nodes, elements)
+
+        return MeshPreviewResult(
+            nodes=nodes,
+            elements=elements,
+            quality_metrics=quality_metrics
+        )
+
+    def generate_mesh_stack(
+            self,
+            mask_stack: np.ndarray,
+            params: MSMParameters
+    ) -> Generator[Tuple[np.ndarray, np.ndarray, Dict[str, float], int, int], None, List[MeshPreviewResult]]:
+        """
+        Generate meshes for all frames in the mask stack as a generator that yields intermediate results.
+
+        Parameters
+        ----------
+        mask_stack : np.ndarray
+            3D array of masks (frames, height, width) or 2D single mask
+        params : MSMParameters
+            Parameters containing mesh generation settings
+
+        Yields
+        ------
+        Tuple[np.ndarray, np.ndarray, Dict[str, float], int, int]
+            (nodes, elements, quality_metrics, current_frame, total_frames)
+            Yields each frame's mesh data along with quality metrics and progress information
+
+        Returns
+        -------
+        List[MeshPreviewResult]
+            List of MeshPreviewResult objects containing the complete mesh data for all frames
+        """
+        # Handle 2D input
+        if mask_stack.ndim == 2:
+            mask_stack = mask_stack[np.newaxis, ...]
+
+        total_frames = mask_stack.shape[0]
+
+        # Initialize mesh generator with parameters
+        mesh_params = MeshParameters(
+            mask=mask_stack[0],  # Use first frame for initial setup
+            density_factor=params.density_factor,
+            algorithm=self._get_algorithm_code(params.algorithm),
+            use_optimization=params.use_optimization
+        )
+        mesh_generator = MeshGenerator(mesh_params)
+
+        # Initialize results list
+        mesh_results = []
+
+        # Process each frame
+        for frame in range(total_frames):
+            # Generate mesh for current frame
+            nodes, elements = mesh_generator.generate_mesh(mask_stack[frame])
+
+            # Calculate quality metrics
+            quality_metrics = mesh_generator.analyze_mesh_quality(nodes, elements)
+
+            # Create and store result object
+            result = MeshPreviewResult(
+                nodes=nodes,
+                elements=elements,
+                quality_metrics=quality_metrics
+            )
+            mesh_results.append(result)
+
+            # Yield intermediate results
+            yield nodes, elements, quality_metrics, frame, total_frames
+
+        return mesh_results
+
     def calculate_stress_field(
             self,
             mask: np.ndarray,
@@ -196,40 +284,57 @@ class MSMService:
 
     def calculate_stress_stack(
             self,
-            masks: np.ndarray,
             force_field: np.ndarray,
             params: MSMParameters,
-            progress_callback: Optional[callable] = None
-    ) -> List[MSMCalculationResult]:
-        """Calculate stress fields for multiple frames."""
+            mesh_results: List[MeshPreviewResult]
+    ) -> Generator[Tuple[MSMCalculationResult, int, int], None, List[MSMCalculationResult]]:
+        """
+        Calculate stress fields for multiple frames, yielding intermediate results.
+
+        Parameters
+        ----------
+        force_field : np.ndarray
+            4D array of force vectors (frames, height, width, 2)
+        params : MSMParameters
+            Parameters for stress calculation
+        mesh_results : List[MeshPreviewResult]
+            Pre-generated mesh data for each frame
+
+        Yields
+        ------
+        Tuple[MSMCalculationResult, int, int]
+            (stress_result, current_frame, total_frames)
+            Yields each frame's stress calculation result along with progress information
+
+        Returns
+        -------
+        List[MSMCalculationResult]
+            Complete list of stress calculation results for all frames
+        """
         results = []
-        num_frames = masks.shape[0]
+        num_frames = force_field.shape[0]
 
-        # Pre-generate meshes if using same parameters for all frames
-        mesh_params = MeshParameters(
-            mask=masks[0],  # Use first frame for initial sizing
-            density_factor=params.density_factor,
-            algorithm=self._get_algorithm_code(params.algorithm),
-            use_optimization=params.use_optimization
-        )
-        mesh_generator = MeshGenerator(mesh_params)
-
-        mesh_data = []
-        for frame in range(num_frames):
-            nodes, elements = mesh_generator.generate_mesh(masks[frame])
-            mesh_data.append((nodes, elements))
-
-            if progress_callback:
-                progress_callback(frame, num_frames, "Generating meshes")
+        # Validate input dimensions
+        if len(mesh_results) != num_frames:
+            raise ValueError(
+                f"Number of mesh results ({len(mesh_results)}) "
+                f"does not match number of frames ({num_frames})"
+            )
 
         # Calculate stress fields using pre-generated meshes
         for frame in range(num_frames):
-            nodes, elements = mesh_data[frame]
+            # Extract mesh data for current frame
+            mesh_data = mesh_results[frame]
+            nodes = mesh_data.nodes
+            elements = mesh_data.elements
+
+            # Extract force components
             tx = force_field[frame, ..., 0]
             ty = force_field[frame, ..., 1]
 
+            # Calculate stress field for current frame
             result = self.calculate_stress_field(
-                mask=masks[frame],
+                mask=None,  # Mask not needed since we're providing nodes/elements
                 traction_x=tx,
                 traction_y=ty,
                 params=params,
@@ -238,33 +343,11 @@ class MSMService:
             )
             results.append(result)
 
-            if progress_callback:
-                progress_callback(frame, num_frames, "Calculating stress fields")
+            # Yield intermediate results
+            yield result, frame, num_frames
 
         return results
 
-    def generate_mesh_preview(
-            self,
-            mask: np.ndarray,
-            params: MSMParameters
-    ) -> MeshPreviewResult:
-        """Generate mesh for preview/visualization."""
-        mesh_params = MeshParameters(
-            mask=mask,
-            density_factor=params.density_factor,
-            algorithm=self._get_algorithm_code(params.algorithm),
-            use_optimization=params.use_optimization
-        )
-
-        mesh_generator = MeshGenerator(mesh_params)
-        nodes, elements = mesh_generator.generate_mesh(mask)
-        quality_metrics = mesh_generator.analyze_mesh_quality(nodes, elements)
-
-        return MeshPreviewResult(
-            nodes=nodes,
-            elements=elements,
-            quality_metrics=quality_metrics
-        )
 
     def _get_algorithm_code(self, algorithm_name: str) -> int:
         """Convert algorithm name to corresponding code."""

@@ -254,7 +254,7 @@ class MSMWidget(BaseAnalysisWidget):
                 mask = self.service.resize_mask_to_forces(mask, target_shape)
 
             # Generate mesh preview
-            preview_result = self.service.generate_mesh_preview(mask, params)
+            preview_result = self.service.generate_mesh(mask, params)
 
             # Get visualization scale factor
             downscale_factor = self.data_manager.force_params.get('downscale_factor', 1)

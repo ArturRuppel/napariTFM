@@ -1,10 +1,11 @@
 from typing import Any
 
 import numpy as np
+from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, Qt, QObject
 from qtpy.QtWidgets import (
-    QGroupBox, QLabel, QCheckBox, QSizePolicy, QFrame, QScrollArea,
+    QGroupBox, QLabel, QCheckBox, QSizePolicy, QFrame, QScrollArea, QApplication,
     QSpinBox, QDoubleSpinBox, QPushButton, QComboBox, QProgressBar, QFileDialog
 )
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
@@ -359,6 +360,9 @@ class MSMActionPanel(QWidget):
         button_layout.addLayout(right_col)
         layout.addLayout(button_layout)
 
+        self.cancel_btn = QPushButton("Cancel All Operations")
+        layout.addWidget(self.cancel_btn)
+
         # Progress section
         self.progress_bar = QProgressBar()
         self.status_label = QLabel("")
@@ -376,9 +380,8 @@ class MSMActionPanel(QWidget):
         self.preview_frame_btn.clicked.connect(self.controller.preview_current_frame)
         self.analyze_btn.clicked.connect(self._handle_analyze_click)
         self.save_btn.clicked.connect(self.controller.save_results)
-
-        # New connection for mask creation
         self.create_mask_btn.clicked.connect(self.controller.create_masks_from_images)
+        self.cancel_btn.clicked.connect(self.controller.cancel_all_operations)
 
     def _handle_analyze_click(self):
         """Handle analyze button click by disabling buttons and starting analysis."""
@@ -409,7 +412,6 @@ class MSMController(QObject):
     mask_creation_completed = Signal()
     mask_creation_failed = Signal(str)
 
-
     def __init__(self, viewer: Viewer, service: MSMService,
                  data_manager: DataManager, parameter_manager: ParameterManager,
                  visualization_manager: VisualizationManager):
@@ -419,6 +421,9 @@ class MSMController(QObject):
         self.data_manager = data_manager
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
+        self.active_workers = []
+
+    # TODO implement freeze UI method and call it while heavy processes are running
 
     def _update_progress(self, progress: int, status: str):
         """Update progress and emit signal."""
@@ -484,7 +489,7 @@ class MSMController(QObject):
             return None
 
     def create_masks_from_images(self):
-        """Handle mask creation from the active image layer."""
+        """Handle mask creation from the active image layer using a thread worker."""
         try:
             active_layer = self.viewer.layers.selection.active
             if not active_layer or not isinstance(active_layer.data, np.ndarray):
@@ -493,35 +498,64 @@ class MSMController(QObject):
             image_data = active_layer.data
             params = self._get_current_parameters()
 
-            # Generate masks using the service's generator
-            mask_generator = self.service.create_mask_stack(image_data, params)
-            total_frames = None
+            @thread_worker
+            def mask_creation_worker():
+                mask_generator = self.service.create_mask_stack(image_data, params)
+                total_frames = None
 
-            try:
-                while True:
-                    # Process each frame to update progress
-                    _, _, current_frame, total_frames = next(mask_generator)
-                    progress = int((current_frame + 1) / total_frames * 100)
-                    self.mask_creation_progress.emit(
-                        progress,
-                        f"Creating masks: Frame {current_frame + 1}/{total_frames}"
-                    )
-            except StopIteration as e:
-                # Get final stacks from generator return value
-                analysis_stack, _ = e.value
+                try:
+                    while True:
+                        _, _, current_frame, total_frames = next(mask_generator)
+                        progress = int((current_frame + 1) / total_frames * 100)
+                        yield (progress, f"Creating masks: Frame {current_frame + 1}/{total_frames}")
+                except StopIteration as e:
+                    return e.value  # Returns (analysis_stack, _)
 
-            # Update DataManager with the final analysis masks
-            self.data_manager.set_masks(analysis_stack)
+            # Create and configure worker
+            worker = mask_creation_worker()
+            worker.running = True  # Add cancellation flag
 
-            # Emit completion signals
-            self.mask_creation_completed.emit()
-            self.mask_creation_progress.emit(100, "Masks created successfully.")
+            # Add to active workers
+            self.active_workers.append(worker)
+
+            def on_finished():
+                if worker in self.active_workers:
+                    self.active_workers.remove(worker)
+
+            worker.finished.connect(on_finished)
+
+            def on_yielded(progress_data):
+                progress, message = progress_data
+                self.mask_creation_progress.emit(progress, message)
+
+            def on_returned(result):
+                analysis_stack, _ = result
+                self.data_manager.set_masks(analysis_stack)
+                self.mask_creation_completed.emit()
+                self.mask_creation_progress.emit(100, "Masks created successfully.")
+
+            def on_errored(exc):
+                error_msg = f"Mask creation failed: {str(exc)}"
+                self.mask_creation_progress.emit(0, error_msg)
+                self.mask_creation_failed.emit(error_msg)
+                QMessageBox.critical(None, "Error", error_msg)
+
+
+
+            # Connect worker signals
+            worker.yielded.connect(on_yielded)
+            worker.returned.connect(on_returned)
+            worker.errored.connect(on_errored)
+
+            # Start the worker
+            worker.start()
 
         except Exception as e:
-            error_msg = f"Mask creation failed: {str(e)}"
+            error_msg = f"Failed to start mask creation: {str(e)}"
             self.mask_creation_progress.emit(0, error_msg)
             self.mask_creation_failed.emit(error_msg)
             QMessageBox.critical(None, "Error", error_msg)
+
     def _handle_progress(self, current: int, total: int, status: str):
         """Handle progress updates during analysis."""
         progress = int((current + 1) / total * 100)
@@ -544,7 +578,7 @@ class MSMController(QObject):
                 mask = self.service.resize_mask_to_forces(mask, target_shape)
 
             # Generate mesh preview
-            preview_result = self.service.generate_mesh_preview(mask, params)
+            preview_result = self.service.generate_mesh(mask, params)
 
             # Get visualization scale factor
             downscale_factor = self.data_manager.force_params.get('downscale_factor', 1)
@@ -654,6 +688,25 @@ class MSMController(QObject):
         except Exception as e:
             QMessageBox.critical(None, "Error", f"Failed to save results: {str(e)}")
         return False
+
+    def cancel_all_operations(self):
+        """Cancel all running background operations"""
+        for worker in self.active_workers:
+            try:
+                worker.running = False  # Set cancellation flag
+                worker.quit()
+                worker.wait(500)  # Wait up to 500ms
+                if worker.isRunning():
+                    worker.terminate()
+                worker.deleteLater()
+            except Exception as e:
+                pass
+        self.active_workers.clear()
+        # Update UI status
+        self.mask_creation_progress.emit(0, "Operations cancelled")
+        self.progress_updated.emit(0, "Operations cancelled")
+        QApplication.processEvents()
+
 
     def _validate_prerequisites(self) -> bool:
         """Check if required data is available."""
@@ -789,7 +842,6 @@ class MSMWidget(BaseAnalysisWidget):
         self.visualization_manager.cleanup()
         super().cleanup()
 
-    # Event handlers
     def _on_data_loaded(self, data_type: str):
         self._update_ui_state()
 
