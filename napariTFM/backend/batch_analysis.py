@@ -1021,7 +1021,7 @@ class BatchAnalysis:
                         displacement,
                         self.config['parameters']['pixel_size'],
                         downscale_factor=self.config['parameters']['downscale_factor'],
-                        regularization=10 ** self.config['parameters']['regularization']
+                        regularization=self.config['parameters']['regularization']
                     )
 
                     # Store results
