@@ -750,7 +750,6 @@ class MSMController(QObject):
                 traction_x=tx,
                 traction_y=ty,
                 params=params,
-                use_mask=mask  # Explicitly pass mask for stress calculation
             )
 
             # Update visualization
