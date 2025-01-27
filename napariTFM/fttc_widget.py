@@ -17,6 +17,8 @@ from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.fttc_service import FTTCService, FTTCParameters
 
 
+# TODO colorbar doesn't update
+# TODO colorbar doesn't update
 class FTTCParameterPanel(QWidget):
     """Panel for handling all FTTC parameter inputs."""
 
@@ -40,20 +42,16 @@ class FTTCParameterPanel(QWidget):
 
         self.setLayout(layout)
 
-    def freeze_ui(self, freeze=True):
-        """Disable/enable interactive elements in parameter panel"""
-        for widget in self.parameter_widgets.values():
-            widget.setEnabled(not freeze)
-
     def _create_material_parameters(self) -> QGroupBox:
         """Create material parameter group."""
         group = QGroupBox("Material Parameters")
         layout = QVBoxLayout()
 
+        # Note: young_modulus is stored in Pa but displayed in kPa
         params = [
-            ("young_modulus", "Young's Modulus (kPa):", 0.1, 1000, 0.1, 10),
+            ("young_modulus", "Young's Modulus (kPa):", 0.1, 1000, 0.1, 10),  # Display in kPa
             ("poisson_ratio_substrate", "Poisson Ratio:", 0, 0.5, 0.01, 0.49),
-            ("gel_height", "Gel Height (μm):", 0, 1000, 10, 0),
+            ("gel_height", "Gel Height (μm):", 0, 1000, 10, 0),  # Special handling for 0/None
             ("lanczos_exp", "Lanczos Exponent:", 0, 5, 1, 1)
         ]
 
@@ -61,8 +59,53 @@ class FTTCParameterPanel(QWidget):
             widget = self._create_parameter_widget(name, label, min_val, max_val, step, default)
             layout.addLayout(widget)
 
+            # Special handling for gel height
+            if name == "gel_height":
+                spin_widget = self.parameter_widgets[name]
+                spin_widget.setSpecialValueText("∞")  # Show infinity symbol when value is 0
+
         group.setLayout(layout)
         return group
+
+    def _on_value_changed(self, param_name: str, value: Any):
+        """Handle parameter value changes."""
+        # Convert kPa to Pa before storing in parameter manager
+        if param_name == "young_modulus":
+            value = value * 1000  # Convert kPa to Pa
+        elif param_name == "regularization":
+            value = 10 ** value  # Convert from log10 scale
+        elif param_name == "gel_height":
+            value = None if value == 0 else value  # Convert 0 to None for infinite height
+
+        self.parameter_manager.set_value(param_name, value)
+        self.parameter_value_changed.emit(param_name, value)
+        self.parameter_changed.emit()
+
+    def _update_widget_value(self, param_name: str, value: any):
+        """Update widget when parameter changes externally."""
+        if param_name in self.parameter_widgets:
+            widget = self.parameter_widgets[param_name]
+            widget.blockSignals(True)
+
+            if param_name == "young_modulus":
+                # Convert Pa to kPa for display
+                widget.setValue(value / 1000)
+            elif param_name == "regularization":
+                widget.setValue(np.log10(value))
+            elif param_name == "gel_height":
+                # Convert None to 0 for display
+                widget.setValue(0 if value is None else value)
+            elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                widget.setValue(value)
+            elif isinstance(widget, QCheckBox):
+                widget.setChecked(value)
+
+            widget.blockSignals(False)
+
+    def freeze_ui(self, freeze=True):
+        """Disable/enable interactive elements in parameter panel"""
+        for widget in self.parameter_widgets.values():
+            widget.setEnabled(not freeze)
 
     def _create_regularization_parameters(self) -> QGroupBox:
         """Create regularization parameter group."""
@@ -138,6 +181,11 @@ class FTTCParameterPanel(QWidget):
 
         return layout
 
+    def set_controller(self, controller):
+        """Set the controller reference and connect GCV button."""
+        self.controller = controller
+        self.parameter_widgets["gcv_button"].clicked.connect(controller.auto_select_gcv)
+
     def _connect_signals(self):
         """Connect widget signals to parameter manager."""
         for name, widget in self.parameter_widgets.items():
@@ -151,27 +199,8 @@ class FTTCParameterPanel(QWidget):
                 )
 
         self.parameter_manager.parameter_changed.connect(self._update_widget_value)
-
-    def _on_value_changed(self, param_name: str, value: Any):
-        """Handle parameter value changes."""
-        if param_name == "regularization":
-            value = 10 ** value  # Convert from log10 scale
-        self.parameter_manager.set_value(param_name, value)
-        self.parameter_value_changed.emit(param_name, value)
-        self.parameter_changed.emit()
-
-    def _update_widget_value(self, param_name: str, value: any):
-        """Update widget when parameter changes externally."""
-        if param_name in self.parameter_widgets:
-            widget = self.parameter_widgets[param_name]
-            widget.blockSignals(True)
-            if param_name == "regularization":
-                widget.setValue(np.log10(value))
-            elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
-                widget.setValue(value)
-            elif isinstance(widget, QCheckBox):
-                widget.setChecked(value)
-            widget.blockSignals(False)
+        if hasattr(self, 'controller'):
+            self.parameter_widgets["gcv_button"].clicked.connect(self.controller.auto_select_gcv)
 
 
 class FTTCDataPanel(QWidget):
@@ -469,6 +498,63 @@ class FTTCController(QObject):
         except Exception as e:
             self._handle_error(str(e))
 
+    def auto_select_gcv(self):
+        """Calculate optimal regularization parameter for current frame using GCV."""
+        try:
+            if not self._validate_prerequisites():
+                return
+
+            self._update_progress(0, "Calculating optimal regularization parameter...")
+            self.freeze_ui()
+
+            # Get current frame data
+            current_frame = self.viewer.dims.current_step[0]
+            displacement_field = self.data_manager.displacement_field[current_frame]
+            pixel_size = self.data_manager.displacement_params['pixel_size']
+            downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
+
+            @thread_worker
+            def gcv_worker():
+                # Initialize calculator with current parameters
+                params = self._get_current_parameters()
+                self.service.initialize_calculator(params)
+
+                # Calculate optimal regularization using GCV
+                shape = displacement_field.shape[:-1]
+                pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
+                vec = np.array([displacement_field[..., 0], displacement_field[..., 1]])
+
+                return self.service.find_optimal_regularization(
+                    displacement_field=displacement_field,
+                    pixel_size=pixel_size,
+                    downscale_factor=downscale_factor
+                )
+
+            # Create and configure worker
+            worker = gcv_worker()
+            worker.returned.connect(self._handle_gcv_result)
+            worker.errored.connect(self._handle_error)
+            worker.finished.connect(self.unfreeze_ui)
+
+            self.active_workers.append(worker)
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.unfreeze_ui()
+
+    def _handle_gcv_result(self, reg_param):
+        """Handle the result from GCV calculation."""
+        try:
+            # Update parameter manager with new regularization value
+            self.parameter_manager.set_value('regularization', reg_param)
+
+            # Update status with the result
+            self._update_progress(100, f"Optimal regularization parameter: {reg_param:.2e}")
+
+        except Exception as e:
+            self._handle_error(str(e))
+
     def _handle_preview_results(self, results):
         """Handle preview calculation results."""
         try:
@@ -619,7 +705,7 @@ class FTTCController(QObject):
     def _get_current_parameters(self) -> FTTCParameters:
         """Get current FTTC parameters from parameter manager."""
         return FTTCParameters(
-            young_modulus=self.parameter_manager.get_value('young_modulus'),
+            young_modulus=self.parameter_manager.get_value('young_modulus'),  # convert to kPa
             poisson_ratio_substrate=self.parameter_manager.get_value('poisson_ratio_substrate'),
             gel_height=self.parameter_manager.get_value('gel_height'),
             lanczos_exp=self.parameter_manager.get_value('lanczos_exp'),
@@ -671,25 +757,27 @@ class FTTCWidget(BaseAnalysisWidget):
         self.service = FTTCService()
         self.parameter_manager = parameter_manager
 
-        # Initialize panels
-        self.parameter_panel = FTTCParameterPanel(parameter_manager)
-        self.data_panel = FTTCDataPanel(data_manager, viewer)
-
-        # Initialize controller
+        # Initialize controller first
         self.controller = FTTCController(
             viewer=viewer,
             service=self.service,
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,
-            data_panel=self.data_panel
+            data_panel=None  # Will be set later
         )
+
+        # Initialize panels with controller reference
+        self.parameter_panel = FTTCParameterPanel(parameter_manager)
+        self.parameter_panel.set_controller(self.controller)  # Set controller reference
+        self.data_panel = FTTCDataPanel(data_manager, viewer)
 
         # Initialize action panel
         self.action_panel = FTTCActionPanel(self.controller)
 
         # Set panels in controller
         self.controller.set_panels(self.parameter_panel, self.action_panel)
+        self.controller.data_panel = self.data_panel
 
         # Set controller in data panel
         self.data_panel.set_controller(self.controller)
@@ -768,6 +856,42 @@ class FTTCWidget(BaseAnalysisWidget):
         main_layout.addWidget(scroll_area)
 
         self.setLayout(main_layout)
+        self._update_button_states()
+
+    def _update_ui_state(self):
+        """Update UI elements based on current state."""
+        # Check if displacement field is available
+        has_displacement = self.data_manager.displacement_field is not None
+        has_force = self.data_manager.force_field is not None
+
+        # Update displacement status through the data panel
+        if has_displacement:
+            try:
+                self.data_panel.displacement_status.setText(
+                    f"Loaded: {self.data_manager.displacement_field.shape}"
+                )
+            except Exception as e:
+                self.data_panel.displacement_status.setText(f"Error ({str(e)})")
+        else:
+            self.data_panel.displacement_status.setText("Not loaded")
+
+        # Update button states based on data availability and analysis state
+        if hasattr(self, 'controller'):
+            analysis_running = hasattr(self.controller, 'active_workers') and len(self.controller.active_workers) > 0
+
+            # Update action panel button states
+            self.action_panel.update_button_states(
+                displacement_data=has_displacement and not analysis_running,
+                force_data=has_force and not analysis_running
+            )
+
+            # Update status message
+            if analysis_running:
+                self.status_label.setText("Analysis in progress...")
+            elif has_displacement:
+                self.status_label.setText("Ready for force calculation")
+            else:
+                self.status_label.setText("Missing required displacement data")
 
     def _connect_signals(self):
         """Connect all widget signals."""
