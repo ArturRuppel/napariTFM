@@ -51,6 +51,11 @@ class MSMParameterPanel(QWidget):
 
         self.setLayout(layout)
 
+    def freeze_ui(self, freeze=True):
+        """Disable/enable interactive elements in parameter panel"""
+        for widget in self.parameter_widgets.values():
+            widget.setEnabled(not freeze)
+
     def _create_parameter_widget(self, name: str, label: str,
                                  min_val: float, max_val: float,
                                  step: float, default: float) -> QHBoxLayout:
@@ -209,6 +214,11 @@ class MSMDataPanel(QWidget):
         self.viewer = viewer
         self.controller = None
         self._setup_ui()
+
+    def freeze_ui(self, freeze=True):
+        """Disable/enable interactive elements in data panel"""
+        self.load_force_btn.setEnabled(not freeze)
+        self.load_mask_btn.setEnabled(not freeze)
 
     def _setup_ui(self):
         layout = QVBoxLayout()
@@ -430,6 +440,16 @@ class MSMActionPanel(QWidget):
 
         self.setLayout(layout)
 
+    def freeze_ui(self, freeze=True):
+        """Disable/enable action buttons (keep cancel enabled)"""
+        buttons = [
+            self.preview_mesh_btn, self.preview_frame_btn,
+            self.analyze_btn, self.save_btn, self.create_mask_btn,
+            self.load_stress_btn
+        ]
+        for btn in buttons:
+            btn.setEnabled(not freeze)
+        self.cancel_btn.setEnabled(True)  # Always keep cancel enabled
     def update_button_states(self, active_layer_exists: bool = False,
                              force_data: bool = False, mask_data: bool = False,
                              stress_data: bool = False):
@@ -530,6 +550,7 @@ class MSMController(QObject):
     mask_creation_progress = Signal(int, str)  # (progress, message)
     mask_creation_completed = Signal()
     mask_creation_failed = Signal(str)
+    ui_frozen = Signal(bool)
 
     def __init__(self, viewer: Viewer, service: MSMService,
                  data_manager: DataManager, parameter_manager: ParameterManager,
@@ -543,7 +564,34 @@ class MSMController(QObject):
         self.data_panel = data_panel
         self.active_workers = []
 
-    # TODO implement freeze UI method and call it while heavy processes are running
+        # Initialize panel attributes as None
+        self.parameter_panel = None
+        self.action_panel = None
+
+    def set_panels(self, parameter_panel: 'MSMParameterPanel', action_panel: 'MSMActionPanel'):
+        """Set the parameter and action panels after initialization."""
+        self.parameter_panel = parameter_panel
+        self.action_panel = action_panel
+
+    def freeze_ui(self):
+        """Disable all interactive UI elements"""
+        if self.data_panel:
+            self.data_panel.freeze_ui(True)
+        if self.parameter_panel:
+            self.parameter_panel.freeze_ui(True)
+        if self.action_panel:
+            self.action_panel.freeze_ui(True)
+        self.ui_frozen.emit(True)
+
+    def unfreeze_ui(self):
+        """Re-enable UI elements and refresh state"""
+        if self.data_panel:
+            self.data_panel.freeze_ui(False)
+        if self.parameter_panel:
+            self.parameter_panel.freeze_ui(False)
+        if self.action_panel:
+            self.action_panel.freeze_ui(False)
+        self.ui_frozen.emit(False)
 
     def _update_progress(self, progress: int, status: str):
         """Update progress and emit signal."""
@@ -576,6 +624,8 @@ class MSMController(QObject):
             worker = mask_creation_worker()
             worker.running = True
             self.active_workers.append(worker)
+            if len(self.active_workers) >= 1:
+                self.freeze_ui()
 
             def on_yielded(progress_data):
                 progress, message = progress_data
@@ -585,12 +635,18 @@ class MSMController(QObject):
                 # Pass raw masks to data panel for processing
                 self.data_panel.load_mask_data(analysis_stack)
                 self.mask_creation_completed.emit()
+                self.active_workers.remove(worker)
+                if not self.active_workers:
+                    self.unfreeze_ui()
 
             def on_errored(exc):
                 error_msg = f"Mask creation failed: {str(exc)}"
                 self.mask_creation_progress.emit(0, error_msg)
                 self.mask_creation_failed.emit(error_msg)
                 QMessageBox.critical(None, "Error", error_msg)
+                self.active_workers.remove(worker)
+                if not self.active_workers:
+                    self.unfreeze_ui()
 
             worker.yielded.connect(on_yielded)
             worker.returned.connect(on_returned)
@@ -685,10 +741,13 @@ class MSMController(QObject):
         worker = stress_calculation_worker()
         worker.running = True
         self.active_workers.append(worker)
+        if len(self.active_workers) >= 1:
+            self.freeze_ui()
 
         def on_yielded(progress_data):
             progress, message = progress_data
             self._update_progress(progress, message)
+
 
         def on_returned(results):
             # Process results
@@ -718,12 +777,18 @@ class MSMController(QObject):
 
             self._update_progress(100, "Analysis completed successfully")
             self.analysis_completed.emit(results)
+            self.active_workers.remove(worker)
+            if not self.active_workers:
+                self.unfreeze_ui()
 
         def on_errored(exc):
             error_msg = f"Stress calculation failed: {str(exc)}"
             self._update_progress(0, error_msg)
             self.analysis_failed.emit(error_msg)
             QMessageBox.critical(None, "Error", error_msg)
+            self.active_workers.remove(worker)
+            if not self.active_workers:
+                self.unfreeze_ui()
 
         worker.yielded.connect(on_yielded)
         worker.returned.connect(on_returned)
@@ -880,6 +945,7 @@ class MSMController(QObject):
         self.mask_creation_progress.emit(0, "Operations cancelled")
         self.progress_updated.emit(0, "Operations cancelled")
         QApplication.processEvents()
+        self.unfreeze_ui()
 
     def _validate_prerequisites(self) -> bool:
         """Check if required data is available."""
@@ -915,10 +981,15 @@ class MSMWidget(BaseAnalysisWidget):
             data_panel=self.data_panel
         )
 
+        # Initialize action panel
+        self.action_panel = MSMActionPanel(self.controller)
+
+        # Set panels in controller
+        self.controller.set_panels(self.parameter_panel, self.action_panel)
+
         self.data_panel.set_controller(self.controller)
 
-        # Initialize action panel and setup UI
-        self.action_panel = MSMActionPanel(self.controller)
+        # Setup UI and connect signals
         self._setup_ui()
         self._connect_signals()
 
@@ -1012,6 +1083,13 @@ class MSMWidget(BaseAnalysisWidget):
         self.controller.analysis_started.connect(self._on_analysis_started)
         self.controller.analysis_completed.connect(self._on_analysis_completed)
         self.controller.analysis_failed.connect(self._on_analysis_failed)
+
+        self.controller.ui_frozen.connect(self._handle_ui_freeze)
+
+    def _handle_ui_freeze(self, frozen):
+        """Update UI state when unfreezing"""
+        if not frozen:
+            self._update_ui_state()
 
     def _update_status(self, progress: int, message: str):
         """Update status display."""
