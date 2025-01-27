@@ -42,7 +42,6 @@ class MSMParameterPanel(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout()
-        layout.setSpacing(8)
 
         # Create parameter groups
         layout.addWidget(self._create_mask_parameters())
@@ -211,29 +210,39 @@ class MSMDataPanel(QWidget):
         self.controller = None
         self._setup_ui()
 
-    def _get_active_layer_data(self):
-        """Get the data from currently active napari layer."""
-        active_layer = self.viewer.layers.selection.active
-        if active_layer is None:
-            QMessageBox.warning(
-                self,
-                "No Layer Selected",
-                "Please select an image layer to create masks from."
-            )
-            return None
+    def _setup_ui(self):
+        layout = QVBoxLayout()
 
-        # Get the actual numpy array from the layer
-        if hasattr(active_layer, 'data') and isinstance(active_layer.data, np.ndarray):
-            return active_layer.data
-        return None
-    def _handle_load_mask_button(self):
-        """Handle the Load Masks button click by getting data from active layer."""
-        mask_data = self._get_active_layer_data()
-        if mask_data is not None:
-            self._load_mask_data(mask_data)
-            # Let the controller handle visualization
-            if self.controller:
-                self.controller.mask_creation_completed.emit()
+        # Create unified data input group
+        data_group = QGroupBox("Data Input")
+        group_layout = QVBoxLayout()
+        data_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+        # Force data row
+        force_layout = QHBoxLayout()
+        self.load_force_btn = QPushButton("Load Forces")
+        self.force_status = QLabel("Not loaded")
+        force_layout.addWidget(self.load_force_btn)
+        force_layout.addWidget(self.force_status)
+        group_layout.addLayout(force_layout)
+
+        # Mask data row
+        mask_layout = QHBoxLayout()
+        self.load_mask_btn = QPushButton("Load Masks")
+        self.mask_status = QLabel("Not loaded")
+        mask_layout.addWidget(self.load_mask_btn)
+        mask_layout.addWidget(self.mask_status)
+        group_layout.addLayout(mask_layout)
+
+        data_group.setLayout(group_layout)
+
+        layout.addWidget(data_group)
+        self.setLayout(layout)
+    def _connect_signals(self):
+        """Connect UI signals to controller methods."""
+        self.load_force_btn.clicked.connect(self._load_force_data)
+        self.load_mask_btn.clicked.connect(self._handle_load_mask_button)
+
     def update_button_states(self, has_active_image: bool):
         """Update button states based on current conditions."""
         # Update Load Masks button
@@ -263,43 +272,6 @@ class MSMDataPanel(QWidget):
         else:
             self.mask_status.setText("Not loaded")
 
-    def set_controller(self, controller):
-        """Set the controller and connect signals."""
-        self.controller = controller
-        self._connect_signals()
-
-    def _connect_signals(self):
-        """Connect UI signals to controller methods."""
-        self.load_force_btn.clicked.connect(self._load_force_data)
-        self.load_mask_btn.clicked.connect(self._handle_load_mask_button)
-
-    def _setup_ui(self):
-        layout = QVBoxLayout()
-
-        # Create unified data input group
-        data_group = QGroupBox("Data Input")
-        group_layout = QVBoxLayout()
-
-        # Force data row
-        force_layout = QHBoxLayout()
-        self.load_force_btn = QPushButton("Load Forces")
-        self.force_status = QLabel("Not loaded")
-        force_layout.addWidget(self.load_force_btn)
-        force_layout.addWidget(self.force_status)
-        group_layout.addLayout(force_layout)
-
-        # Mask data row
-        mask_layout = QHBoxLayout()
-        self.load_mask_btn = QPushButton("Load Masks")
-        self.mask_status = QLabel("Not loaded")
-        mask_layout.addWidget(self.load_mask_btn)
-        mask_layout.addWidget(self.mask_status)
-        group_layout.addLayout(mask_layout)
-
-        data_group.setLayout(group_layout)
-        layout.addWidget(data_group)
-        self.setLayout(layout)
-
     def update_mask_status(self, status_text: str):
         """Update the mask status label."""
         self.mask_status.setText(status_text)
@@ -315,6 +287,36 @@ class MSMDataPanel(QWidget):
             )
             return None
         return active_layer
+
+    def _get_active_layer_data(self):
+        """Get the data from currently active napari layer."""
+        active_layer = self.viewer.layers.selection.active
+        if active_layer is None:
+            QMessageBox.warning(
+                self,
+                "No Layer Selected",
+                "Please select an image layer to create masks from."
+            )
+            return None
+
+        # Get the actual numpy array from the layer
+        if hasattr(active_layer, 'data') and isinstance(active_layer.data, np.ndarray):
+            return active_layer.data
+        return None
+
+    def _handle_load_mask_button(self):
+        """Handle the Load Masks button click by getting data from active layer."""
+        mask_data = self._get_active_layer_data()
+        if mask_data is not None:
+            self._load_mask_data(mask_data)
+            # Let the controller handle visualization
+            if self.controller:
+                self.controller.mask_creation_completed.emit()
+
+    def set_controller(self, controller):
+        """Set the controller and connect signals."""
+        self.controller = controller
+        self._connect_signals()
 
     def _load_force_data(self):
         """Load force data from files."""
@@ -395,7 +397,6 @@ class MSMActionPanel(QWidget):
 
         # Create grid of button pairs
         button_layout = QVBoxLayout()
-        button_layout.setSpacing(8)  # Add some spacing between rows
 
         # Row 1: Create Masks and Preview Mesh
         row1_layout = QHBoxLayout()
@@ -426,14 +427,6 @@ class MSMActionPanel(QWidget):
         # Cancel button (full width)
         self.cancel_btn = QPushButton("Cancel All Operations")
         layout.addWidget(self.cancel_btn)
-
-        # Progress section
-        self.progress_bar = QProgressBar()
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.status_label)
 
         self.setLayout(layout)
 
@@ -482,7 +475,6 @@ class MSMActionPanel(QWidget):
             "Calculate stress tensors first" if not stress_data
             else "Save results"
         )
-
 
     def _connect_signals(self):
         """Connect action panel buttons to controller methods."""
@@ -902,7 +894,7 @@ class MSMController(QObject):
 
 class MSMWidget(BaseAnalysisWidget):
     """Widget for Monolayer Stress Microscopy analysis."""
-    stress_calculated = Signal(object) # Emits stress analysis results
+    stress_calculated = Signal(object)  # Emits stress analysis results
 
     def __init__(self, viewer: Viewer, data_manager: DataManager,
                  parameter_manager: ParameterManager, visualization_manager: VisualizationManager):
@@ -933,18 +925,18 @@ class MSMWidget(BaseAnalysisWidget):
         # Add layer selection monitoring
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
 
-
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
-        main_layout.setSpacing(8)
+
+        main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
         # Left side: Colorbar (from BaseAnalysisWidget)
         colorbar_container = QWidget()
         colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(4, 4, 4, 4)
+        colorbar_layout.setContentsMargins(0, 0, 0, 0)
 
         self.colorbar_manager = ColorbarManager()
         colorbar_group = self.create_colorbar_widget(
@@ -969,9 +961,10 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Create a widget to hold all the content in the scroll area
         scroll_content = QWidget()
+        scroll_content.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         scroll_layout = QVBoxLayout()
-        scroll_layout.setSpacing(8)
-        scroll_layout.setContentsMargins(4, 4, 4, 4)
+        scroll_layout.setSpacing(0)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
 
         # Add panels to the scroll area
         scroll_layout.addWidget(self.data_panel)
@@ -994,7 +987,6 @@ class MSMWidget(BaseAnalysisWidget):
         scroll_area.setWidget(scroll_content)
 
         main_layout.addWidget(scroll_area)
-        # main_layout.addStretch(1)
 
         self.setLayout(main_layout)
 
@@ -1096,4 +1088,3 @@ class MSMWidget(BaseAnalysisWidget):
             mask_data=has_mask,
             stress_data=has_stress
         )
-
