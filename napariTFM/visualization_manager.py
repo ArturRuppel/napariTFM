@@ -404,9 +404,6 @@ class VisualizationManager(ErrorHandlingMixin):
             self.handle_error(error)
             raise
 
-
-
-
     def visualize_force_preview(
             self,
             force_x: np.ndarray,
@@ -642,7 +639,6 @@ class VisualizationManager(ErrorHandlingMixin):
                     contrast_limits=(-max_stress, max_stress)
                 )
 
-
                 # Average normal stress
                 self._layers['stress_normal'] = self.viewer.add_image(
                     sigma_normal,
@@ -737,7 +733,6 @@ class VisualizationManager(ErrorHandlingMixin):
                     contrast_limits=(-max_stress, max_stress)
                 )
 
-
                 # Average normal stress
                 self._layers['stress_normal'] = self.viewer.add_image(
                     sigma_normal,
@@ -758,6 +753,7 @@ class VisualizationManager(ErrorHandlingMixin):
             )
             self.handle_error(error)
             raise
+
     def get_force_statistics(self, results: Dict[str, Any]) -> Dict[str, float]:
         """Calculate force statistics."""
         try:
@@ -885,7 +881,6 @@ class VisualizationManager(ErrorHandlingMixin):
         vectors[:, 0, 1] = X_flat  # x coordinates
         vectors[:, 0, 0] = Y_flat  # y coordinates
 
-
         vectors[:, 1, 1] = U_flat
         vectors[:, 1, 0] = V_flat
 
@@ -980,3 +975,39 @@ class VisualizationManager(ErrorHandlingMixin):
         for layer_name in [edge_layer_name, node_layer_name]:
             if layer_name in self.viewer.layers:
                 self.viewer.layers.remove(layer_name)
+
+    def visualize_masks(self, masks: np.ndarray, downscale_factor: int = 1, name: str = 'Masks', opacity: float = 0.5):
+        """
+        Visualize masks with proper scaling.
+
+        Parameters
+        ----------
+        masks : np.ndarray
+            Binary mask array to visualize
+        downscale_factor : int
+            Factor by which to upscale the masks for visualization
+        name : str
+            Name of the layer in napari viewer
+        opacity : float
+            Opacity of the mask layer (0-1)
+        """
+        # Remove existing mask layer if it exists
+        if name in self.viewer.layers:
+            self.viewer.layers.remove(name)
+
+        # Upscale masks if needed
+        if downscale_factor > 1:
+            upscaled_masks = np.repeat(
+                np.repeat(masks, downscale_factor, axis=-2),
+                downscale_factor, axis=-1
+            )
+        else:
+            upscaled_masks = masks
+
+        # Add the mask layer
+        self.viewer.add_labels(
+            upscaled_masks.astype(np.uint8),
+            name=name,
+            visible=True,
+            opacity=opacity
+        )

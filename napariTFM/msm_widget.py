@@ -497,11 +497,11 @@ class MSMController(QObject):
 
                 try:
                     while True:
-                        _, _, current_frame, total_frames = next(mask_generator)
+                        _, current_frame, total_frames = next(mask_generator)
                         progress = int((current_frame + 1) / total_frames * 100)
                         yield (progress, f"Creating masks: Frame {current_frame + 1}/{total_frames}")
                 except StopIteration as e:
-                    analysis_stack, _ = e.value  # Get raw analysis masks
+                    analysis_stack = e.value
                     return analysis_stack
 
             worker = mask_creation_worker()
@@ -803,7 +803,6 @@ class MSMController(QObject):
         return True
 
 
-
 class MSMWidget(BaseAnalysisWidget):
     """Widget for Monolayer Stress Microscopy analysis."""
     stress_calculated = Signal(dict)  # Emits stress analysis results
@@ -954,16 +953,17 @@ class MSMWidget(BaseAnalysisWidget):
         """Handle successful mask creation."""
         masks = self.data_manager.masks
         self.data_panel.update_mask_status(f"Loaded: {masks.shape}")
-        # self.mask_status.setText()
 
-        if 'Masks' in self.viewer.layers:
-            self.viewer.layers.remove('Masks')
+        # Get downscale factor from force parameters
+        try:
+            downscale_factor = self.data_manager.force_params['downscale_factor']
+        except:
+            downscale_factor = 1
 
-        self.viewer.add_labels(
-            masks.astype(np.uint8),
-            name='Masks',
-            visible=True,
-            opacity=0.5,
+        # Visualize masks using the visualization manager
+        self.visualization_manager.visualize_masks(
+            masks=masks,
+            downscale_factor=downscale_factor
         )
 
     def _on_mask_creation_failed(self, error_msg: str):

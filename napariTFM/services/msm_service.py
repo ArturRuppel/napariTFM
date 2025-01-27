@@ -71,7 +71,7 @@ class MSMService:
             params: MSMParameters,
             target_shape: Optional[Tuple[int, int]] = None,
             downscale_factor: int = 1
-    ) -> Generator[Tuple[np.ndarray, np.ndarray, int, int], None, Tuple[np.ndarray, np.ndarray]]:
+    ) -> Generator[Tuple[np.ndarray, int, int], None, np.ndarray]:
         """
         Create analysis and visualization mask stacks as a generator that yields intermediate results.
 
@@ -106,7 +106,6 @@ class MSMService:
 
         # Initialize mask stacks
         analysis_masks = []
-        vis_masks = []
 
         # Process each frame
         for frame in range(total_frames):
@@ -130,34 +129,16 @@ class MSMService:
             else:
                 analysis_mask = base_mask
 
-            # Handle visualization mask resizing
-            if downscale_factor > 1:
-                vis_shape = (
-                    analysis_mask.shape[0] * downscale_factor,
-                    analysis_mask.shape[1] * downscale_factor
-                )
-                vis_mask = resize(
-                    base_mask.astype(float),
-                    vis_shape,
-                    order=0,
-                    preserve_range=True,
-                    anti_aliasing=False
-                ) > 0.5
-            else:
-                vis_mask = base_mask
-
             # Store masks
             analysis_masks.append(analysis_mask)
-            vis_masks.append(vis_mask)
 
             # Yield intermediate results
-            yield analysis_mask, vis_mask, frame, total_frames
+            yield analysis_mask, frame, total_frames
 
         # Convert lists to arrays for final return
         analysis_stack = np.stack(analysis_masks)
-        vis_stack = np.stack(vis_masks)
 
-        return analysis_stack, vis_stack
+        return analysis_stack
 
     def process_mask_data(self, mask_data: np.ndarray, force_field: np.ndarray = None) -> tuple[np.ndarray, list[str]]:
         """
