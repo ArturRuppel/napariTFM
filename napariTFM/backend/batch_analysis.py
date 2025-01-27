@@ -14,7 +14,7 @@ from napariTFM.backend.displacement_analysis import TVL1Parameters, Displacement
 from napariTFM.backend.fttc import FTTC
 from napariTFM.backend.msm import MonolayerStressMicroscopy
 from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
-
+# TODO Stress analysis failed: serializing a bytes object larger than 4 GiB requires pickle protocol 4 or higher. Skipping this step.
 
 import logging
 import warnings

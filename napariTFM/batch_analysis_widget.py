@@ -17,6 +17,7 @@ from qtpy.QtWidgets import (
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.backend.batch_analysis import BatchAnalysis
+# TODO Make folder choser remember last choice
 
 
 class BatchAnalysisWidget(BaseAnalysisWidget):
