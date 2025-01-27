@@ -1,11 +1,11 @@
-from typing import Any, Optional, Dict
+from typing import Any
+
 import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, Qt, QObject
 from qtpy.QtWidgets import (
-    QGroupBox, QLabel, QCheckBox, QSizePolicy, QFrame, QScrollArea, QApplication,
-    QSpinBox, QDoubleSpinBox, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
+    QGroupBox, QLabel, QCheckBox, QSizePolicy, QFrame, QScrollArea, QSpinBox, QDoubleSpinBox, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
     QWidget, QMessageBox, QProgressBar
 )
 
@@ -13,17 +13,19 @@ from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
 from napariTFM.data_manager import DataManager
 from napariTFM.parameter_manager import ParameterManager
-from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.fttc_service import FTTCService, FTTCParameters
+from napariTFM.visualization_manager import VisualizationManager
 
 
 # TODO colorbar doesn't update
 # TODO button enabling/disabling logic is not on point
+# TODO Live update of force preview and results with vis params only works partially
 class FTTCParameterPanel(QWidget):
     """Panel for handling all FTTC parameter inputs."""
 
     parameter_changed = Signal()
     parameter_value_changed = Signal(str, object)
+
 
     def __init__(self, parameter_manager):
         super().__init__()
@@ -80,6 +82,10 @@ class FTTCParameterPanel(QWidget):
         self.parameter_manager.set_value(param_name, value)
         self.parameter_value_changed.emit(param_name, value)
         self.parameter_changed.emit()
+
+        # Update visualization if f_max changes
+        if param_name in ["f_max", "force_vector_stride", "force_arrow_scale"] and hasattr(self, 'controller'):
+            self.controller.update_force_visualization()
 
     def _update_widget_value(self, param_name: str, value: any):
         """Update widget when parameter changes externally."""
@@ -146,7 +152,7 @@ class FTTCParameterPanel(QWidget):
         params = [
             ("force_vector_stride", "Vector Stride:", 1, 100, 1, 20),
             ("force_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1, 1.0),
-            ("f_max", "Max Force (Pa):", 0.1, 10000.0, 1, 1000.0)
+            ("f_max", "Max Force (Pa):", 0.1, 10000.0, 1, 500.0)  # Changed default to 500
         ]
 
         for name, label, min_val, max_val, step, default in params:
@@ -368,6 +374,7 @@ class FTTCController(QObject):
         self.parameter_panel = None
         self.action_panel = None
 
+
     def set_panels(self, parameter_panel: 'FTTCParameterPanel',
                    action_panel: 'FTTCActionPanel'):
         """Set the parameter and action panels after initialization."""
@@ -483,7 +490,7 @@ class FTTCController(QObject):
                     regularization=None if params.auto_gcv else params.regularization,
                     use_gcv=params.auto_gcv
                 )
-                return tx, ty
+                return tx, ty, params  # Also return current parameters
 
             # Create and configure worker
             worker = preview_worker()
@@ -497,6 +504,7 @@ class FTTCController(QObject):
 
         except Exception as e:
             self._handle_error(str(e))
+
 
     def auto_select_gcv(self):
         """Calculate optimal regularization parameter for current frame using GCV."""
@@ -555,19 +563,34 @@ class FTTCController(QObject):
         except Exception as e:
             self._handle_error(str(e))
 
+    def _create_visualization_parameters(self) -> QGroupBox:
+        """Create visualization parameter group."""
+        group = QGroupBox("Visualization Parameters")
+        layout = QVBoxLayout()
+
+        params = [
+            ("force_vector_stride", "Vector Stride:", 1, 100, 1, 20),
+            ("force_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1, 1.0),
+            ("f_max", "Max Force (Pa):", 0.1, 10000.0, 1, 500.0)  # Changed default to 500
+        ]
+
+        for name, label, min_val, max_val, step, default in params:
+            widget = self._create_parameter_widget(name, label, min_val, max_val, step, default)
+            layout.addLayout(widget)
+
+        group.setLayout(layout)
+        return group
+
+
     def _handle_preview_results(self, results):
         """Handle preview calculation results."""
         try:
-            tx, ty = results
-
-            # Calculate force magnitude for colorbar update
-            force_magnitude = np.sqrt(tx ** 2 + ty ** 2)
+            tx, ty, params = results  # Unpack the results including parameters
 
             # Get visualization parameters
-            params = self._get_current_parameters()
             downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
 
-            # Update visualization
+            # Update visualization with current parameters
             self.visualization_manager.visualize_force_preview(
                 tx, ty,
                 f_max=params.f_max,
@@ -576,9 +599,8 @@ class FTTCController(QObject):
                 downscale_factor=downscale_factor
             )
 
-            # Update colorbar with force magnitude range
-            if hasattr(self.visualization_manager, 'colorbar_manager'):
-                self.visualization_manager.colorbar_manager.update_limits(0, np.max(force_magnitude))
+            # Calculate force magnitude for statistics
+            force_magnitude = np.sqrt(tx ** 2 + ty ** 2)
 
             # Calculate and show statistics
             stats_message = (
@@ -592,7 +614,6 @@ class FTTCController(QObject):
         except Exception as e:
             self._handle_error(str(e))
 
-    # In FTTCController class, modify _handle_force_results:
     def _handle_force_results(self, results):
         """Handle completed force calculation results."""
         try:
@@ -608,8 +629,10 @@ class FTTCController(QObject):
             force_magnitude = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
 
             # Update colorbar with force magnitude range
-            if hasattr(self.visualization_manager, 'colorbar_manager'):
-                self.visualization_manager.colorbar_manager.update_limits(0, np.max(force_magnitude))
+            max_force = min(params.f_max, np.max(force_magnitude))  # Use the smaller of f_max or actual max
+            if hasattr(self.visualization_manager, 'widget'):
+                if hasattr(self.visualization_manager.widget, 'colorbar_manager'):
+                    self.visualization_manager.widget.colorbar_manager.update_limits(0, max_force)
 
             # Package parameters
             force_params = {
@@ -669,6 +692,39 @@ class FTTCController(QObject):
 
                 np.save(file_path, force_results)
                 self._update_progress(100, f"Results saved to:\n{file_path}")
+
+        except Exception as e:
+            self._handle_error(str(e))
+
+    def update_force_visualization(self):
+        """Update force visualization with current parameters."""
+        try:
+            if not self.data_manager.force_field is None:
+                # Get current parameters
+                params = self._get_current_parameters()
+
+                # Update visualization with new parameters
+                results = {
+                    'tx': self.data_manager.force_field[..., 0],
+                    'ty': self.data_manager.force_field[..., 1],
+                    'parameters': {
+                        'visualization': {
+                            'f_max': params.f_max,
+                            'force_vector_stride': params.force_vector_stride,
+                            'force_arrow_scale': params.force_arrow_scale
+                        }
+                    }
+                }
+
+                self.visualization_manager.visualize_force_results(
+                    results,
+                    downscale_factor=self.data_manager.force_params.get('downscale_factor', 1)
+                )
+
+                # Update colorbar
+                if hasattr(self.visualization_manager, 'widget'):
+                    if hasattr(self.visualization_manager.widget, 'colorbar_manager'):
+                        self.visualization_manager.widget.colorbar_manager.update_limits(0, params.f_max)
 
         except Exception as e:
             self._handle_error(str(e))
@@ -816,7 +872,7 @@ class FTTCWidget(BaseAnalysisWidget):
         colorbar_group = self.create_colorbar_widget(
             colormap_name='inferno',
             label="Force (Pa)",
-            clim=(0, 1000),
+            clim=(0, 500.0),  # Changed default to 500
             colorbar_manager=self.colorbar_manager
         )
         colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -914,6 +970,7 @@ class FTTCWidget(BaseAnalysisWidget):
                 self.status_label.setText("Ready for force calculation")
             else:
                 self.status_label.setText("Missing required displacement data")
+
     def _connect_signals(self):
         """Connect all widget signals."""
         # Connect controller signals
@@ -935,11 +992,27 @@ class FTTCWidget(BaseAnalysisWidget):
         # Connect UI freeze signals
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
 
-
         # Connect auto GCV checkbox to button state
         self.parameter_panel.parameter_widgets["auto_gcv"].stateChanged.connect(
             lambda state: self.parameter_panel.parameter_widgets["gcv_button"].setEnabled(not bool(state))
         )
+        self.parameter_panel.parameter_value_changed.connect(self._on_parameter_changed)
+
+
+    def _on_displacement_loaded(self, displacement_data: dict):
+        """Handle displacement data loading."""
+        try:
+            # Update visualization
+            self.visualization_manager.visualize_displacement_results(
+                displacement_data,
+                downscale_factor=displacement_data.get('parameters', {}).get('downscale_factor', 1)
+            )
+
+            # Update colorbar with default force range
+            self.colorbar_manager.update_limits(0, 500.0)  # Changed default to 500
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to process displacement data: {str(e)}")
 
     def _update_status(self, progress: int, message: str):
         """Update status display."""
@@ -953,22 +1026,6 @@ class FTTCWidget(BaseAnalysisWidget):
     def _on_data_loaded(self, data_type: str):
         """Handle data loading completion."""
         self._update_button_states()
-
-    def _on_displacement_loaded(self, displacement_data: dict):
-        """Handle displacement data loading."""
-        try:
-            # Update visualization
-            self.visualization_manager.visualize_displacement_results(
-                displacement_data,
-                downscale_factor=displacement_data.get('parameters', {}).get('downscale_factor', 1)
-            )
-
-            # Update colorbar
-            d_max = displacement_data.get('parameters', {}).get('d_max', 10.0)
-            self.colorbar_manager.update_limits(0, d_max)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to process displacement data: {str(e)}")
 
     def _on_analysis_started(self):
         """Handle analysis start."""
@@ -984,11 +1041,11 @@ class FTTCWidget(BaseAnalysisWidget):
         self._update_button_states()
         self._update_status(0, f"Analysis failed: {error_msg}")
 
-    def _on_parameter_changed(self):
+    def _on_parameter_changed(self, param_name: str, value: Any):
         """Handle parameter changes."""
-        if hasattr(self, 'preview_active') and self.preview_active:
-            self.controller.preview_force()
-
+        if param_name == "f_max":
+            # Update colorbar immediately
+            self.colorbar_manager.update_limits(0, value)
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze."""
         if not frozen:
