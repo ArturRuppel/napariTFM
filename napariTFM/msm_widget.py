@@ -197,13 +197,12 @@ class MSMParameterPanel(QWidget):
 
 
 class MSMDataPanel(QWidget):
-    """Panel for handling data loading and status display."""
+    """Panel for handling data loading and status display in a unified group."""
 
-    # Define signals
     data_loaded = Signal(str)  # Emits data type that was loaded ('force' or 'mask')
-    force_data_loaded = Signal(object)  # Emits force data
-    mask_data_loaded = Signal(object)  # Emits mask data
-    data_load_failed = Signal(str)  # Emits error message
+    force_data_loaded = Signal(object)
+    mask_data_loaded = Signal(object)
+    data_load_failed = Signal(str)
 
     def __init__(self, data_manager, viewer):
         super().__init__()
@@ -215,40 +214,40 @@ class MSMDataPanel(QWidget):
     def _setup_ui(self):
         layout = QVBoxLayout()
 
-        # Force data section
-        force_group = QGroupBox("Force Data")
+        # Create unified data input group
+        data_group = QGroupBox("Data Input")
+        group_layout = QVBoxLayout()
+
+        # Force data row
         force_layout = QHBoxLayout()
         self.load_force_btn = QPushButton("Load Forces")
         self.force_status = QLabel("Not loaded")
         force_layout.addWidget(self.load_force_btn)
         force_layout.addWidget(self.force_status)
-        force_group.setLayout(force_layout)
+        group_layout.addLayout(force_layout)
 
-        # Mask data section
-        mask_group = QGroupBox("Mask Data")
-        mask_layout = QVBoxLayout()
-
-        # Top row for buttons
-        button_layout = QHBoxLayout()
+        # Mask data row
+        mask_layout = QHBoxLayout()
         self.load_mask_btn = QPushButton("Load Masks")
-        button_layout.addWidget(self.load_mask_btn)
-
-        # Bottom row for status
-        status_layout = QHBoxLayout()
         self.mask_status = QLabel("Not loaded")
-        status_layout.addWidget(self.mask_status)
+        mask_layout.addWidget(self.load_mask_btn)
+        mask_layout.addWidget(self.mask_status)
+        group_layout.addLayout(mask_layout)
 
-        mask_layout.addLayout(button_layout)
-        mask_layout.addLayout(status_layout)
-        mask_group.setLayout(mask_layout)
-
-        layout.addWidget(force_group)
-        layout.addWidget(mask_group)
+        data_group.setLayout(group_layout)
+        layout.addWidget(data_group)
         self.setLayout(layout)
 
     def _connect_signals(self):
         self.load_force_btn.clicked.connect(self._load_force_data)
         self.load_mask_btn.clicked.connect(self._load_mask_data)
+
+    def update_status_labels(self, data_type: str, status_text: str):
+        """Update status labels for either force or mask data."""
+        if data_type == 'force':
+            self.force_status.setText(status_text)
+        elif data_type == 'mask':
+            self.mask_status.setText(status_text)
 
     def update_mask_status(self, status_text: str):
         """Update the mask status label."""
@@ -500,6 +499,8 @@ class MSMController(QObject):
 
             # Update DataManager without triggering external signals
             self.data_manager.set_masks(masks)
+
+            self.mask_creation_completed.emit()
 
             # Update UI status via the action panel
             self.progress_updated.emit(100, "Masks created successfully.")
@@ -798,7 +799,19 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _on_mask_creation_completed(self):
         """Handle successful mask creation."""
-        self.data_panel.update_mask_status("Masks created successfully")
+        masks = self.data_manager.masks
+        self.data_panel.update_mask_status(f"Loaded: {masks.shape}")
+        # self.mask_status.setText()
+
+        if 'Masks' in self.viewer.layers:
+            self.viewer.layers.remove('Masks')
+
+        self.viewer.add_labels(
+            masks.astype(np.uint8),
+            name='Masks',
+            visible=True,
+            opacity=0.5,
+        )
 
     def _on_mask_creation_failed(self, error_msg: str):
         """Handle mask creation failure."""
@@ -810,6 +823,11 @@ class MSMWidget(BaseAnalysisWidget):
         has_force_data = self.data_manager.force_field is not None
         has_mask_data = self.data_manager.masks is not None
         has_stress_data = self.data_manager.stress_tensor is not None
+
+        if not has_force_data:
+            self.data_panel.update_status_labels('force', "Not loaded")
+        if not has_mask_data:
+            self.data_panel.update_status_labels('mask', "Not loaded")
 
         self.action_panel.set_buttons_enabled(has_force_data and has_mask_data)
         self.action_panel.save_btn.setEnabled(has_stress_data)
