@@ -193,6 +193,7 @@ class MonolayerStressMicroscopy:
 
         return final_mask
 
+    # deprecated
     @classmethod
     def create_mask_stack(cls, image_stack, threshold_percentile=0, dilation=10, smoothing_sigma=10.0,
                           target_shape=None, downscale_factor=1):

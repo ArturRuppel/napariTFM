@@ -475,6 +475,7 @@ class MSMWidget(BaseAnalysisWidget):
                 downscale_factor = self.data_manager.force_params['downscale_factor']
 
             # Create preview mask using MSM class methods
+            # TODO should not use the stack method
             _, preview_mask = MonolayerStressMicroscopy.create_mask_stack(
                 image,
                 threshold_percentile=threshold,

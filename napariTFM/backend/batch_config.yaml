@@ -1,28 +1,18 @@
 # List of folders to analyze
 root_folders:
-  - "D:/2025-01-22/position2"
-  - "D:/2025-01-22/position3"
-  - "D:/2025-01-22/position4"
-  - "D:/2025-01-22/position5"
-  - "D:/2025-01-22/position6"
-  - "D:/2025-01-22/position7"
-  - "D:/2025-01-22/position8"
-  - "D:/2025-01-22/position9"
-  - "D:/2025-01-22/position10"
-  - "D:/2025-01-22/position11"
-  - "D:/2025-01-22/position12"
-  - "D:/2025-01-22/position13"
+  - "C:/Users/aruppel/Desktop/test"
+
 
 analysis_steps:
   create_masks: true
-  displacement: false
+  displacement: true
   force: true
-  preprocessing: false
+  preprocessing: true
   stress: true
 input_files:
-  beads: beads_zaverage.tif
-  cells: cells_zaverag.tif
-  reference: reference_zaverag.tif
+  beads: beads.tif
+  cells: cells.tif
+  reference: reference.tif
 parameters:
   cell_gaussian_sigma: 1.0
   cell_max_intensity: 99.9
@@ -68,7 +58,7 @@ visualizations:
   displacement_map: true
   force_cell_overlay: true
   force_map: true
-  mesh: false
-  normal_stress: false
-  sigma_xx: false
-  sigma_yy: false
+  mesh: true
+  normal_stress: true
+  sigma_xx: true
+  sigma_yy: true

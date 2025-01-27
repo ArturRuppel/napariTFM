@@ -195,6 +195,7 @@ class MeshGenerator:
             "n_elements": len(triangles)
         }
 
+    # deprecated
     def plot_mesh(self, points: np.ndarray, triangles: np.ndarray, ax=None):
         """Plot the generated mesh for visualization.
 

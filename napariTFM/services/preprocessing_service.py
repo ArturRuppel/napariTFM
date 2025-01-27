@@ -3,7 +3,7 @@ from typing import Optional, Tuple, Dict, Any, List, Generator
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
-
+# TODO service has basically the same class, should just keep one
 @dataclass
 class PreprocessingParameters:
     """Parameters for image preprocessing"""

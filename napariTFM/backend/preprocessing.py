@@ -173,6 +173,7 @@ class ImagePreprocessor:
 
         return registered, warp_matrix
 
+    # deprecated
     def preprocess_all_generator(
             self,
             bead_stack: Optional[np.ndarray] = None,

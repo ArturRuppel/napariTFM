@@ -41,6 +41,7 @@ class DisplacementAnalyzer:
             self.params.median_filtering, self.params.use_initial_flow
         )
 
+    # deprecated
     def analyze_displacement_generator(self, reference: np.ndarray, bead_stack: np.ndarray,
                                        pixel_size: float, downscale_factor: int = 1,
                                        visualization_params: Optional[Dict] = None) -> Generator:
