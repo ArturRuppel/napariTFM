@@ -158,6 +158,7 @@ class DataManager:
         self._validate_input_stack(data, "masks")
         self._masks = data
 
+
     def _validate_input_stack(self, data: np.ndarray, name: str) -> None:
         """Validate dimensions and type of input stack data."""
         if not isinstance(data, np.ndarray):

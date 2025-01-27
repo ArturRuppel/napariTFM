@@ -908,3 +908,75 @@ class VisualizationManager(ErrorHandlingMixin):
             'std': magnitude.std(),
             'median': np.median(magnitude)
         }
+
+    def visualize_mesh(self, nodes: np.ndarray, elements: np.ndarray,
+                       downscale_factor: float = 1.0, layer_prefix: str = ''):
+        """
+        Visualize mesh nodes and edges in napari viewer.
+
+        Parameters
+        ----------
+        nodes : np.ndarray
+            Node coordinates (N x 2)
+        elements : np.ndarray
+            Element connectivity (M x 3)
+        downscale_factor : float
+            Factor to scale coordinates by
+        layer_prefix : str
+            Prefix for layer names (for multiple visualizations)
+        """
+        # Remove existing mesh layers
+        edge_layer_name = f"{layer_prefix}Mesh Edges"
+        node_layer_name = f"{layer_prefix}Mesh Nodes"
+
+        for layer_name in [edge_layer_name, node_layer_name]:
+            if layer_name in self.viewer.layers:
+                self.viewer.layers.remove(layer_name)
+
+        # Scale node coordinates
+        nodes_scaled = nodes * downscale_factor
+
+        # Swap x and y coordinates for display
+        nodes_display = np.column_stack((nodes_scaled[:, 1], nodes_scaled[:, 0]))
+
+        # Create edge data for visualization
+        num_elements = len(elements)
+        edge_data = np.zeros((num_elements * 3, 2, 2))
+
+        for i, element in enumerate(elements):
+            # Get node coordinates for triangle vertices
+            v1 = nodes_display[element[0]]
+            v2 = nodes_display[element[1]]
+            v3 = nodes_display[element[2]]
+
+            # Add three edges (v1-v2, v2-v3, v3-v1)
+            edge_data[i * 3] = np.array([v1, v2])
+            edge_data[i * 3 + 1] = np.array([v2, v3])
+            edge_data[i * 3 + 2] = np.array([v3, v1])
+
+        # Add visualization layers
+        self.viewer.add_shapes(
+            edge_data,
+            shape_type='line',
+            edge_color='yellow',
+            edge_width=1,
+            opacity=0.6,
+            name=edge_layer_name
+        )
+
+        self.viewer.add_points(
+            nodes_display,
+            size=4,
+            face_color='red',
+            opacity=0.7,
+            name=node_layer_name
+        )
+
+    def remove_mesh_visualization(self, layer_prefix: str = ''):
+        """Remove mesh visualization layers."""
+        edge_layer_name = f"{layer_prefix}Mesh Edges"
+        node_layer_name = f"{layer_prefix}Mesh Nodes"
+
+        for layer_name in [edge_layer_name, node_layer_name]:
+            if layer_name in self.viewer.layers:
+                self.viewer.layers.remove(layer_name)
