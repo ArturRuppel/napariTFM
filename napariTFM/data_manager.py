@@ -130,14 +130,14 @@ class DataManager:
 
     def set_force_results(self, force_field, parameters):
         """Set force field data and parameters."""
-        self._orce_field = force_field
+        self._force_field = force_field
         self._force_params = parameters
-        return True  # Indicate successful update
+        return True
 
     def set_masks(self, masks):
         """Set mask data."""
         self._masks = masks
-        return True  # Indicate successful update
+        return True
 
     def set_stress_results(self, stress_tensor, parameters):
         """Set stress tensor results and parameters."""

@@ -204,13 +204,22 @@ class MSMDataPanel(QWidget):
     mask_data_loaded = Signal(object)
     data_load_failed = Signal(str)
 
-    def __init__(self, data_manager, controller, viewer):
+    def __init__(self, data_manager, viewer):
         super().__init__()
         self.data_manager = data_manager
-        self.controller = controller
         self.viewer = viewer
+        self.controller = None
         self._setup_ui()
+
+    def set_controller(self, controller):
+        """Set the controller and connect signals."""
+        self.controller = controller
         self._connect_signals()
+
+    def _connect_signals(self):
+        """Connect UI signals to controller methods."""
+        self.load_force_btn.clicked.connect(self._load_force_data)
+        self.load_mask_btn.clicked.connect(self._load_mask_data)
 
     def _setup_ui(self):
         layout = QVBoxLayout()
@@ -238,10 +247,6 @@ class MSMDataPanel(QWidget):
         data_group.setLayout(group_layout)
         layout.addWidget(data_group)
         self.setLayout(layout)
-
-    def _connect_signals(self):
-        self.load_force_btn.clicked.connect(self._load_force_data)
-        self.load_mask_btn.clicked.connect(self._load_mask_data)
 
     def update_status_labels(self, data_type: str, status_text: str):
         """Update status labels for either force or mask data."""
@@ -274,7 +279,7 @@ class MSMDataPanel(QWidget):
             )
             if file_path:
                 force_data = np.load(file_path, allow_pickle=True).item()
-                self.controller.set_force_data(
+                self.data_manager.set_force_results(
                     force_data["force_field"],
                     force_data["parameters"]
                 )
@@ -284,64 +289,51 @@ class MSMDataPanel(QWidget):
             self.force_status.setText("Error loading")
             QMessageBox.critical(self, "Error", error_msg)
 
-    def _load_mask_data(self):
-        """Load mask data from active layer."""
+    def load_mask_data(self, mask_data):
+        """Public method to load mask data directly."""
+        self._load_mask_data(mask_data=mask_data)
+
+    def _load_mask_data(self, mask_data=None):
+        """Handle mask loading from either active layer or provided data."""
         try:
-            # Check if we have force data first
-            if self.controller.data_manager.force_field is None:
+            if mask_data is None:
+                # Get active layer if no mask_data provided
+                active_layer = self._get_active_layer()
+                if active_layer is None:
+                    return
+                mask_data = active_layer.data
+            else:
+                # Validate provided mask_data
+                if not isinstance(mask_data, np.ndarray):
+                    raise ValueError("Provided mask data is not a numpy array")
+
+            # Check for force data presence - Use data_manager directly
+            force_field = self.data_manager.force_field
+            if force_field is None:
                 QMessageBox.warning(
                     self,
                     "No Force Data",
-                    "It's recommended to load force data first to ensure proper mask scaling."
+                    "No force data loaded. Masks may need resizing later."
                 )
 
-            active_layer = self._get_active_layer()
-            if active_layer is not None:
-                mask_data = self._process_mask_layer(active_layer)
-                if mask_data is not None:
-                    self.controller.set_mask_data(mask_data)
-                    self.mask_status.setText(f"Loaded: {mask_data.shape}")
+            # Process masks (resizing if needed)
+            processed_masks, warnings = self.controller.service.process_mask_data(
+                mask_data,
+                force_field
+            )
+
+            # Show processing warnings
+            for warning in warnings:
+                QMessageBox.warning(self, "Warning", warning)
+
+            # Update data manager and UI
+            self.data_manager.set_masks(processed_masks)
+            self.mask_status.setText(f"Loaded: {processed_masks.shape}")
+
         except Exception as e:
             error_msg = f"Failed to load mask data: {str(e)}"
             self.mask_status.setText("Error loading")
             QMessageBox.critical(self, "Error", error_msg)
-
-    def _process_mask_layer(self, layer):
-        """Process a layer into mask data."""
-        if layer.data is None:
-            raise ValueError("Selected layer contains no data")
-
-        # Convert layer data to binary mask
-        mask_data = layer.data.astype(bool)
-
-        # If this is a single mask, add time dimension
-        if mask_data.ndim == 2:
-            mask_data = mask_data[np.newaxis, ...]
-
-        # Ensure we have a 3D array (time, height, width)
-        if mask_data.ndim != 3:
-            raise ValueError(
-                f"Mask data must be 2D or 3D, got shape {mask_data.shape}"
-            )
-
-        # If force data exists, scale mask to match force shape
-        if self.data_manager.force_field is not None:
-            force_shape = self.data_manager.force_field.shape[1:3]  # Get height, width
-            if mask_data.shape[1:] != force_shape:
-                from skimage.transform import resize
-                mask_data = np.stack([
-                    resize(
-                        frame.astype(float),
-                        force_shape,
-                        order=0,
-                        preserve_range=True,
-                        anti_aliasing=False
-                    ) > 0.5
-                    for frame in mask_data
-                ])
-
-        return mask_data
-
 
 
 class MSMActionPanel(QWidget):
@@ -416,6 +408,7 @@ class MSMActionPanel(QWidget):
         self.preview_frame_btn.setEnabled(has_force_data and has_mask_data)
         self.analyze_btn.setEnabled(has_force_data and has_mask_data)
         self.save_btn.setEnabled(has_stress_data)
+
     def _handle_analyze_click(self):
         """Handle analyze button click by disabling buttons and starting analysis."""
         self.set_buttons_enabled(False)
@@ -433,7 +426,6 @@ class MSMActionPanel(QWidget):
             btn.setEnabled(enabled)
 
 
-
 class MSMController(QObject):
     """Coordinates interactions between UI components, service, and managers."""
 
@@ -449,13 +441,14 @@ class MSMController(QObject):
 
     def __init__(self, viewer: Viewer, service: MSMService,
                  data_manager: DataManager, parameter_manager: ParameterManager,
-                 visualization_manager: VisualizationManager):
-        super().__init__()  # Initialize QObject
+                 visualization_manager: VisualizationManager, data_panel: MSMDataPanel):
+        super().__init__()
         self.viewer = viewer
         self.service = service
         self.data_manager = data_manager
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
+        self.data_panel = data_panel
         self.active_workers = []
 
     # TODO implement freeze UI method and call it while heavy processes are running
@@ -486,6 +479,60 @@ class MSMController(QObject):
             self.analysis_failed.emit(error_msg)
             QMessageBox.critical(None, "Error", error_msg)
             return None
+
+    def create_masks_from_images(self):
+        """Handle mask creation from the active image layer."""
+        try:
+            active_layer = self.viewer.layers.selection.active
+            if not active_layer or not isinstance(active_layer.data, np.ndarray):
+                raise ValueError("No valid image layer selected.")
+
+            image_data = active_layer.data
+            params = self._get_current_parameters()
+
+            @thread_worker
+            def mask_creation_worker():
+                mask_generator = self.service.create_mask_stack(image_data, params)
+                total_frames = image_data.shape[0] if image_data.ndim > 2 else 1
+
+                try:
+                    while True:
+                        _, _, current_frame, total_frames = next(mask_generator)
+                        progress = int((current_frame + 1) / total_frames * 100)
+                        yield (progress, f"Creating masks: Frame {current_frame + 1}/{total_frames}")
+                except StopIteration as e:
+                    analysis_stack, _ = e.value  # Get raw analysis masks
+                    return analysis_stack
+
+            worker = mask_creation_worker()
+            worker.running = True
+            self.active_workers.append(worker)
+
+            def on_yielded(progress_data):
+                progress, message = progress_data
+                self.mask_creation_progress.emit(progress, message)
+
+            def on_returned(analysis_stack):
+                # Pass raw masks to data panel for processing
+                self.data_panel.load_mask_data(analysis_stack)
+                self.mask_creation_completed.emit()
+
+            def on_errored(exc):
+                error_msg = f"Mask creation failed: {str(exc)}"
+                self.mask_creation_progress.emit(0, error_msg)
+                self.mask_creation_failed.emit(error_msg)
+                QMessageBox.critical(None, "Error", error_msg)
+
+            worker.yielded.connect(on_yielded)
+            worker.returned.connect(on_returned)
+            worker.errored.connect(on_errored)
+            worker.start()
+
+        except Exception as e:
+            error_msg = f"Failed to start mask creation: {str(e)}"
+            self.mask_creation_progress.emit(0, error_msg)
+            self.mask_creation_failed.emit(error_msg)
+            QMessageBox.critical(None, "Error", error_msg)
 
     def _start_mesh_generation(self, masks, params):
         """Start thread worker for mesh generation."""
@@ -593,72 +640,6 @@ class MSMController(QObject):
         worker.returned.connect(on_returned)
         worker.errored.connect(on_errored)
         worker.start()
-
-    def create_masks_from_images(self):
-        """Handle mask creation from the active image layer using a thread worker."""
-        try:
-            active_layer = self.viewer.layers.selection.active
-            if not active_layer or not isinstance(active_layer.data, np.ndarray):
-                raise ValueError("No valid image layer selected.")
-
-            image_data = active_layer.data
-            params = self._get_current_parameters()
-
-            @thread_worker
-            def mask_creation_worker():
-                mask_generator = self.service.create_mask_stack(image_data, params)
-                total_frames = None
-
-                try:
-                    while True:
-                        _, _, current_frame, total_frames = next(mask_generator)
-                        progress = int((current_frame + 1) / total_frames * 100)
-                        yield (progress, f"Creating masks: Frame {current_frame + 1}/{total_frames}")
-                except StopIteration as e:
-                    return e.value  # Returns (analysis_stack, _)
-
-            # Create and configure worker
-            worker = mask_creation_worker()
-            worker.running = True  # Add cancellation flag
-
-            # Add to active workers
-            self.active_workers.append(worker)
-
-            def on_finished():
-                if worker in self.active_workers:
-                    self.active_workers.remove(worker)
-
-            worker.finished.connect(on_finished)
-
-            def on_yielded(progress_data):
-                progress, message = progress_data
-                self.mask_creation_progress.emit(progress, message)
-
-            def on_returned(result):
-                analysis_stack, _ = result
-                self.data_manager.set_masks(analysis_stack)
-                self.mask_creation_completed.emit()
-                self.mask_creation_progress.emit(100, "Masks created successfully.")
-
-            def on_errored(exc):
-                error_msg = f"Mask creation failed: {str(exc)}"
-                self.mask_creation_progress.emit(0, error_msg)
-                self.mask_creation_failed.emit(error_msg)
-                QMessageBox.critical(None, "Error", error_msg)
-
-            # Connect worker signals
-            worker.yielded.connect(on_yielded)
-            worker.returned.connect(on_returned)
-            worker.errored.connect(on_errored)
-
-            # Start the worker
-            worker.start()
-
-        except Exception as e:
-            error_msg = f"Failed to start mask creation: {str(e)}"
-            self.mask_creation_progress.emit(0, error_msg)
-            self.mask_creation_failed.emit(error_msg)
-            QMessageBox.critical(None, "Error", error_msg)
 
     def _handle_progress(self, current: int, total: int, status: str):
         """Handle progress updates during analysis."""
@@ -821,20 +802,6 @@ class MSMController(QObject):
             return False
         return True
 
-    def set_force_data(self, force_field, parameters):
-        """Handle force data updates."""
-        if self.data_manager.set_force_results(force_field, parameters):
-            self.data_updated.emit('force')
-
-    def set_mask_data(self, masks):
-        """Handle mask data updates."""
-        if self.data_manager.set_masks(masks):
-            self.data_updated.emit('mask')
-
-    def set_stress_results(self, stress_tensor, parameters):
-        """Handle stress results updates."""
-        if self.data_manager.set_stress_results(stress_tensor, parameters):
-            self.data_updated.emit('stress')
 
 
 class MSMWidget(BaseAnalysisWidget):
@@ -845,21 +812,25 @@ class MSMWidget(BaseAnalysisWidget):
                  parameter_manager: ParameterManager, visualization_manager: VisualizationManager):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Initialize managers and service
-        self.parameter_manager = parameter_manager
+        # Initialize service and panels first
         self.service = MSMService()
         self.parameter_panel = MSMParameterPanel(parameter_manager)
+        self.data_panel = MSMDataPanel(data_manager, viewer)  # Create without controller
+
+        # Initialize controller with data_panel
         self.controller = MSMController(
             viewer=viewer,
             service=self.service,
             data_manager=data_manager,
             parameter_manager=parameter_manager,
-            visualization_manager=visualization_manager
+            visualization_manager=visualization_manager,
+            data_panel=self.data_panel
         )
-        self.data_panel = MSMDataPanel(data_manager, self.controller, viewer)
-        self.action_panel = MSMActionPanel(self.controller)
 
-        # Setup UI
+        self.data_panel.set_controller(self.controller)
+
+        # Initialize action panel and setup UI
+        self.action_panel = MSMActionPanel(self.controller)
         self._setup_ui()
         self._connect_signals()
 

@@ -159,6 +159,73 @@ class MSMService:
 
         return analysis_stack, vis_stack
 
+    def process_mask_data(self, mask_data: np.ndarray, force_field: np.ndarray = None) -> tuple[np.ndarray, list[str]]:
+        """
+        Process mask data into the required format with validation and resizing.
+
+        Args:
+            mask_data: Input mask data array
+            force_field: Optional force field for shape validation
+
+        Returns:
+            Tuple of (processed_mask_data, warning_messages)
+        """
+        warnings = []
+
+        if mask_data is None:
+            raise ValueError("No mask data provided")
+
+        # Check for multiple values
+        unique_values = np.unique(mask_data)
+        unique_values = unique_values[unique_values != 0]  # Exclude zero
+        if len(unique_values) > 1:
+            warnings.append("Multiple non-zero values detected in the mask. Converting to binary (0 and 1).")
+
+        # Convert to binary mask
+        mask_data = mask_data > 0
+
+        # If this is a single mask, add time dimension
+        if mask_data.ndim == 2:
+            mask_data = mask_data[np.newaxis, ...]
+
+        # Ensure we have a 3D array (time, height, width)
+        if mask_data.ndim != 3:
+            raise ValueError(f"Mask data must be 2D or 3D, got shape {mask_data.shape}")
+
+        # If force data exists, resize masks to match
+        if force_field is not None:
+            force_shape = force_field.shape[1:3]  # Get height, width
+            if mask_data.shape[1:] != force_shape:
+                mask_data = np.stack([
+                    resize(
+                        frame.astype(float),
+                        force_shape,
+                        order=0,
+                        preserve_range=True,
+                        anti_aliasing=False
+                    ) > 0.5
+                    for frame in mask_data
+                ])
+
+        return mask_data, warnings
+
+    def resize_mask_to_forces(
+            self,
+            mask: np.ndarray,
+            force_shape: Tuple[int, int]
+    ) -> np.ndarray:
+        """Resize mask to match force field shape."""
+        if mask.shape != force_shape:
+            return resize(
+                mask.astype(float),
+                force_shape,
+                order=0,
+                preserve_range=True,
+                anti_aliasing=False
+            ) > 0.5
+        return mask
+
+
     def generate_mesh(
             self,
             mask: np.ndarray,
@@ -388,21 +455,6 @@ class MSMService:
 
         return True, ""
 
-    def resize_mask_to_forces(
-            self,
-            mask: np.ndarray,
-            force_shape: Tuple[int, int]
-    ) -> np.ndarray:
-        """Resize mask to match force field shape."""
-        if mask.shape != force_shape:
-            return resize(
-                mask.astype(float),
-                force_shape,
-                order=0,
-                preserve_range=True,
-                anti_aliasing=False
-            ) > 0.5
-        return mask
 
     def get_timing_stats(self) -> Dict[str, float]:
         """Get timing statistics from last calculation."""
