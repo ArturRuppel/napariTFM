@@ -211,6 +211,35 @@ class MSMDataPanel(QWidget):
         self.controller = None
         self._setup_ui()
 
+    def update_button_states(self, has_active_image: bool):
+        """Update button states based on current conditions."""
+        # Update Load Masks button
+        self.load_mask_btn.setEnabled(has_active_image)
+        if not has_active_image:
+            self.load_mask_btn.setToolTip("Select an image layer first")
+        else:
+            self.load_mask_btn.setToolTip("Load masks from selected layer")
+
+        # Force button always enabled with appropriate tooltip
+        self.load_force_btn.setEnabled(True)
+        self.load_force_btn.setToolTip("Load force data from file")
+
+    def update_data_status(self):
+        """Update both force and mask status labels based on data manager state."""
+        # Update force status
+        if self.data_manager.force_field is not None:
+            force_shape = self.data_manager.force_field.shape
+            self.force_status.setText(f"Loaded: {force_shape}")
+        else:
+            self.force_status.setText("Not loaded")
+
+        # Update mask status
+        if self.data_manager.masks is not None:
+            mask_shape = self.data_manager.masks.shape
+            self.mask_status.setText(f"Loaded: {mask_shape}")
+        else:
+            self.mask_status.setText("Not loaded")
+
     def set_controller(self, controller):
         """Set the controller and connect signals."""
         self.controller = controller
@@ -247,13 +276,6 @@ class MSMDataPanel(QWidget):
         data_group.setLayout(group_layout)
         layout.addWidget(data_group)
         self.setLayout(layout)
-
-    def update_status_labels(self, data_type: str, status_text: str):
-        """Update status labels for either force or mask data."""
-        if data_type == 'force':
-            self.force_status.setText(status_text)
-        elif data_type == 'mask':
-            self.mask_status.setText(status_text)
 
     def update_mask_status(self, status_text: str):
         """Update the mask status label."""
@@ -383,6 +405,48 @@ class MSMActionPanel(QWidget):
         layout.addWidget(self.status_label)
 
         self.setLayout(layout)
+
+    def update_button_states(self, active_layer_exists: bool = False,
+                           force_data: bool = False, mask_data: bool = False,
+                           stress_data: bool = False):
+        """Update button states based on current data availability."""
+        # Ensure all parameters are boolean, defaulting to False if None
+        active_layer_exists = bool(active_layer_exists)
+        force_data = bool(force_data)
+        mask_data = bool(mask_data)
+        stress_data = bool(stress_data)
+
+        # Create Masks button
+        self.create_mask_btn.setEnabled(active_layer_exists)
+        self.create_mask_btn.setToolTip(
+            "Create masks from selected image" if active_layer_exists
+            else "Select an image layer first"
+        )
+
+        # Preview Mesh button
+        self.preview_mesh_btn.setEnabled(mask_data)
+        if not mask_data:
+            self.preview_mesh_btn.setToolTip("Load masks first")
+        else:
+            self.preview_mesh_btn.setToolTip(
+                "Preview mesh (Warning: No force data present)" if not force_data
+                else "Preview mesh"
+            )
+
+        # Preview Frame and Analysis buttons
+        for btn in [self.preview_frame_btn, self.analyze_btn]:
+            btn.setEnabled(mask_data and force_data)
+            btn.setToolTip(
+                "Load both mask and force data first" if not (mask_data and force_data)
+                else btn.text()
+            )
+
+        # Save Results button
+        self.save_btn.setEnabled(stress_data)
+        self.save_btn.setToolTip(
+            "Calculate stress tensors first" if not stress_data
+            else "Save results"
+        )
 
     def _connect_signals(self):
         """Connect action panel buttons to controller methods."""
@@ -831,6 +895,7 @@ class MSMWidget(BaseAnalysisWidget):
         self._setup_ui()
         self._connect_signals()
 
+
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
@@ -894,6 +959,8 @@ class MSMWidget(BaseAnalysisWidget):
         # main_layout.addStretch(1)
 
         self.setLayout(main_layout)
+
+        self._update_ui_state()
 
     def _connect_signals(self):
         """Connect all widget signals."""
@@ -970,15 +1037,27 @@ class MSMWidget(BaseAnalysisWidget):
         QMessageBox.critical(self, "Error", error_msg)
 
     def _update_ui_state(self):
-        """Update UI element states based on current data availability."""
-        has_force_data = self.data_manager.force_field is not None
-        has_mask_data = self.data_manager.masks is not None
-        has_stress_data = self.data_manager.stress_tensor is not None
+        """Update all button states based on current application state."""
+        # Check viewer state
+        active_layer = self.viewer.layers.selection.active
+        has_active_image = (active_layer is not None and
+                            isinstance(active_layer.data, np.ndarray))
 
-        if not has_force_data:
-            self.data_panel.update_status_labels('force', "Not loaded")
-        if not has_mask_data:
-            self.data_panel.update_status_labels('mask', "Not loaded")
+        # Check data manager state
+        has_force = self.data_manager.force_field is not None
+        has_mask = self.data_manager.masks is not None
+        has_stress = (self.data_manager.stress_tensor is not None and
+                      self.data_manager.stress_params is not None)
 
-        self.action_panel.set_buttons_enabled(has_force_data and has_mask_data)
-        self.action_panel.save_btn.setEnabled(has_stress_data)
+        # Update data panel buttons
+        self.data_panel.update_button_states(has_active_image)
+        self.data_panel.update_data_status()
+
+        # Update action panel buttons
+        self.action_panel.update_button_states(
+            active_layer_exists=has_active_image,
+            force_data=has_force,
+            mask_data=has_mask,
+            stress_data=has_stress
+        )
+
