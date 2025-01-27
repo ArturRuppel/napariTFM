@@ -662,8 +662,10 @@ class VisualizationManager(ErrorHandlingMixin):
 
     def visualize_stress_results(
             self,
-            results: Dict[str, Any],
+            stress_tensor: np.ndarray,
+            downscale_factor: Optional[int] = 1,
             max_stress: Optional[float] = None
+
     ) -> None:
         """Visualize stress results for all frames."""
         try:
@@ -674,17 +676,7 @@ class VisualizationManager(ErrorHandlingMixin):
                 'Average Normal Stress'
             ])
 
-            # Get the stress tensor stack
-            stress_tensor = results['stress_tensor']
 
-            # Get parameters
-            if max_stress is None:
-                max_stress = results.get('parameters', {}).get('max_stress', 1.0)
-
-            # Get downscale factor from parameters
-            downscale_factor = results.get('parameters', {}).get('downscale_factor', 1)
-
-            # Function to upscale stress components
             def upscale_component(component):
                 if downscale_factor > 1:
                     if component.ndim == 3:  # Multiple frames

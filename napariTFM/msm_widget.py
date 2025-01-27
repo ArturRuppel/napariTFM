@@ -452,33 +452,10 @@ class MSMController(QObject):
         self.active_workers = []
 
     # TODO implement freeze UI method and call it while heavy processes are running
-    # TODO Think about how to handle resizing of masks
 
     def _update_progress(self, progress: int, status: str):
         """Update progress and emit signal."""
         self.progress_updated.emit(progress, status)
-
-    def start_analysis(self):
-        """Start the stress analysis by first generating meshes then calculating stresses."""
-        try:
-            if not self._validate_prerequisites():
-                return
-
-            self.analysis_started.emit()
-            self._update_progress(0, "Starting analysis...")
-
-            params = self._get_current_parameters()
-            masks = self.data_manager.masks
-
-            # Start mesh generation
-            self._start_mesh_generation(masks, params)
-
-        except Exception as e:
-            error_msg = f"Analysis failed: {str(e)}"
-            self._update_progress(0, error_msg)
-            self.analysis_failed.emit(error_msg)
-            QMessageBox.critical(None, "Error", error_msg)
-            return None
 
     def create_masks_from_images(self):
         """Handle mask creation from the active image layer."""
@@ -534,56 +511,76 @@ class MSMController(QObject):
             self.mask_creation_failed.emit(error_msg)
             QMessageBox.critical(None, "Error", error_msg)
 
-    def _start_mesh_generation(self, masks, params):
-        """Start thread worker for mesh generation."""
+    def start_analysis(self):
+        """Start the stress analysis by first generating meshes then calculating stresses."""
+        try:
+            if not self._validate_prerequisites():
+                return
 
-        @thread_worker
-        def mesh_generation_worker():
-            mesh_generator = self.service.generate_mesh_stack(masks, params)
-            total_frames = masks.shape[0]
-            try:
-                while True:
-                    # Yield progress from mesh generator
-                    _, _, _, current_frame, total_frames = next(mesh_generator)
-                    progress = int((current_frame + 1) / total_frames * 100)
-                    yield (progress, f"Generating mesh: Frame {current_frame + 1}/{total_frames}")
-            except StopIteration as e:
-                return e.value  # Returns List[MeshPreviewResult]
+            self.analysis_started.emit()
+            self._update_progress(0, "Starting analysis...")
 
-        worker = mesh_generation_worker()
-        worker.running = True
-        self.active_workers.append(worker)
+            params = self._get_current_parameters()
+            masks = self.data_manager.masks
 
-        def on_yielded(progress_data):
-            progress, message = progress_data
-            self._update_progress(progress, message)
+            # Generate meshes in main thread
+            mesh_results = self._generate_mesh_stack(masks, params)
 
-        def on_returned(mesh_results):
             # Start stress calculation with generated meshes
             self._start_stress_calculation(mesh_results, params)
 
-        def on_errored(exc):
-            error_msg = f"Mesh generation failed: {str(exc)}"
+        except Exception as e:
+            error_msg = f"Analysis failed: {str(e)}"
             self._update_progress(0, error_msg)
             self.analysis_failed.emit(error_msg)
             QMessageBox.critical(None, "Error", error_msg)
+            return None
 
-        worker.yielded.connect(on_yielded)
-        worker.returned.connect(on_returned)
-        worker.errored.connect(on_errored)
-        worker.start()
+    def _generate_mesh_stack(self, masks, params):
+        """Generate mesh stack in the main thread."""
+        try:
+            mesh_generator = self.service.generate_mesh_stack(masks, params)
+            total_frames = masks.shape[0]
+            mesh_results = []
+
+            while True:
+                try:
+                    # Process next mesh
+                    mesh_result, _, _, current_frame, total_frames = next(mesh_generator)
+                    mesh_results.append(mesh_result)
+
+                    # Update progress
+                    progress = int((current_frame + 1) / total_frames * 100)
+                    self._update_progress(progress, f"Generating mesh: Frame {current_frame + 1}/{total_frames}")
+
+                    # Process UI events to keep the interface responsive
+                    QApplication.processEvents()
+
+                except StopIteration as e:
+                    # Generator completed, return final results
+                    return e.value
+
+        except Exception as e:
+            raise Exception(f"Mesh generation failed: {str(e)}")
 
     def _start_stress_calculation(self, mesh_results, params):
         """Start thread worker for stress calculation."""
 
         @thread_worker
         def stress_calculation_worker():
+            # Get masks and force field
+            masks = self.data_manager.masks
+            force_field = self.data_manager.force_field
+            total_frames = force_field.shape[0]
+
+            # Initialize stress generator with explicit mask passing
             stress_generator = self.service.calculate_stress_stack(
-                force_field=self.data_manager.force_field,
+                force_field=force_field,
                 params=params,
-                mesh_results=mesh_results
+                mesh_results=mesh_results,
+                masks=masks  # Explicitly pass masks
             )
-            total_frames = self.data_manager.force_field.shape[0]
+
             try:
                 while True:
                     # Yield progress from stress generator
@@ -591,7 +588,7 @@ class MSMController(QObject):
                     progress = int((current_frame + 1) / total_frames * 100)
                     yield (progress, f"Calculating stress: Frame {current_frame + 1}/{total_frames}")
             except StopIteration as e:
-                return e.value  # Returns List[MSMCalculationResult]
+                return e.value
 
         worker = stress_calculation_worker()
         worker.running = True
@@ -623,7 +620,7 @@ class MSMController(QObject):
             # Update visualization
             self.visualization_manager.visualize_stress_results(
                 stress_tensor_stack,
-                params.max_stress,
+                max_stress=params.max_stress,
                 downscale_factor=downscale_factor
             )
 
@@ -640,6 +637,58 @@ class MSMController(QObject):
         worker.returned.connect(on_returned)
         worker.errored.connect(on_errored)
         worker.start()
+
+    def preview_current_frame(self):
+        """Calculate and display stress field for current frame."""
+        try:
+            if not self._validate_prerequisites():
+                return
+
+            self._update_progress(0, "Generating stress preview...")
+            current_frame = self.viewer.dims.current_step[0]
+            params = self._get_current_parameters()
+
+            # Get current frame data
+            mask = self.data_manager.masks[current_frame]
+            tx = self.data_manager.force_field[current_frame, ..., 0]
+            ty = self.data_manager.force_field[current_frame, ..., 1]
+
+            # Ensure mask matches force field shape
+            mask = self.service.resize_mask_to_forces(mask, tx.shape)
+
+            # Calculate stress field with explicit mask
+            result = self.service.calculate_stress_field(
+                mask=mask,
+                traction_x=tx,
+                traction_y=ty,
+                params=params,
+                use_mask=mask  # Explicitly pass mask for stress calculation
+            )
+
+            # Update visualization
+            pixel_size = self.data_manager.force_params['pixel_size']
+            downscale_factor = self.data_manager.force_params['downscale_factor']
+
+            stress_tensor = result.stress_tensor * pixel_size * downscale_factor * 1e-6
+            self.visualization_manager.visualize_stress_preview(
+                stress_tensor,
+                params.max_stress,
+                downscale_factor=downscale_factor
+            )
+
+            status = (
+                f"Preview generated for frame {current_frame}\n"
+                f"Condition number: {result.condition_number:.1e}\n"
+                f"Residual: {result.residual:.1e}"
+            )
+            self._update_progress(100, status)
+            return result
+
+        except Exception as e:
+            error_msg = f"Failed to preview stress field: {str(e)}"
+            self._update_progress(0, error_msg)
+            QMessageBox.critical(None, "Error", error_msg)
+            return None
 
     def _handle_progress(self, current: int, total: int, status: str):
         """Handle progress updates during analysis."""
@@ -680,57 +729,6 @@ class MSMController(QObject):
 
         except Exception as e:
             error_msg = f"Failed to preview mesh: {str(e)}"
-            self._update_progress(0, error_msg)
-            QMessageBox.critical(None, "Error", error_msg)
-            return None
-
-    def preview_current_frame(self):
-        """Calculate and display stress field for current frame."""
-        try:
-            if not self._validate_prerequisites():
-                return
-
-            self._update_progress(0, "Generating stress preview...")
-            current_frame = self.viewer.dims.current_step[0]
-            params = self._get_current_parameters()
-
-            # Get current frame data
-            mask = self.data_manager.masks[current_frame]
-            tx = self.data_manager.force_field[current_frame, ..., 0]
-            ty = self.data_manager.force_field[current_frame, ..., 1]
-
-            # Ensure mask matches force field shape
-            mask = self.service.resize_mask_to_forces(mask, tx.shape)
-
-            # Calculate stress field
-            result = self.service.calculate_stress_field(
-                mask=mask,
-                traction_x=tx,
-                traction_y=ty,
-                params=params
-            )
-
-            # Update visualization
-            pixel_size = self.data_manager.force_params['pixel_size']
-            downscale_factor = self.data_manager.force_params['downscale_factor']
-
-            stress_tensor = result.stress_tensor * pixel_size * downscale_factor * 1e-6  # Convert to N/m
-            self.visualization_manager.visualize_stress_preview(
-                stress_tensor,
-                params.max_stress,
-                downscale_factor=downscale_factor
-            )
-
-            status = (
-                f"Preview generated for frame {current_frame}\n"
-                f"Condition number: {result.condition_number:.1e}\n"
-                f"Residual: {result.residual:.1e}"
-            )
-            self._update_progress(100, status)
-            return result
-
-        except Exception as e:
-            error_msg = f"Failed to preview stress field: {str(e)}"
             self._update_progress(0, error_msg)
             QMessageBox.critical(None, "Error", error_msg)
             return None
@@ -805,7 +803,7 @@ class MSMController(QObject):
 
 class MSMWidget(BaseAnalysisWidget):
     """Widget for Monolayer Stress Microscopy analysis."""
-    stress_calculated = Signal(dict)  # Emits stress analysis results
+    stress_calculated = Signal(object) # Emits stress analysis results
 
     def __init__(self, viewer: Viewer, data_manager: DataManager,
                  parameter_manager: ParameterManager, visualization_manager: VisualizationManager):

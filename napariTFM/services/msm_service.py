@@ -330,72 +330,39 @@ class MSMService:
             parameters=params
         )
 
-    def calculate_stress_stack(
-            self,
-            force_field: np.ndarray,
-            params: MSMParameters,
-            mesh_results: List[MeshPreviewResult]
-    ) -> Generator[Tuple[MSMCalculationResult, int, int], None, List[MSMCalculationResult]]:
-        """
-        Calculate stress fields for multiple frames, yielding intermediate results.
+    def calculate_stress_stack(self, force_field, params, mesh_results, masks):
+        """Calculate stress tensor stack for all frames."""
+        total_frames = force_field.shape[0]
+        all_results = []  # List to collect all results
 
-        Parameters
-        ----------
-        force_field : np.ndarray
-            4D array of force vectors (frames, height, width, 2)
-        params : MSMParameters
-            Parameters for stress calculation
-        mesh_results : List[MeshPreviewResult]
-            Pre-generated mesh data for each frame
-
-        Yields
-        ------
-        Tuple[MSMCalculationResult, int, int]
-            (stress_result, current_frame, total_frames)
-            Yields each frame's stress calculation result along with progress information
-
-        Returns
-        -------
-        List[MSMCalculationResult]
-            Complete list of stress calculation results for all frames
-        """
-        results = []
-        num_frames = force_field.shape[0]
-
-        # Validate input dimensions
-        if len(mesh_results) != num_frames:
-            raise ValueError(
-                f"Number of mesh results ({len(mesh_results)}) "
-                f"does not match number of frames ({num_frames})"
-            )
-
-        # Calculate stress fields using pre-generated meshes
-        for frame in range(num_frames):
-            # Extract mesh data for current frame
-            mesh_data = mesh_results[frame]
-            nodes = mesh_data.nodes
-            elements = mesh_data.elements
-
-            # Extract force components
+        for frame in range(total_frames):
+            # Get current frame data
             tx = force_field[frame, ..., 0]
             ty = force_field[frame, ..., 1]
+            mask = masks[frame]  # Get mask for current frame
+            mesh_result = mesh_results[frame]  # Get mesh for current frame
 
-            # Calculate stress field for current frame
+            # Ensure mask matches force field shape
+            mask = self.resize_mask_to_forces(mask, tx.shape)
+
+            # Calculate stress field with mesh data
             result = self.calculate_stress_field(
-                mask=None,  # Mask not needed since we're providing nodes/elements
+                mask=mask,
                 traction_x=tx,
                 traction_y=ty,
                 params=params,
-                nodes=nodes,
-                elements=elements
+                nodes=mesh_result.nodes,
+                elements=mesh_result.elements
             )
-            results.append(result)
 
-            # Yield intermediate results
-            yield result, frame, num_frames
+            # Add to results list
+            all_results.append(result)
 
-        return results
+            # Yield progress with the result object directly
+            yield result, frame, total_frames
 
+        # Make sure we return the complete list of results when the generator is exhausted
+        return all_results
 
     def _get_algorithm_code(self, algorithm_name: str) -> int:
         """Convert algorithm name to corresponding code."""
