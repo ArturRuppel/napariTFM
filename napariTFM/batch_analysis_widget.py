@@ -64,6 +64,110 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         finally:
             self.blockSignals(False)
 
+    def _create_folder_management_group(self) -> QGroupBox:
+        """Create folder management group."""
+        group = QGroupBox("Folder Management")
+        layout = QVBoxLayout()
+
+        # Folder list first
+        self.folder_list_widget = QListWidget()
+        layout.addWidget(self.folder_list_widget)
+
+        # Create grid layout for buttons
+        button_layout = QGridLayout()
+
+        # Add folder management buttons
+        self.add_folder_btn = QPushButton("Add Folder")
+        self.clear_folders_btn = QPushButton("Clear Folders")
+        self.save_config_btn = QPushButton("Save Config")  # New button
+        button_layout.addWidget(self.add_folder_btn, 0, 0)
+        button_layout.addWidget(self.clear_folders_btn, 0, 1)
+        button_layout.addWidget(self.save_config_btn, 0, 2)  # Add to grid
+
+        # Add console selection radio buttons
+        console_group = QHBoxLayout()
+        self.console_group = QButtonGroup()
+
+        self.napari_console_radio = QRadioButton("Run in Napari Console")
+        self.new_console_radio = QRadioButton("Run in New Console")
+        self.napari_console_radio.setChecked(True)  # Default to napari console
+
+        self.console_group.addButton(self.napari_console_radio)
+        self.console_group.addButton(self.new_console_radio)
+
+        console_group.addWidget(self.napari_console_radio)
+        console_group.addWidget(self.new_console_radio)
+
+        layout.addLayout(console_group)
+
+        # Add run button
+        self.run_analysis_btn = QPushButton("Run Analysis")
+        layout.addWidget(self.run_analysis_btn)
+
+        layout.addLayout(button_layout)
+        group.setLayout(layout)
+        return group
+
+    def _connect_signals(self):
+        """Connect widget signals."""
+        # Keep existing signal connections
+        self.add_folder_btn.clicked.connect(self._add_folder)
+        self.clear_folders_btn.clicked.connect(self._clear_folders)
+        self.run_analysis_btn.clicked.connect(self._run_batch_analysis)
+        self.save_config_btn.clicked.connect(self._save_config_dialog)  # New connection
+
+    def _save_config_dialog(self):
+        """Open a file dialog to save the configuration file."""
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Configuration",
+            os.path.expanduser("~"),
+            "YAML Files (*.yaml *.yml);;All Files (*.*)"
+        )
+
+        if filepath:
+            try:
+                self.save_config_to_yaml(filepath)
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Configuration saved successfully to:\n{filepath}"
+                )
+            except IOError as e:
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to save configuration:\n{str(e)}"
+                )
+
+    def save_config_to_yaml(self, filepath: str) -> None:
+        """
+        Save the current configuration to a YAML file.
+
+        Parameters:
+        -----------
+        filepath : str
+            The path where the YAML file should be saved. If no extension is provided,
+            '.yaml' will be added automatically.
+
+        Raises:
+        -------
+        IOError: If there is an error writing to the file
+        """
+        # Add .yaml extension if not present
+        if not filepath.lower().endswith(('.yml', '.yaml')):
+            filepath += '.yaml'
+
+        try:
+            # Generate configuration dictionary
+            config = self.generate_config()
+
+            # Save to YAML file
+            with open(filepath, 'w') as f:
+                yaml.safe_dump(config, f, default_flow_style=False)
+        except Exception as e:
+            raise IOError(f"Failed to save configuration to {filepath}: {str(e)}")
+
     def _create_visualization_group(self) -> QGroupBox:
         """Create visualization options group."""
         group = QGroupBox("Visualizations")
@@ -105,48 +209,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             checkbox.stateChanged.connect(make_callback())
             layout.addWidget(checkbox)
 
-        group.setLayout(layout)
-        return group
-
-    def _create_folder_management_group(self) -> QGroupBox:
-        """Create folder management group."""
-        group = QGroupBox("Folder Management")
-        layout = QVBoxLayout()
-
-        # Folder list first
-        self.folder_list_widget = QListWidget()
-        layout.addWidget(self.folder_list_widget)
-
-        # Create grid layout for buttons
-        button_layout = QGridLayout()
-
-        # Add folder management buttons
-        self.add_folder_btn = QPushButton("Add Folder")
-        self.clear_folders_btn = QPushButton("Clear Folders")
-        button_layout.addWidget(self.add_folder_btn, 0, 0)
-        button_layout.addWidget(self.clear_folders_btn, 0, 1)
-
-        # Add console selection radio buttons
-        console_group = QHBoxLayout()
-        self.console_group = QButtonGroup()
-
-        self.napari_console_radio = QRadioButton("Run in Napari Console")
-        self.new_console_radio = QRadioButton("Run in New Console")
-        self.napari_console_radio.setChecked(True)  # Default to napari console
-
-        self.console_group.addButton(self.napari_console_radio)
-        self.console_group.addButton(self.new_console_radio)
-
-        console_group.addWidget(self.napari_console_radio)
-        console_group.addWidget(self.new_console_radio)
-
-        layout.addLayout(console_group)
-
-        # Add run button
-        self.run_analysis_btn = QPushButton("Run Analysis")
-        layout.addWidget(self.run_analysis_btn)
-
-        layout.addLayout(button_layout)
         group.setLayout(layout)
         return group
 
@@ -1158,13 +1220,6 @@ Path(config_path).unlink()
         params.update(self.parameter_manager.get_category_parameters(ParameterCategory.VISUALIZATION))
 
         return params
-
-    def _connect_signals(self):
-        """Connect widget signals."""
-        # Keep existing signal connections
-        self.add_folder_btn.clicked.connect(self._add_folder)
-        self.clear_folders_btn.clicked.connect(self._clear_folders)
-        self.run_analysis_btn.clicked.connect(self._run_batch_analysis)
 
     def _create_status_frame(self) -> QFrame:
         """Create status frame."""

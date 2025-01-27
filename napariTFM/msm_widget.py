@@ -17,7 +17,7 @@ from napariTFM.parameter_manager import ParameterManager
 from napariTFM.services.msm_service import MSMParameters, MSMService
 from napariTFM.visualization_manager import VisualizationManager
 
-
+# TODO implement loading and saving
 class MSMParameterPanel(QWidget):
     """Panel for handling all MSM parameter inputs."""
 
