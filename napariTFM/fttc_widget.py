@@ -560,6 +560,9 @@ class FTTCController(QObject):
         try:
             tx, ty = results
 
+            # Calculate force magnitude for colorbar update
+            force_magnitude = np.sqrt(tx ** 2 + ty ** 2)
+
             # Get visualization parameters
             params = self._get_current_parameters()
             downscale_factor = self.data_manager.displacement_params.get('downscale_factor', 1)
@@ -573,24 +576,23 @@ class FTTCController(QObject):
                 downscale_factor=downscale_factor
             )
 
+            # Update colorbar with force magnitude range
+            if hasattr(self.visualization_manager, 'colorbar_manager'):
+                self.visualization_manager.colorbar_manager.update_limits(0, np.max(force_magnitude))
+
             # Calculate and show statistics
-            magnitude = np.sqrt(tx ** 2 + ty ** 2)
             stats_message = (
                 f"Preview statistics:\n"
-                f"Max force: {np.max(magnitude):.2f} Pa\n"
-                f"Mean force: {np.mean(magnitude):.2f} Pa\n"
-                f"Median force: {np.median(magnitude):.2f} Pa"
+                f"Max force: {np.max(force_magnitude):.2f} Pa\n"
+                f"Mean force: {np.mean(force_magnitude):.2f} Pa\n"
+                f"Median force: {np.median(force_magnitude):.2f} Pa"
             )
             self._update_progress(100, stats_message)
 
         except Exception as e:
             self._handle_error(str(e))
 
-    def _handle_force_progress(self, progress_data):
-        """Handle progress updates during force calculation."""
-        progress, message, _ = progress_data
-        self._update_progress(progress, message)
-
+    # In FTTCController class, modify _handle_force_results:
     def _handle_force_results(self, results):
         """Handle completed force calculation results."""
         try:
@@ -601,6 +603,13 @@ class FTTCController(QObject):
 
             # Create force field array
             force_field = np.stack([results['tx'], results['ty']], axis=-1)
+
+            # Calculate force magnitude for colorbar
+            force_magnitude = np.sqrt(results['tx'] ** 2 + results['ty'] ** 2)
+
+            # Update colorbar with force magnitude range
+            if hasattr(self.visualization_manager, 'colorbar_manager'):
+                self.visualization_manager.colorbar_manager.update_limits(0, np.max(force_magnitude))
 
             # Package parameters
             force_params = {
@@ -633,6 +642,11 @@ class FTTCController(QObject):
 
         except Exception as e:
             self._handle_error(str(e))
+
+    def _handle_force_progress(self, progress_data):
+        """Handle progress updates during force calculation."""
+        progress, message, _ = progress_data
+        self._update_progress(progress, message)
 
     def save_results(self):
         """Save force calculation results to file."""
@@ -860,11 +874,11 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self):
         """Update UI elements based on current state."""
-        # Check if displacement field is available
+        # Check data availability
         has_displacement = self.data_manager.displacement_field is not None
         has_force = self.data_manager.force_field is not None
 
-        # Update displacement status through the data panel
+        # Update displacement status
         if has_displacement:
             try:
                 self.data_panel.displacement_status.setText(
@@ -875,15 +889,23 @@ class FTTCWidget(BaseAnalysisWidget):
         else:
             self.data_panel.displacement_status.setText("Not loaded")
 
-        # Update button states based on data availability and analysis state
+        # Update button states
         if hasattr(self, 'controller'):
-            analysis_running = hasattr(self.controller, 'active_workers') and len(self.controller.active_workers) > 0
+            analysis_running = (hasattr(self.controller, 'active_workers') and
+                                len(self.controller.active_workers) > 0)
 
             # Update action panel button states
             self.action_panel.update_button_states(
                 displacement_data=has_displacement and not analysis_running,
                 force_data=has_force and not analysis_running
             )
+
+            # Update GCV button state based on auto GCV checkbox
+            if hasattr(self.parameter_panel, 'parameter_widgets'):
+                auto_gcv = self.parameter_panel.parameter_widgets["auto_gcv"].isChecked()
+                self.parameter_panel.parameter_widgets["gcv_button"].setEnabled(
+                    has_displacement and not analysis_running and not auto_gcv
+                )
 
             # Update status message
             if analysis_running:
@@ -892,7 +914,6 @@ class FTTCWidget(BaseAnalysisWidget):
                 self.status_label.setText("Ready for force calculation")
             else:
                 self.status_label.setText("Missing required displacement data")
-
     def _connect_signals(self):
         """Connect all widget signals."""
         # Connect controller signals
@@ -913,6 +934,12 @@ class FTTCWidget(BaseAnalysisWidget):
 
         # Connect UI freeze signals
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
+
+
+        # Connect auto GCV checkbox to button state
+        self.parameter_panel.parameter_widgets["auto_gcv"].stateChanged.connect(
+            lambda state: self.parameter_panel.parameter_widgets["gcv_button"].setEnabled(not bool(state))
+        )
 
     def _update_status(self, progress: int, message: str):
         """Update status display."""
