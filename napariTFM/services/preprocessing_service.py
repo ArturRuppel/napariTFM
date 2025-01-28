@@ -3,6 +3,7 @@ from typing import Optional, Tuple, Dict, Any, List, Generator
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
+
 # TODO service has basically the same class, should just keep one
 @dataclass
 class PreprocessingParameters:
@@ -17,23 +18,6 @@ class PreprocessingParameters:
     cell_gaussian_sigma: float = 0.0
     registration_mode: str = 'translation'
 
-    def validate(self):
-        """Validate parameter values"""
-        if not 0 <= self.min_intensity_percentile < self.max_intensity_percentile <= 1:
-            raise ValueError("Invalid intensity percentile range")
-
-        if not 0 <= self.cell_min_intensity_percentile < self.cell_max_intensity_percentile <= 1:
-            raise ValueError("Invalid cell intensity percentile range")
-
-        if self.enable_gaussian_filter and self.gaussian_sigma < 0:
-            raise ValueError("Gaussian sigma must be non-negative")
-
-        if self.enable_cell_gaussian_filter and self.cell_gaussian_sigma < 0:
-            raise ValueError("Cell gaussian sigma must be non-negative")
-
-        if self.registration_mode not in ['translation', 'rigid', 'no registration']:
-            raise ValueError(f"Invalid registration mode: {self.registration_mode}")
-
 
 @dataclass
 class PreprocessingResult:
@@ -46,15 +30,81 @@ class PreprocessingResult:
 class PreprocessingService:
     """Service layer for image preprocessing operations"""
 
-    def __init__(self, parameters: Optional[PreprocessingParameters] = None):
-        """Initialize with optional parameters"""
-        self.params = parameters or PreprocessingParameters()
+    def __init__(self, params: PreprocessingParameters):
+        """Initialize with required parameters"""
+        is_valid, error_msg = self.validate_parameters(params)
+        if not is_valid:
+            raise ValueError(error_msg)
+        self.params = params
         self.transform_matrices = []
 
     def update_parameters(self, parameters: PreprocessingParameters):
         """Update preprocessing parameters"""
-        parameters.validate()
+        is_valid, error_msg = self.validate_parameters(parameters)
+        if not is_valid:
+            raise ValueError(error_msg)
         self.params = parameters
+
+    @staticmethod
+    def validate_parameters(params: PreprocessingParameters) -> Tuple[bool, str]:
+        """
+        Validate preprocessing parameters.
+
+        Parameters
+        ----------
+        params : PreprocessingParameters
+            Parameters to validate
+
+        Returns
+        -------
+        Tuple[bool, str]
+            (is_valid, error_message)
+        """
+        if not 0 <= params.min_intensity_percentile < params.max_intensity_percentile <= 1:
+            return False, "Invalid intensity percentile range"
+
+        if not 0 <= params.cell_min_intensity_percentile < params.cell_max_intensity_percentile <= 1:
+            return False, "Invalid cell intensity percentile range"
+
+        if params.enable_gaussian_filter and params.gaussian_sigma < 0:
+            return False, "Gaussian sigma must be non-negative"
+
+        if params.enable_cell_gaussian_filter and params.cell_gaussian_sigma < 0:
+            return False, "Cell gaussian sigma must be non-negative"
+
+        if params.registration_mode not in ['translation', 'rigid', 'no registration']:
+            return False, f"Invalid registration mode: {params.registration_mode}"
+
+        return True, ""
+
+    @staticmethod
+    def validate_image(image: np.ndarray) -> Tuple[bool, str]:
+        """
+        Validate input image data.
+
+        Parameters
+        ----------
+        image : np.ndarray
+            Image data to validate
+
+        Returns
+        -------
+        Tuple[bool, str]
+            (is_valid, error_message)
+        """
+        if image is None:
+            return False, "No image data provided"
+
+        if not isinstance(image, np.ndarray):
+            return False, "Image must be a numpy array"
+
+        if image.ndim not in (2, 3):
+            return False, "Image must be 2D or 3D (time series)"
+
+        if np.all(np.isnan(image)):
+            return False, "Image contains only NaN values"
+
+        return True, ""
 
     def preprocess_frame(self, image: np.ndarray, is_cell: bool = False,
                          reference_image: Optional[np.ndarray] = None) -> PreprocessingResult:

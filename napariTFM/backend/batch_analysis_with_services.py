@@ -259,9 +259,7 @@ class BatchAnalysis:
 
         print("Starting Preprocessing...")
         start_time = time()
-        preprocessing_service = PreprocessingService()
-        params = self._create_preprocessing_parameters()
-        preprocessing_service.update_parameters(params)
+        preprocessing_service = PreprocessingService(self._create_preprocessing_parameters())
 
         # Process bead images
         bead_stack = tifffile.imread(str(folder / self.config['input_files']['beads']))

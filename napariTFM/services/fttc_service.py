@@ -53,6 +53,10 @@ class FTTCService:
         params : FTTCParameters
             Parameters for the FTTC calculations
         """
+        is_valid, error_msg = self.validate_parameters(params)
+        if not is_valid:
+            raise ValueError(error_msg)
+
         self.calculator = FTTC(
             E=params.young_modulus,
             nu=params.poisson_ratio_substrate,
@@ -267,3 +271,10 @@ class FTTCService:
             return False, "Downscale factor must be at least 1"
 
         return True, ""
+
+    def update_parameters(self, parameters: FTTCParameters):
+        """Update preprocessing parameters"""
+        is_valid, error_msg = self.validate_parameters(parameters)
+        if not is_valid:
+            raise ValueError(error_msg)
+        self.params = parameters

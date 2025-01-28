@@ -53,7 +53,16 @@ class DisplacementService:
         ----------
         params : DisplacementParameters
             Parameters for the displacement analysis
+
+        Raises
+        ------
+        ValueError
+            If parameters are invalid
         """
+        is_valid, error_msg = self.validate_parameters(params)
+        if not is_valid:
+            raise ValueError(error_msg)
+
         tvl1_params = TVL1Parameters(
             tau=params.tau,
             lambda_=params.lambda_,
@@ -70,6 +79,135 @@ class DisplacementService:
 
         self.analyzer = DisplacementAnalyzer(tvl1_params)
         self.params = params
+
+    def update_parameters(self, parameters: DisplacementParameters):
+        """
+        Update displacement analysis parameters.
+
+        Parameters
+        ----------
+        parameters : DisplacementParameters
+            New parameters to use
+
+        Raises
+        ------
+        ValueError
+            If parameters are invalid
+        """
+        is_valid, error_msg = self.validate_parameters(parameters)
+        if not is_valid:
+            raise ValueError(error_msg)
+
+        tvl1_params = TVL1Parameters(
+            tau=parameters.tau,
+            lambda_=parameters.lambda_,
+            theta=parameters.theta,
+            nscales=parameters.nscales,
+            warps=parameters.warps,
+            epsilon=parameters.epsilon,
+            inner_iterations=parameters.inner_iterations,
+            outer_iterations=parameters.outer_iterations,
+            scale_step=parameters.scale_step,
+            median_filtering=parameters.median_filtering,
+            downscale_factor=parameters.downscale_factor
+        )
+
+        self.analyzer = DisplacementAnalyzer(tvl1_params)
+        self.params = parameters
+
+    @staticmethod
+    def validate_parameters(params: DisplacementParameters) -> Tuple[bool, str]:
+        """
+        Validate displacement analysis parameters.
+
+        Parameters
+        ----------
+        params : DisplacementParameters
+            Parameters to validate
+
+        Returns
+        -------
+        Tuple[bool, str]
+            (is_valid, error_message)
+        """
+        if params.tau <= 0:
+            return False, "tau must be positive"
+
+        if params.lambda_ <= 0:
+            return False, "lambda must be positive"
+
+        if not 0 < params.theta < 1:
+            return False, "theta must be between 0 and 1"
+
+        if params.nscales < 1:
+            return False, "nscales must be at least 1"
+
+        if params.warps < 1:
+            return False, "warps must be at least 1"
+
+        if params.epsilon <= 0:
+            return False, "epsilon must be positive"
+
+        if params.inner_iterations < 1:
+            return False, "inner_iterations must be at least 1"
+
+        if params.outer_iterations < 1:
+            return False, "outer_iterations must be at least 1"
+
+        if params.scale_step <= 0:
+            return False, "scale_step must be positive"
+
+        if params.median_filtering < 0:
+            return False, "median_filtering must be non-negative"
+
+        if params.downscale_factor < 1:
+            return False, "downscale_factor must be at least 1"
+
+        if params.pixel_size <= 0:
+            return False, "pixel_size must be positive"
+
+        if params.frame_interval <= 0:
+            return False, "frame_interval must be positive"
+
+        if params.d_max <= 0:
+            return False, "d_max must be positive"
+
+        if params.disp_vector_stride < 1:
+            return False, "disp_vector_stride must be at least 1"
+
+        if params.disp_arrow_scale <= 0:
+            return False, "disp_arrow_scale must be positive"
+
+        return True, ""
+
+    @staticmethod
+    def validate_image(image: np.ndarray) -> Tuple[bool, str]:
+        """
+        Validate input image data.
+
+        Parameters
+        ----------
+        image : np.ndarray
+            Image data to validate
+
+        Returns
+        -------
+        Tuple[bool, str]
+            (is_valid, error_message)
+        """
+        if image is None:
+            return False, "No image data provided"
+
+        if not isinstance(image, np.ndarray):
+            return False, "Image must be a numpy array"
+
+        if image.ndim not in (2, 3):
+            return False, "Image must be 2D or 3D (time series)"
+
+        if np.all(np.isnan(image)):
+            return False, "Image contains only NaN values"
+
+        return True, ""
 
     def calculate_flow(
             self,
@@ -98,7 +236,20 @@ class DisplacementService:
             If yield_intermediates is True:
                 Generator yielding (intermediate_flow, frame_index, total_frames) during calculation
                 and returning final DisplacementCalculationResult when exhausted
+
+        Raises
+        ------
+        ValueError
+            If input images are invalid
         """
+        # Validate input images
+        is_valid, error_msg = self.validate_image(reference)
+        if not is_valid:
+            raise ValueError(f"Invalid reference image: {error_msg}")
+
+        is_valid, error_msg = self.validate_image(target)
+        if not is_valid:
+            raise ValueError(f"Invalid target image: {error_msg}")
         # Ensure target is 3D
         if target.ndim == 2:
             target = target[np.newaxis, ...]
