@@ -61,9 +61,6 @@ class MSMService:
     def __init__(self):
         self.analyzer = None
 
-    def initialize_analyzer(self, params: MSMParameters):
-        """Initialize or update the MSM analyzer with given parameters."""
-
 
     def calculate_stress_field(
             self,

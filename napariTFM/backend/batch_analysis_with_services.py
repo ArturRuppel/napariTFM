@@ -53,18 +53,20 @@ class TeeLogger:
             self.log.write("\n" + "-" * 50 + "\n\n")
 
     def print_banner(self):
-        banner = """
-        ╔═══════════════════════════════════════════════════════╗
-        ║                                _ _____ _____ __  __   ║
-        ║   _ __   __ _ _ __   __ _ _ __(_)_   _|  ___|  \/  |  ║
-        ║  | '_ \ / _` | '_ \ / _` | '__| | | | | |_  | |\/| |  ║
-        ║  | | | | (_| | |_) | (_| | |  | | | | |  _| | |  | |  ║
-        ║  |_| |_|\__,_| .__/ \__,_|_|  |_| |_| |_|   |_|  |_|  ║
-        ║              |_|                                      ║
-        ║                                                       ║
-        ║        Traction Force Microscopy Analysis Tool        ║
-        ╚═══════════════════════════════════════════════════════╝
-        """
+        banner = '''
+    ╔═════════════════════════════════════════════════════════════════════════════╗
+    ║                                                                             ║
+    ║                                         ,--.,--------.,------.,--.   ,--.   ║
+    ║   ,--,--,  ,--,--. ,---.  ,--,--.,--.--.`--''--.  .--'|  .---'|   `.'   |   ║
+    ║   |      \| ,-.  || .-. |' ,-.  ||  .--',--.   |  |   |  `--, |  |'.'|  |   ║
+    ║   |  ||  |\ '-'  || '-' '\ '-'  ||  |   |  |   |  |   |  |`   |  |   |  |   ║
+    ║   `--''--' `--`--'|  |-'  `--`--'`--'   `--'   `--'   `--'    `--'   `--'   ║
+    ║                   `--'                                                      ║
+    ║                                                                             ║
+    ║                   Traction Force Microscopy Analysis Tool                   ║
+    ╚═════════════════════════════════════════════════════════════════════════════╝
+        '''
+
         print(banner)
 
     def write(self, message):
@@ -465,8 +467,8 @@ class BatchAnalysis:
             # Prepare results dictionary
             stress_data = {
                 'stress_tensors': np.stack([r.stress_tensor for r in stress_results]),
-                'nodes': np.stack([r.nodes for r in stress_results]),
-                'elements': np.stack([r.elements for r in stress_results]),
+                'nodes': [r.nodes for r in stress_results],
+                'elements': [r.elements for r in stress_results],
                 'condition_numbers': [r.condition_number for r in stress_results],
                 'residuals': [r.residual for r in stress_results],
                 'parameters': params.__dict__
