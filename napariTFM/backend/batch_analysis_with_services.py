@@ -681,7 +681,6 @@ class BatchAnalysis:
                         if self.config['visualizations']['mesh']:
                             # Load masks for mesh visualization if needed
                             masks = tifffile.imread(str(tfm_folder / "masks.tif"))
-                            data['masks'] = masks
                     except Exception as e:
                         print(f"Could not load stress/mask data for visualization: {str(e)}")
                         return
@@ -722,14 +721,9 @@ class BatchAnalysis:
                         plot_normal_stress=self.config['visualizations']['normal_stress']
                     )
 
-                if self.config['visualizations']['mesh'] and 'masks' in data:
+                if self.config['visualizations']['mesh']:
                     print("Generating mesh visualization...")
-                    viz_saver.save_mesh_visualization(
-                        data['masks'],
-                        density_factor=self.config['parameters']['density_factor'],
-                        algorithm=6 if self.config['parameters']['mesh_algorithm'] == 'Frontal-Del.' else 1,
-                        use_optimization=self.config['parameters']['use_optimization']
-                    )
+                    viz_saver.save_mesh_visualization(data)
 
         except Exception as e:
             print(f"Error generating {step} visualization: {str(e)}")

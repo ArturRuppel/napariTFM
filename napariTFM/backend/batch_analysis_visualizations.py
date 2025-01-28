@@ -7,6 +7,7 @@ from skimage.transform import resize
 
 from napariTFM.services.displacement_service import DisplacementResult
 from napariTFM.services.fttc_service import FTTCResult
+from napariTFM.services.msm_service import MSMResult
 
 
 class BatchVisualizationSaver:
@@ -90,13 +91,13 @@ class BatchVisualizationSaver:
         return legend_img
 
     def save_displacement_visualization(self, displacement_results: DisplacementResult, fps: int = 10) -> None:
-        displacement_fields = displacement_results.displacement_fields
-        params = displacement_results.get('parameters', {})
+        displacement_fields = displacement_results.displacement_field
+        params = displacement_results.parameters
 
-        downscale_factor = params['downscale_factor']
-        d_max = params['d_max']
-        arrow_scale = params['disp_arrow_scale']
-        vector_stride = params['disp_vector_stride']
+        downscale_factor = params.downscale_factor
+        d_max = params.d_max
+        arrow_scale = params.disp_arrow_scale
+        vector_stride = params.disp_vector_stride
 
         vector_scale = arrow_scale / d_max * 50 / downscale_factor
         vector_stride_scaled = vector_stride // downscale_factor
@@ -157,14 +158,14 @@ class BatchVisualizationSaver:
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, palettesize=256, loop=0)
 
     def save_force_visualization(self, force_results: FTTCResult, fps: int = 10) -> None:
-        tx = force_results.force_field[:,0,:,:]
-        ty = force_results.force_field[:,1,:,:]
-        params = force_results.get('parameters', {})
+        tx = force_results.force_field[..., 0]
+        ty = force_results.force_field[..., 1]
+        params = force_results.parameters
 
-        downscale_factor = params['downscale_factor']
-        f_max = params['visualization']['f_max']
-        arrow_scale = params['visualization']['arrow_scale']
-        vector_stride = params['visualization']['vector_stride']
+        downscale_factor = params.downscale_factor
+        f_max = params.f_max
+        arrow_scale = params.force_arrow_scale
+        vector_stride = params.force_vector_stride
 
         vector_scale = arrow_scale / f_max * 50 / downscale_factor
         vector_stride_scaled = vector_stride // downscale_factor
@@ -220,16 +221,15 @@ class BatchVisualizationSaver:
         output_path = self.viz_folder / 'force_map.gif'
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
 
-    def save_force_cell_overlay(self, force_results: dict, cell_images: np.ndarray, fps: int = 10) -> None:
+    def save_force_cell_overlay(self, force_results: FTTCResult, cell_images: np.ndarray, fps: int = 10) -> None:
+        tx = force_results.force_field[..., 0]
+        ty = force_results.force_field[..., 1]
+        params = force_results.parameters
 
-        tx = force_results['tx']
-        ty = force_results['ty']
-        params = force_results.get('parameters', {})
-
-        downscale_factor = params['downscale_factor']
-        f_max = params['visualization']['f_max']
-        arrow_scale = params['visualization']['arrow_scale']
-        vector_stride = params['visualization']['vector_stride']
+        downscale_factor = params.downscale_factor
+        f_max = params.f_max
+        arrow_scale = params.force_arrow_scale
+        vector_stride = params.force_vector_stride
 
         vector_scale = arrow_scale / f_max * 50 / downscale_factor
         vector_stride_scaled = vector_stride // downscale_factor
@@ -291,7 +291,7 @@ class BatchVisualizationSaver:
         output_path = self.viz_folder / 'force_cell_overlay.gif'
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
 
-    def save_stress_visualization(self, stress_results: dict, plot_sigma_xx: bool = True,
+    def save_stress_visualization(self, stress_results: MSMResult, plot_sigma_xx: bool = True,
                                   plot_sigma_yy: bool = True, plot_normal_stress: bool = True,
                                   fps: int = 10) -> None:
         """
@@ -311,24 +311,24 @@ class BatchVisualizationSaver:
             Frames per second for the GIF
         """
         # Extract stress tensor and parameters
-        stress_tensor = stress_results['stress_tensor']
-        params = stress_results['parameters']
-        max_stress = params['max_stress']  # mN/m
+        stress_tensor = stress_results.stress_tensor
+        params = stress_results.parameters
+        max_stress = params.max_stress  # mN/m
 
         # Define components and their corresponding visualization parameters
         components = {
             'sigma_xx': {
-                'data': stress_tensor[..., 0, 0] * 1e3,  # Convert to mN/m
+                'data': stress_tensor[..., 0, 0],
                 'label': 'Normal Stress XX (mN/m)',
                 'enabled': plot_sigma_xx
             },
             'sigma_yy': {
-                'data': stress_tensor[..., 1, 1] * 1e3,  # Convert to mN/m
+                'data': stress_tensor[..., 1, 1],
                 'label': 'Normal Stress YY (mN/m)',
                 'enabled': plot_sigma_yy
             },
             'normal_stress': {
-                'data': (stress_tensor[..., 0, 0] + stress_tensor[..., 1, 1]) * 0.5e3,  # Convert to mN/m
+                'data': (stress_tensor[..., 0, 0] + stress_tensor[..., 1, 1]) * 0.5,  # Convert to mN/m
                 'label': 'Average Normal Stress (mN/m)',
                 'enabled': plot_normal_stress
             }
@@ -380,36 +380,22 @@ class BatchVisualizationSaver:
                 output_path = self.viz_folder / f'{component_name}.gif'
                 imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
 
-    def save_mesh_visualization(self, masks: np.ndarray, density_factor: float = 0.01,
-                                algorithm: int = 6, use_optimization: bool = True,
-                                fps: int = 10) -> None:
+    def save_mesh_visualization(self, stress_results: MSMResult, fps: int = 10) -> None:
         """
-        Create and save a GIF of mesh visualizations for each frame.
+        Create and save a GIF of mesh visualizations for each frame using pre-calculated meshes.
 
         Parameters
         ----------
-        masks : np.ndarray
-            Stack of binary masks
-        density_factor : float, optional
-            Controls mesh density (smaller = denser mesh)
-        algorithm : int, optional
-            Mesh generation algorithm (default: 6 for Frontal-Delaunay)
-        use_optimization : bool, optional
-            Whether to optimize the mesh
+        stress_results : MSMResult
+            Results from stress calculations containing lists of nodes and elements for each frame
         fps : int, optional
             Frames per second for the GIF
         """
-        from napariTFM.backend.mesh_generator import MeshGenerator, MeshParameters
+        from napariTFM.backend.mesh_generator import MeshGenerator
 
         frames = []
-        total_frames = len(masks) if masks.ndim > 2 else 1
-
-        # Handle single mask case
-        if masks.ndim == 2:
-            masks = masks[np.newaxis, ...]
-
-        # Get mask shape for consistent frame size
-        mask_height, mask_width = masks[0].shape
+        stress_shape = stress_results.stress_shape
+        mask_height, mask_width = stress_shape
         aspect_ratio = mask_width / mask_height
 
         # Calculate figure size to maintain aspect ratio with higher resolution
@@ -419,19 +405,13 @@ class BatchVisualizationSaver:
         else:
             figsize = (base_size * aspect_ratio, base_size)
 
-        # Create mesh parameters with user-specified values
-        params = MeshParameters(
-            mask=masks[0],  # Placeholder mask
-            density_factor=density_factor,
-            algorithm=algorithm,
-            use_optimization=use_optimization
-        )
+        total_frames = len(stress_results.nodes)  # Number of frames based on number of meshes
 
-        # Initialize mesh generator
-        mesh_gen = MeshGenerator(params)
-
-        # Process each frame
         for frame_idx in range(total_frames):
+            # Get current frame's nodes and elements
+            points = np.array(stress_results.nodes[frame_idx])
+            triangles = np.array(stress_results.elements[frame_idx], dtype=np.int32)
+
             print(f"Processing mesh frame {frame_idx + 1}/{total_frames}")
 
             # Create figure with high DPI for better resolution
@@ -439,17 +419,14 @@ class BatchVisualizationSaver:
             ax = fig.add_axes([0.1, 0.1, 0.8, 0.8])  # Add axes with padding
 
             try:
-                # Generate mesh for current frame
-                points, triangles = mesh_gen.generate_mesh(masks[frame_idx])
-
-                # Create our own visualization instead of using mesh_gen.plot_mesh
-                # Plot edges
+                # Create mesh visualization
                 edges = []
                 for triangle in triangles:
-                    # Add all three edges of the triangle
-                    edges.append(np.array([points[triangle[0]], points[triangle[1]]]))
-                    edges.append(np.array([points[triangle[1]], points[triangle[2]]]))
-                    edges.append(np.array([points[triangle[2]], points[triangle[0]]]))
+                    # Convert indices to integers and create edge arrays
+                    i0, i1, i2 = triangle[0], triangle[1], triangle[2]
+                    edges.append(np.vstack([points[i0], points[i1]]))
+                    edges.append(np.vstack([points[i1], points[i2]]))
+                    edges.append(np.vstack([points[i2], points[i0]]))
 
                 # Create line collection with thinner lines
                 lc = plt.matplotlib.collections.LineCollection(edges, colors='b', alpha=1.0, linewidth=0.4)
@@ -459,10 +436,12 @@ class BatchVisualizationSaver:
                 ax.plot(points[:, 0], points[:, 1], 'r.', markersize=0.6, alpha=1.0)
 
                 # Calculate mesh quality metrics
+                mesh_gen = MeshGenerator(None)  # Initialize without parameters for quality calculation
                 quality_metrics = mesh_gen.analyze_mesh_quality(points, triangles)
 
                 # Add quality metrics text with adjusted font size
                 metrics_text = (
+                    f"Frame {frame_idx + 1}/{total_frames}\n"
                     f"Elements: {quality_metrics['n_elements']}\n"
                     f"Min Angle: {quality_metrics['min_angle']:.1f}°\n"
                     f"Mean Quality: {quality_metrics['mean_quality']:.2f}\n"
@@ -473,9 +452,6 @@ class BatchVisualizationSaver:
                         verticalalignment='top',
                         fontsize=8,
                         bbox=dict(facecolor='white', alpha=1.0, pad=0.5))
-
-                # Set title with adjusted font size
-                ax.set_title(f"Frame {frame_idx + 1}/{total_frames}", fontsize=10, pad=10)
 
                 # Configure axes
                 ax.set_xlim(-0.02 * mask_width, 1.02 * mask_width)
@@ -494,9 +470,9 @@ class BatchVisualizationSaver:
                 frames.append(frame)
 
             except Exception as e:
-                print(f"Warning: Failed to generate mesh for frame {frame_idx + 1}: {str(e)}")
+                print(f"Warning: Failed to generate mesh visualization for frame {frame_idx + 1}: {str(e)}")
                 # Create error frame
-                ax.text(0.5, 0.5, f"Mesh generation failed:\n{str(e)}",
+                ax.text(0.5, 0.5, f"Mesh visualization failed:\n{str(e)}",
                         ha='center', va='center', transform=ax.transAxes,
                         fontsize=10)
                 fig.canvas.draw()

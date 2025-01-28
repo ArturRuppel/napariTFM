@@ -36,11 +36,11 @@ class MSMParameters:
 
 
 @dataclass
-class MSMCalculationResult:
+class MSMResult:
     """Results from stress field calculation"""
     stress_tensor: np.ndarray  # Shape: (frames, height, width, 2, 2) for xx, yy, xy, yx components
-    nodes: np.ndarray  # Shape: (n_nodes, 2) for node coordinates
-    elements: np.ndarray  # Shape: (n_elements, 3) for element connectivity
+    nodes: List[np.ndarray]  # Shape: (n_nodes, 2) for node coordinates
+    elements: List[np.ndarray]  # Shape: (n_elements, 3) for element connectivity
     condition_number: float
     residual: float
     parameters: MSMParameters
@@ -258,7 +258,7 @@ class MSMService:
             masks: np.ndarray,
             mesh_data: Optional[List[Tuple[np.ndarray, np.ndarray, Dict[str, float]]]] = None,
             yield_intermediates: bool = False
-    ) -> Union[MSMCalculationResult, Generator[Tuple[MSMCalculationResult, int, int], None, MSMCalculationResult]]:
+    ) -> Union[MSMResult, Generator[Tuple[MSMResult, int, int], None, MSMResult]]:
         """
         Calculate stress tensor stack from force field data.
         Always returns stress tensor with shape (t, y, x, 2, 2) where t=1 for single frames.
@@ -277,7 +277,7 @@ class MSMService:
 
         Returns
         -------
-        Union[MSMCalculationResult, Generator]
+        Union[MSMResult, Generator]
             If yield_intermediates is False:
                 MSMCalculationResult containing final stress tensor
             If yield_intermediates is True:
@@ -356,7 +356,7 @@ class MSMService:
                 residuals.append(residual)
 
                 # Create intermediate result
-                result = MSMCalculationResult(
+                result = MSMResult(
                     stress_tensor=stress_stack[:frame + 1],
                     nodes=nodes,  # Current frame's nodes
                     elements=elements,  # Current frame's elements
@@ -371,10 +371,10 @@ class MSMService:
                 yield result, frame + 1, total_frames
 
             # Return final result with mean condition number and residual
-            return MSMCalculationResult(
+            return MSMResult(
                 stress_tensor=stress_stack,
-                nodes=nodes_stack[-1],  # Last frame's nodes
-                elements=elements_stack[-1],  # Last frame's elements
+                nodes=nodes_stack,  # Last frame's nodes
+                elements=elements_stack,  # Last frame's elements
                 condition_number=np.mean(np.stack(condition_numbers)),  # Mean condition number
                 residual=np.mean(residuals),  # Mean residual
                 parameters=self.params,
@@ -395,7 +395,7 @@ class MSMService:
                 condition_numbers.append(condition_number)
                 residuals.append(residual)
 
-            return MSMCalculationResult(
+            return MSMResult(
                 stress_tensor=stress_stack,
                 nodes=nodes_stack[-1],  # Last frame's nodes
                 elements=elements_stack[-1],  # Last frame's elements

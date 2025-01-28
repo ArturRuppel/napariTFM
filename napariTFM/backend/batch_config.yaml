@@ -8,7 +8,7 @@ analysis_steps:
   displacement: false
   force: false
   preprocessing: false
-  stress: true
+  stress: false
 input_files:
   beads: beads.tif
   cells: cells.tif
