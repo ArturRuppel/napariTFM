@@ -148,12 +148,6 @@ class ParameterManager(QObject):
             raise KeyError(f"Parameter '{name}' not found")
         self._parameters[name].callbacks.add(callback)
 
-    # def unregister_callback(self, name: str, callback: Callable):
-    #     """Unregister a callback for parameter changes."""
-    #     if name not in self._parameters:
-    #         raise KeyError(f"Parameter '{name}' not found")
-    #     self._parameters[name].callbacks.discard(callback)
-
     def get_category_parameters(self, category: ParameterCategory) -> Dict[str, Any]:
         """Get all parameters belonging to a specific category."""
         return {

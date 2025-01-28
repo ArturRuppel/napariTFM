@@ -19,7 +19,7 @@ from napariTFM.colorbar import ColorbarManager
 from napariTFM.parameter_manager import ParameterCategory
 from napariTFM.services.msm_service import MSMParameters, MSMService
 
-
+# TODO make sure yaml file generated writes registration modes without capitalizing
 class MSMWidget(BaseAnalysisWidget):
     """Widget for Monolayer Stress Microscopy analysis."""
 
