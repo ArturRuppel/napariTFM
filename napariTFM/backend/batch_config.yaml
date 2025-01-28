@@ -6,7 +6,7 @@ root_folders:
 analysis_steps:
   create_masks: true
   displacement: false
-  force: true
+  force: false
   preprocessing: false
   stress: true
 input_files:

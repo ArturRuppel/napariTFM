@@ -4,10 +4,12 @@ from datetime import datetime
 from pathlib import Path
 from time import time
 from typing import Optional, Tuple
+from skimage.transform import rescale
 
 import numpy as np
 import tifffile
 import yaml
+from numpy._typing import NDArray
 
 from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters
@@ -115,6 +117,11 @@ class BatchAnalysis:
         self.msm_service = MSMService()
         self._tee_logger = None
 
+    def process_all_folders(self) -> None:
+        """Process all folders specified in configuration."""
+        for folder in self.config['root_folders']:
+            self.process_folder(folder)
+
     def process_folder(self, folder_path: str) -> None:
         """Main processing pipeline for a folder."""
         folder = Path(folder_path)
@@ -129,20 +136,24 @@ class BatchAnalysis:
             preprocessed_data = self._handle_preprocessing_execution(folder, tfm_folder)
 
             # Handle displacement
-            displacement_data = self._handle_displacement_execution(folder, tfm_folder, preprocessed_data)
+            displacement_data = self._handle_displacement_execution(tfm_folder, preprocessed_data)
 
             # Handle force analysis
-            force_data = self._handle_force_execution(folder, tfm_folder, displacement_data)
+            force_data = self._handle_force_execution(tfm_folder, displacement_data)
+
+            # Handle mask creation
+            mask_data = self._handle_mask_creation(tfm_folder)
 
             # Handle stress analysis
-            mesh_data, stress_data = self._handle_stress_execution(folder, tfm_folder, force_data)
+            stress_data = self._handle_stress_execution(tfm_folder, mask_data, force_data)
 
             # Generate visualizations
+            # TODO refactor method to extract mesh params from stress data
             self._generate_visualizations(viz_saver, preprocessed_data, displacement_data,
-                                          force_data, mesh_data, stress_data)
+                                          force_data, stress_data)
 
             print("\nFolder processing completed successfully!")
-            print("=" * 80)
+            print("=" * 50)
 
         finally:
             self._cleanup()
@@ -158,7 +169,7 @@ class BatchAnalysis:
             print(f"Preprocessing failed: {str(e)}")
             return None
 
-    def _handle_displacement_execution(self, folder: Path, tfm_folder: Path, preprocessed_data: Optional[dict]) -> Optional[dict]:
+    def _handle_displacement_execution(self, tfm_folder: Path, preprocessed_data: Optional[dict]) -> Optional[dict]:
         """Handle displacement analysis execution. Always runs if enabled."""
         if not self.config['analysis_steps']['displacement']:
             return None
@@ -167,8 +178,8 @@ class BatchAnalysis:
             if preprocessed_data is None:
                 print("\nLoading preprocessed images from file...")
                 try:
-                    preprocessed_bead_stack = tifffile.imread(str(folder / tfm_folder / "preprocessed_beads.tif"))
-                    preprocessed_reference = tifffile.imread(str(folder / tfm_folder / "preprocessed_reference.tif"))
+                    preprocessed_bead_stack = tifffile.imread(str(tfm_folder / "preprocessed_beads.tif"))
+                    preprocessed_reference = tifffile.imread(str(tfm_folder / "preprocessed_reference.tif"))
                     preprocessed_data = {
                         'beads': preprocessed_bead_stack,
                         'reference': preprocessed_reference,
@@ -182,7 +193,7 @@ class BatchAnalysis:
             print(f"Displacement analysis failed: {str(e)}")
             return None
 
-    def _handle_force_execution(self, folder: Path, tfm_folder: Path, displacement_data: Optional[dict]) -> Optional[dict]:
+    def _handle_force_execution(self, tfm_folder: Path, displacement_data: Optional[dict]) -> Optional[dict]:
         """Handle force analysis execution. Always runs if enabled."""
         if not self.config['analysis_steps']['force']:
             return None
@@ -200,96 +211,51 @@ class BatchAnalysis:
             print(f"Force analysis failed: {str(e)}")
             return None
 
-    def _handle_stress_execution(self, folder: Path, tfm_folder: Path, force_data: Optional[dict]) -> Tuple[Optional[dict], Optional[dict]]:
-        """Handle stress analysis execution. Always runs if enabled."""
-        if not (self.config['analysis_steps']['create_masks'] or self.config['analysis_steps']['stress']):
-            return None, None
+    def _handle_mask_creation(self, tfm_folder: Path) -> Optional[dict]:
+        """Handle mask creation execution. Always runs if enabled."""
+        if not self.config['analysis_steps']['create_masks']:
+            return None
 
         try:
-            if force_data is None and self.config['analysis_steps']['stress']:
+            try:
+                cell_images = tifffile.imread(str(tfm_folder / "preprocessed_cells.tif"))
+            except Exception as e:
+                print(f"Could not load cell images: {str(e)}")
+                return None
+
+            return self._execute_mask_creation(tfm_folder, cell_images)
+
+        except Exception as e:
+            print(f"Mask creation failed: {str(e)}")
+            return None
+
+    def _handle_stress_execution(self, tfm_folder: Path, force_data: Optional[dict], mask_data: Optional[np.ndarray]) -> Optional[dict]:
+        """Handle stress analysis execution. Always runs if enabled."""
+        if not self.config['analysis_steps']['stress']:
+            return None
+
+        try:
+            if force_data is None:
                 print("\nLoading force data from file...")
                 try:
                     force_data = np.load(str(tfm_folder / "traction_forces.npy"), allow_pickle=True).item()
                 except Exception as e:
                     print(f"Could not load force data: {str(e)}")
-                    return None, None
-            return self._execute_stress_analysis(folder, tfm_folder, force_data)
+                    return None
+
+            print("\nLoading mask data...")
+            try:
+                if mask_data is None:
+                    mask_data = np.load(str(tfm_folder / "masks_and_mesh.npy"), allow_pickle=True).item()
+            except Exception as e:
+                print(f"Could not load mask data: {str(e)}")
+                return None
+
+            return self._execute_stress_analysis(tfm_folder, force_data, mask_data)
+
         except Exception as e:
-            print(f"Mesh/stress analysis failed: {str(e)}")
-            return None, None
-
-    def _initialize_folder(self, folder: Path) -> Path:
-        """Set up folder structure and logging."""
-        tfm_folder = folder / "TFM_data"
-        tfm_folder.mkdir(exist_ok=True)
-
-        log_file = tfm_folder / "processing_log.txt"
-        self._tee_logger = TeeLogger(log_file, self.config)
-        sys.stdout = self._tee_logger
-
-        return tfm_folder
-
-    def _create_preprocessing_parameters(self) -> PreprocessingParameters:
-        """Create preprocessing parameters from config."""
-        return PreprocessingParameters(
-            min_intensity_percentile=self.config['parameters']['min_intensity'] / 100,
-            max_intensity_percentile=self.config['parameters']['max_intensity'] / 100,
-            gaussian_sigma=self.config['parameters']['gaussian_sigma'],
-            cell_min_intensity_percentile=self.config['parameters']['cell_min_intensity'] / 100,
-            cell_max_intensity_percentile=self.config['parameters']['cell_max_intensity'] / 100,
-            cell_gaussian_sigma=self.config['parameters']['cell_gaussian_sigma'],
-            registration_mode=self.config['parameters']['registration_mode']
-        )
-
-    def _create_displacement_parameters(self) -> DisplacementParameters:
-        """Create displacement parameters from config."""
-        return DisplacementParameters(
-            tau=self.config['parameters']['tau'],
-            lambda_=self.config['parameters']['lambda_'],
-            theta=self.config['parameters']['theta'],
-            nscales=self.config['parameters']['nscales'],
-            warps=self.config['parameters']['warps'],
-            epsilon=self.config['parameters']['epsilon'],
-            inner_iterations=self.config['parameters']['inner_iterations'],
-            outer_iterations=self.config['parameters']['outer_iterations'],
-            scale_step=self.config['parameters']['scale_step'],
-            median_filtering=self.config['parameters']['median_filtering'],
-            downscale_factor=self.config['parameters']['downscale_factor'],
-            pixel_size=self.config['parameters']['pixel_size'],
-            frame_interval=self.config['parameters']['frame_interval'],
-            d_max=self.config['parameters']['d_max'],
-            vector_stride=self.config['parameters']['disp_vector_stride'],
-            arrow_scale=self.config['parameters']['disp_arrow_scale']
-        )
-
-    def _create_fttc_parameters(self) -> FTTCParameters:
-        """Create FTTC parameters from config."""
-        return FTTCParameters(
-            young_modulus=self.config['parameters']['young_modulus'],
-            poisson_ratio_substrate=self.config['parameters']['poisson_ratio_substrate'],
-            gel_height=self.config['parameters'].get('gel_height'),
-            lanczos_exp=self.config['parameters']['lanczos_exp'],
-            regularization=self.config['parameters']['regularization'],
-            auto_gcv=False,
-            force_vector_stride=self.config['parameters']['force_vector_stride'],
-            force_arrow_scale=self.config['parameters']['force_arrow_scale'],
-            f_max=self.config['parameters']['f_max'],
-            frame_interval=self.config['parameters']['frame_interval']
-        )
-
-    def _create_msm_parameters(self) -> MSMParameters:
-        """Create MSM parameters from config."""
-        return MSMParameters(
-            density_factor=self.config['parameters']['density_factor'],
-            algorithm=self.config['parameters']['mesh_algorithm'],
-            use_optimization=self.config['parameters']['use_optimization'],
-            poisson_ratio_cells=self.config['parameters']['poisson_ratio_cells'],
-            young_modulus=1.0,
-            threshold=self.config['parameters']['threshold'],
-            dilation=self.config['parameters']['dilation'],
-            smoothing_sigma=self.config['parameters']['smoothing_sigma'],
-            max_stress=self.config['parameters']['max_stress']
-        )
+            print(f"Stress analysis failed: {str(e)}")
+            return None
 
     def _execute_preprocessing(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
         """Execute preprocessing step using PreprocessingService."""
@@ -423,40 +389,167 @@ class BatchAnalysis:
         print(f"Force analysis completed in {time() - start_time:.1f} seconds")
         return force_data
 
-    def _execute_stress_analysis(self, folder: Path, tfm_folder: Path, force_data: Optional[dict]) -> Tuple[Optional[dict], Optional[dict]]:
-        """Execute mesh generation and stress analysis steps using MSMService."""
-        print("Starting Mesh and Stress Analysis...")
+    def _execute_mask_creation(self, tfm_folder: Path, cell_images: np.ndarray) -> NDArray[int]:
+        """Execute mask creation step using MSMService."""
+        print("\nStarting Mask Creation...")
         start_time = time()
 
         params = self._create_msm_parameters()
-        cell_images = self._load_cell_images(folder, tfm_folder)
-
-        # Generate masks and meshes
-        mesh_results = []
+        downscale_factor = self.config['parameters']['downscale_factor']
         masks = []
 
+        # Create masks and generate meshes
         for mask, frame, total in self.msm_service.create_mask_stack(cell_images, params):
+            mask = rescale(mask, 1 / downscale_factor, order=0, preserve_range=True, anti_aliasing=False)
             masks.append(mask)
-            mesh_result = self.msm_service.generate_mesh(mask, params)
-            mesh_results.append(mesh_result)
-            self._log_mesh_progress(mesh_result, frame, total)
+            self._log_mask_progress(mask, frame, total)
 
-        # Calculate stress if needed
-        stress_results = None
-        if self.config['analysis_steps']['stress']:
-            stress_results = []
-            for result, frame, total in self.msm_service.calculate_stress_stack(
-                    force_data['force_field'], params, mesh_results, np.stack(masks)
-            ):
-                stress_results.append(result)
-                self._log_stress_progress(result, frame, total)
+        masks = np.array(masks)
+
+        tifffile.imwrite(str(tfm_folder / "masks.tif"), masks.astype("uint8"))
+
+        print(f"Mask creation completed in {time() - start_time:.1f} seconds")
+        return masks
+
+    def _execute_stress_analysis(self, tfm_folder: Path, force_data: dict, mask_data: dict) -> Optional[dict]:
+        """Execute stress analysis step using MSMService."""
+        print("Starting Stress Analysis...")
+        start_time = time()
+
+        params = self._create_msm_parameters()
+        stress_results = []
+
+        # Calculate stress
+        for result, frame, total in self.msm_service.calculate_stress_stack(
+                force_data['forces'], params, mask_data['mesh_results'], mask_data['masks']):
+            stress_results.append(result)
+
+            # Log progress
+            magnitude = np.sqrt(np.sum(result.stress_tensor ** 2, axis=-1))
+            print(f"Frame {frame + 1}/{total}: "
+                  f"Mean stress: {np.mean(magnitude):.2f} mN/m, "
+                  f"Max stress: {np.max(magnitude):.2f} mN/m")
 
         # Save results
-        mesh_data = self._save_mesh_data(tfm_folder, mesh_results, masks, params)
-        stress_data = self._save_stress_data(tfm_folder, stress_results) if stress_results else None
+        stress_data = {
+            'stress_tensors': np.stack([r.stress_tensor for r in stress_results]),
+            'parameters': params.__dict__
+        }
+        np.save(str(tfm_folder / "stress_results.npy"), stress_data)
 
-        print(f"Mesh and stress analysis completed in {time() - start_time:.1f} seconds")
-        return mesh_data, stress_data
+        print(f"Stress analysis completed in {time() - start_time:.1f} seconds")
+        return stress_data
+
+    def _create_preprocessing_parameters(self) -> PreprocessingParameters:
+        """Create preprocessing parameters from config."""
+        return PreprocessingParameters(
+            min_intensity_percentile=self.config['parameters']['min_intensity'] / 100,
+            max_intensity_percentile=self.config['parameters']['max_intensity'] / 100,
+            gaussian_sigma=self.config['parameters']['gaussian_sigma'],
+            cell_min_intensity_percentile=self.config['parameters']['cell_min_intensity'] / 100,
+            cell_max_intensity_percentile=self.config['parameters']['cell_max_intensity'] / 100,
+            cell_gaussian_sigma=self.config['parameters']['cell_gaussian_sigma'],
+            registration_mode=self.config['parameters']['registration_mode']
+        )
+
+    def _create_displacement_parameters(self) -> DisplacementParameters:
+        """Create displacement parameters from config."""
+        return DisplacementParameters(
+            tau=self.config['parameters']['tau'],
+            lambda_=self.config['parameters']['lambda_'],
+            theta=self.config['parameters']['theta'],
+            nscales=self.config['parameters']['nscales'],
+            warps=self.config['parameters']['warps'],
+            epsilon=self.config['parameters']['epsilon'],
+            inner_iterations=self.config['parameters']['inner_iterations'],
+            outer_iterations=self.config['parameters']['outer_iterations'],
+            scale_step=self.config['parameters']['scale_step'],
+            median_filtering=self.config['parameters']['median_filtering'],
+            downscale_factor=self.config['parameters']['downscale_factor'],
+            pixel_size=self.config['parameters']['pixel_size'],
+            frame_interval=self.config['parameters']['frame_interval'],
+            d_max=self.config['parameters']['d_max'],
+            vector_stride=self.config['parameters']['disp_vector_stride'],
+            arrow_scale=self.config['parameters']['disp_arrow_scale']
+        )
+
+    def _create_fttc_parameters(self) -> FTTCParameters:
+        """Create FTTC parameters from config."""
+        return FTTCParameters(
+            young_modulus=self.config['parameters']['young_modulus'],
+            poisson_ratio_substrate=self.config['parameters']['poisson_ratio_substrate'],
+            gel_height=self.config['parameters'].get('gel_height'),
+            lanczos_exp=self.config['parameters']['lanczos_exp'],
+            regularization=self.config['parameters']['regularization'],
+            auto_gcv=False,
+            force_vector_stride=self.config['parameters']['force_vector_stride'],
+            force_arrow_scale=self.config['parameters']['force_arrow_scale'],
+            f_max=self.config['parameters']['f_max'],
+            frame_interval=self.config['parameters']['frame_interval']
+        )
+
+    def _create_msm_parameters(self) -> MSMParameters:
+        """Create MSM parameters from config."""
+        return MSMParameters(
+            density_factor=self.config['parameters']['density_factor'],
+            algorithm=self.config['parameters']['mesh_algorithm'],
+            use_optimization=self.config['parameters']['use_optimization'],
+            poisson_ratio_cells=self.config['parameters']['poisson_ratio_cells'],
+            young_modulus=1.0,
+            threshold=self.config['parameters']['threshold'],
+            dilation=self.config['parameters']['dilation'],
+            smoothing_sigma=self.config['parameters']['smoothing_sigma'],
+            max_stress=self.config['parameters']['max_stress']
+        )
+
+    def _log_displacement_progress(self, result, frame, total):
+        flow_magnitude = np.sqrt(np.sum(result.flow ** 2, axis=-1))
+        print(f"Frame {frame}/{total}: "
+              f"Mean displacement: {np.mean(flow_magnitude):.2f} µm, "
+              f"Max displacement: {np.max(flow_magnitude):.2f} µm")
+
+    def _log_force_progress(self, result, frame, total):
+        print(f"Frame {frame}/{total}: "
+              f"Mean force: {result['mean_force']:.2f} Pa, "
+              f"Max force: {result['max_force']:.2f} Pa")
+
+    def _log_mask_progress(self, mask, frame, total):
+        # Calculate surface area (sum of all True/1 pixels)
+        surface_area = np.sum(mask)
+
+        # Calculate centroid coordinates
+        y_coords, x_coords = np.where(mask)
+        if len(x_coords) > 0:  # Check if mask is not empty
+            centroid_x = np.mean(x_coords)
+            centroid_y = np.mean(y_coords)
+            print(f"Frame {frame}/{total}: "
+                  f"Centroid: ({centroid_x:.1f}, {centroid_y:.1f}), "
+                  f"Area: {surface_area:.0f} px²")
+        else:
+            print(f"Frame {frame}/{total}: Empty mask")
+
+    def _log_mesh_progress(self, result, frame, total):
+        quality = result.quality_metrics
+        print(f"Frame {frame}/{total}: "
+              f"Average quality: {quality['mean_quality']:.3f}, "
+              f"Min angle: {quality['min_angle']:.1f}°")
+
+    def _log_stress_progress(self, result, frame, total):
+        magnitude = np.sqrt(np.sum(result.stress_tensor ** 2, axis=-1))
+        print(f"Frame {frame}/{total}: "
+              f"Mean stress: {np.mean(magnitude):.2f} mN/m, "
+              f"Max stress: {np.max(magnitude):.2f} mN/m")
+
+    def _initialize_folder(self, folder: Path) -> Path:
+        """Set up folder structure and logging."""
+        tfm_folder = folder / "TFM_data"
+        tfm_folder.mkdir(exist_ok=True)
+
+        log_file = tfm_folder / "processing_log.txt"
+        self._tee_logger = TeeLogger(log_file, self.config)
+        sys.stdout = self._tee_logger
+
+        return tfm_folder
 
     def _generate_visualizations(self, viz_saver: BatchVisualizationSaver,
                                  preprocessed_data: Optional[dict],
@@ -486,35 +579,6 @@ class BatchAnalysis:
                 plot_sigma_yy=self.config['visualizations']['sigma_yy'],
                 plot_normal_stress=self.config['visualizations']['normal_stress']
             )
-
-    def _cleanup(self) -> None:
-        """Clean up resources."""
-        if self._tee_logger:
-            self._tee_logger.close()
-            self._tee_logger = None
-
-    def _log_displacement_progress(self, result, frame, total):
-        flow_magnitude = np.sqrt(np.sum(result.flow ** 2, axis=-1))
-        print(f"Frame {frame}/{total}: "
-              f"Mean displacement: {np.mean(flow_magnitude):.2f} µm, "
-              f"Max displacement: {np.max(flow_magnitude):.2f} µm")
-
-    def _log_force_progress(self, result, frame, total):
-        print(f"Frame {frame}/{total}: "
-              f"Mean force: {result['mean_force']:.2f} Pa, "
-              f"Max force: {result['max_force']:.2f} Pa")
-
-    def _log_mesh_progress(self, result, frame, total):
-        quality = result.quality_metrics
-        print(f"Frame {frame}/{total}: "
-              f"Average quality: {quality['mean_quality']:.3f}, "
-              f"Min angle: {quality['min_angle']:.1f}°")
-
-    def _log_stress_progress(self, result, frame, total):
-        magnitude = np.sqrt(np.sum(result.stress_tensor ** 2, axis=-1))
-        print(f"Frame {frame}/{total}: "
-              f"Mean stress: {np.mean(magnitude):.2f} mN/m, "
-              f"Max stress: {np.max(magnitude):.2f} mN/m")
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'BatchAnalysis':
@@ -589,10 +653,11 @@ class BatchAnalysis:
         )
         print(f"Saved calibrated TIFF: {filepath}")
 
-    def process_all_folders(self) -> None:
-        """Process all folders specified in configuration."""
-        for folder in self.config['root_folders']:
-            self.process_folder(folder)
+    def _cleanup(self) -> None:
+        """Clean up resources."""
+        if self._tee_logger:
+            self._tee_logger.close()
+            self._tee_logger = None
 
 
 if __name__ == "__main__":

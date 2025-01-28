@@ -14,6 +14,11 @@ from napariTFM.backend.mesh_generator import MeshParameters, MeshGenerator
 @dataclass
 class MSMParameters:
     """Parameters for MSM calculations"""
+    # Mask creation parameters
+    threshold: float
+    dilation: int
+    smoothing_sigma: float
+
     # Mesh parameters
     density_factor: float
     algorithm: str
@@ -23,11 +28,6 @@ class MSMParameters:
     poisson_ratio_cells: float
     young_modulus: float
 
-    # Mask creation parameters
-    threshold: float
-    dilation: int
-    smoothing_sigma: float
-
     # Visualization parameters
     max_stress: float
 
@@ -35,7 +35,9 @@ class MSMParameters:
 @dataclass
 class MSMCalculationResult:
     """Results from stress field calculation"""
-    stress_tensor: np.ndarray
+    stress_tensor: np.ndarray  # Shape: (frames, height, width, 4) for xx, yy, xy, yx components
+    nodes: np.ndarray  # Shape: (n_nodes, 2) for node coordinates
+    elements: np.ndarray  # Shape: (n_elements, 3) for element connectivity
     condition_number: float
     residual: float
     parameters: MSMParameters
@@ -51,6 +53,161 @@ class MeshPreviewResult:
 
 class MSMService:
     """Service layer handling business logic for Monolayer Stress Microscopy calculations."""
+
+    def __init__(self):
+        self.analyzer = None
+
+    def initialize_analyzer(self, params: MSMParameters):
+        """Initialize or update the MSM analyzer with given parameters."""
+        self.analyzer = MonolayerStressMicroscopy(
+            mask=None,  # Will be set during calculation
+            density_factor=params.density_factor,
+            algorithm=self._get_algorithm_code(params.algorithm),
+            use_optimization=params.use_optimization,
+            poisson_ratio=params.poisson_ratio_cells,
+            young_modulus=params.young_modulus
+        )
+
+    def calculate_stress_field(
+            self,
+            mask: np.ndarray,
+            traction_x: np.ndarray,
+            traction_y: np.ndarray,
+            params: MSMParameters,
+            nodes: Optional[np.ndarray] = None,
+            elements: Optional[np.ndarray] = None
+    ) -> MSMCalculationResult:
+        """Calculate stress field for single frame."""
+        if self.analyzer is None:
+            self.initialize_analyzer(params)
+
+        # Update analyzer with current mask and mesh
+        self.analyzer.mask = mask
+        if nodes is not None and elements is not None:
+            self.analyzer.nodes = nodes
+            self.analyzer.elements = elements
+
+        # Calculate stress field
+        stress_tensor, condition_number, residual = self.analyzer.calculate_stress_field(
+            traction_x,
+            traction_y
+        )
+
+        return MSMCalculationResult(
+            stress_tensor=stress_tensor,
+            nodes=self.analyzer.nodes,
+            elements=self.analyzer.elements,
+            condition_number=condition_number,
+            residual=residual,
+            parameters=params
+        )
+
+    def calculate_stress_stack(
+            self,
+            force_field: np.ndarray,
+            params: MSMParameters,
+            mesh_results: List[MeshPreviewResult],
+            masks: np.ndarray
+    ) -> Generator[Tuple[MSMCalculationResult, int, int], None, List[MSMCalculationResult]]:
+        """
+        Calculate stress tensor stack for all frames.
+
+        Parameters
+        ----------
+        force_field : np.ndarray
+            4D array of force vectors (frames, height, width, 2)
+        params : MSMParameters
+            Parameters for calculation
+        mesh_results : List[MeshPreviewResult]
+            Pre-calculated mesh data for each frame
+        masks : np.ndarray
+            3D array of masks (frames, height, width)
+
+        Yields
+        ------
+        Tuple[MSMCalculationResult, int, int]
+            (result, current_frame, total_frames)
+
+        Returns
+        -------
+        List[MSMCalculationResult]
+            Complete list of results for all frames
+        """
+        if self.analyzer is None:
+            self.initialize_analyzer(params)
+
+        total_frames = force_field.shape[0]
+        all_results = []
+
+        for frame in range(total_frames):
+            # Get current frame data
+            tx = force_field[frame, ..., 0]
+            ty = force_field[frame, ..., 1]
+            mask = masks[frame]
+            mesh_result = mesh_results[frame]
+
+            # Ensure mask matches force field shape
+            mask = self.resize_mask_to_forces(mask, tx.shape)
+
+            # Calculate stress field with mesh data
+            result = self.calculate_stress_field(
+                mask=mask,
+                traction_x=tx,
+                traction_y=ty,
+                params=params,
+                nodes=mesh_result.nodes,
+                elements=mesh_result.elements
+            )
+
+            all_results.append(result)
+            yield result, frame, total_frames
+
+        return all_results
+
+    def process_mask_data(
+            self,
+            mask_data: np.ndarray,
+            force_field: Optional[np.ndarray] = None
+    ) -> Tuple[np.ndarray, List[str]]:
+        """Process mask data into required format with validation and resizing."""
+        warnings = []
+
+        if mask_data is None:
+            raise ValueError("No mask data provided")
+
+        # Check for multiple values
+        unique_values = np.unique(mask_data)
+        unique_values = unique_values[unique_values != 0]  # Exclude zero
+        if len(unique_values) > 1:
+            warnings.append("Multiple non-zero values detected in mask. Converting to binary (0 and 1).")
+
+        # Convert to binary mask
+        mask_data = mask_data > 0
+
+        # If this is a single mask, add time dimension
+        if mask_data.ndim == 2:
+            mask_data = mask_data[np.newaxis, ...]
+
+        # Ensure we have a 3D array (time, height, width)
+        if mask_data.ndim != 3:
+            raise ValueError(f"Mask data must be 2D or 3D, got shape {mask_data.shape}")
+
+        # If force data exists, resize masks to match
+        if force_field is not None:
+            force_shape = force_field.shape[1:3]  # Get height, width
+            if mask_data.shape[1:] != force_shape:
+                mask_data = np.stack([
+                    resize(
+                        frame.astype(float),
+                        force_shape,
+                        order=0,
+                        preserve_range=True,
+                        anti_aliasing=False
+                    ) > 0.5
+                    for frame in mask_data
+                ])
+
+        return mask_data, warnings
 
     def create_mask_from_image(
             self,
@@ -140,55 +297,6 @@ class MSMService:
 
         return analysis_stack
 
-    def process_mask_data(self, mask_data: np.ndarray, force_field: np.ndarray = None) -> tuple[np.ndarray, list[str]]:
-        """
-        Process mask data into the required format with validation and resizing.
-
-        Args:
-            mask_data: Input mask data array
-            force_field: Optional force field for shape validation
-
-        Returns:
-            Tuple of (processed_mask_data, warning_messages)
-        """
-        warnings = []
-
-        if mask_data is None:
-            raise ValueError("No mask data provided")
-
-        # Check for multiple values
-        unique_values = np.unique(mask_data)
-        unique_values = unique_values[unique_values != 0]  # Exclude zero
-        if len(unique_values) > 1:
-            warnings.append("Multiple non-zero values detected in the mask. Converting to binary (0 and 1).")
-
-        # Convert to binary mask
-        mask_data = mask_data > 0
-
-        # If this is a single mask, add time dimension
-        if mask_data.ndim == 2:
-            mask_data = mask_data[np.newaxis, ...]
-
-        # Ensure we have a 3D array (time, height, width)
-        if mask_data.ndim != 3:
-            raise ValueError(f"Mask data must be 2D or 3D, got shape {mask_data.shape}")
-
-        # If force data exists, resize masks to match
-        if force_field is not None:
-            force_shape = force_field.shape[1:3]  # Get height, width
-            if mask_data.shape[1:] != force_shape:
-                mask_data = np.stack([
-                    resize(
-                        frame.astype(float),
-                        force_shape,
-                        order=0,
-                        preserve_range=True,
-                        anti_aliasing=False
-                    ) > 0.5
-                    for frame in mask_data
-                ])
-
-        return mask_data, warnings
 
     def resize_mask_to_forces(
             self,
@@ -294,75 +402,6 @@ class MSMService:
             yield nodes, elements, quality_metrics, frame, total_frames
 
         return mesh_results
-
-    def calculate_stress_field(
-            self,
-            mask: np.ndarray,
-            traction_x: np.ndarray,
-            traction_y: np.ndarray,
-            params: MSMParameters,
-            nodes: Optional[np.ndarray] = None,
-            elements: Optional[np.ndarray] = None
-    ) -> MSMCalculationResult:
-        """Calculate stress field for single frame."""
-        # Initialize MSM analyzer
-        analyzer = MonolayerStressMicroscopy(
-            mask=mask,
-            density_factor=params.density_factor,
-            algorithm=self._get_algorithm_code(params.algorithm),
-            use_optimization=params.use_optimization,
-            poisson_ratio=params.poisson_ratio_cells,
-            young_modulus=params.young_modulus,
-            nodes=nodes,
-            elements=elements
-        )
-
-        # Calculate stress field
-        stress_tensor, condition_number, residual = analyzer.calculate_stress_field(
-            traction_x,
-            traction_y
-        )
-
-        return MSMCalculationResult(
-            stress_tensor=stress_tensor,
-            condition_number=condition_number,
-            residual=residual,
-            parameters=params
-        )
-
-    def calculate_stress_stack(self, force_field, params, mesh_results, masks):
-        """Calculate stress tensor stack for all frames."""
-        total_frames = force_field.shape[0]
-        all_results = []  # List to collect all results
-
-        for frame in range(total_frames):
-            # Get current frame data
-            tx = force_field[frame, ..., 0]
-            ty = force_field[frame, ..., 1]
-            mask = masks[frame]  # Get mask for current frame
-            mesh_result = mesh_results[frame]  # Get mesh for current frame
-
-            # Ensure mask matches force field shape
-            mask = self.resize_mask_to_forces(mask, tx.shape)
-
-            # Calculate stress field with mesh data
-            result = self.calculate_stress_field(
-                mask=mask,
-                traction_x=tx,
-                traction_y=ty,
-                params=params,
-                nodes=mesh_result.nodes,
-                elements=mesh_result.elements
-            )
-
-            # Add to results list
-            all_results.append(result)
-
-            # Yield progress with the result object directly
-            yield result, frame, total_frames
-
-        # Make sure we return the complete list of results when the generator is exhausted
-        return all_results
 
     def _get_algorithm_code(self, algorithm_name: str) -> int:
         """Convert algorithm name to corresponding code."""
