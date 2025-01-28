@@ -722,12 +722,7 @@ class MSMController(QObject):
             total_frames = force_field.shape[0]
 
             # Initialize stress generator with explicit mask passing
-            stress_generator = self.service.calculate_stress_stack(
-                force_field=force_field,
-                params=params,
-                mesh_results=mesh_results,
-                masks=masks  # Explicitly pass masks
-            )
+            stress_generator = self.service.calculate_stresses(force_field=force_field, masks=masks)
 
             try:
                 while True:

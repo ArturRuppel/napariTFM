@@ -97,27 +97,8 @@ class MonolayerStressMicroscopy:
         self.E = young_modulus
         self.timing_stats = {}
         self._nested_calls = {}
-
-        if nodes is None or elements is None:
-            # Validate density_factor before mesh generation
-            if density_factor < 0.005:
-                warnings.warn(
-                    "Density factor is very low (< 0.005), which may lead to numerical instabilities and long runtimes.",
-                    UserWarning
-                )
-
-            # Proceed with mesh generation
-            mesh_params = MeshParameters(
-                mask=mask,
-                density_factor=density_factor,
-                algorithm=algorithm,
-                use_optimization=use_optimization
-            )
-            self.mesh_generator = MeshGenerator(mesh_params)
-            self.nodes, self.elements = self.mesh_generator.generate_mesh(mask)
-        else:
-            self.nodes = nodes
-            self.elements = elements
+        self.nodes = nodes
+        self.elements = elements
 
     @staticmethod
     def create_mask_from_image(image, threshold_percentile=0, dilation=10, smoothing_sigma=10.0):
@@ -609,6 +590,24 @@ class MonolayerStressMicroscopy:
     def calculate_stress_field(self, traction_x, traction_y):
         """Calculate stress field and return quality metrics"""
         try:
+            if self.nodes is None or self.elements is None:
+                # Validate density_factor before mesh generation
+                if self.density_factor < 0.005:
+                    warnings.warn(
+                        "Density factor is very low (< 0.005), which may lead to numerical instabilities and long runtimes.",
+                        UserWarning
+                    )
+
+                # Proceed with mesh generation
+                mesh_params = MeshParameters(
+                    mask=self.mask,
+                    density_factor=self.density_factor,
+                    algorithm=self.algorithm,
+                    use_optimization=self.use_optimization
+                )
+                self.mesh_generator = MeshGenerator(mesh_params)
+                self.nodes, self.elements = self.mesh_generator.generate_mesh(self.mask)
+
             if np.all(np.isnan(traction_x)) or np.all(np.isnan(traction_y)):
                 raise ValueError("Input tractions are all NaN")
 

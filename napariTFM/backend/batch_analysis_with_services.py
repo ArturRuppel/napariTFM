@@ -14,7 +14,7 @@ from numpy._typing import NDArray
 from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
 from napariTFM.services.fttc_service import FTTCService, FTTCParameters
-from napariTFM.services.msm_service import MSMService, MSMParameters, MeshResult
+from napariTFM.services.msm_service import MSMService, MSMParameters
 from napariTFM.services.preprocessing_service import PreprocessingService, PreprocessingParameters
 
 
@@ -259,7 +259,8 @@ class BatchAnalysis:
 
         print("Starting Preprocessing...")
         start_time = time()
-        preprocessing_service = PreprocessingService(self._create_preprocessing_parameters())
+        params = self._create_preprocessing_parameters()
+        preprocessing_service = PreprocessingService(params)
 
         # Process bead images
         bead_stack = tifffile.imread(str(folder / self.config['input_files']['beads']))
@@ -382,22 +383,22 @@ class BatchAnalysis:
         if force_result is None:
             raise RuntimeError("Force calculation failed")
 
-
         np.save(str(tfm_folder / "traction_forces.npy"), force_result)
 
         print(f"Force analysis completed in {time() - start_time:.1f} seconds")
         return force_result
+
     def _execute_mask_creation(self, tfm_folder: Path, cell_images: np.ndarray) -> NDArray[int]:
         """Execute mask creation step using MSMService."""
         print("Starting Mask Creation...")
         start_time = time()
-
         params = self._create_msm_parameters()
+        msm_service = MSMService(params)
         downscale_factor = self.config['parameters']['downscale_factor']
         masks = []
 
         # Create masks and generate meshes
-        for mask, frame, total in self.msm_service.create_mask_stack(cell_images, params):
+        for mask, frame, total in msm_service.create_mask_stack(cell_images, params):
             mask = rescale(mask, 1 / downscale_factor, order=0, preserve_range=True, anti_aliasing=False)
             masks.append(mask)
             self._log_mask_progress(mask, frame, total)
@@ -438,11 +439,11 @@ class BatchAnalysis:
             mesh_results = []
             for nodes, elements, quality_metrics, frame, total in self.msm_service.generate_mesh_stack(
                     mask_data, params):
-                mesh_results.append(MeshResult(
-                    nodes=nodes,
-                    elements=elements,
-                    quality_metrics=quality_metrics
-                ))
+                # mesh_results.append(MeshResult(
+                #     nodes=nodes,
+                #     elements=elements,
+                #     quality_metrics=quality_metrics
+                # ))
                 self._log_mesh_progress({
                     'mean_quality': quality_metrics['mean_quality'],
                     'min_angle': quality_metrics['min_angle']
@@ -451,12 +452,7 @@ class BatchAnalysis:
             # Calculate stress for each frame
             print("Calculating stress fields...")
             stress_results = []
-            for result, frame, total in self.msm_service.calculate_stress_stack(
-                    force_data['forces'],
-                    params,
-                    mesh_results,
-                    mask_data
-            ):
+            for result, frame, total in self.msm_service.calculate_stresses(force_data['forces'], params, mesh_results):
                 stress_results.append(result)
                 self._log_stress_progress(result, frame + 1, total)
 
@@ -543,7 +539,8 @@ class BatchAnalysis:
             smoothing_sigma=self.config['parameters']['smoothing_sigma'],
             max_stress=self.config['parameters']['max_stress'],
             pixel_size=self.config['parameters']['pixel_size'],
-            downscale_factor=self.config['parameters']['downscale_factor']
+            downscale_factor=self.config['parameters']['downscale_factor'],
+            frame_interval=self.config['parameters']['frame_interval']
         )
 
     def _log_displacement_progress(self, result, frame, total):
