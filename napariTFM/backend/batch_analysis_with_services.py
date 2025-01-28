@@ -14,7 +14,7 @@ from numpy._typing import NDArray
 from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters
 from napariTFM.services.fttc_service import FTTCService, FTTCParameters
-from napariTFM.services.msm_service import MSMService, MSMParameters
+from napariTFM.services.msm_service import MSMService, MSMParameters, MeshResult
 from napariTFM.services.preprocessing_service import PreprocessingService, PreprocessingParameters
 
 
@@ -246,7 +246,7 @@ class BatchAnalysis:
             print("\nLoading mask data...")
             try:
                 if mask_data is None:
-                    mask_data = np.load(str(tfm_folder / "masks_and_mesh.npy"), allow_pickle=True).item()
+                    mask_data = tifffile.imread(str(tfm_folder / "masks.tif"))
             except Exception as e:
                 print(f"Could not load mask data: {str(e)}")
                 return None
@@ -411,35 +411,76 @@ class BatchAnalysis:
         print(f"Mask creation completed in {time() - start_time:.1f} seconds")
         return masks
 
-    def _execute_stress_analysis(self, tfm_folder: Path, force_data: dict, mask_data: dict) -> Optional[dict]:
-        """Execute stress analysis step using MSMService."""
-        print("Starting Stress Analysis...")
+    def _execute_stress_analysis(self, tfm_folder: Path, force_data: dict, mask_data: np.ndarray) -> Optional[dict]:
+        """
+        Execute stress analysis step using MSMService.
+
+        Parameters
+        ----------
+        tfm_folder : Path
+            Path to the TFM data folder
+        force_data : dict
+            Dictionary containing force field data and parameters
+        mask_data : np.ndarray
+            3D array of masks (frames, height, width)
+
+        Returns
+        -------
+        Optional[dict]
+            Dictionary containing stress tensors and parameters, or None if analysis fails
+        """
+        print("\nStarting Stress Analysis...")
         start_time = time()
 
         params = self._create_msm_parameters()
-        stress_results = []
 
-        # Calculate stress
-        for result, frame, total in self.msm_service.calculate_stress_stack(
-                force_data['forces'], params, mask_data['mesh_results'], mask_data['masks']):
-            stress_results.append(result)
+        try:
+            # Initialize mesh generation
+            print("Generating meshes for all frames...")
+            mesh_results = []
+            for nodes, elements, quality_metrics, frame, total in self.msm_service.generate_mesh_stack(
+                    mask_data, params):
+                mesh_results.append(MeshResult(
+                    nodes=nodes,
+                    elements=elements,
+                    quality_metrics=quality_metrics
+                ))
+                self._log_mesh_progress({
+                    'mean_quality': quality_metrics['mean_quality'],
+                    'min_angle': quality_metrics['min_angle']
+                }, frame + 1, total)
 
-            # Log progress
-            magnitude = np.sqrt(np.sum(result.stress_tensor ** 2, axis=-1))
-            print(f"Frame {frame + 1}/{total}: "
-                  f"Mean stress: {np.mean(magnitude):.2f} mN/m, "
-                  f"Max stress: {np.max(magnitude):.2f} mN/m")
+            # Calculate stress for each frame
+            print("\nCalculating stress fields...")
+            stress_results = []
+            for result, frame, total in self.msm_service.calculate_stress_stack(
+                    force_data['forces'],
+                    params,
+                    mesh_results,
+                    mask_data
+            ):
+                stress_results.append(result)
+                self._log_stress_progress(result, frame + 1, total)
 
-        # Save results
-        stress_data = {
-            'stress_tensors': np.stack([r.stress_tensor for r in stress_results]),
-            'parameters': params.__dict__
-        }
-        np.save(str(tfm_folder / "stress_results.npy"), stress_data)
+            # Prepare results dictionary
+            stress_data = {
+                'stress_tensors': np.stack([r.stress_tensor for r in stress_results]),
+                'nodes': np.stack([r.nodes for r in stress_results]),
+                'elements': np.stack([r.elements for r in stress_results]),
+                'condition_numbers': [r.condition_number for r in stress_results],
+                'residuals': [r.residual for r in stress_results],
+                'parameters': params.__dict__
+            }
 
-        print(f"Stress analysis completed in {time() - start_time:.1f} seconds")
-        return stress_data
+            # Save results
+            np.save(str(tfm_folder / "stress_results.npy"), stress_data)
 
+            print(f"Stress analysis completed in {time() - start_time:.1f} seconds")
+            return stress_data
+
+        except Exception as e:
+            print(f"Error during stress analysis: {str(e)}")
+            return None
     def _create_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create preprocessing parameters from config."""
         return PreprocessingParameters(
@@ -499,7 +540,9 @@ class BatchAnalysis:
             threshold=self.config['parameters']['threshold'],
             dilation=self.config['parameters']['dilation'],
             smoothing_sigma=self.config['parameters']['smoothing_sigma'],
-            max_stress=self.config['parameters']['max_stress']
+            max_stress=self.config['parameters']['max_stress'],
+            pixel_size=self.config['parameters']['pixel_size'],
+            downscale_factor=self.config['parameters']['downscale_factor']
         )
 
     def _log_displacement_progress(self, result, frame, total):
@@ -528,8 +571,7 @@ class BatchAnalysis:
         else:
             print(f"Frame {frame}/{total}: Empty mask")
 
-    def _log_mesh_progress(self, result, frame, total):
-        quality = result.quality_metrics
+    def _log_mesh_progress(self, quality, frame, total):
         print(f"Frame {frame}/{total}: "
               f"Average quality: {quality['mean_quality']:.3f}, "
               f"Min angle: {quality['min_angle']:.1f}°")

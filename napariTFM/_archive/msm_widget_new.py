@@ -310,12 +310,7 @@ class MSMWidget(BaseAnalysisWidget):
                 downscale_factor = self.data_manager.force_params['downscale_factor']
 
             # Create masks
-            analysis_masks, vis_masks = self.service.create_mask_stack(
-                image_stack=active_layer.data,
-                params=params,
-                target_shape=target_shape,
-                downscale_factor=downscale_factor
-            )
+            analysis_masks, vis_masks = self.service.create_mask_stack(image_stack=active_layer.data, params=params, target_shape=target_shape)
 
             # Store and visualize results
             self.data_manager.set_masks(analysis_masks)

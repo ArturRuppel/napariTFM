@@ -28,6 +28,10 @@ class MSMParameters:
     poisson_ratio_cells: float
     young_modulus: float
 
+    # Scaling parameter
+    pixel_size: float # in µm
+    downscale_factor: int
+
     # Visualization parameters
     max_stress: float
 
@@ -44,7 +48,7 @@ class MSMCalculationResult:
 
 
 @dataclass
-class MeshPreviewResult:
+class MeshResult:
     """Results from mesh preview generation"""
     nodes: np.ndarray
     elements: np.ndarray
@@ -59,14 +63,7 @@ class MSMService:
 
     def initialize_analyzer(self, params: MSMParameters):
         """Initialize or update the MSM analyzer with given parameters."""
-        self.analyzer = MonolayerStressMicroscopy(
-            mask=None,  # Will be set during calculation
-            density_factor=params.density_factor,
-            algorithm=self._get_algorithm_code(params.algorithm),
-            use_optimization=params.use_optimization,
-            poisson_ratio=params.poisson_ratio_cells,
-            young_modulus=params.young_modulus
-        )
+
 
     def calculate_stress_field(
             self,
@@ -78,11 +75,15 @@ class MSMService:
             elements: Optional[np.ndarray] = None
     ) -> MSMCalculationResult:
         """Calculate stress field for single frame."""
-        if self.analyzer is None:
-            self.initialize_analyzer(params)
+        self.analyzer = MonolayerStressMicroscopy(
+            mask=mask,  # Will be set during calculation
+            density_factor=params.density_factor,
+            algorithm=self._get_algorithm_code(params.algorithm),
+            use_optimization=params.use_optimization,
+            poisson_ratio=params.poisson_ratio_cells,
+            young_modulus=params.young_modulus
+        )
 
-        # Update analyzer with current mask and mesh
-        self.analyzer.mask = mask
         if nodes is not None and elements is not None:
             self.analyzer.nodes = nodes
             self.analyzer.elements = elements
@@ -92,6 +93,9 @@ class MSMService:
             traction_x,
             traction_y
         )
+
+        # scale stress tensor to mN/m
+        stress_tensor *= params.downscale_factor * params.pixel_size * 1e-3
 
         return MSMCalculationResult(
             stress_tensor=stress_tensor,
@@ -106,7 +110,7 @@ class MSMService:
             self,
             force_field: np.ndarray,
             params: MSMParameters,
-            mesh_results: List[MeshPreviewResult],
+            mesh_results: List[MeshResult],
             masks: np.ndarray
     ) -> Generator[Tuple[MSMCalculationResult, int, int], None, List[MSMCalculationResult]]:
         """
@@ -118,7 +122,7 @@ class MSMService:
             4D array of force vectors (frames, height, width, 2)
         params : MSMParameters
             Parameters for calculation
-        mesh_results : List[MeshPreviewResult]
+        mesh_results : List[MeshResult]
             Pre-calculated mesh data for each frame
         masks : np.ndarray
             3D array of masks (frames, height, width)
@@ -133,9 +137,6 @@ class MSMService:
         List[MSMCalculationResult]
             Complete list of results for all frames
         """
-        if self.analyzer is None:
-            self.initialize_analyzer(params)
-
         total_frames = force_field.shape[0]
         all_results = []
 
@@ -227,7 +228,6 @@ class MSMService:
             image_stack: np.ndarray,
             params: MSMParameters,
             target_shape: Optional[Tuple[int, int]] = None,
-            downscale_factor: int = 1
     ) -> Generator[Tuple[np.ndarray, int, int], None, np.ndarray]:
         """
         Create analysis and visualization mask stacks as a generator that yields intermediate results.
@@ -319,7 +319,7 @@ class MSMService:
             self,
             mask: np.ndarray,
             params: MSMParameters
-    ) -> MeshPreviewResult:
+    ) -> MeshResult:
         """Generate mesh for preview/visualization."""
         mesh_params = MeshParameters(
             mask=mask,
@@ -332,7 +332,7 @@ class MSMService:
         nodes, elements = mesh_generator.generate_mesh(mask)
         quality_metrics = mesh_generator.analyze_mesh_quality(nodes, elements)
 
-        return MeshPreviewResult(
+        return MeshResult(
             nodes=nodes,
             elements=elements,
             quality_metrics=quality_metrics
@@ -342,7 +342,7 @@ class MSMService:
             self,
             mask_stack: np.ndarray,
             params: MSMParameters
-    ) -> Generator[Tuple[np.ndarray, np.ndarray, Dict[str, float], int, int], None, List[MeshPreviewResult]]:
+    ) -> Generator[Tuple[np.ndarray, np.ndarray, Dict[str, float], int, int], None, List[MeshResult]]:
         """
         Generate meshes for all frames in the mask stack as a generator that yields intermediate results.
 
@@ -361,7 +361,7 @@ class MSMService:
 
         Returns
         -------
-        List[MeshPreviewResult]
+        List[MeshResult]
             List of MeshPreviewResult objects containing the complete mesh data for all frames
         """
         # Handle 2D input
@@ -391,7 +391,7 @@ class MSMService:
             quality_metrics = mesh_generator.analyze_mesh_quality(nodes, elements)
 
             # Create and store result object
-            result = MeshPreviewResult(
+            result = MeshResult(
                 nodes=nodes,
                 elements=elements,
                 quality_metrics=quality_metrics
