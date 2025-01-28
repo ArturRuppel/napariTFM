@@ -12,7 +12,7 @@ import yaml
 from numpy._typing import NDArray
 
 from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
-from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters
+from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
 from napariTFM.services.fttc_service import FTTCService, FTTCParameters
 from napariTFM.services.msm_service import MSMService, MSMParameters, MeshResult
 from napariTFM.services.preprocessing_service import PreprocessingService, PreprocessingParameters
@@ -113,9 +113,6 @@ class BatchAnalysis:
 
     def __init__(self, config: dict):
         self.config = config
-        self.preprocessing_service = PreprocessingService()
-        self.fttc_service = FTTCService()
-        self.msm_service = MSMService()
         self._tee_logger = None
 
     def process_all_folders(self) -> None:
@@ -262,8 +259,9 @@ class BatchAnalysis:
 
         print("Starting Preprocessing...")
         start_time = time()
+        preprocessing_service = PreprocessingService()
         params = self._create_preprocessing_parameters()
-        self.preprocessing_service.update_parameters(params)
+        preprocessing_service.update_parameters(params)
 
         # Process bead images
         bead_stack = tifffile.imread(str(folder / self.config['input_files']['beads']))
@@ -279,17 +277,17 @@ class BatchAnalysis:
                 print(f"Warning: Cell image file specified but not found: {self.config['input_files']['cells']}")
 
         bead_results = []
-        for result, frame, total in self.preprocessing_service.preprocess_stack(bead_stack, reference):
+        for result, frame, total in preprocessing_service.preprocess_stack(bead_stack, reference):
             bead_results.append(result)
             print(f"Progress (beads): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
 
-        reference_result = self.preprocessing_service.preprocess_frame(reference)
+        reference_result = preprocessing_service.preprocess_frame(reference)
 
         # Process cell images if available
         cell_results = []
         if cell_stack is not None:
             print("Processing cell images...")
-            for result, frame, total in self.preprocessing_service.preprocess_stack(cell_stack, reference_image=None, is_cell=True):
+            for result, frame, total in preprocessing_service.preprocess_stack(cell_stack, reference_image=None, is_cell=True):
                 cell_results.append(result)
                 print(f"Progress (cells): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
 
@@ -360,42 +358,37 @@ class BatchAnalysis:
         print(f"Displacement analysis completed in {time() - start_time:.1f} seconds")
         return displacement_result
 
-    def _execute_force_analysis(self, tfm_folder: Path, displacement_data: Optional[dict]) -> Optional[dict]:
+    def _execute_force_analysis(self, tfm_folder: Path, displacement_data: DisplacementResult) -> Optional[dict]:
         """Execute force analysis step using FTTCService."""
-
         print("Starting Force Analysis...")
         start_time = time()
 
-        params = self._create_fttc_parameters()
-        self.fttc_service.initialize_calculator(params)
+        fttc_service = FTTCService(self._create_fttc_parameters())
 
-        force_results = []
-        for result, frame, total in self.fttc_service.calculate_force_stack(
-                displacement_data['flows'],
-                self.config['parameters']['pixel_size'],
-                self.config['parameters']['downscale_factor']
-        ):
-            force_results.append(result)
-            # Update progress logging to use the result object
-            magnitude = np.sqrt(np.sum(result.force_field ** 2, axis=-1))
-            progress_info = {
-                'frame': frame - 1,
-                'mean_force': np.mean(magnitude),
-                'max_force': np.max(magnitude),
-                'median_force': np.median(magnitude)
-            }
-            self._log_force_progress(progress_info, frame, total)
+        # Get the generator
+        force_generator = fttc_service.calculate_forces(
+            displacement_data.flow,
+            yield_intermediates=True
+        )
 
-        force_data = {
-            'forces': np.stack([r.force_field for r in force_results]),
-            'parameters': params.__dict__
-        }
+        # Initialize result container
+        try:
+            while True:
+                # Get next intermediate result
+                force_field, frame, total = next(force_generator)
+                self._log_force_progress(force_field, frame, total)
+        except StopIteration as e:
+            # Retrieve final result from generator's return value
+            force_result = e.value
 
-        np.save(str(tfm_folder / "traction_forces.npy"), force_data)
+        if force_result is None:
+            raise RuntimeError("Force calculation failed")
+
+
+        np.save(str(tfm_folder / "traction_forces.npy"), force_result)
 
         print(f"Force analysis completed in {time() - start_time:.1f} seconds")
-        return force_data
-
+        return force_result
     def _execute_mask_creation(self, tfm_folder: Path, cell_images: np.ndarray) -> NDArray[int]:
         """Execute mask creation step using MSMService."""
         print("Starting Mask Creation...")
@@ -534,7 +527,9 @@ class BatchAnalysis:
             force_vector_stride=self.config['parameters']['force_vector_stride'],
             force_arrow_scale=self.config['parameters']['force_arrow_scale'],
             f_max=self.config['parameters']['f_max'],
-            frame_interval=self.config['parameters']['frame_interval']
+            frame_interval=self.config['parameters']['frame_interval'],
+            pixel_size=self.config['parameters']['pixel_size'],
+            downscale_factor=self.config['parameters']['downscale_factor']
         )
 
     def _create_msm_parameters(self) -> MSMParameters:
@@ -560,9 +555,10 @@ class BatchAnalysis:
               f"Max displacement: {np.max(flow_magnitude):.2f} µm")
 
     def _log_force_progress(self, result, frame, total):
+        force_magnitude = np.sqrt(np.sum(result ** 2, axis=-1))
         print(f"Frame {frame}/{total}: "
-              f"Mean force: {result['mean_force']:.2f} Pa, "
-              f"Max force: {result['max_force']:.2f} Pa")
+              f"Mean force: {np.mean(force_magnitude):.2f} Pa, "
+              f"Max force: {np.mean(force_magnitude):.2f} Pa")
 
     def _log_mask_progress(self, mask, frame, total):
         # Calculate surface area (sum of all True/1 pixels)

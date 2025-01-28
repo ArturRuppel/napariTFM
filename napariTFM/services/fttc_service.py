@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any, List, Generator
+from typing import Optional, Tuple, Dict, Any, List, Generator, Union
 import numpy as np
 
 from napariTFM.backend.fttc import FTTC
@@ -14,190 +14,180 @@ class FTTCParameters:
     gel_height: Optional[float]  # μm (None for infinite thickness)
     lanczos_exp: int
 
-    # Regularization parameters
+    # Processing parameters
     regularization: float
     auto_gcv: bool
+    downscale_factor: int
+    pixel_size: float
+
+    # Time parameters
+    frame_interval: float  # minutes
 
     # Visualization parameters
     force_vector_stride: int
     force_arrow_scale: float
     f_max: float
 
-    # Time parameters
-    frame_interval: float  # minutes
-
 
 @dataclass
-class FTTCCalculationResult:
+class FTTCResult:
     """Results from force calculation"""
-    force_field: np.ndarray  # Shape: (frames, height, width, 2) for x,y components
+    force_field: np.ndarray  # Shape: (t, y, x, 2) for time series, units in Pa
+    original_shape: tuple  # Original displacement field shape (y, x)
+    force_shape: tuple  # Force field shape (y, x)
+    parameters: FTTCParameters
+    physical_scale: dict  # Dictionary containing physical scaling information
     condition_number: float
     residual: float
-    parameters: FTTCParameters
 
 
 class FTTCService:
     """Service layer handling business logic for FTTC force calculations."""
 
-    def __init__(self):
-        self.calculator = None
+    def __init__(self, params: FTTCParameters):
+        """
+        Initialize the FTTC service with calculation parameters.
 
-    def initialize_calculator(self, params: FTTCParameters):
-        """Initialize or update the FTTC calculator with given parameters."""
+        Parameters
+        ----------
+        params : FTTCParameters
+            Parameters for the FTTC calculations
+        """
         self.calculator = FTTC(
             E=params.young_modulus,
             nu=params.poisson_ratio_substrate,
             lanczos_exp=params.lanczos_exp,
             gel_height=params.gel_height
         )
+        self.params = params
 
     def calculate_forces(
             self,
             displacement_field: np.ndarray,
-            pixel_size: float,
-            downscale_factor: int = 1,
-            regularization: Optional[float] = None,
-            use_gcv: bool = False
-    ) -> Tuple[np.ndarray, np.ndarray]:
+            yield_intermediates: bool = False
+    ) -> Union[FTTCResult, Generator[Tuple[np.ndarray, int, int], None, FTTCResult]]:
         """
-        Calculate forces from displacement field for a single frame.
+        Calculate forces from displacement field data.
+        Always returns force field with shape (t, y, x, 2) where t=1 for single frames.
 
         Parameters
         ----------
         displacement_field : np.ndarray
-            2D array of displacement vectors (height, width, 2)
-        pixel_size : float
-            Physical size of each pixel in micrometers
-        downscale_factor : int
-            Factor by which the displacement field was downscaled
-        regularization : float, optional
-            Regularization parameter (if None and use_gcv=False, will use current value)
-        use_gcv : bool
-            Whether to use GCV to determine regularization parameter
+            Displacement field data with shape (t, y, x, 2)
+        yield_intermediates : bool
+            If True, yields (force_field, current_frame, total_frames) tuples during calculation
 
         Returns
         -------
-        Tuple[np.ndarray, np.ndarray]
-            Calculated force components (tx, ty)
+        Union[FTTCResult, Generator]
+            If yield_intermediates is False:
+                FTTCCalculationResult containing final force field
+            If yield_intermediates is True:
+                Generator yielding (intermediate_forces, frame_index, total_frames) during calculation
+                and returning final FTTCCalculationResult when exhausted
         """
-        if self.calculator is None:
-            raise RuntimeError("Calculator not initialized. Call initialize_calculator first.")
+        # Ensure displacement field is 4D
+        if displacement_field.ndim == 3:
+            displacement_field = displacement_field[np.newaxis, ...]
 
-        # Calculate forces using the FTTC calculator
-        if use_gcv:
-            regularization = None  # Force GCV calculation
+        total_frames = displacement_field.shape[0]
+        force_shape = displacement_field.shape[1:4]  # (y, x, 2)
+        force_stack = np.zeros((total_frames, *force_shape), dtype=np.float32)
 
-        result = self.calculator.calculate_traction(
-            displacements=displacement_field,
-            pixel_size=pixel_size,
-            downscale_factor=downscale_factor,
-            regularization=regularization
-        )
+        def calculate_with_intermediates():
+            for frame in range(total_frames):
+                # Calculate forces for current frame
+                result = self.calculator.calculate_traction(
+                    displacements=displacement_field[frame],
+                    pixel_size=self.params.pixel_size,
+                    downscale_factor=self.params.downscale_factor,
+                    regularization=None if self.params.auto_gcv else self.params.regularization
+                )
 
-        return result[1][0], result[1][1]  # Return tx, ty components
+                # Extract force components and store in stack
+                force_stack[frame, ..., 0] = result[1][0]  # tx
+                force_stack[frame, ..., 1] = result[1][1]  # ty
 
-    def calculate_force_stack(
-            self,
-            displacement_field: np.ndarray,
-            pixel_size: float,
-            downscale_factor: int = 1,
-            regularization: Optional[float] = None,
-            use_gcv: bool = False
-    ) -> Generator[Tuple[FTTCCalculationResult, int, int], None, List[FTTCCalculationResult]]:
-        """
-        Calculate forces for all frames in the displacement stack.
+                # Yield intermediate result with progress info
+                yield force_stack[frame].copy(), frame + 1, total_frames
 
-        Parameters
-        ----------
-        displacement_field : np.ndarray
-            4D array of displacement vectors (frames, height, width, 2)
-        pixel_size : float
-            Physical size of each pixel in micrometers
-        downscale_factor : int
-            Factor by which the displacement field was downscaled
-        regularization : float, optional
-            Regularization parameter (if None and use_gcv=False, will use current value)
-        use_gcv : bool
-            Whether to use GCV to determine regularization parameter
+            # Create physical scale information
+            physical_scale = {
+                'pixel_size': self.params.pixel_size,
+                'grid_spacing': self.params.pixel_size * self.params.downscale_factor,
+                'time_interval': self.params.frame_interval,
+                'force_units': 'Pa',
+                'grid_spacing_units': 'µm',
+                'time_interval_units': 'min',
+            }
 
-        Yields
-        ------
-        Tuple[FTTCCalculationResult, int, int]
-            (result, current_frame, total_frames)
-
-        Returns
-        -------
-        List[FTTCCalculationResult]
-            Complete list of results for all frames
-        """
-        if self.calculator is None:
-            raise RuntimeError("Calculator not initialized. Call initialize_calculator first.")
-
-        total_frames = len(displacement_field)
-        all_results = []
-
-        for frame_idx in range(total_frames):
-            # Calculate forces for current frame
-            tx, ty = self.calculate_forces(
-                displacement_field=displacement_field[frame_idx],
-                pixel_size=pixel_size,
-                downscale_factor=downscale_factor,
-                regularization=regularization,
-                use_gcv=use_gcv
+            return FTTCResult(
+                force_field=force_stack,
+                original_shape=displacement_field.shape[1:3],
+                force_shape=force_stack.shape[1:3],
+                parameters=self.params,
+                physical_scale=physical_scale,
+                condition_number=getattr(self.calculator, 'last_condition_number', 0.0),
+                residual=getattr(self.calculator, 'last_residual', 0.0)
             )
 
-            # Calculate magnitude for statistics
-            magnitude = np.sqrt(tx ** 2 + ty ** 2)
+        if yield_intermediates:
+            return calculate_with_intermediates()
+        else:
+            # Calculate without yielding intermediates
+            for frame in range(total_frames):
+                result = self.calculator.calculate_traction(
+                    displacements=displacement_field[frame],
+                    pixel_size=self.params.pixel_size,
+                    downscale_factor=self.params.downscale_factor,
+                    regularization=None if self.params.auto_gcv else self.params.regularization
+                )
+                force_stack[frame, ..., 0] = result[1][0]  # tx
+                force_stack[frame, ..., 1] = result[1][1]  # ty
 
-            # Create result object
-            force_field = np.stack([tx, ty], axis=-1)
-            result = FTTCCalculationResult(
-                force_field=force_field,
-                condition_number=self.calculator.last_condition_number if hasattr(self.calculator, 'last_condition_number') else 0.0,
-                residual=self.calculator.last_residual if hasattr(self.calculator, 'last_residual') else 0.0,
-                parameters=self.calculator.parameters if hasattr(self.calculator, 'parameters') else None
+            physical_scale = {
+                'pixel_size': self.params.pixel_size,
+                'grid_spacing': self.params.pixel_size * self.params.downscale_factor,
+                'time_interval': self.params.frame_interval,
+                'force_units': 'Pa',
+                'grid_spacing_units': 'µm',
+                'time_interval_units': 'min',
+            }
+
+            return FTTCResult(
+                force_field=force_stack,
+                original_shape=displacement_field.shape[1:3],
+                force_shape=force_stack.shape[1:3],
+                parameters=self.params,
+                physical_scale=physical_scale,
+                condition_number=getattr(self.calculator, 'last_condition_number', 0.0),
+                residual=getattr(self.calculator, 'last_residual', 0.0)
             )
-
-            all_results.append(result)
-            yield result, frame_idx + 1, total_frames
-
-        return all_results
 
     def find_optimal_regularization(
             self,
-            displacement_field: np.ndarray,
-            pixel_size: float,
-            downscale_factor: int = 1
+            displacement_field: np.ndarray
     ) -> float:
         """
-        Find optimal regularization parameter using GCV for current frame.
+        Find optimal regularization parameter using GCV.
 
         Parameters
         ----------
         displacement_field : np.ndarray
             2D array of displacement vectors (height, width, 2)
-        pixel_size : float
-            Physical size of each pixel in micrometers
-        downscale_factor : int
-            Factor by which the displacement field was downscaled
 
         Returns
         -------
         float
             Optimal regularization parameter
         """
-        if self.calculator is None:
-            raise RuntimeError("Calculator not initialized. Call initialize_calculator first.")
-
-        # Prepare data for GCV calculation
         shape = displacement_field.shape[:-1]
         pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
         vec = np.array([displacement_field[..., 0], displacement_field[..., 1]])
+        return self.calculator._find_regularization(pos, vec, self.params.pixel_size * self.params.downscale_factor)
 
-        # Calculate optimal regularization
-        return self.calculator._find_regularization(pos, vec, pixel_size * downscale_factor)
-
-    def validate_displacement_field(self, displacement_field: np.ndarray) -> Tuple[bool, str]:
+    @staticmethod
+    def validate_displacement_field(displacement_field: np.ndarray) -> Tuple[bool, str]:
         """
         Validate displacement field data.
 
@@ -217,8 +207,8 @@ class FTTCService:
         if not isinstance(displacement_field, np.ndarray):
             return False, "Displacement field must be a numpy array"
 
-        if displacement_field.ndim != 4:
-            return False, f"Displacement field must be 4D (frames, height, width, 2), got shape {displacement_field.shape}"
+        if displacement_field.ndim not in (3, 4):
+            return False, "Displacement field must be 3D (y,x,2) or 4D (t,y,x,2)"
 
         if displacement_field.shape[-1] != 2:
             return False, f"Last dimension must be 2 (x,y components), got {displacement_field.shape[-1]}"
@@ -228,7 +218,8 @@ class FTTCService:
 
         return True, ""
 
-    def validate_parameters(self, params: FTTCParameters) -> Tuple[bool, str]:
+    @staticmethod
+    def validate_parameters(params: FTTCParameters) -> Tuple[bool, str]:
         """
         Validate FTTC calculation parameters.
 
@@ -269,47 +260,10 @@ class FTTCService:
         if params.frame_interval <= 0:
             return False, "Frame interval must be positive"
 
+        if params.pixel_size <= 0:
+            return False, "Pixel size must be positive"
+
+        if params.downscale_factor < 1:
+            return False, "Downscale factor must be at least 1"
+
         return True, ""
-
-    def process_force_data(
-            self,
-            force_data: Dict[str, Any]
-    ) -> Tuple[np.ndarray, Dict[str, Any], List[str]]:
-        """
-        Process loaded force data into standardized format.
-
-        Parameters
-        ----------
-        force_data : Dict[str, Any]
-            Raw force data dictionary from file
-
-        Returns
-        -------
-        Tuple[np.ndarray, Dict[str, Any], List[str]]
-            (force_field, parameters, warnings)
-        """
-        warnings = []
-
-        # Validate basic structure
-        if 'force_field' not in force_data or 'parameters' not in force_data:
-            raise ValueError("Invalid force data format: missing required keys")
-
-        force_field = force_data['force_field']
-        parameters = force_data['parameters']
-
-        # Convert to numpy array if needed
-        if not isinstance(force_field, np.ndarray):
-            force_field = np.array(force_field)
-            warnings.append("Force field converted to numpy array")
-
-        # Validate shape
-        if force_field.ndim != 4 or force_field.shape[-1] != 2:
-            raise ValueError(f"Invalid force field shape: {force_field.shape}")
-
-        # Ensure parameters has required keys
-        required_params = ['pixel_size', 'young_modulus', 'poisson_ratio_substrate']
-        missing_params = [param for param in required_params if param not in parameters]
-        if missing_params:
-            raise ValueError(f"Missing required parameters: {missing_params}")
-
-        return force_field, parameters, warnings

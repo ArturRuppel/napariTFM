@@ -33,7 +33,7 @@ class DisplacementParameters:
 
 
 @dataclass
-class DisplacementCalculationResult:
+class DisplacementResult:
     """Results from displacement field calculation"""
     flow: np.ndarray  # Shape (t, y, x, 2) for time series, units in µm
     original_shape: tuple  # Original image shape (y, x)
@@ -76,7 +76,7 @@ class DisplacementService:
             reference: np.ndarray,
             target: np.ndarray,
             yield_intermediates: bool = False
-    ) -> Union[DisplacementCalculationResult, Generator[Tuple[np.ndarray, int, int], None, DisplacementCalculationResult]]:
+    ) -> Union[DisplacementResult, Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]]:
         """
         Calculate optical flow between reference and target image(s).
         Always returns flow with shape (t, y, x, 2) where t=1 for single frames.
@@ -92,7 +92,7 @@ class DisplacementService:
 
         Returns
         -------
-        Union[DisplacementCalculationResult, Generator]
+        Union[DisplacementResult, Generator]
             If yield_intermediates is False:
                 DisplacementCalculationResult containing final flow field
             If yield_intermediates is True:
@@ -144,7 +144,7 @@ class DisplacementService:
                 'time_interval_units': 'min',
             }
 
-            return DisplacementCalculationResult(
+            return DisplacementResult(
                 flow=flow_stack,
                 original_shape=reference.shape,
                 flow_shape=flow_stack.shape[1:3],
@@ -171,7 +171,7 @@ class DisplacementService:
                 'time_interval_units': 'min',
             }
 
-            return DisplacementCalculationResult(
+            return DisplacementResult(
                 flow=flow_stack,
                 original_shape=reference.shape,
                 flow_shape=flow_stack.shape[1:3],
