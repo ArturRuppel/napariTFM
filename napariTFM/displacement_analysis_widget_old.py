@@ -889,7 +889,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 'flows': flows,
                 'parameters': complete_params,
                 'original_shape': worker_results['original_shape'],
-                'flow_shape': flows[0].shape[:2],
+                'displacement_field_shape': flows[0].shape[:2],
                 'units': 'micrometers'
             }
 
@@ -999,7 +999,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                     'flows': displacement_data['flows'],
                     'parameters': displacement_data['parameters'],
                     'original_shape': displacement_data['flows'].shape[1:3],
-                    'flow_shape': displacement_data['flows'].shape[1:3],
+                    'displacement_field_shape': displacement_data['flows'].shape[1:3],
                     'units': 'micrometers'
                 }
 

@@ -979,7 +979,7 @@ class BatchAnalysis:
                 'flows': self._displacement_field,
                 'parameters': formatted_params,
                 'original_shape': self._preprocessed_reference.shape,
-                'flow_shape': self._displacement_field[0].shape[:2],
+                'displacement_field_shape': self._displacement_field[0].shape[:2],
                 'units': 'micrometers'
             })
             print("Displacement analysis results saved successfully")

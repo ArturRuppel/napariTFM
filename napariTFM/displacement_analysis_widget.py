@@ -379,7 +379,7 @@ class DisplacementController(QObject):
             moving = self.data_manager.preprocessed_bead_stack[current_frame]
 
             # Calculate displacement field
-            result = self.service.calculate_flow(reference, moving, params)
+            result = self.service.calculate_displacement_field(reference, moving, params)
 
             # Update visualization
             self.visualization_manager.visualize_displacement_preview(
@@ -454,7 +454,7 @@ class DisplacementController(QObject):
                     'flows': flow_stack,
                     'parameters': params,
                     'original_shape': results[0].original_shape,
-                    'flow_shape': results[0].flow_shape,
+                    'displacement_field_shape': results[0].displacement_field_shape,
                     'units': 'micrometers'
                 })
 

@@ -3,7 +3,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from time import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 from skimage.transform import rescale
 
 import numpy as np
@@ -13,7 +13,7 @@ from numpy._typing import NDArray
 
 from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
-from napariTFM.services.fttc_service import FTTCService, FTTCParameters
+from napariTFM.services.fttc_service import FTTCService, FTTCParameters, FTTCResult
 from napariTFM.services.msm_service import MSMService, MSMParameters
 from napariTFM.services.preprocessing_service import PreprocessingService, PreprocessingParameters
 
@@ -33,24 +33,33 @@ class TeeLogger:
         self.print_banner()
         self.log.write(f"Processing started at: {self.start_time}\n")
         self.log.write("-" * 50 + "\n\n")
+        self.terminal.write(f"Processing started at: {self.start_time}\n")
+        self.terminal.write("-" * 50 + "\n\n")
 
         # Log configuration parameters if provided
         if config:
             self.log.write("Analysis Parameters:\n")
             self.log.write("-" * 20 + "\n")
+            self.terminal.write("Analysis Parameters:\n")
+            self.terminal.write("-" * 20 + "\n")
 
             # Log analysis steps
             self.log.write("\nEnabled Analysis Steps:\n")
+            self.terminal.write("\nEnabled Analysis Steps:\n")
             for step, enabled in config.get('analysis_steps', {}).items():
                 self.log.write(f"- {step}: {'Yes' if enabled else 'No'}\n")
+                self.terminal.write(f"- {step}: {'Yes' if enabled else 'No'}\n")
 
             # Log key parameters
-            self.log.write("\nKey Parameters:\n")
+            self.log.write("\nKParameters:\n")
+            self.terminal.write("\nParameters:\n")
             params = config.get('parameters', {})
             for key, value in sorted(params.items()):
                 self.log.write(f"- {key}: {value}\n")
+                self.terminal.write(f"- {key}: {value}\n")
 
             self.log.write("\n" + "-" * 50 + "\n\n")
+            self.terminal.write("\n" + "-" * 50 + "\n\n")
 
     def print_banner(self):
         banner = '''
@@ -90,6 +99,12 @@ class TeeLogger:
         self.log.write(f"Started:  {self.start_time}\n")
         self.log.write(f"Finished: {end_time}\n")
         self.log.write(f"Duration: {duration}\n")
+
+        self.terminal.write("\n" + "-" * 50 + "\n")
+        self.terminal.write("Analysis Summary:\n")
+        self.terminal.write(f"Started:  {self.start_time}\n")
+        self.terminal.write(f"Finished: {end_time}\n")
+        self.terminal.write(f"Duration: {duration}\n")
 
         # Calculate hours, minutes, seconds for more readable format
         total_seconds = duration.total_seconds()
@@ -248,7 +263,7 @@ class BatchAnalysis:
                 print(f"Could not load mask data: {str(e)}")
                 return None
 
-            return self._execute_stress_analysis(tfm_folder, force_data, mask_data)
+            return self._execute_stress_analysis(tfm_folder, mask_data, force_data)
 
         except Exception as e:
             print(f"Stress analysis failed: {str(e)}")
@@ -332,18 +347,14 @@ class BatchAnalysis:
         displacement_service = DisplacementService(self._create_displacement_parameters())
 
         # Get the generator
-        flow_generator = displacement_service.calculate_flow(
-            preprocessed_data['reference'],
-            preprocessed_data['beads'],
-            yield_intermediates=True
-        )
+        displacement_field_generator = displacement_service.calculate_displacement_field(preprocessed_data['reference'], preprocessed_data['beads'], yield_intermediates=True)
 
         # Initialize result container
         try:
             while True:
                 # Get next intermediate result
-                flow, frame, total = next(flow_generator)
-                self._log_displacement_progress(flow, frame, total)
+                displacement_field, frame, total = next(displacement_field_generator)
+                self._log_displacement_progress(displacement_field, frame, total)
         except StopIteration as e:
             # Retrieve final result from generator's return value
             displacement_result = e.value
@@ -351,7 +362,7 @@ class BatchAnalysis:
         if displacement_result is None:
             raise RuntimeError("Displacement calculation failed")
 
-        # Save the flow field
+        # Save the displacement field
         np.save(str(tfm_folder / "displacements.npy"), displacement_result)
 
         print(f"Displacement analysis completed in {time() - start_time:.1f} seconds")
@@ -366,7 +377,7 @@ class BatchAnalysis:
 
         # Get the generator
         force_generator = fttc_service.calculate_forces(
-            displacement_data.flow,
+            displacement_data.displacement_field,
             yield_intermediates=True
         )
 
@@ -410,7 +421,7 @@ class BatchAnalysis:
         print(f"Mask creation completed in {time() - start_time:.1f} seconds")
         return masks
 
-    def _execute_stress_analysis(self, tfm_folder: Path, force_data: dict, mask_data: np.ndarray) -> Optional[dict]:
+    def _execute_stress_analysis(self, tfm_folder: Path, mask_data: np.ndarray, force_data: FTTCResult) -> Optional[dict]:
         """
         Execute stress analysis step using MSMService.
 
@@ -418,10 +429,10 @@ class BatchAnalysis:
         ----------
         tfm_folder : Path
             Path to the TFM data folder
-        force_data : dict
-            Dictionary containing force field data and parameters
         mask_data : np.ndarray
             3D array of masks (frames, height, width)
+        force_data : Optional[dict]
+            Dictionary containing force field data and parameters. If None, will attempt to load from file.
 
         Returns
         -------
@@ -432,50 +443,62 @@ class BatchAnalysis:
         start_time = time()
 
         params = self._create_msm_parameters()
+        msm_service = MSMService(params)
 
         try:
             # Initialize mesh generation
             print("Generating meshes for all frames...")
-            mesh_results = []
-            for nodes, elements, quality_metrics, frame, total in self.msm_service.generate_mesh_stack(
-                    mask_data, params):
-                # mesh_results.append(MeshResult(
-                #     nodes=nodes,
-                #     elements=elements,
-                #     quality_metrics=quality_metrics
-                # ))
-                self._log_mesh_progress({
-                    'mean_quality': quality_metrics['mean_quality'],
-                    'min_angle': quality_metrics['min_angle']
-                }, frame + 1, total)
+            mesh_generator = msm_service.generate_mesh_stack(mask_data)
+
+            # Store mesh data for all frames
+            mesh_data = []
+
+            # Process mesh generation results
+            try:
+                while True:
+                    nodes, elements, quality_metrics, frame, total = next(mesh_generator)
+                    mesh_data.append((nodes, elements, quality_metrics))
+                    self._log_mesh_progress({
+                        'mean_quality': quality_metrics['mean_quality'],
+                        'min_angle': quality_metrics['min_angle']
+                    }, frame + 1, total)
+            except StopIteration as e:
+                # Get the final mesh results if returned
+                final_mesh_results = e.value
+                if final_mesh_results:
+                    mesh_data = final_mesh_results
 
             # Calculate stress for each frame
             print("Calculating stress fields...")
-            stress_results = []
-            for result, frame, total in self.msm_service.calculate_stresses(force_data['forces'], params, mesh_results):
-                stress_results.append(result)
-                self._log_stress_progress(result, frame + 1, total)
+            # Get the generator
+            stress_generator = msm_service.calculate_stresses(
+                force_field=force_data.force_field,  # Access forces from the dictionary
+                masks=mask_data,
+                mesh_data=mesh_data,
+                yield_intermediates=True
+            )
 
-            # Prepare results dictionary
-            stress_data = {
-                'stress_tensors': np.stack([r.stress_tensor for r in stress_results]),
-                'nodes': [r.nodes for r in stress_results],
-                'elements': [r.elements for r in stress_results],
-                'condition_numbers': [r.condition_number for r in stress_results],
-                'residuals': [r.residual for r in stress_results],
-                'parameters': params.__dict__
-            }
+            # Process stress calculation results
+            try:
+                while True:
+                    stress_result, frame, total = next(stress_generator)
+                    self._log_stress_progress(stress_result, frame, total)
+            except StopIteration as e:
+                # Retrieve final result from generator's return value
+                final_result = e.value
+
+            if final_result is None:
+                raise RuntimeError("Stress calculation failed")
 
             # Save results
-            np.save(str(tfm_folder / "stress_results.npy"), stress_data)
+            np.save(str(tfm_folder / "stress_results.npy"), final_result)
 
             print(f"Stress analysis completed in {time() - start_time:.1f} seconds")
-            return stress_data
+            return final_result
 
         except Exception as e:
             print(f"Error during stress analysis: {str(e)}")
             return None
-
     def _create_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create preprocessing parameters from config."""
         return PreprocessingParameters(
@@ -544,10 +567,10 @@ class BatchAnalysis:
         )
 
     def _log_displacement_progress(self, result, frame, total):
-        flow_magnitude = np.sqrt(np.sum(result ** 2, axis=-1))
+        displacement_field_magnitude = np.sqrt(np.sum(result ** 2, axis=-1))
         print(f"Frame {frame}/{total}: "
-              f"Mean displacement: {np.mean(flow_magnitude):.2f} µm, "
-              f"Max displacement: {np.max(flow_magnitude):.2f} µm")
+              f"Mean displacement: {np.mean(displacement_field_magnitude):.2f} µm, "
+              f"Max displacement: {np.max(displacement_field_magnitude):.2f} µm")
 
     def _log_force_progress(self, result, frame, total):
         force_magnitude = np.sqrt(np.sum(result ** 2, axis=-1))

@@ -76,7 +76,7 @@ class DisplacementAnalyzer:
                 'arrow_scale': 1.0
             },
             'original_shape': reference.shape,
-            'flow_shape': flows[0].shape[:2],
+            'displacement_field_shape': flows[0].shape[:2],
             'units': 'micrometers'
         }
 

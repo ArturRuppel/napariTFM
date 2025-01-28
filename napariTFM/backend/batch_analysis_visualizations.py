@@ -5,6 +5,9 @@ import numpy as np
 from matplotlib import pyplot as plt
 from skimage.transform import resize
 
+from napariTFM.services.displacement_service import DisplacementResult
+from napariTFM.services.fttc_service import FTTCResult
+
 
 class BatchVisualizationSaver:
     """Handles saving visualizations for batch analysis results."""
@@ -86,8 +89,8 @@ class BatchVisualizationSaver:
 
         return legend_img
 
-    def save_displacement_visualization(self, displacement_results: dict, fps: int = 10) -> None:
-        flows = displacement_results['flows']
+    def save_displacement_visualization(self, displacement_results: DisplacementResult, fps: int = 10) -> None:
+        displacement_fields = displacement_results.displacement_fields
         params = displacement_results.get('parameters', {})
 
         downscale_factor = params['downscale_factor']
@@ -99,18 +102,18 @@ class BatchVisualizationSaver:
         vector_stride_scaled = vector_stride // downscale_factor
 
         frames = []
-        for flow in flows:
+        for displacement_field in displacement_fields:
             fig, (ax_map, ax_cbar) = plt.subplots(2, 1, figsize=(8, 10),
                                                   gridspec_kw={'height_ratios': [20, 1]})
 
             plt.rcParams.update({'font.size': 18, 'text.color': 'black'})
 
             # Calculate and display magnitude
-            magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
+            magnitude = np.sqrt(np.sum(displacement_field ** 2, axis=-1))
             im = ax_map.imshow(magnitude, cmap='viridis', vmin=0, vmax=d_max)
 
             # Sample points for vectors
-            h, w = flow.shape[:2]
+            h, w = displacement_field.shape[:2]
             y_points = np.arange(vector_stride_scaled // 2, h - vector_stride_scaled // 2, vector_stride_scaled)
             x_points = np.arange(vector_stride_scaled // 2, w - vector_stride_scaled // 2, vector_stride_scaled)
             Y, X = np.meshgrid(y_points, x_points, indexing='ij')
@@ -118,9 +121,9 @@ class BatchVisualizationSaver:
             # Get sampled magnitudes for coloring
             sampled_magnitude = magnitude[Y, X]
 
-            # Get flow components and scale them
-            U = flow[Y, X, 0] * vector_scale
-            V = flow[Y, X, 1] * vector_scale
+            # Get displacement_field components and scale them
+            U = displacement_field[Y, X, 0] * vector_scale
+            V = displacement_field[Y, X, 1] * vector_scale
 
             # Calculate magnitudes for vector filtering
             mask = sampled_magnitude > 0
@@ -153,9 +156,9 @@ class BatchVisualizationSaver:
         output_path = self.viz_folder / 'displacement_map.gif'
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, palettesize=256, loop=0)
 
-    def save_force_visualization(self, force_results: dict, fps: int = 10) -> None:
-        tx = force_results['tx']
-        ty = force_results['ty']
+    def save_force_visualization(self, force_results: FTTCResult, fps: int = 10) -> None:
+        tx = force_results.force_field[:,0,:,:]
+        ty = force_results.force_field[:,1,:,:]
         params = force_results.get('parameters', {})
 
         downscale_factor = params['downscale_factor']

@@ -306,7 +306,7 @@ class FTTCWidget(BaseAnalysisWidget):
                     'parameters': parameters,
                     'visualization_params': parameters['visualization_params'],
                     'original_shape': displacement_data['flows'].shape[1:3],
-                    'flow_shape': displacement_data['flows'].shape[1:3],
+                    'displacement_field_shape': displacement_data['flows'].shape[1:3],
                     'units': 'micrometers'
                 }
 
