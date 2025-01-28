@@ -91,9 +91,9 @@ class BatchVisualizationSaver:
         params = displacement_results.get('parameters', {})
 
         downscale_factor = params['downscale_factor']
-        d_max = params['visualization_params']['d_max']
-        arrow_scale = params['visualization_params']['arrow_scale']
-        vector_stride = params['visualization_params']['vector_stride']
+        d_max = params['d_max']
+        arrow_scale = params['disp_arrow_scale']
+        vector_stride = params['disp_vector_stride']
 
         vector_scale = arrow_scale / d_max * 50 / downscale_factor
         vector_stride_scaled = vector_stride // downscale_factor

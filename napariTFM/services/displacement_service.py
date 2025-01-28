@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any, List, Generator
+from typing import Optional, Tuple, Dict, Any, List, Generator, Union
 import numpy as np
 from skimage.transform import resize
 
@@ -28,27 +28,32 @@ class DisplacementParameters:
 
     # Visualization parameters
     d_max: float
-    vector_stride: int
-    arrow_scale: float
+    disp_vector_stride: int
+    disp_arrow_scale: float
 
 
 @dataclass
 class DisplacementCalculationResult:
     """Results from displacement field calculation"""
-    flow: np.ndarray
-    original_shape: tuple
-    flow_shape: tuple
+    flow: np.ndarray  # Shape (t, y, x, 2) for time series, units in µm
+    original_shape: tuple  # Original image shape (y, x)
+    flow_shape: tuple  # Flow field shape (y, x)
     parameters: DisplacementParameters
+    physical_scale: dict  # Dictionary containing physical scaling information
 
 
 class DisplacementService:
     """Service layer handling business logic for displacement analysis."""
 
-    def __init__(self):
-        self.analyzer = None
+    def __init__(self, params: DisplacementParameters):
+        """
+        Initialize the displacement service with analysis parameters.
 
-    def _ensure_analyzer(self, params: DisplacementParameters):
-        """Ensure analyzer exists with current parameters."""
+        Parameters
+        ----------
+        params : DisplacementParameters
+            Parameters for the displacement analysis
+        """
         tvl1_params = TVL1Parameters(
             tau=params.tau,
             lambda_=params.lambda_,
@@ -64,166 +69,112 @@ class DisplacementService:
         )
 
         self.analyzer = DisplacementAnalyzer(tvl1_params)
-
-    def process_image_data(self, image_data: np.ndarray) -> tuple[np.ndarray, list[str]]:
-        """
-        Process image data with validation and normalization.
-
-        Args:
-            image_data: Input image data array
-
-        Returns:
-            Tuple of (processed_image_data, warning_messages)
-        """
-        warnings = []
-
-        if image_data is None:
-            raise ValueError("No image data provided")
-
-        # Convert to float and normalize if needed
-        if image_data.dtype != np.float32:
-            image_data = image_data.astype(np.float32)
-            warnings.append("Image data converted to float32")
-
-        # If single image, add time dimension
-        if image_data.ndim == 2:
-            image_data = image_data[np.newaxis, ...]
-            warnings.append("Single image expanded to 3D array")
-
-        # Ensure we have a 3D array (time, height, width)
-        if image_data.ndim != 3:
-            raise ValueError(f"Image data must be 2D or 3D, got shape {image_data.shape}")
-
-        return image_data, warnings
+        self.params = params
 
     def calculate_flow(
             self,
             reference: np.ndarray,
-            moving: np.ndarray,
-            params: DisplacementParameters
-    ) -> DisplacementCalculationResult:
-        """Calculate optical flow between reference and moving image."""
-        self._ensure_analyzer(params)
-
-        # Calculate flow in pixels
-        flow_pixels = self.analyzer.calculate_flow(reference, moving)
-
-        # Apply downscaling if needed
-        if params.downscale_factor > 1:
-            flow_pixels = self.analyzer.downscale_flow(flow_pixels, params.downscale_factor)
-
-        # Convert to physical units
-        flow = flow_pixels * params.pixel_size
-
-        return DisplacementCalculationResult(
-            flow=flow,
-            original_shape=reference.shape,
-            flow_shape=flow.shape[:2],
-            parameters=params
-        )
-
-    def calculate_flow_stack(
-            self,
-            reference: np.ndarray,
-            bead_stack: np.ndarray,
-            params: DisplacementParameters
-    ) -> Generator[Tuple[DisplacementCalculationResult, int, int], None, List[DisplacementCalculationResult]]:
+            target: np.ndarray,
+            yield_intermediates: bool = False
+    ) -> Union[DisplacementCalculationResult, Generator[Tuple[np.ndarray, int, int], None, DisplacementCalculationResult]]:
         """
-        Calculate flow for all frames as a generator that yields intermediate results.
+        Calculate optical flow between reference and target image(s).
+        Always returns flow with shape (t, y, x, 2) where t=1 for single frames.
 
         Parameters
         ----------
         reference : np.ndarray
-            Reference image
-        bead_stack : np.ndarray
-            Stack of bead images
-        params : DisplacementParameters
-            Analysis parameters
-
-        Yields
-        ------
-        Tuple[DisplacementCalculationResult, int, int]
-            (result, current_frame, total_frames)
-            Yields each frame's flow calculation along with progress information
+            Reference image (2D)
+        target : np.ndarray
+            Target image(s) - will be converted to 3D (t, y, x) if 2D
+        yield_intermediates : bool
+            If True, yields (flow, current_frame, total_frames) tuples during calculation
 
         Returns
         -------
-        List[DisplacementCalculationResult]
-            Complete list of results for all frames
+        Union[DisplacementCalculationResult, Generator]
+            If yield_intermediates is False:
+                DisplacementCalculationResult containing final flow field
+            If yield_intermediates is True:
+                Generator yielding (intermediate_flow, frame_index, total_frames) during calculation
+                and returning final DisplacementCalculationResult when exhausted
         """
-        self._ensure_analyzer(params)
+        # Ensure target is 3D
+        if target.ndim == 2:
+            target = target[np.newaxis, ...]
 
-        # Handle 2D input
-        if bead_stack.ndim == 2:
-            bead_stack = bead_stack[np.newaxis, ...]
+        total_frames = target.shape[0]
 
-        total_frames = bead_stack.shape[0]
-        all_results = []
+        # Calculate output shape based on downscaling
+        if self.params.downscale_factor > 1:
+            flow_shape = (
+                total_frames,
+                target.shape[1] // self.params.downscale_factor,
+                target.shape[2] // self.params.downscale_factor,
+                2
+            )
+        else:
+            flow_shape = (total_frames, target.shape[1], target.shape[2], 2)
 
-        for frame in range(total_frames):
-            # Calculate flow for current frame
-            result = self.calculate_flow(reference, bead_stack[frame], params)
-            all_results.append(result)
+        flow_stack = np.zeros(flow_shape, dtype=np.float32)
 
-            # Yield intermediate results
-            yield result, frame, total_frames
+        def calculate_with_intermediates():
+            # Calculate flow for each frame
+            for frame in range(total_frames):
+                # Calculate flow in pixels
+                flow_pixels = self.analyzer.calculate_flow(reference, target[frame])
 
-        return all_results
+                # Apply downscaling if needed
+                if self.params.downscale_factor > 1:
+                    flow_pixels = self.analyzer.downscale_flow(flow_pixels, self.params.downscale_factor)
 
-    def validate_parameters(self, params: DisplacementParameters) -> Tuple[bool, str]:
-        """Validate displacement analysis parameters."""
-        if params.tau <= 0:
-            return False, "Tau must be positive"
+                # Convert to physical units (µm)
+                flow_stack[frame] = flow_pixels * self.params.pixel_size
 
-        if params.lambda_ <= 0:
-            return False, "Lambda must be positive"
+                # Yield intermediate result with progress info
+                yield flow_stack[frame].copy(), frame + 1, total_frames
 
-        if not 0 < params.theta <= 1:
-            return False, "Theta must be between 0 and 1"
+            # Create physical scale information
+            physical_scale = {
+                'pixel_size': self.params.pixel_size,
+                'grid_spacing': self.params.pixel_size * self.params.downscale_factor,
+                'time_interval': self.params.frame_interval,
+                'displacement_units': 'µm',
+                'grid_spacing_units': 'µm',
+                'time_interval_units': 'min',
+            }
 
-        if params.nscales < 1:
-            return False, "Number of scales must be at least 1"
+            return DisplacementCalculationResult(
+                flow=flow_stack,
+                original_shape=reference.shape,
+                flow_shape=flow_stack.shape[1:3],
+                parameters=self.params,
+                physical_scale=physical_scale
+            )
 
-        if params.warps < 1:
-            return False, "Number of warps must be at least 1"
+        if yield_intermediates:
+            return calculate_with_intermediates()
+        else:
+            # Calculate without yielding intermediates
+            for frame in range(total_frames):
+                flow_pixels = self.analyzer.calculate_flow(reference, target[frame])
+                if self.params.downscale_factor > 1:
+                    flow_pixels = self.analyzer.downscale_flow(flow_pixels, self.params.downscale_factor)
+                flow_stack[frame] = flow_pixels * self.params.pixel_size
 
-        if params.epsilon <= 0:
-            return False, "Epsilon must be positive"
+            physical_scale = {
+                'pixel_size': self.params.pixel_size,
+                'grid_spacing': self.params.pixel_size * self.params.downscale_factor,
+                'time_interval': self.params.frame_interval,
+                'displacement_units': 'µm',
+                'grid_spacing_units': 'µm',
+                'time_interval_units': 'min',
+            }
 
-        if params.inner_iterations < 1:
-            return False, "Inner iterations must be at least 1"
-
-        if params.outer_iterations < 1:
-            return False, "Outer iterations must be at least 1"
-
-        if not 0 < params.scale_step < 1:
-            return False, "Scale step must be between 0 and 1"
-
-        if params.median_filtering < 1 or params.median_filtering % 2 == 0:
-            return False, "Median filtering size must be odd and at least 1"
-
-        if params.downscale_factor < 1:
-            return False, "Downscale factor must be at least 1"
-
-        if params.pixel_size <= 0:
-            return False, "Pixel size must be positive"
-
-        if params.frame_interval <= 0:
-            return False, "Frame interval must be positive"
-
-        if params.d_max <= 0:
-            return False, "Maximum displacement must be positive"
-
-        if params.vector_stride < 1:
-            return False, "Vector stride must be at least 1"
-
-        if params.arrow_scale <= 0:
-            return False, "Arrow scale must be positive"
-
-        return True, ""
-
-    def apply_flow_to_image(self, image: np.ndarray, flow: np.ndarray) -> np.ndarray:
-        """Apply flow field to deform an image."""
-        if self.analyzer is None:
-            self.analyzer = DisplacementAnalyzer()
-        return self.analyzer.apply_flow(image, flow)
+            return DisplacementCalculationResult(
+                flow=flow_stack,
+                original_shape=reference.shape,
+                flow_shape=flow_stack.shape[1:3],
+                parameters=self.params,
+                physical_scale=physical_scale
+            )

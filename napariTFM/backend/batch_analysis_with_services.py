@@ -114,7 +114,6 @@ class BatchAnalysis:
     def __init__(self, config: dict):
         self.config = config
         self.preprocessing_service = PreprocessingService()
-        self.displacement_service = DisplacementService()
         self.fttc_service = FTTCService()
         self.msm_service = MSMService()
         self._tee_logger = None
@@ -136,25 +135,24 @@ class BatchAnalysis:
 
             # Handle preprocessing
             preprocessed_data = self._handle_preprocessing_execution(folder, tfm_folder)
+            self._handle_visualization(tfm_folder, viz_saver, 'preprocessing', preprocessed_data)
 
             # Handle displacement
             displacement_data = self._handle_displacement_execution(tfm_folder, preprocessed_data)
+            self._handle_visualization(tfm_folder, viz_saver, 'displacement', displacement_data)
 
             # Handle force analysis
             force_data = self._handle_force_execution(tfm_folder, displacement_data)
+            self._handle_visualization(tfm_folder, viz_saver, 'force', force_data)
 
             # Handle mask creation
             mask_data = self._handle_mask_creation(tfm_folder)
 
             # Handle stress analysis
             stress_data = self._handle_stress_execution(tfm_folder, mask_data, force_data)
+            self._handle_visualization(tfm_folder, viz_saver, 'stress', stress_data)
 
-            # Generate visualizations
-            # TODO refactor method to extract mesh params from stress data
-            self._generate_visualizations(viz_saver, preprocessed_data, displacement_data,
-                                          force_data, stress_data)
-
-            print("\nFolder processing completed successfully!")
+            print("Folder processing completed successfully!")
             print("=" * 50)
 
         finally:
@@ -178,7 +176,7 @@ class BatchAnalysis:
 
         try:
             if preprocessed_data is None:
-                print("\nLoading preprocessed images from file...")
+                print("Loading preprocessed images from file...")
                 try:
                     preprocessed_bead_stack = tifffile.imread(str(tfm_folder / "preprocessed_beads.tif"))
                     preprocessed_reference = tifffile.imread(str(tfm_folder / "preprocessed_reference.tif"))
@@ -238,14 +236,14 @@ class BatchAnalysis:
 
         try:
             if force_data is None:
-                print("\nLoading force data from file...")
+                print("Loading force data from file...")
                 try:
                     force_data = np.load(str(tfm_folder / "traction_forces.npy"), allow_pickle=True).item()
                 except Exception as e:
                     print(f"Could not load force data: {str(e)}")
                     return None
 
-            print("\nLoading mask data...")
+            print("Loading mask data...")
             try:
                 if mask_data is None:
                     mask_data = tifffile.imread(str(tfm_folder / "masks.tif"))
@@ -262,7 +260,7 @@ class BatchAnalysis:
     def _execute_preprocessing(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
         """Execute preprocessing step using PreprocessingService."""
 
-        print("\nStarting Preprocessing...")
+        print("Starting Preprocessing...")
         start_time = time()
         params = self._create_preprocessing_parameters()
         self.preprocessing_service.update_parameters(params)
@@ -290,7 +288,7 @@ class BatchAnalysis:
         # Process cell images if available
         cell_results = []
         if cell_stack is not None:
-            print("\nProcessing cell images...")
+            print("Processing cell images...")
             for result, frame, total in self.preprocessing_service.preprocess_stack(cell_stack, reference_image=None, is_cell=True):
                 cell_results.append(result)
                 print(f"Progress (cells): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
@@ -332,28 +330,35 @@ class BatchAnalysis:
         return preprocessed
 
     def _execute_displacement_analysis(self, tfm_folder: Path, preprocessed_data: Optional[dict]) -> Optional[dict]:
-        """Execute displacement analysis step using DisplacementService."""
-        print("\nStarting Displacement Analysis...")
+        print("Starting Displacement Analysis...")
         start_time = time()
-        params = self._create_displacement_parameters()
-        results = []
+        displacement_service = DisplacementService(self._create_displacement_parameters())
 
-        for result, frame, total in self.displacement_service.calculate_flow_stack(
-                preprocessed_data['reference'],
-                preprocessed_data['beads'],
-                params
-        ):
-            results.append(result)
-            self._log_displacement_progress(result, frame, total)
+        # Get the generator
+        flow_generator = displacement_service.calculate_flow(
+            preprocessed_data['reference'],
+            preprocessed_data['beads'],
+            yield_intermediates=True
+        )
 
-        displacement_data = {
-            'flows': np.stack([r.flow for r in results]),
-            'parameters': params.__dict__
-        }
-        np.save(str(tfm_folder / "displacements.npy"), displacement_data)
+        # Initialize result container
+        try:
+            while True:
+                # Get next intermediate result
+                flow, frame, total = next(flow_generator)
+                self._log_displacement_progress(flow, frame, total)
+        except StopIteration as e:
+            # Retrieve final result from generator's return value
+            displacement_result = e.value
+
+        if displacement_result is None:
+            raise RuntimeError("Displacement calculation failed")
+
+        # Save the flow field
+        np.save(str(tfm_folder / "displacements.npy"), displacement_result)
 
         print(f"Displacement analysis completed in {time() - start_time:.1f} seconds")
-        return displacement_data
+        return displacement_result
 
     def _execute_force_analysis(self, tfm_folder: Path, displacement_data: Optional[dict]) -> Optional[dict]:
         """Execute force analysis step using FTTCService."""
@@ -393,7 +398,7 @@ class BatchAnalysis:
 
     def _execute_mask_creation(self, tfm_folder: Path, cell_images: np.ndarray) -> NDArray[int]:
         """Execute mask creation step using MSMService."""
-        print("\nStarting Mask Creation...")
+        print("Starting Mask Creation...")
         start_time = time()
 
         params = self._create_msm_parameters()
@@ -431,7 +436,7 @@ class BatchAnalysis:
         Optional[dict]
             Dictionary containing stress tensors and parameters, or None if analysis fails
         """
-        print("\nStarting Stress Analysis...")
+        print("Starting Stress Analysis...")
         start_time = time()
 
         params = self._create_msm_parameters()
@@ -453,7 +458,7 @@ class BatchAnalysis:
                 }, frame + 1, total)
 
             # Calculate stress for each frame
-            print("\nCalculating stress fields...")
+            print("Calculating stress fields...")
             stress_results = []
             for result, frame, total in self.msm_service.calculate_stress_stack(
                     force_data['forces'],
@@ -483,6 +488,7 @@ class BatchAnalysis:
         except Exception as e:
             print(f"Error during stress analysis: {str(e)}")
             return None
+
     def _create_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create preprocessing parameters from config."""
         return PreprocessingParameters(
@@ -512,8 +518,8 @@ class BatchAnalysis:
             pixel_size=self.config['parameters']['pixel_size'],
             frame_interval=self.config['parameters']['frame_interval'],
             d_max=self.config['parameters']['d_max'],
-            vector_stride=self.config['parameters']['disp_vector_stride'],
-            arrow_scale=self.config['parameters']['disp_arrow_scale']
+            disp_vector_stride=self.config['parameters']['disp_vector_stride'],
+            disp_arrow_scale=self.config['parameters']['disp_arrow_scale']
         )
 
     def _create_fttc_parameters(self) -> FTTCParameters:
@@ -548,7 +554,7 @@ class BatchAnalysis:
         )
 
     def _log_displacement_progress(self, result, frame, total):
-        flow_magnitude = np.sqrt(np.sum(result.flow ** 2, axis=-1))
+        flow_magnitude = np.sqrt(np.sum(result ** 2, axis=-1))
         print(f"Frame {frame}/{total}: "
               f"Mean displacement: {np.mean(flow_magnitude):.2f} µm, "
               f"Max displacement: {np.max(flow_magnitude):.2f} µm")
@@ -595,34 +601,124 @@ class BatchAnalysis:
 
         return tfm_folder
 
-    def _generate_visualizations(self, viz_saver: BatchVisualizationSaver,
-                                 preprocessed_data: Optional[dict],
-                                 displacement_data: Optional[dict],
-                                 force_data: Optional[dict],
-                                 mesh_data: Optional[dict],
-                                 stress_data: Optional[dict]) -> None:
-        """Generate all requested visualizations using BatchVisualizationSaver."""
-        if self.config['visualizations']['bead_overlay'] and preprocessed_data:
-            viz_saver.save_bead_overlay(preprocessed_data['beads'], preprocessed_data['reference'])
+    def _handle_visualization(self, tfm_folder: Path, viz_saver: BatchVisualizationSaver, step: str,
+                              current_data: Optional[dict] = None) -> None:
+        """
+        Handle visualizations for each analysis step, loading data from files if needed.
 
-        if self.config['visualizations']['displacement_map'] and displacement_data:
-            viz_saver.save_displacement_visualization(displacement_data)
+        Parameters
+        ----------
+        tfm_folder : Path
+            Path to the TFM data folder
+        viz_saver : BatchVisualizationSaver
+            Visualization saver instance
+        step : str
+            Current analysis step ('preprocessing', 'displacement', 'force', 'stress')
+        current_data : Optional[dict]
+            Data from the current analysis step, if available
+        """
+        # Map analysis steps to their visualization flags
+        viz_map = {
+            'preprocessing': 'bead_overlay',
+            'displacement': 'displacement_map',
+            'force': ['force_map', 'force_cell_overlay'],
+            'stress': ['sigma_xx', 'sigma_yy', 'normal_stress', 'mesh']
+        }
 
-        if self.config['visualizations']['force_map'] and force_data:
-            viz_saver.save_force_visualization(force_data)
+        viz_flags = viz_map.get(step, [])
+        if isinstance(viz_flags, str):
+            viz_flags = [viz_flags]
 
-        if self.config['visualizations']['mesh'] and mesh_data:
-            viz_saver.save_mesh_visualization(mesh_data['masks'], mesh_data['mesh_results'])
+        # Check if any visualization is enabled for this step
+        if not any(self.config['visualizations'].get(flag, False) for flag in viz_flags):
+            return
 
-        if any([self.config['visualizations']['sigma_xx'],
-                self.config['visualizations']['sigma_yy'],
-                self.config['visualizations']['normal_stress']]) and stress_data:
-            viz_saver.save_stress_visualization(
-                stress_data,
-                plot_sigma_xx=self.config['visualizations']['sigma_xx'],
-                plot_sigma_yy=self.config['visualizations']['sigma_yy'],
-                plot_normal_stress=self.config['visualizations']['normal_stress']
-            )
+        try:
+            data = current_data
+            if data is None:
+                # Try to load data from files based on step
+                if step == 'preprocessing':
+                    try:
+                        data = {
+                            'beads': tifffile.imread(str(tfm_folder / "preprocessed_beads.tif")),
+                            'reference': tifffile.imread(str(tfm_folder / "preprocessed_reference.tif"))
+                        }
+                    except Exception as e:
+                        print(f"Could not load preprocessed files for visualization: {str(e)}")
+                        return
+
+                elif step == 'displacement':
+                    try:
+                        data = np.load(str(tfm_folder / "displacements.npy"), allow_pickle=True).item()
+                    except Exception as e:
+                        print(f"Could not load displacement data for visualization: {str(e)}")
+                        return
+
+                elif step == 'force':
+                    try:
+                        data = np.load(str(tfm_folder / "traction_forces.npy"), allow_pickle=True).item()
+                    except Exception as e:
+                        print(f"Could not load force data for visualization: {str(e)}")
+                        return
+
+                elif step == 'stress':
+                    try:
+                        data = np.load(str(tfm_folder / "stress_results.npy"), allow_pickle=True).item()
+                        if self.config['visualizations']['mesh']:
+                            # Load masks for mesh visualization if needed
+                            masks = tifffile.imread(str(tfm_folder / "masks.tif"))
+                            data['masks'] = masks
+                    except Exception as e:
+                        print(f"Could not load stress/mask data for visualization: {str(e)}")
+                        return
+
+            if data is None:
+                print(f"No data available for {step} visualization")
+                return
+
+            # Generate visualizations based on enabled flags
+            if step == 'preprocessing' and self.config['visualizations']['bead_overlay']:
+                print("Generating bead overlay visualization...")
+                viz_saver.save_bead_overlay(data['beads'], data['reference'])
+
+            elif step == 'displacement' and self.config['visualizations']['displacement_map']:
+                print("Generating displacement map visualization...")
+                viz_saver.save_displacement_visualization(data)
+
+            elif step == 'force':
+                if self.config['visualizations']['force_map']:
+                    print("Generating force map visualization...")
+                    viz_saver.save_force_visualization(data)
+
+                if self.config['visualizations']['force_cell_overlay']:
+                    print("Generating force-cell overlay visualization...")
+                    try:
+                        cell_images = tifffile.imread(str(tfm_folder / "preprocessed_cells.tif"))
+                        viz_saver.save_force_cell_overlay(data, cell_images)
+                    except Exception as e:
+                        print(f"Could not generate force-cell overlay: {str(e)}")
+
+            elif step == 'stress':
+                if any(self.config['visualizations'][flag] for flag in ['sigma_xx', 'sigma_yy', 'normal_stress']):
+                    print("Generating stress visualization...")
+                    viz_saver.save_stress_visualization(
+                        data,
+                        plot_sigma_xx=self.config['visualizations']['sigma_xx'],
+                        plot_sigma_yy=self.config['visualizations']['sigma_yy'],
+                        plot_normal_stress=self.config['visualizations']['normal_stress']
+                    )
+
+                if self.config['visualizations']['mesh'] and 'masks' in data:
+                    print("Generating mesh visualization...")
+                    viz_saver.save_mesh_visualization(
+                        data['masks'],
+                        density_factor=self.config['parameters']['density_factor'],
+                        algorithm=6 if self.config['parameters']['mesh_algorithm'] == 'Frontal-Del.' else 1,
+                        use_optimization=self.config['parameters']['use_optimization']
+                    )
+
+        except Exception as e:
+            print(f"Error generating {step} visualization: {str(e)}")
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'BatchAnalysis':

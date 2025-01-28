@@ -4,9 +4,9 @@ root_folders:
 
 
 analysis_steps:
-  create_masks: false
-  displacement: false
-  force: false
+  create_masks: true
+  displacement: true
+  force: true
   preprocessing: false
   stress: true
 input_files:
