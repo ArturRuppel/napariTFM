@@ -122,7 +122,7 @@ class BatchAnalysis:
         viz_saver = BatchVisualizationSaver(folder)
 
         try:
-            print(f"\nProcessing folder: {folder_path}")
+            print(f"Processing folder: {folder_path}")
             print("=" * 50)
 
             # Handle preprocessing
@@ -153,7 +153,6 @@ class BatchAnalysis:
             return None
 
         try:
-            print("\nExecuting preprocessing step...")
             return self._execute_preprocessing(folder, tfm_folder)
         except Exception as e:
             print(f"Preprocessing failed: {str(e)}")
@@ -178,7 +177,6 @@ class BatchAnalysis:
                     print(f"Could not load preprocessed files: {str(e)}")
                     return None
 
-            print("\nExecuting displacement analysis step...")
             return self._execute_displacement_analysis(tfm_folder, preprocessed_data)
         except Exception as e:
             print(f"Displacement analysis failed: {str(e)}")
@@ -191,14 +189,12 @@ class BatchAnalysis:
 
         try:
             if displacement_data is None:
-                print("\nLoading displacement data from file...")
+                print("Loading displacement data from file...")
                 try:
                     displacement_data = np.load(str(tfm_folder / "displacements.npy"), allow_pickle=True).item()
                 except Exception as e:
                     print(f"Could not load displacement data: {str(e)}")
                     return None
-
-            print("\nExecuting force analysis step...")
             return self._execute_force_analysis(tfm_folder, displacement_data)
         except Exception as e:
             print(f"Force analysis failed: {str(e)}")
@@ -217,8 +213,6 @@ class BatchAnalysis:
                 except Exception as e:
                     print(f"Could not load force data: {str(e)}")
                     return None, None
-
-            print("\nExecuting mesh and stress analysis steps...")
             return self._execute_stress_analysis(folder, tfm_folder, force_data)
         except Exception as e:
             print(f"Mesh/stress analysis failed: {str(e)}")
@@ -396,7 +390,7 @@ class BatchAnalysis:
     def _execute_force_analysis(self, tfm_folder: Path, displacement_data: Optional[dict]) -> Optional[dict]:
         """Execute force analysis step using FTTCService."""
 
-        print("\nStarting Force Analysis...")
+        print("Starting Force Analysis...")
         start_time = time()
 
         params = self._create_fttc_parameters()
@@ -409,9 +403,21 @@ class BatchAnalysis:
                 self.config['parameters']['downscale_factor']
         ):
             force_results.append(result)
-            self._log_force_progress(result, frame, total)
+            # Update progress logging to use the result object
+            magnitude = np.sqrt(np.sum(result.force_field ** 2, axis=-1))
+            progress_info = {
+                'frame': frame - 1,
+                'mean_force': np.mean(magnitude),
+                'max_force': np.max(magnitude),
+                'median_force': np.median(magnitude)
+            }
+            self._log_force_progress(progress_info, frame, total)
 
-        force_data = self._prepare_force_data(force_results, params)
+        force_data = {
+            'forces': np.stack([r.force_field for r in force_results]),
+            'parameters': params.__dict__
+        }
+
         np.save(str(tfm_folder / "traction_forces.npy"), force_data)
 
         print(f"Force analysis completed in {time() - start_time:.1f} seconds")
@@ -419,7 +425,7 @@ class BatchAnalysis:
 
     def _execute_stress_analysis(self, folder: Path, tfm_folder: Path, force_data: Optional[dict]) -> Tuple[Optional[dict], Optional[dict]]:
         """Execute mesh generation and stress analysis steps using MSMService."""
-        print("\nStarting Mesh and Stress Analysis...")
+        print("Starting Mesh and Stress Analysis...")
         start_time = time()
 
         params = self._create_msm_parameters()

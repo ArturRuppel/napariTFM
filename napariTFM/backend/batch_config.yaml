@@ -5,9 +5,9 @@ root_folders:
 
 analysis_steps:
   create_masks: true
-  displacement: true
+  displacement: false
   force: true
-  preprocessing: true
+  preprocessing: false
   stress: true
 input_files:
   beads: beads.tif

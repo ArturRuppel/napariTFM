@@ -103,11 +103,9 @@ class FTTCService:
             downscale_factor: int = 1,
             regularization: Optional[float] = None,
             use_gcv: bool = False
-    ) -> Generator[Tuple[Dict[str, Any], int, int], None, Dict[str, Any]]:
+    ) -> Generator[Tuple[FTTCCalculationResult, int, int], None, List[FTTCCalculationResult]]:
         """
         Calculate forces for all frames in the displacement stack.
-
-        Yields progress updates and returns final results.
 
         Parameters
         ----------
@@ -124,19 +122,19 @@ class FTTCService:
 
         Yields
         ------
-        Tuple[Dict[str, Any], int, int]
-            (progress_info, current_frame, total_frames)
+        Tuple[FTTCCalculationResult, int, int]
+            (result, current_frame, total_frames)
 
         Returns
         -------
-        Dict[str, Any]
-            Complete force calculation results
+        List[FTTCCalculationResult]
+            Complete list of results for all frames
         """
         if self.calculator is None:
             raise RuntimeError("Calculator not initialized. Call initialize_calculator first.")
 
         total_frames = len(displacement_field)
-        force_results = {'tx': [], 'ty': []}
+        all_results = []
 
         for frame_idx in range(total_frames):
             # Calculate forces for current frame
@@ -148,27 +146,22 @@ class FTTCService:
                 use_gcv=use_gcv
             )
 
-            force_results['tx'].append(tx)
-            force_results['ty'].append(ty)
-
-            # Calculate magnitude for progress statistics
+            # Calculate magnitude for statistics
             magnitude = np.sqrt(tx ** 2 + ty ** 2)
 
-            # Create progress info
-            progress_info = {
-                'frame': frame_idx,
-                'mean_force': np.mean(magnitude),
-                'max_force': np.max(magnitude),
-                'median_force': np.median(magnitude)
-            }
+            # Create result object
+            force_field = np.stack([tx, ty], axis=-1)
+            result = FTTCCalculationResult(
+                force_field=force_field,
+                condition_number=self.calculator.last_condition_number if hasattr(self.calculator, 'last_condition_number') else 0.0,
+                residual=self.calculator.last_residual if hasattr(self.calculator, 'last_residual') else 0.0,
+                parameters=self.calculator.parameters if hasattr(self.calculator, 'parameters') else None
+            )
 
-            yield progress_info, frame_idx + 1, total_frames
+            all_results.append(result)
+            yield result, frame_idx + 1, total_frames
 
-        # Convert lists to arrays for final results
-        force_results['tx'] = np.stack(force_results['tx'])
-        force_results['ty'] = np.stack(force_results['ty'])
-
-        return force_results
+        return all_results
 
     def find_optimal_regularization(
             self,
