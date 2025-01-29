@@ -81,75 +81,72 @@ class VisualizationManager(ErrorHandlingMixin):
                 pass
             self._displacement_dims_callback = None
 
-    def update_preprocessing_visualization(self, results: Dict) -> None:
-        """
-        Update visualization after preprocessing.
+    def update_preprocessing_visualization(self) -> None:
+        """Update visualization after preprocessing."""
+        try:
+            # Clear any existing layers first
+            if 'Preprocessed Beads' in self.viewer.layers:
+                self.viewer.layers.remove('Preprocessed Beads')
+            if 'Preprocessed Reference' in self.viewer.layers:
+                self.viewer.layers.remove('Preprocessed Reference')
+            if 'Preprocessed Cells' in self.viewer.layers:
+                self.viewer.layers.remove('Preprocessed Cells')
+            if 'Bead Overlay' in self.viewer.layers:
+                self.viewer.layers.remove('Bead Overlay')
 
-        Parameters
-        ----------
-        results : dict
-            Dictionary containing preprocessing results
-        """
-        if 'beads' in results and 'reference' in results:
-            processed_beads, _ = results['beads']
-            processed_reference, _ = results['reference']
-            if processed_beads is not None and processed_reference is not None:
-                # Create the bead-reference overlay
-                self.create_bead_overlay(processed_beads, processed_reference)
+            # Create bead-reference overlay if both are available
+            if (self.data_manager.preprocessed_bead_stack is not None and
+                    self.data_manager.preprocessed_reference is not None):
+                self.create_bead_overlay()
 
-        # Keep all existing visualization code exactly the same
-        if 'beads' in results:
-            processed_beads, _ = results['beads']
-            if processed_beads is not None:
-                if 'Preprocessed Beads' in self.viewer.layers:
-                    self.viewer.layers.remove('Preprocessed Beads')
+            # Add individual layers
+            if self.data_manager.preprocessed_bead_stack is not None:
                 self.viewer.add_image(
-                    processed_beads,
+                    self.data_manager.preprocessed_bead_stack,
                     name='Preprocessed Beads',
                     colormap='green',
                     visible=True
                 )
 
-        if 'reference' in results:
-            processed_reference, _ = results['reference']
-            if processed_reference is not None:
-                if 'Preprocessed Reference' in self.viewer.layers:
-                    self.viewer.layers.remove('Preprocessed Reference')
+            if self.data_manager.preprocessed_reference is not None:
                 self.viewer.add_image(
-                    processed_reference,
+                    self.data_manager.preprocessed_reference,
                     name='Preprocessed Reference',
                     colormap='magenta',
                     visible=True
                 )
 
-        if 'cells' in results:
-            processed_cells, _ = results['cells']
-            if processed_cells is not None:
-                if 'Preprocessed Cells' in self.viewer.layers:
-                    self.viewer.layers.remove('Preprocessed Cells')
+            if self.data_manager.preprocessed_cell_stack is not None:
                 self.viewer.add_image(
-                    processed_cells,
+                    self.data_manager.preprocessed_cell_stack,
                     name='Preprocessed Cells',
                     colormap='gray',
                     visible=True
                 )
 
-    def create_bead_overlay(self, bead_stack: np.ndarray, reference_image: np.ndarray) -> None:
-        """Create combined bead-reference overlay layer.
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to update preprocessing visualization",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check data availability and consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
 
-        Parameters
-        ----------
-        bead_stack : np.ndarray
-            Preprocessed bead stack
-        reference_image : np.ndarray
-            Preprocessed reference image
-        """
+    def create_bead_overlay(self) -> None:
+        """Create combined bead-reference overlay layer."""
+        # Validate data availability
+        if self.data_manager.preprocessed_bead_stack is None or self.data_manager.preprocessed_reference is None:
+            raise ValueError("Both preprocessed bead stack and reference image must be available")
+
         # Remove existing overlay if present
         if 'Bead Overlay' in self.viewer.layers:
             self.viewer.layers.remove('Bead Overlay')
 
         # Create RGB overlay stack
-        overlay_stack = self._create_overlay_stack(bead_stack, reference_image)
+        overlay_stack = self._create_overlay_stack()
 
         # Add overlay layer
         self.viewer.add_image(
@@ -159,21 +156,11 @@ class VisualizationManager(ErrorHandlingMixin):
             rgb=True
         )
 
-    def _create_overlay_stack(self, bead_stack: np.ndarray, reference_image: np.ndarray) -> np.ndarray:
-        """Create RGB overlay stack combining beads (green) and reference (magenta).
+    def _create_overlay_stack(self) -> np.ndarray:
+        """Create RGB overlay stack combining beads (green) and reference (magenta)."""
+        bead_stack = self.data_manager.preprocessed_bead_stack
+        reference = self.data_manager.preprocessed_reference
 
-        Parameters
-        ----------
-        bead_stack : np.ndarray
-            Bead image stack
-        reference_image : np.ndarray
-            Reference image
-
-        Returns
-        -------
-        np.ndarray
-            RGB overlay stack
-        """
         # Get dimensions
         num_frames = len(bead_stack)
         height, width = bead_stack.shape[1:]
@@ -182,7 +169,7 @@ class VisualizationManager(ErrorHandlingMixin):
         overlay_stack = np.zeros((num_frames, height, width, 3), dtype=float)
 
         # Normalize reference image
-        reference = reference_image.astype(float)
+        reference = reference.astype(float)
         ref_min = reference.min()
         ref_max = reference.max()
         if ref_max > ref_min:
@@ -190,14 +177,12 @@ class VisualizationManager(ErrorHandlingMixin):
 
         # Process each frame
         for i in range(num_frames):
-            # Normalize bead frame
             bead_frame = bead_stack[i].astype(float)
             bead_min = bead_frame.min()
             bead_max = bead_frame.max()
             if bead_max > bead_min:
                 bead_frame = (bead_frame - bead_min) / (bead_max - bead_min)
 
-            # Combine into RGB (magenta reference, green beads)
             overlay_stack[i, :, :, 0] = reference  # Red channel (for magenta)
             overlay_stack[i, :, :, 1] = bead_frame  # Green channel
             overlay_stack[i, :, :, 2] = reference  # Blue channel (for magenta)

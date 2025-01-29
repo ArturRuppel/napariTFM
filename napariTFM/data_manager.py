@@ -55,7 +55,7 @@ class DataManager:
     def set_preprocessed_reference(self, data: np.ndarray) -> None:
         """Set and validate input reference image."""
         self._validate_reference_image(data)
-        self._reference = data
+        self._preprocessed_reference = data
         self._invalidate_from_displacement()
 
 

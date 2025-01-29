@@ -2,6 +2,7 @@
 # TODO UI doesn't freeze during processing
 # TODO reference button should have different enable/disable logic
 # TODO parameters don't synch from batch to preprocessing widget
+# TODO only Bead Overlay layer should be visible after preprocessing
 
 from pathlib import Path
 from typing import Optional, Any
@@ -297,6 +298,7 @@ class PreprocessingParameterPanel(QWidget):
                     combo.setCurrentIndex(index)
             finally:
                 combo.blockSignals(False)
+
     def _reset_parameters(self):
         """Reset parameters to defaults."""
         self.parameter_manager.reset_preprocessing_parameters()
@@ -567,22 +569,14 @@ class PreprocessingController(QObject):
                     self.progress_updated.emit(50 + progress / 2, f"Processing cells: Frame {frame}/{total}")
 
             # Update data manager with processed data
-            self.data_manager.set_preprocessed_bead_stack(
-                np.stack([r.processed_image for r in bead_results])
-            )
+            self.data_manager.set_preprocessed_bead_stack(np.stack([r.processed_image for r in bead_results]))
             self.data_manager.set_preprocessed_reference(reference_result.processed_image)
 
             if cell_results:
-                self.data_manager.set_preprocessed_cell_stack(
-                    np.stack([r.processed_image for r in cell_results])
-                )
+                self.data_manager.set_preprocessed_cell_stack(np.stack([r.processed_image for r in cell_results]))
 
             # Let visualization manager handle visualization using data from data manager
-            self.visualization_manager.update_preprocessing_visualization({
-                'beads': (self.data_manager.preprocessed_bead_stack, self.data_manager.reference),
-                'reference': (self.data_manager.preprocessed_reference, self.data_manager.reference),
-                'parameters': params.__dict__
-            })
+            self.visualization_manager.update_preprocessing_visualization()
 
             self.progress_updated.emit(100, "Preprocessing complete")
             self.preprocessing_completed.emit({
@@ -594,6 +588,7 @@ class PreprocessingController(QObject):
             raise
         finally:
             self.unfreeze_ui()
+
     def _handle_preprocessing_results(self, results):
         """Handle successful preprocessing results."""
         try:
@@ -647,19 +642,36 @@ class PreprocessingController(QObject):
             if not save_dir:
                 return
 
-            # Get metadata values
+            save_dir = Path(save_dir)
+            files_saved = []
+
+            # Get calibration parameters
             pixel_size = self.parameter_manager.get_parameter('pixel_size')
             frame_interval = self.parameter_manager.get_parameter('frame_interval')
 
-            files_saved = []
-
             # Helper function to save TIFF files
-            def save_tiff(data, filename):
+            def _save_calibrated_tiff(data: np.ndarray, filepath: Path) -> bool:
+                """
+                Save data as calibrated TIFF file with ImageJ-compatible metadata.
+
+                Args:
+                    data: numpy array to save
+                    filepath: path where to save the file
+
+                Returns:
+                    bool: True if save was successful
+                """
                 if data is None:
                     return False
 
-                filepath = os.path.join(save_dir, filename)
-                metadata = {
+                # Convert to 16-bit
+                data_normalized = data.astype(float)
+                data_normalized = (data_normalized - data_normalized.min()) / (
+                        data_normalized.max() - data_normalized.min())
+                data_16bit = (data_normalized * 65535).astype(np.uint16)
+
+                # Create ImageJ-compatible metadata
+                imagej_metadata = {
                     'ImageJ': '1.53c',
                     'spacing': pixel_size,
                     'unit': 'um',
@@ -667,26 +679,51 @@ class PreprocessingController(QObject):
                     'frame_interval_unit': 'minute'
                 }
 
+                # For Z-stacks or time series, specify dimensions
+                if data.ndim > 2:
+                    imagej_metadata.update({
+                        'frames': data.shape[0],
+                        'slices': 1,
+                        'channels': 1
+                    })
+
+                # Combine metadata for compatibility
+                metadata = {
+                    'PhysicalSizeX': pixel_size,
+                    'PhysicalSizeXUnit': 'um',
+                    'PhysicalSizeY': pixel_size,
+                    'PhysicalSizeYUnit': 'um',
+                    'TimeIncrement': frame_interval,
+                    'TimeIncrementUnit': 'min',
+                    **imagej_metadata
+                }
+
+                # Save with metadata using tifffile
                 tifffile.imwrite(
-                    filepath,
-                    data,
+                    str(filepath),
+                    data_16bit,
                     imagej=True,
                     metadata=metadata,
-                    resolution=(1 / pixel_size, 1 / pixel_size)
+                    resolution=(1 / pixel_size, 1 / pixel_size),  # resolution in pixels per unit
+                    photometric='minisblack'
                 )
+
                 return True
 
             # Save each data type if available
             if self.data_manager.preprocessed_bead_stack is not None:
-                if save_tiff(self.data_manager.preprocessed_bead_stack, "preprocessed_beads.tif"):
+                bead_path = save_dir / "preprocessed_beads.tif"
+                if _save_calibrated_tiff(self.data_manager.preprocessed_bead_stack, bead_path):
                     files_saved.append("preprocessed_beads.tif")
 
             if self.data_manager.preprocessed_reference is not None:
-                if save_tiff(self.data_manager.preprocessed_reference, "preprocessed_reference.tif"):
+                ref_path = save_dir / "preprocessed_reference.tif"
+                if _save_calibrated_tiff(self.data_manager.preprocessed_reference, ref_path):
                     files_saved.append("preprocessed_reference.tif")
 
             if self.data_manager.preprocessed_cell_stack is not None:
-                if save_tiff(self.data_manager.preprocessed_cell_stack, "preprocessed_cells.tif"):
+                cell_path = save_dir / "preprocessed_cells.tif"
+                if _save_calibrated_tiff(self.data_manager.preprocessed_cell_stack, cell_path):
                     files_saved.append("preprocessed_cells.tif")
 
             if files_saved:
