@@ -4,11 +4,11 @@ root_folders:
 
 
 analysis_steps:
-  create_masks: true
-  displacement: true
-  force: true
-  preprocessing: true
-  stress: true
+  create_masks: false
+  displacement: false
+  force: false
+  preprocessing: false
+  stress: false
 input_files:
   beads: beads.tif
   cells: cells.tif
@@ -40,9 +40,9 @@ parameters:
   min_intensity: 80.0
   nscales: 3
   outer_iterations: 5
-  pixel_size: 0.2
+  pixel_size: 0.1
   poisson_ratio_cells: 0.5
-  poisson_ratio_substrate: 0.49
+  poisson_ratio_substrate: 0.5
   registration_mode: translation
   regularization: 0.00015848931924611142
   scale_step: 0.5

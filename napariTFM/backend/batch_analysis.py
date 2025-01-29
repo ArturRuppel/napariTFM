@@ -5,7 +5,7 @@ from pathlib import Path
 from time import time
 from typing import Optional, Tuple, List, Dict
 from skimage.transform import rescale
-
+from time import sleep
 import numpy as np
 import tifffile
 import yaml
@@ -18,7 +18,6 @@ from napariTFM.services.msm_service import MSMService, MSMParameters
 from napariTFM.services.preprocessing_service import PreprocessingService, PreprocessingParameters
 
 
-# TODO remove this warning from console output: UserWarning: <tifffile.TiffWriter 'preprocessed_reference.tif'> not writing description to ImageJ file
 class TeeLogger:
     """Custom logger that captures print statements and logging output to both console and file."""
 
@@ -61,21 +60,42 @@ class TeeLogger:
             self.terminal.write("\n" + "-" * 50 + "\n\n")
 
     def print_banner(self):
+        separator = "-" * 80
         banner = '''
-    ╔═════════════════════════════════════════════════════════════════════════════╗
-    ║                                                                             ║
-    ║                                         ,--.,--------.,------.,--.   ,--.   ║
-    ║   ,--,--,  ,--,--. ,---.  ,--,--.,--.--.`--''--.  .--'|  .---'|   `.'   |   ║
-    ║   |      \| ,-.  || .-. |' ,-.  ||  .--',--.   |  |   |  `--, |  |'.'|  |   ║
-    ║   |  ||  |\ '-'  || '-' '\ '-'  ||  |   |  |   |  |   |  |`   |  |   |  |   ║
-    ║   `--''--' `--`--'|  |-'  `--`--'`--'   `--'   `--'   `--'    `--'   `--'   ║
-    ║                   `--'                                                      ║
-    ║                                                                             ║
-    ║                   Traction Force Microscopy Analysis Tool                   ║
-    ╚═════════════════════════════════════════════════════════════════════════════╝
-        '''
+ ----------------------------------------------------------------------------- 
+|                                                                             |
+|                                         ,--.,--------.,------.,--.   ,--.   |
+|   ,--,--,  ,--,--. ,---.  ,--,--.,--.--.`--''--.  .--'|  .---'|   `.'   |   |
+|   |      \| ,-.  || .-. |' ,-.  ||  .--',--.   |  |   |  `--, |  |'.'|  |   |
+|   |  ||  |\ '-'  || '-' '\ '-'  ||  |   |  |   |  |   |  |`   |  |   |  |   |
+|   `--''--' `--`--'|  |-'  `--`--'`--'   `--'   `--'   `--'    `--'   `--'   |
+|                   `--'                                                      |
+|                                                                             |
+|                   Traction Force Microscopy Analysis Tool                   |
+ ----------------------------------------------------------------------------- '''
 
-        print(banner)
+        contact_info = '''                 
+            For comments, questions or bug reports, please contact:
+                           artur.ruppel@crbm.cnrs.fr
+                    https://github.com/ArturRuppel/napariTFM'''
+
+        # Combined output for both terminal and log file
+        output = (
+            f"\n{separator}\n"
+            f"{banner}\n"
+            f"{contact_info}\n"
+            f"{separator}\n\n"
+        )
+
+        # Write to both outputs
+        self.terminal.write(output)
+        self.log.write(output)
+
+        # Flush both outputs to ensure immediate writing
+        self.flush()
+
+        # Only pause the terminal output
+        sleep(2)
 
     def write(self, message):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -95,32 +115,35 @@ class TeeLogger:
         # Write footer with timing information
         self.log.write("\n" + "-" * 50 + "\n")
         self.log.write("Analysis Summary:\n")
-        self.log.write(f"Started:  {self.start_time}\n")
-        self.log.write(f"Finished: {end_time}\n")
+        self.log.write(f"Started:  {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        self.log.write(f"Finished: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         self.log.write(f"Duration: {duration}\n")
 
         self.terminal.write("\n" + "-" * 50 + "\n")
         self.terminal.write("Analysis Summary:\n")
-        self.terminal.write(f"Started:  {self.start_time}\n")
-        self.terminal.write(f"Finished: {end_time}\n")
+        self.terminal.write(f"Started:  {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        self.terminal.write(f"Finished: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         self.terminal.write(f"Duration: {duration}\n")
 
         # Calculate hours, minutes, seconds for more readable format
-        total_seconds = duration.total_seconds()
-        hours = int(total_seconds // 3600)
-        minutes = int((total_seconds % 3600) // 60)
+        total_seconds = int(duration.total_seconds())  # Convert to integer for second resolution
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60
 
+        time_str = ""
         if hours > 0:
-            self.log.write(f"Total time: {hours}h {minutes}m {seconds:.1f}s\n")
+            time_str = f"{hours}h {minutes}m {seconds}s"
         elif minutes > 0:
-            self.log.write(f"Total time: {minutes}m {seconds:.1f}s\n")
+            time_str = f"{minutes}m {seconds}s"
         else:
-            self.log.write(f"Total time: {seconds:.1f}s\n")
+            time_str = f"{seconds}s"
+
+        self.log.write(f"Total time: {time_str}\n")
+        self.terminal.write(f"Total time: {time_str}\n")
 
         self.log.close()
         sys.stdout = self.terminal
-
 
 class BatchAnalysis:
     """Handles batch analysis of TFM data using service layer components."""
@@ -771,13 +794,7 @@ class BatchAnalysis:
                 'channels': 1
             })
 
-        # Create description for ImageJ
-        description = json.dumps({
-            'Info': f'Scale: {pixel_size} um/pixel, Frame interval: {frame_interval} min',
-            **imagej_metadata
-        })
-
-        # Combine with original metadata for compatibility
+        # Combine metadata for compatibility
         metadata = {
             'PhysicalSizeX': pixel_size,
             'PhysicalSizeXUnit': 'um',
@@ -794,10 +811,10 @@ class BatchAnalysis:
             data_16bit,
             imagej=True,
             metadata=metadata,
-            description=description,
             resolution=(1 / pixel_size, 1 / pixel_size),  # resolution in pixels per unit
             photometric='minisblack'
         )
+
         print(f"Saved calibrated TIFF: {filepath}")
 
     def _cleanup(self) -> None:
