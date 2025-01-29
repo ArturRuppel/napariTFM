@@ -644,6 +644,7 @@ class PreprocessingController(QObject):
     data_updated = Signal(str)  # Data type that was updated
     ui_frozen = Signal(bool)
 
+    # region === Initialization
     def __init__(self, viewer, service, data_manager, parameter_manager, visualization_manager):
         super().__init__()
         self.viewer = viewer
@@ -662,6 +663,14 @@ class PreprocessingController(QObject):
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
         self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
 
+    def set_panels(self, parameter_panel, data_panel):
+        """Set the parameter and data panels."""
+        self.parameter_panel = parameter_panel
+        self.data_panel = data_panel
+
+    # endregion === Initialization
+
+    # region === Processing Execution
     def run_preprocessing(self):
         """Execute preprocessing on loaded data."""
         try:
@@ -737,11 +746,9 @@ class PreprocessingController(QObject):
         QApplication.processEvents()
         self.unfreeze_ui()
 
-    def set_panels(self, parameter_panel, data_panel):
-        """Set the parameter and data panels."""
-        self.parameter_panel = parameter_panel
-        self.data_panel = data_panel
+    # endregion === Processing Execution
 
+    # region === Parameter Handling
     def _on_parameter_changed(self, param_name: str, value: Any):
         """Handle parameter changes."""
         if self.preview_enabled:
@@ -752,6 +759,9 @@ class PreprocessingController(QObject):
         if category == ParameterCategory.PREPROCESSING and self.preview_enabled:
             self._update_preview()
 
+    # endregion === Parameter Handling
+
+    # region === Data Management
     def load_active_layer(self, data_type: str):
         """Load the currently active layer as the specified data type."""
         active_layer = self.viewer.layers.selection.active
@@ -878,6 +888,17 @@ class PreprocessingController(QObject):
         self.progress_updated.emit(0, f"Error: {error_msg}")
         QMessageBox.critical(None, "Error", error_msg)
         self.unfreeze_ui()
+
+    def _has_required_data(self):
+        """Check if required data for processing is loaded."""
+        return (self.data_manager.bead_stack is not None and
+                self.data_manager.reference is not None)
+
+    def _check_preprocessed_data(self):
+        """Check availability of preprocessed data."""
+        return (self.data_manager.preprocessed_bead_stack is not None or
+                self.data_manager.preprocessed_reference is not None or
+                self.data_manager.preprocessed_cell_stack is not None)
 
     def _handle_preprocessing_results(self, results):
         """Handle successful preprocessing results."""
@@ -1046,6 +1067,9 @@ class PreprocessingController(QObject):
         except Exception as e:
             QMessageBox.critical(None, "Error", f"Failed to save data: {str(e)}")
 
+    # endregion === Data Management
+
+    # region === State Management
     def freeze_ui(self):
         """Disable all interactive UI elements except cancel button."""
         if self.data_panel is not None:
@@ -1072,17 +1096,7 @@ class PreprocessingController(QObject):
         # Update save button based on preprocessed data availability
         has_preprocessed = self._check_preprocessed_data()
         self.save_btn.setEnabled(not frozen and has_preprocessed)
-
-    def _has_required_data(self):
-        """Check if required data for processing is loaded."""
-        return (self.data_manager.bead_stack is not None and
-                self.data_manager.reference is not None)
-
-    def _check_preprocessed_data(self):
-        """Check availability of preprocessed data."""
-        return (self.data_manager.preprocessed_bead_stack is not None or
-                self.data_manager.preprocessed_reference is not None or
-                self.data_manager.preprocessed_cell_stack is not None)
+    # endregion === State Management
 
 
 class PreprocessingWidget(BaseAnalysisWidget):
