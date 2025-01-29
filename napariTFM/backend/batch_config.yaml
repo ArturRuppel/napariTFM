@@ -4,11 +4,11 @@ root_folders:
 
 
 analysis_steps:
-  create_masks: false
-  displacement: false
-  force: false
-  preprocessing: false
-  stress: false
+  create_masks: true
+  displacement: true
+  force: true
+  preprocessing: true
+  stress: true
 input_files:
   beads: beads.tif
   cells: cells.tif

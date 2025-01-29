@@ -256,12 +256,12 @@ class MSMService:
             self,
             force_field: np.ndarray,
             masks: np.ndarray,
-            mesh_data: Optional[List[Tuple[np.ndarray, np.ndarray, Dict[str, float]]]] = None,
-            yield_intermediates: bool = False
-    ) -> Union[MSMResult, Generator[Tuple[MSMResult, int, int], None, MSMResult]]:
+            mesh_data: Optional[List[Tuple[np.ndarray, np.ndarray, Dict[str, float]]]] = None
+    ) -> Generator[Tuple[MSMResult, int, int], None, MSMResult]:
         """
         Calculate stress tensor stack from force field data.
         Always returns stress tensor with shape (t, y, x, 2, 2) where t=1 for single frames.
+        Yields intermediate results during calculation.
 
         Parameters
         ----------
@@ -272,17 +272,12 @@ class MSMService:
         mesh_data : Optional[List[Tuple[np.ndarray, np.ndarray, Dict[str, float]]]]
             Optional list of (nodes, elements, quality_metrics) tuples for each frame
             If not provided, meshes will be generated automatically
-        yield_intermediates : bool
-            If True, yields (stress_result, current_frame, total_frames) tuples during calculation
 
         Returns
         -------
-        Union[MSMResult, Generator]
-            If yield_intermediates is False:
-                MSMCalculationResult containing final stress tensor
-            If yield_intermediates is True:
-                Generator yielding (intermediate_result, frame_index, total_frames) during calculation
-                and returning final MSMCalculationResult when exhausted
+        Generator[Tuple[MSMResult, int, int], None, MSMResult]
+            Generator yielding (intermediate_result, frame_index, total_frames) during calculation
+            and returning final MSMCalculationResult when exhausted
         """
         # Ensure force field is 4D and masks is 3D
         if force_field.ndim == 3:
@@ -343,69 +338,44 @@ class MSMService:
 
             return stress_tensor, nodes, elements, condition_number, residual
 
-        def calculate_with_intermediates():
-            for frame in range(total_frames):
-                # Process current frame
-                stress_tensor, nodes, elements, condition_number, residual = process_frame(frame)
+        for frame in range(total_frames):
+            # Process current frame
+            stress_tensor, nodes, elements, condition_number, residual = process_frame(frame)
 
-                # Store results
-                stress_stack[frame] = stress_tensor
-                nodes_stack.append(nodes)
-                elements_stack.append(elements)
-                condition_numbers.append(condition_number)
-                residuals.append(residual)
+            # Store results
+            stress_stack[frame] = stress_tensor
+            nodes_stack.append(nodes)
+            elements_stack.append(elements)
+            condition_numbers.append(condition_number)
+            residuals.append(residual)
 
-                # Create intermediate result
-                result = MSMResult(
-                    stress_tensor=stress_stack[:frame + 1],
-                    nodes=nodes,  # Current frame's nodes
-                    elements=elements,  # Current frame's elements
-                    condition_number=condition_number,  # Current frame's condition number
-                    residual=residual,  # Current frame's residual
-                    parameters=self.params,
-                    physical_scale=physical_scale,
-                    original_shape=force_field.shape[1:3],
-                    stress_shape=stress_stack.shape[1:3]
-                )
-
-                yield result, frame + 1, total_frames
-
-            # Return final result with mean condition number and residual
-            return MSMResult(
-                stress_tensor=stress_stack,
-                nodes=nodes_stack,  # Last frame's nodes
-                elements=elements_stack,  # Last frame's elements
-                condition_number=np.mean(np.stack(condition_numbers)),  # Mean condition number
-                residual=np.mean(residuals),  # Mean residual
+            # Create intermediate result
+            result = MSMResult(
+                stress_tensor=stress_stack[:frame + 1],
+                nodes=nodes,  # Current frame's nodes
+                elements=elements,  # Current frame's elements
+                condition_number=condition_number,  # Current frame's condition number
+                residual=residual,  # Current frame's residual
                 parameters=self.params,
                 physical_scale=physical_scale,
                 original_shape=force_field.shape[1:3],
                 stress_shape=stress_stack.shape[1:3]
             )
 
-        if yield_intermediates:
-            return calculate_with_intermediates()
-        else:
-            # Calculate without yielding intermediates
-            for frame in range(total_frames):
-                stress_tensor, nodes, elements, condition_number, residual = process_frame(frame)
-                stress_stack[frame] = stress_tensor
-                nodes_stack.append(nodes)
-                elements_stack.append(elements)
-                condition_numbers.append(condition_number)
-                residuals.append(residual)
+            yield result, frame + 1, total_frames
 
-            return MSMResult(
-                stress_tensor=stress_stack,
-                nodes=nodes_stack[-1],  # Last frame's nodes
-                elements=elements_stack[-1],  # Last frame's elements
-                condition_number=np.mean(condition_numbers),  # Mean condition number
-                residual=np.mean(residuals),  # Mean residual
-                parameters=self.params,
-                physical_scale=physical_scale,
-                original_shape=force_field.shape[1:3],
-                stress_shape=stress_stack.shape[1:3]
-            )
+        # Return final result with mean condition number and residual
+        return MSMResult(
+            stress_tensor=stress_stack,
+            nodes=nodes_stack,  # All frames' nodes
+            elements=elements_stack,  # All frames' elements
+            condition_number=np.mean(np.stack(condition_numbers)),  # Mean condition number
+            residual=np.mean(residuals),  # Mean residual
+            parameters=self.params,
+            physical_scale=physical_scale,
+            original_shape=force_field.shape[1:3],
+            stress_shape=stress_stack.shape[1:3]
+        )
 
     def _create_physical_scale(self) -> dict:
         """Create physical scale information dictionary."""

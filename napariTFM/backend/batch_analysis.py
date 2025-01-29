@@ -19,7 +19,6 @@ from napariTFM.services.preprocessing_service import PreprocessingService, Prepr
 
 
 # TODO remove this warning from console output: UserWarning: <tifffile.TiffWriter 'preprocessed_reference.tif'> not writing description to ImageJ file
-# TODO test service layer with intermediates off
 class TeeLogger:
     """Custom logger that captures print statements and logging output to both console and file."""
 
@@ -347,7 +346,7 @@ class BatchAnalysis:
         displacement_service = DisplacementService(self._create_displacement_parameters())
 
         # Get the generator
-        displacement_field_generator = displacement_service.calculate_displacement_field(preprocessed_data['reference'], preprocessed_data['beads'], yield_intermediates=True)
+        displacement_field_generator = displacement_service.calculate_displacement_field(preprocessed_data['reference'], preprocessed_data['beads'])
 
         # Initialize result container
         try:
@@ -361,6 +360,7 @@ class BatchAnalysis:
 
         if displacement_result is None:
             raise RuntimeError("Displacement calculation failed")
+
 
         # Save the displacement field
         np.save(str(tfm_folder / "displacements.npy"), displacement_result)
@@ -377,8 +377,7 @@ class BatchAnalysis:
 
         # Get the generator
         force_generator = fttc_service.calculate_forces(
-            displacement_data.displacement_field,
-            yield_intermediates=True
+            displacement_data.displacement_field
         )
 
         # Initialize result container
@@ -474,8 +473,7 @@ class BatchAnalysis:
             stress_generator = msm_service.calculate_stresses(
                 force_field=force_data.force_field,  # Access forces from the dictionary
                 masks=mask_data,
-                mesh_data=mesh_data,
-                yield_intermediates=True
+                mesh_data=mesh_data
             )
 
             # Process stress calculation results
@@ -577,7 +575,7 @@ class BatchAnalysis:
         force_magnitude = np.sqrt(np.sum(result ** 2, axis=-1))
         print(f"Frame {frame}/{total}: "
               f"Mean force: {np.mean(force_magnitude):.2f} Pa, "
-              f"Max force: {np.mean(force_magnitude):.2f} Pa")
+              f"Max force: {np.max(force_magnitude):.2f} Pa")
 
     def _log_mask_progress(self, mask, frame, total):
         # Calculate surface area (sum of all True/1 pixels)

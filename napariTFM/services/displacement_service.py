@@ -212,12 +212,12 @@ class DisplacementService:
     def calculate_displacement_field(
             self,
             reference: np.ndarray,
-            target: np.ndarray,
-            yield_intermediates: bool = False
-    ) -> Union[DisplacementResult, Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]]:
+            target: np.ndarray
+    ) -> Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]:
         """
         Calculate optical flow between reference and target image(s).
         Always returns displacement field with shape (t, y, x, 2) where t=1 for single frames.
+        Yields intermediate results during calculation.
 
         Parameters
         ----------
@@ -225,17 +225,12 @@ class DisplacementService:
             Reference image (2D)
         target : np.ndarray
             Target image(s) - will be converted to 3D (t, y, x) if 2D
-        yield_intermediates : bool
-            If True, yields (displacement field, current_frame, total_frames) tuples during calculation
 
         Returns
         -------
-        Union[DisplacementResult, Generator]
-            If yield_intermediates is False:
-                DisplacementResult containing final displacement field
-            If yield_intermediates is True:
-                Generator yielding (intermediate_displacement_field, frame_index, total_frames) during calculation
-                and returning final DisplacementCalculationResult when exhausted
+        Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]
+            Generator yielding (intermediate_displacement_field, frame_index, total_frames) during calculation
+            and returning final DisplacementCalculationResult when exhausted
 
         Raises
         ------
@@ -250,6 +245,7 @@ class DisplacementService:
         is_valid, error_msg = self.validate_image(target)
         if not is_valid:
             raise ValueError(f"Invalid target image: {error_msg}")
+
         # Ensure target is 3D
         if target.ndim == 2:
             target = target[np.newaxis, ...]
@@ -269,63 +265,35 @@ class DisplacementService:
 
         displacement_field_stack = np.zeros(displacement_field_shape, dtype=np.float32)
 
-        def calculate_with_intermediates():
-            # Calculate displacement_field for each frame
-            for frame in range(total_frames):
-                # Calculate displacement_field in pixels
-                displacement_field_pixels = self.analyzer.calculate_flow(reference, target[frame])
+        # Calculate displacement_field for each frame
+        for frame in range(total_frames):
+            # Calculate displacement_field in pixels
+            displacement_field_pixels = self.analyzer.calculate_flow(reference, target[frame])
 
-                # Apply downscaling if needed
-                if self.params.downscale_factor > 1:
-                    displacement_field_pixels = self.analyzer.downscale_flow(displacement_field_pixels, self.params.downscale_factor)
+            # Apply downscaling if needed
+            if self.params.downscale_factor > 1:
+                displacement_field_pixels = self.analyzer.downscale_flow(displacement_field_pixels, self.params.downscale_factor)
 
-                # Convert to physical units (µm)
-                displacement_field_stack[frame] = displacement_field_pixels * self.params.pixel_size
+            # Convert to physical units (µm)
+            displacement_field_stack[frame] = displacement_field_pixels * self.params.pixel_size
 
-                # Yield intermediate result with progress info
-                yield displacement_field_stack[frame].copy(), frame + 1, total_frames
+            # Yield intermediate result with progress info
+            yield displacement_field_stack[frame].copy(), frame + 1, total_frames
 
-            # Create physical scale information
-            physical_scale = {
-                'pixel_size': self.params.pixel_size,
-                'grid_spacing': self.params.pixel_size * self.params.downscale_factor,
-                'time_interval': self.params.frame_interval,
-                'displacement_units': 'µm',
-                'grid_spacing_units': 'µm',
-                'time_interval_units': 'min',
-            }
+        # Create physical scale information
+        physical_scale = {
+            'pixel_size': self.params.pixel_size,
+            'grid_spacing': self.params.pixel_size * self.params.downscale_factor,
+            'time_interval': self.params.frame_interval,
+            'displacement_units': 'µm',
+            'grid_spacing_units': 'µm',
+            'time_interval_units': 'min',
+        }
 
-            return DisplacementResult(
-                displacement_field=displacement_field_stack,
-                original_shape=reference.shape,
-                displacement_field_shape=displacement_field_stack.shape[1:3],
-                parameters=self.params,
-                physical_scale=physical_scale
-            )
-
-        if yield_intermediates:
-            return calculate_with_intermediates()
-        else:
-            # Calculate without yielding intermediates
-            for frame in range(total_frames):
-                displacement_field_pixels = self.analyzer.calculate_displacement_field(reference, target[frame])
-                if self.params.downscale_factor > 1:
-                    displacement_field_pixels = self.analyzer.downscale_displacement_field(displacement_field_pixels, self.params.downscale_factor)
-                displacement_field_stack[frame] = displacement_field_pixels * self.params.pixel_size
-
-            physical_scale = {
-                'pixel_size': self.params.pixel_size,
-                'grid_spacing': self.params.pixel_size * self.params.downscale_factor,
-                'time_interval': self.params.frame_interval,
-                'displacement_units': 'µm',
-                'grid_spacing_units': 'µm',
-                'time_interval_units': 'min',
-            }
-
-            return DisplacementResult(
-                displacement_field=displacement_field_stack,
-                original_shape=reference.shape,
-                displacement_field_shape=displacement_field_stack.shape[1:3],
-                parameters=self.params,
-                physical_scale=physical_scale
-            )
+        return DisplacementResult(
+            displacement_field=displacement_field_stack,
+            original_shape=reference.shape,
+            displacement_field_shape=displacement_field_stack.shape[1:3],
+            parameters=self.params,
+            physical_scale=physical_scale
+        )

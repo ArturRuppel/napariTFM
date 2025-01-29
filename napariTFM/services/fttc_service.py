@@ -67,28 +67,23 @@ class FTTCService:
 
     def calculate_forces(
             self,
-            displacement_field: np.ndarray,
-            yield_intermediates: bool = False
-    ) -> Union[FTTCResult, Generator[Tuple[np.ndarray, int, int], None, FTTCResult]]:
+            displacement_field: np.ndarray
+    ) -> Generator[Tuple[np.ndarray, int, int], None, FTTCResult]:
         """
         Calculate forces from displacement field data.
         Always returns force field with shape (t, y, x, 2) where t=1 for single frames.
+        Yields intermediate results during calculation.
 
         Parameters
         ----------
         displacement_field : np.ndarray
             Displacement field data with shape (t, y, x, 2)
-        yield_intermediates : bool
-            If True, yields (force_field, current_frame, total_frames) tuples during calculation
 
         Returns
         -------
-        Union[FTTCResult, Generator]
-            If yield_intermediates is False:
-                FTTCCalculationResult containing final force field
-            If yield_intermediates is True:
-                Generator yielding (intermediate_forces, frame_index, total_frames) during calculation
-                and returning final FTTCCalculationResult when exhausted
+        Generator[Tuple[np.ndarray, int, int], None, FTTCResult]
+            Generator yielding (intermediate_forces, frame_index, total_frames) during calculation
+            and returning final FTTCCalculationResult when exhausted
         """
         # Ensure displacement field is 4D
         if displacement_field.ndim == 3:
@@ -98,75 +93,41 @@ class FTTCService:
         force_shape = displacement_field.shape[1:4]  # (y, x, 2)
         force_stack = np.zeros((total_frames, *force_shape), dtype=np.float32)
 
-        def calculate_with_intermediates():
-            for frame in range(total_frames):
-                # Calculate forces for current frame
-                result = self.calculator.calculate_traction(
-                    displacements=displacement_field[frame],
-                    pixel_size=self.params.pixel_size,
-                    downscale_factor=self.params.downscale_factor,
-                    regularization=None if self.params.auto_gcv else self.params.regularization
-                )
-
-                # Extract force components and store in stack
-                force_stack[frame, ..., 0] = result[1][0]  # tx
-                force_stack[frame, ..., 1] = result[1][1]  # ty
-
-                # Yield intermediate result with progress info
-                yield force_stack[frame].copy(), frame + 1, total_frames
-
-            # Create physical scale information
-            physical_scale = {
-                'pixel_size': self.params.pixel_size,
-                'grid_spacing': self.params.pixel_size * self.params.downscale_factor,
-                'time_interval': self.params.frame_interval,
-                'force_units': 'Pa',
-                'grid_spacing_units': 'µm',
-                'time_interval_units': 'min',
-            }
-
-            return FTTCResult(
-                force_field=force_stack,
-                original_shape=displacement_field.shape[1:3],
-                force_shape=force_stack.shape[1:3],
-                parameters=self.params,
-                physical_scale=physical_scale,
-                condition_number=getattr(self.calculator, 'last_condition_number', 0.0),
-                residual=getattr(self.calculator, 'last_residual', 0.0)
+        for frame in range(total_frames):
+            # Calculate forces for current frame
+            result = self.calculator.calculate_traction(
+                displacements=displacement_field[frame],
+                pixel_size=self.params.pixel_size,
+                downscale_factor=self.params.downscale_factor,
+                regularization=None if self.params.auto_gcv else self.params.regularization
             )
 
-        if yield_intermediates:
-            return calculate_with_intermediates()
-        else:
-            # Calculate without yielding intermediates
-            for frame in range(total_frames):
-                result = self.calculator.calculate_traction(
-                    displacements=displacement_field[frame],
-                    pixel_size=self.params.pixel_size,
-                    downscale_factor=self.params.downscale_factor,
-                    regularization=None if self.params.auto_gcv else self.params.regularization
-                )
-                force_stack[frame, ..., 0] = result[1][0]  # tx
-                force_stack[frame, ..., 1] = result[1][1]  # ty
+            # Extract force components and store in stack
+            force_stack[frame, ..., 0] = result[1][0]  # tx
+            force_stack[frame, ..., 1] = result[1][1]  # ty
 
-            physical_scale = {
-                'pixel_size': self.params.pixel_size,
-                'grid_spacing': self.params.pixel_size * self.params.downscale_factor,
-                'time_interval': self.params.frame_interval,
-                'force_units': 'Pa',
-                'grid_spacing_units': 'µm',
-                'time_interval_units': 'min',
-            }
+            # Yield intermediate result with progress info
+            yield force_stack[frame].copy(), frame + 1, total_frames
 
-            return FTTCResult(
-                force_field=force_stack,
-                original_shape=displacement_field.shape[1:3],
-                force_shape=force_stack.shape[1:3],
-                parameters=self.params,
-                physical_scale=physical_scale,
-                condition_number=getattr(self.calculator, 'last_condition_number', 0.0),
-                residual=getattr(self.calculator, 'last_residual', 0.0)
-            )
+        # Create physical scale information
+        physical_scale = {
+            'pixel_size': self.params.pixel_size,
+            'grid_spacing': self.params.pixel_size * self.params.downscale_factor,
+            'time_interval': self.params.frame_interval,
+            'force_units': 'Pa',
+            'grid_spacing_units': 'µm',
+            'time_interval_units': 'min',
+        }
+
+        return FTTCResult(
+            force_field=force_stack,
+            original_shape=displacement_field.shape[1:3],
+            force_shape=force_stack.shape[1:3],
+            parameters=self.params,
+            physical_scale=physical_scale,
+            condition_number=getattr(self.calculator, 'last_condition_number', 0.0),
+            residual=getattr(self.calculator, 'last_residual', 0.0)
+        )
 
     def find_optimal_regularization(
             self,
