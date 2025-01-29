@@ -1,5 +1,5 @@
-# TODO add rangesliders
 # TODO parameters don't synch from batch to preprocessing widget
+# TODO clicking preview only shows preview after changing a param
 
 
 from pathlib import Path
@@ -11,8 +11,9 @@ from napari.layers import Image
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Qt, Signal, QObject
+from qtrangeslider import QRangeSlider
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QRadioButton, QFileDialog,
+    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QRadioButton, QFileDialog, QSlider,
     QDoubleSpinBox, QPushButton, QFrame, QScrollArea, QCheckBox, QApplication,
     QProgressBar, QMessageBox, QComboBox, QSizePolicy
 )
@@ -116,19 +117,30 @@ class PreprocessingDataPanel(QWidget):
         self.load_cells_btn.setEnabled(not frozen)
 
 
+from qtpy.QtCore import Qt, Signal
+from qtpy.QtWidgets import (
+    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget,
+    QDoubleSpinBox, QPushButton, QComboBox, QSlider
+)
+from qtrangeslider import QRangeSlider
+
+
 class PreprocessingParameterPanel(QWidget):
     """Panel for handling preprocessing parameter inputs."""
 
     parameter_changed = Signal()
 
-    def __init__(self, parameter_manager: ParameterManager):
+    def __init__(self, parameter_manager):
         super().__init__()
         self.parameter_manager = parameter_manager
         self.parameter_spins = {}
+        self.parameter_sliders = {}
+        self.parameter_range_sliders = {}
         self.parameter_combos = {}
         self._setup_ui()
 
     def _setup_ui(self):
+        """Set up the main UI elements."""
         layout = QVBoxLayout()
 
         # Add parameter groups
@@ -144,61 +156,16 @@ class PreprocessingParameterPanel(QWidget):
         self._connect_signals()
         self._sync_widget_with_parameters()
 
-    def _create_intensity_range_group(self):
-        group = QGroupBox("Bead/Reference Parameters")
-        layout = QVBoxLayout()
-
-        # Add intensity parameters
-        intensity_params = [
-            ("min_intensity_percentile", "Min Intensity (%)", 0, 100, 0.1),
-            ("max_intensity_percentile", "Max Intensity (%)", 0, 100, 0.1),
-            ("gaussian_sigma", "Gaussian Sigma", 0.0, 10.0, 0.1)
-        ]
-
-        for name, label, min_val, max_val, step in intensity_params:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-            spin = self._create_spinbox(min_val, max_val, step)
-            self.parameter_spins[name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        # Add note about Gaussian blur
-        note = QLabel("Set Gaussian Sigma to 0 to disable blur")
-        note.setStyleSheet("color: gray;")
-        layout.addWidget(note)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_cell_params_group(self):
-        group = QGroupBox("Cell Stack Parameters")
-        layout = QVBoxLayout()
-
-        # Add cell parameters
-        cell_params = [
-            ("cell_min_intensity_percentile", "Min Intensity (%)", 0, 100, 0.1),
-            ("cell_max_intensity_percentile", "Max Intensity (%)", 0, 100, 0.1),
-            ("cell_gaussian_sigma", "Gaussian Sigma", 0.0, 10.0, 0.1)
-        ]
-
-        for name, label, min_val, max_val, step in cell_params:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-            spin = self._create_spinbox(min_val, max_val, step)
-            self.parameter_spins[name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        # Add note about Gaussian blur
-        note = QLabel("Set Gaussian Sigma to 0 to disable blur")
-        note.setStyleSheet("color: gray;")
-        layout.addWidget(note)
-
-        group.setLayout(layout)
-        return group
+    def _create_spinbox(self, min_val: float, max_val: float, step: float, decimals: int = 1) -> QDoubleSpinBox:
+        """Create a spinbox with given parameters."""
+        spin = QDoubleSpinBox()
+        spin.setRange(min_val, max_val)
+        spin.setSingleStep(step)
+        spin.setDecimals(decimals)
+        return spin
 
     def _create_registration_group(self):
+        """Create the registration control group."""
         group = QGroupBox("Registration")
         layout = QVBoxLayout()
 
@@ -219,52 +186,340 @@ class PreprocessingParameterPanel(QWidget):
         group.setLayout(layout)
         return group
 
-    def _create_spinbox(self, min_val: float, max_val: float, step: float, decimals: int = 1) -> QDoubleSpinBox:
-        """Create a spinbox with given parameters."""
-        spin = QDoubleSpinBox()
-        spin.setRange(min_val, max_val)
-        spin.setSingleStep(step)
-        spin.setDecimals(decimals)
-        return spin
+    def _create_intensity_range_group(self):
+        group = QGroupBox("Bead/Reference Parameters")
+        layout = QVBoxLayout()
+
+        # Create range slider
+        intensity_slider = QRangeSlider(Qt.Horizontal)
+        intensity_slider.setRange(0, 1000)  # 0-100.0 with 0.1 precision
+        self.parameter_range_sliders['intensity'] = intensity_slider
+        layout.addWidget(intensity_slider)
+
+        # Create spinboxes
+        spinbox_layout = QHBoxLayout()
+        min_label = QLabel("Min")
+        min_label.setFixedWidth(40)
+
+        min_spin = self._create_spinbox(0, 100, 0.1)
+        max_spin = self._create_spinbox(0, 100, 0.1)
+        self.parameter_spins['min_intensity_percentile'] = min_spin
+        self.parameter_spins['max_intensity_percentile'] = max_spin
+
+        spinbox_layout.addWidget(min_label)
+        spinbox_layout.addWidget(min_spin)
+        spinbox_layout.addStretch()
+        spinbox_layout.addWidget(max_spin)
+        spinbox_layout.addWidget(QLabel("Max"))
+        layout.addLayout(spinbox_layout)
+
+        # Create Gaussian sigma controls
+        sigma_layout = QHBoxLayout()
+        blur_label = QLabel("Blur")
+        blur_label.setFixedWidth(40)
+
+        sigma_spin = self._create_spinbox(0, 10, 0.1)
+        self.parameter_spins['gaussian_sigma'] = sigma_spin
+
+        sigma_slider = QSlider(Qt.Horizontal)
+        sigma_slider.setRange(0, 100)  # 0-10.0 with 0.1 precision
+        self.parameter_sliders['gaussian_sigma'] = sigma_slider
+
+        sigma_layout.addWidget(blur_label)
+        sigma_layout.addWidget(sigma_spin)
+        sigma_layout.addWidget(sigma_slider)
+        layout.addLayout(sigma_layout)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_cell_params_group(self):
+        group = QGroupBox("Cell Stack Parameters")
+        layout = QVBoxLayout()
+
+        # Create range slider
+        cell_intensity_slider = QRangeSlider(Qt.Horizontal)
+        cell_intensity_slider.setRange(0, 1000)  # 0-100.0 with 0.1 precision
+        self.parameter_range_sliders['cell_intensity'] = cell_intensity_slider
+        layout.addWidget(cell_intensity_slider)
+
+        # Create spinboxes
+        spinbox_layout = QHBoxLayout()
+        min_label = QLabel("Min")
+        min_label.setFixedWidth(40)
+
+        min_spin = self._create_spinbox(0, 100, 0.1)
+        max_spin = self._create_spinbox(0, 100, 0.1)
+        self.parameter_spins['cell_min_intensity_percentile'] = min_spin
+        self.parameter_spins['cell_max_intensity_percentile'] = max_spin
+
+        spinbox_layout.addWidget(min_label)
+        spinbox_layout.addWidget(min_spin)
+        spinbox_layout.addStretch()
+        spinbox_layout.addWidget(max_spin)
+        spinbox_layout.addWidget(QLabel("Max"))
+        layout.addLayout(spinbox_layout)
+
+        # Create Gaussian sigma controls
+        sigma_layout = QHBoxLayout()
+        blur_label = QLabel("Blur")
+        blur_label.setFixedWidth(40)
+
+        sigma_spin = self._create_spinbox(0, 10, 0.1)
+        self.parameter_spins['cell_gaussian_sigma'] = sigma_spin
+
+        sigma_slider = QSlider(Qt.Horizontal)
+        sigma_slider.setRange(0, 100)  # 0-10.0 with 0.1 precision
+        self.parameter_sliders['cell_gaussian_sigma'] = sigma_slider
+
+        sigma_layout.addWidget(blur_label)
+        sigma_layout.addWidget(sigma_spin)
+        sigma_layout.addWidget(sigma_slider)
+        layout.addLayout(sigma_layout)
+
+        group.setLayout(layout)
+        return group
 
     def _connect_signals(self):
-        """Connect widget signals to parameter manager."""
-        # Connect spinboxes
-        for name, spin in self.parameter_spins.items():
+        """Connect all parameter control signals."""
+        # Connect intensity range controls
+        intensity_slider = self.parameter_range_sliders['intensity']
+        intensity_slider.valueChanged.connect(self._update_intensity_from_slider)
+
+        min_spin = self.parameter_spins['min_intensity_percentile']
+        max_spin = self.parameter_spins['max_intensity_percentile']
+        min_spin.valueChanged.connect(self._update_intensity_from_spinbox)
+        max_spin.valueChanged.connect(self._update_intensity_from_spinbox)
+
+        # Connect cell intensity range controls
+        cell_slider = self.parameter_range_sliders['cell_intensity']
+        cell_slider.valueChanged.connect(self._update_cell_intensity_from_slider)
+
+        cell_min_spin = self.parameter_spins['cell_min_intensity_percentile']
+        cell_max_spin = self.parameter_spins['cell_max_intensity_percentile']
+        cell_min_spin.valueChanged.connect(self._update_cell_intensity_from_spinbox)
+        cell_max_spin.valueChanged.connect(self._update_cell_intensity_from_spinbox)
+
+        # Connect Gaussian sigma controls
+        for param in ['gaussian_sigma', 'cell_gaussian_sigma']:
+            slider = self.parameter_sliders[param]
+            spin = self.parameter_spins[param]
+
+            slider.valueChanged.connect(
+                lambda v, p=param: self._update_sigma_from_slider(p, v)
+            )
             spin.valueChanged.connect(
-                lambda v, n=name: self.parameter_manager.set_parameter(n, v)
+                lambda v, p=param: self._update_sigma_from_spinbox(p, v)
             )
 
-        # Connect comboboxes
-        for name, combo in self.parameter_combos.items():
-            combo.currentTextChanged.connect(
-                lambda t, n=name: self.parameter_manager.set_parameter(n, t.lower())
+        # Connect registration mode
+        self.registration_mode_combo.currentTextChanged.connect(
+            lambda text: self.parameter_manager.set_parameter(
+                'registration_mode',
+                text.lower()
             )
+        )
 
         # Connect reset button
         self.reset_btn.clicked.connect(self._reset_parameters)
 
+    def _update_intensity_from_slider(self, values):
+        """Update intensity spinboxes from range slider."""
+        min_val, max_val = values
+        min_percent = min_val / 10.0
+        max_percent = max_val / 10.0
+
+        # Update spinboxes without triggering their signals
+        min_spin = self.parameter_spins['min_intensity_percentile']
+        max_spin = self.parameter_spins['max_intensity_percentile']
+
+        self._block_widgets(True)
+        min_spin.setValue(min_percent)
+        max_spin.setValue(max_percent)
+        self._block_widgets(False)
+
+        # Update parameters
+        self.parameter_manager.set_parameter('min_intensity_percentile', min_percent)
+        self.parameter_manager.set_parameter('max_intensity_percentile', max_percent)
+        self.parameter_changed.emit()
+
+    def _update_cell_intensity_from_slider(self, values):
+        """Update cell intensity spinboxes from range slider."""
+        min_val, max_val = values
+        min_percent = min_val / 10.0
+        max_percent = max_val / 10.0
+
+        # Update spinboxes without triggering their signals
+        min_spin = self.parameter_spins['cell_min_intensity_percentile']
+        max_spin = self.parameter_spins['cell_max_intensity_percentile']
+
+        self._block_widgets(True)
+        min_spin.setValue(min_percent)
+        max_spin.setValue(max_percent)
+        self._block_widgets(False)
+
+        # Update parameters
+        self.parameter_manager.set_parameter('cell_min_intensity_percentile', min_percent)
+        self.parameter_manager.set_parameter('cell_max_intensity_percentile', max_percent)
+        self.parameter_changed.emit()
+
+    def _update_intensity_from_spinbox(self):
+        """Update intensity slider from spinboxes."""
+        min_spin = self.parameter_spins['min_intensity_percentile']
+        max_spin = self.parameter_spins['max_intensity_percentile']
+        slider = self.parameter_range_sliders['intensity']
+
+        min_val = int(min_spin.value() * 10)
+        max_val = int(max_spin.value() * 10)
+
+        # Update slider without triggering its signal
+        slider.blockSignals(True)
+        slider.setValue((min_val, max_val))
+        slider.blockSignals(False)
+
+        # Update parameters
+        self.parameter_manager.set_parameter('min_intensity_percentile', min_spin.value())
+        self.parameter_manager.set_parameter('max_intensity_percentile', max_spin.value())
+        self.parameter_changed.emit()
+
+    def _update_cell_intensity_from_spinbox(self):
+        """Update cell intensity slider from spinboxes."""
+        min_spin = self.parameter_spins['cell_min_intensity_percentile']
+        max_spin = self.parameter_spins['cell_max_intensity_percentile']
+        slider = self.parameter_range_sliders['cell_intensity']
+
+        min_val = int(min_spin.value() * 10)
+        max_val = int(max_spin.value() * 10)
+
+        # Update slider without triggering its signal
+        slider.blockSignals(True)
+        slider.setValue((min_val, max_val))
+        slider.blockSignals(False)
+
+        # Update parameters
+        self.parameter_manager.set_parameter('cell_min_intensity_percentile', min_spin.value())
+        self.parameter_manager.set_parameter('cell_max_intensity_percentile', max_spin.value())
+        self.parameter_changed.emit()
+
+    def _update_sigma_from_slider(self, param: str, value: int):
+        """Update sigma spinbox from slider."""
+        sigma_value = value / 10.0
+        spin = self.parameter_spins[param]
+
+        spin.blockSignals(True)
+        spin.setValue(sigma_value)
+        spin.blockSignals(False)
+
+        self.parameter_manager.set_parameter(param, sigma_value)
+        self.parameter_changed.emit()
+
+    def _update_sigma_from_spinbox(self, param: str, value: float):
+        """Update sigma slider from spinbox."""
+        slider_value = int(value * 10)
+        slider = self.parameter_sliders[param]
+
+        slider.blockSignals(True)
+        slider.setValue(slider_value)
+        slider.blockSignals(False)
+
+        self.parameter_manager.set_parameter(param, value)
+        self.parameter_changed.emit()
+
     def _sync_widget_with_parameters(self):
-        """Sync widget values with parameter manager values."""
+        """Sync all widget values with parameter manager values."""
         self._block_widgets(True)
         try:
-            # Sync spinboxes
-            for name, spin in self.parameter_spins.items():
-                value = self.parameter_manager.get_parameter(name)
-                self._safe_set_value(spin, value)
+            # Sync intensity ranges
+            min_val = self.parameter_manager.get_parameter('min_intensity_percentile')
+            max_val = self.parameter_manager.get_parameter('max_intensity_percentile')
 
-            # Sync comboboxes
-            for name, combo in self.parameter_combos.items():
-                value = self.parameter_manager.get_parameter(name)
-                self._safe_set_combo_text(combo, str(value))
+            if min_val is not None and max_val is not None:
+                self.parameter_spins['min_intensity_percentile'].setValue(min_val)
+                self.parameter_spins['max_intensity_percentile'].setValue(max_val)
+                self.parameter_range_sliders['intensity'].setValue((
+                    int(min_val * 10),
+                    int(max_val * 10)
+                ))
+
+            # Sync cell intensity ranges
+            cell_min = self.parameter_manager.get_parameter('cell_min_intensity_percentile')
+            cell_max = self.parameter_manager.get_parameter('cell_max_intensity_percentile')
+
+            if cell_min is not None and cell_max is not None:
+                self.parameter_spins['cell_min_intensity_percentile'].setValue(cell_min)
+                self.parameter_spins['cell_max_intensity_percentile'].setValue(cell_max)
+                self.parameter_range_sliders['cell_intensity'].setValue((
+                    int(cell_min * 10),
+                    int(cell_max * 10)
+                ))
+
+            # Sync sigma values
+            for param in ['gaussian_sigma', 'cell_gaussian_sigma']:
+                value = self.parameter_manager.get_parameter(param)
+                if value is not None:
+                    self.parameter_spins[param].setValue(value)
+                    self.parameter_sliders[param].setValue(int(value * 10))
+
+            # Sync registration mode
+            reg_mode = self.parameter_manager.get_parameter('registration_mode')
+            if reg_mode is not None:
+                index = self.registration_mode_combo.findText(reg_mode.title())
+                if index >= 0:
+                    self.registration_mode_combo.setCurrentIndex(index)
 
         finally:
             self._block_widgets(False)
 
     def _block_widgets(self, block: bool):
-        """Block or unblock signals for all widgets."""
-        for widget in list(self.parameter_spins.values()) + list(self.parameter_combos.values()):
-            widget.blockSignals(block)
+        """Block or unfreeze all widget signals."""
+        for widgets in [
+            self.parameter_spins.values(),
+            self.parameter_sliders.values(),
+            self.parameter_range_sliders.values(),
+            self.parameter_combos.values()
+        ]:
+            for widget in widgets:
+                widget.blockSignals(block)
+
+    def _reset_parameters(self):
+        """Reset all parameters to their default values."""
+        self.parameter_manager.reset_preprocessing_parameters()
+        self._sync_widget_with_parameters()
+        self.parameter_changed.emit()
+
+    def freeze_ui(self, frozen: bool):
+        """Freeze or unfreeze UI elements."""
+        for widget_dict in [
+            self.parameter_spins,
+            self.parameter_sliders,
+            self.parameter_range_sliders,
+            self.parameter_combos
+        ]:
+            for widget in widget_dict.values():
+                widget.setEnabled(not frozen)
+
+        self.reset_btn.setEnabled(not frozen)
+
+    def get_parameters(self):
+        """Get current parameter values."""
+        return {
+            'min_intensity_percentile': self.parameter_spins['min_intensity_percentile'].value(),
+            'max_intensity_percentile': self.parameter_spins['max_intensity_percentile'].value(),
+            'gaussian_sigma': self.parameter_spins['gaussian_sigma'].value(),
+            'cell_min_intensity_percentile': self.parameter_spins['cell_min_intensity_percentile'].value(),
+            'cell_max_intensity_percentile': self.parameter_spins['cell_max_intensity_percentile'].value(),
+            'cell_gaussian_sigma': self.parameter_spins['cell_gaussian_sigma'].value(),
+            'registration_mode': self.registration_mode_combo.currentText().lower()
+        }
+
+    def update_parameter(self, name: str, value: float):
+        """Update a single parameter value."""
+        if name in self.parameter_spins:
+            self.parameter_spins[name].setValue(value)
+        elif name == 'registration_mode' and value is not None:
+            index = self.registration_mode_combo.findText(str(value).title())
+            if index >= 0:
+                self.registration_mode_combo.setCurrentIndex(index)
 
     def _safe_set_value(self, widget, value):
         """Safely set widget value."""
@@ -296,19 +551,7 @@ class PreprocessingParameterPanel(QWidget):
             finally:
                 combo.blockSignals(False)
 
-    def _reset_parameters(self):
-        """Reset parameters to defaults."""
-        self.parameter_manager.reset_preprocessing_parameters()
-        self._sync_widget_with_parameters()
-        self.parameter_changed.emit()
 
-    def freeze_ui(self, frozen: bool):
-        """Freeze or unfreeze UI elements."""
-        for spin in self.parameter_spins.values():
-            spin.setEnabled(not frozen)
-        for combo in self.parameter_combos.values():
-            combo.setEnabled(not frozen)
-        self.reset_btn.setEnabled(not frozen)
 
 
 class PreprocessingController(QObject):
