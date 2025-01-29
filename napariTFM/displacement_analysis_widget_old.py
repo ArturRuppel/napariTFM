@@ -11,8 +11,8 @@ from qtpy.QtWidgets import (
 from napari.qt.threading import thread_worker
 
 from napariTFM.backend.displacement_analysis import DisplacementAnalyzer
-from napariTFM.data_manager import DataManager
-from napariTFM.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.data_manager_old import DataManager
+from napariTFM.parameter_manager_old import ParameterManager, ParameterCategory
 from napariTFM.visualization_manager import VisualizationManager
 from .base_widget import BaseAnalysisWidget
 from .colorbar import ColorbarManager

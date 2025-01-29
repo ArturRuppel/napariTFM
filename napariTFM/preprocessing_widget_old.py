@@ -18,9 +18,9 @@ from napari.qt.threading import thread_worker
 
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
-from napariTFM.data_manager import DataManager
+from napariTFM.data_manager_old import DataManager
 from napariTFM.error_handling import ProcessingError
-from napariTFM.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.parameter_manager_old import ParameterManager, ParameterCategory
 from napariTFM.backend.preprocessing import PreprocessingParameters, ImagePreprocessor
 from napariTFM.visualization_manager import VisualizationManager
 

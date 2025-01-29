@@ -1,9 +1,14 @@
-from typing import Dict, Any, Callable, Set
-from dataclasses import dataclass, field
+from dataclasses import dataclass, asdict, fields
+from typing import Dict, Any, Callable, Set, Optional, Tuple
 from enum import Enum, auto
 import yaml
 from pathlib import Path
 from qtpy.QtCore import QObject, Signal
+
+from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters
+from napariTFM.services.fttc_service import FTTCService, FTTCParameters
+from napariTFM.services.msm_service import MSMService, MSMParameters
+from napariTFM.services.preprocessing_service import PreprocessingService, PreprocessingParameters
 
 
 class ParameterCategory(Enum):
@@ -17,222 +22,288 @@ class ParameterCategory(Enum):
 
 
 @dataclass
-class Parameter:
-    """Class to store parameter metadata and value."""
-    value: Any
-    category: ParameterCategory
-    callbacks: Set[Callable] = field(default_factory=set)
+class UnifiedParameters:
+    """Single source of truth for all parameters"""
+    # General parameters
+    pixel_size: float = 1.0
+    frame_interval: float = 1.0
+
+    # Preprocessing parameters
+    min_intensity_percentile: float = 0.0
+    max_intensity_percentile: float = 1.0
+    enable_gaussian_filter: bool = False
+    gaussian_sigma: float = 0.0
+    cell_min_intensity_percentile: float = 0.0
+    cell_max_intensity_percentile: float = 1.0
+    enable_cell_gaussian_filter: bool = False
+    cell_gaussian_sigma: float = 0.0
+    registration_mode: str = 'translation'
+
+    # Displacement parameters
+    tau: float = 0.25
+    lambda_: float = 0.4
+    theta: float = 0.3
+    nscales: int = 3
+    warps: int = 3
+    epsilon: float = 0.01
+    inner_iterations: int = 15
+    outer_iterations: int = 5
+    scale_step: float = 0.5
+    median_filtering: int = 5
+    downscale_factor: int = 1
+    disp_vector_stride: int = 20
+    disp_arrow_scale: float = 1.0
+    d_max: float = 5.0
+
+    # Force parameters
+    young_modulus: float = 10000.0
+    poisson_ratio_substrate: float = 0.49
+    gel_height: Optional[float] = None
+    lanczos_exp: int = 1
+    regularization: float = 1e-4
+    auto_gcv: bool = False
+    force_vector_stride: int = 20
+    force_arrow_scale: float = 1.0
+    f_max: float = 1000.0
+
+    # Stress parameters
+    threshold: float = 0.0
+    dilation: int = 10
+    smoothing_sigma: float = 10.0
+    density_factor: float = 0.025
+    mesh_algorithm: str = 'Frontal-Del.'
+    use_optimization: bool = True
+    poisson_ratio_cells: float = 0.5
+    max_stress: float = 1.0
+
+    # Visualization parameters (you can add more as needed)
+    show_vectors: bool = True
+    show_colormap: bool = True
+
+    def to_preprocessing_parameters(self) -> PreprocessingParameters:
+        """Create PreprocessingParameters from unified parameters"""
+        return PreprocessingParameters(
+            min_intensity_percentile=self.min_intensity_percentile,
+            max_intensity_percentile=self.max_intensity_percentile,
+            enable_gaussian_filter=self.enable_gaussian_filter,
+            gaussian_sigma=self.gaussian_sigma,
+            cell_min_intensity_percentile=self.cell_min_intensity_percentile,
+            cell_max_intensity_percentile=self.cell_max_intensity_percentile,
+            enable_cell_gaussian_filter=self.enable_cell_gaussian_filter,
+            cell_gaussian_sigma=self.cell_gaussian_sigma,
+            registration_mode=self.registration_mode
+        )
+
+    def to_displacement_parameters(self) -> DisplacementParameters:
+        """Create DisplacementParameters from unified parameters"""
+        return DisplacementParameters(
+            tau=self.tau,
+            lambda_=self.lambda_,
+            theta=self.theta,
+            nscales=self.nscales,
+            warps=self.warps,
+            epsilon=self.epsilon,
+            inner_iterations=self.inner_iterations,
+            outer_iterations=self.outer_iterations,
+            scale_step=self.scale_step,
+            median_filtering=self.median_filtering,
+            downscale_factor=self.downscale_factor,
+            pixel_size=self.pixel_size,
+            frame_interval=self.frame_interval,
+            d_max=self.d_max,
+            disp_vector_stride=self.disp_vector_stride,
+            disp_arrow_scale=self.disp_arrow_scale
+        )
+
+    def to_fttc_parameters(self) -> FTTCParameters:
+        """Create FTTCParameters from unified parameters"""
+        return FTTCParameters(
+            young_modulus=self.young_modulus,
+            poisson_ratio_substrate=self.poisson_ratio_substrate,
+            gel_height=self.gel_height,
+            lanczos_exp=self.lanczos_exp,
+            regularization=self.regularization,
+            auto_gcv=self.auto_gcv,
+            downscale_factor=self.downscale_factor,
+            pixel_size=self.pixel_size,
+            frame_interval=self.frame_interval,
+            force_vector_stride=self.force_vector_stride,
+            force_arrow_scale=self.force_arrow_scale,
+            f_max=self.f_max
+        )
+
+    def to_msm_parameters(self) -> MSMParameters:
+        """Create MSMParameters from unified parameters"""
+        return MSMParameters(
+            threshold=self.threshold,
+            dilation=self.dilation,
+            smoothing_sigma=self.smoothing_sigma,
+            density_factor=self.density_factor,
+            algorithm=self.mesh_algorithm,
+            use_optimization=self.use_optimization,
+            poisson_ratio_cells=self.poisson_ratio_cells,
+            young_modulus=self.young_modulus,
+            pixel_size=self.pixel_size,
+            downscale_factor=self.downscale_factor,
+            frame_interval=self.frame_interval,
+            max_stress=self.max_stress
+        )
 
 
 class ParameterManager(QObject):
-    """Centralized manager for TFM analysis parameters."""
+    """Manages all parameters for the TFM analysis pipeline"""
 
-    # Signal emitted when any parameter changes
     parameter_changed = Signal(str, object)  # (parameter_name, new_value)
+    parameters_reset = Signal(ParameterCategory)  # Emitted when parameters are reset
 
     def __init__(self):
         super().__init__()
-        self._parameters: Dict[str, Parameter] = {}
-        self._initialize_default_parameters()
+        self._parameters = UnifiedParameters()
+        self._callbacks: Dict[str, Set[Callable]] = {}
+        self._initialize_callbacks()
 
-    def _initialize_default_parameters(self):
-        """Initialize all parameters with their default values."""
-        # General parameters
-        self._add_parameter('pixel_size', 1.0, ParameterCategory.GENERAL)
-        self._add_parameter('frame_interval', 1.0, ParameterCategory.GENERAL)
+    def _initialize_callbacks(self):
+        """Initialize callback sets for all parameters"""
+        for field in fields(self._parameters):
+            self._callbacks[field.name] = set()
 
-        # Preprocessing parameters
-        preproc_params = {
-            'min_intensity': 0.0,
-            'max_intensity': 100.0,
-            'gaussian_sigma': 0.0,
-            'cell_min_intensity': 0.0,
-            'cell_max_intensity': 100.0,
-            'cell_gaussian_sigma': 0.0,
-            'registration_mode': 'translation'
-        }
-        for name, value in preproc_params.items():
-            self._add_parameter(name, value, ParameterCategory.PREPROCESSING)
+    def register_callback(self, param_name: str, callback: Callable) -> None:
+        """Register a callback for parameter changes"""
+        if not hasattr(self._parameters, param_name):
+            raise ValueError(f"Unknown parameter: {param_name}")
+        self._callbacks[param_name].add(callback)
 
-        # Displacement parameters
-        disp_params = {
-            'tau': 0.25,
-            'lambda_': 0.4,
-            'theta': 0.3,
-            'nscales': 3,
-            'warps': 3,
-            'epsilon': 0.01,
-            'inner_iterations': 15,
-            'outer_iterations': 5,
-            'scale_step': 0.5,
-            'median_filtering': 5,
-            'downscale_factor': 1,
-            'disp_vector_stride': 20,
-            'disp_arrow_scale': 1.0,
-            'd_max': 5.0
-        }
-        for name, value in disp_params.items():
-            self._add_parameter(name, value, ParameterCategory.DISPLACEMENT)
+    def unregister_callback(self, param_name: str, callback: Callable) -> None:
+        """Unregister a callback for parameter changes"""
+        if not hasattr(self._parameters, param_name):
+            raise ValueError(f"Unknown parameter: {param_name}")
+        self._callbacks[param_name].discard(callback)
 
-        # Force parameters
-        force_params = {
-            'young_modulus': 10000.0,  # 10 kPa in Pa
-            'poisson_ratio_substrate': 0.49,
-            'gel_height': None,  # None means infinite
-            'lanczos_exp': 1,
-            'regularization': 1e-4,
-            'auto_gcv': False,
-            'force_vector_stride': 20,
-            'force_arrow_scale': 1.0,
-            'f_max': 1000.0
-        }
-        for name, value in force_params.items():
-            self._add_parameter(name, value, ParameterCategory.FORCE)
+    def get_parameter(self, name: str) -> Any:
+        """Get a parameter value"""
+        if not hasattr(self._parameters, name):
+            raise ValueError(f"Unknown parameter: {name}")
+        return getattr(self._parameters, name)
 
-        # Stress parameters
-        stress_params = {
-            'threshold': 0.0,
-            'dilation': 10,
-            'smoothing_sigma': 10.0,
-            'density_factor': 0.025,
-            'mesh_algorithm': 'Frontal-Del.',
-            'use_optimization': True,
-            'poisson_ratio_cells': 0.5,
-            'max_stress': 1.0
-        }
-        for name, value in stress_params.items():
-            self._add_parameter(name, value, ParameterCategory.STRESS)
+    def set_parameter(self, name: str, value: Any) -> None:
+        """Set a parameter value and trigger callbacks"""
+        if not hasattr(self._parameters, name):
+            raise ValueError(f"Unknown parameter: {name}")
 
-        # Visualization parameters
-        viz_params = {
-            'save_bead_overlay': False,
-            'save_displacement_map': False,
-            'save_force_map': False,
-            'save_force_cell_overlay': False,
-            'save_sigma_xx': False,
-            'save_sigma_yy': False,
-            'save_shear': False,
-            'save_normal_stress': False,
-            'save_mesh': True
-        }
-        for name, value in viz_params.items():
-            self._add_parameter(name, value, ParameterCategory.VISUALIZATION)
+        current_value = getattr(self._parameters, name)
+        if current_value != value:
+            setattr(self._parameters, name, value)
 
-    def _add_parameter(self, name: str, value: Any, category: ParameterCategory):
-        """Add a new parameter to the manager."""
-        self._parameters[name] = Parameter(value=value, category=category)
-
-    def get_value(self, name: str) -> Any:
-        """Get the current value of a parameter."""
-        if name not in self._parameters:
-            raise KeyError(f"Parameter '{name}' not found")
-        return self._parameters[name].value
-
-    def set_value(self, name: str, value: Any):
-        """Set the value of a parameter and notify observers."""
-        if name not in self._parameters:
-            raise KeyError(f"Parameter '{name}' not found")
-
-        param = self._parameters[name]
-        if param.value != value:
-            param.value = value
-            # Notify observers
-            for callback in param.callbacks:
+            # Trigger callbacks
+            for callback in self._callbacks[name]:
                 callback(value)
+
             # Emit signal
             self.parameter_changed.emit(name, value)
 
-    def register_callback(self, name: str, callback: Callable):
-        """Register a callback for parameter changes."""
-        if name not in self._parameters:
-            raise KeyError(f"Parameter '{name}' not found")
-        self._parameters[name].callbacks.add(callback)
+    def get_preprocessing_parameters(self) -> PreprocessingParameters:
+        """Get parameters for preprocessing service"""
+        return self._parameters.to_preprocessing_parameters()
 
-    def get_category_parameters(self, category: ParameterCategory) -> Dict[str, Any]:
-        """Get all parameters belonging to a specific category."""
-        return {
-            name: param.value
-            for name, param in self._parameters.items()
-            if param.category == category
-        }
+    def get_displacement_parameters(self) -> DisplacementParameters:
+        """Get parameters for displacement service"""
+        return self._parameters.to_displacement_parameters()
 
-    def load_from_file(self, filepath: Path):
-        """Load parameters from a YAML file."""
+    def get_fttc_parameters(self) -> FTTCParameters:
+        """Get parameters for FTTC service"""
+        return self._parameters.to_fttc_parameters()
+
+    def get_msm_parameters(self) -> MSMParameters:
+        """Get parameters for MSM service"""
+        return self._parameters.to_msm_parameters()
+
+    def reset_all_parameters(self) -> None:
+        """Reset all parameters to default values"""
+        new_params = UnifiedParameters()
+        self._update_all_parameters(new_params)
+        for category in ParameterCategory:
+            self.parameters_reset.emit(category)
+
+    def reset_preprocessing_parameters(self) -> None:
+        """Reset preprocessing parameters to defaults"""
+        defaults = UnifiedParameters()
+        for field in fields(PreprocessingParameters):
+            self.set_parameter(field.name, getattr(defaults, field.name))
+        self.parameters_reset.emit(ParameterCategory.PREPROCESSING)
+
+    def reset_displacement_parameters(self) -> None:
+        """Reset displacement parameters to defaults"""
+        defaults = UnifiedParameters()
+        for field in fields(DisplacementParameters):
+            self.set_parameter(field.name, getattr(defaults, field.name))
+        self.parameters_reset.emit(ParameterCategory.DISPLACEMENT)
+
+    def reset_force_parameters(self) -> None:
+        """Reset force parameters to defaults"""
+        defaults = UnifiedParameters()
+        for field in fields(FTTCParameters):
+            self.set_parameter(field.name, getattr(defaults, field.name))
+        self.parameters_reset.emit(ParameterCategory.FORCE)
+
+    def reset_stress_parameters(self) -> None:
+        """Reset stress parameters to defaults"""
+        defaults = UnifiedParameters()
+        for field in fields(MSMParameters):
+            self.set_parameter(field.name, getattr(defaults, field.name))
+        self.parameters_reset.emit(ParameterCategory.STRESS)
+
+    def load_from_file(self, filepath: Path) -> None:
+        """Load parameters from file"""
         with open(filepath, 'r') as f:
             data = yaml.safe_load(f)
 
-        # Update parameters from each section
-        for section, params in data.items():
-            try:
-                category = ParameterCategory[section.upper()]
-                for name, value in params.items():
-                    if name in self._parameters:
-                        self.set_value(name, value)
-            except KeyError:
-                continue  # Skip unknown sections/parameters
+        # Create new parameters instance with loaded values
+        current_params = asdict(self._parameters)
+        current_params.update(data)
+        new_params = UnifiedParameters(**current_params)
 
-    def save_to_file(self, filepath: Path):
-        """Save parameters to a YAML file."""
-        # Group parameters by category
-        data = {}
-        for category in ParameterCategory:
-            category_params = self.get_category_parameters(category)
-            if category_params:
-                data[category.name.lower()] = category_params
+        # Update all parameters
+        self._update_all_parameters(new_params)
 
-        # Save to file
+    def save_to_file(self, filepath: Path) -> None:
+        """Save parameters to file"""
+        data = asdict(self._parameters)
         with open(filepath, 'w') as f:
             yaml.dump(data, f, default_flow_style=False)
 
-    def reset_to_defaults(self):
-        """Reset all parameters to their default values."""
-        # Store existing callbacks
-        callbacks = {name: param.callbacks for name, param in self._parameters.items()}
+    def _update_all_parameters(self, new_params: UnifiedParameters) -> None:
+        """Update all parameters with validation"""
+        old_values = asdict(self._parameters)
+        new_values = asdict(new_params)
 
-        # Clear and reinitialize parameters
-        self._parameters.clear()
-        self._initialize_default_parameters()
+        for name, new_value in new_values.items():
+            if old_values.get(name) != new_value:
+                self.set_parameter(name, new_value)
 
-        # Restore callbacks
-        for name, saved_callbacks in callbacks.items():
-            if name in self._parameters:
-                self._parameters[name].callbacks = saved_callbacks
-                # Notify callbacks of new default value
-                for callback in saved_callbacks:
-                    callback(self._parameters[name].value)
-                # Emit signal for the parameter change
-                self.parameter_changed.emit(name, self._parameters[name].value)
+    def validate_all_parameters(self) -> Tuple[bool, str]:
+        """Validate all parameters using service validation methods"""
+        # Check preprocessing parameters
+        preproc_params = self.get_preprocessing_parameters()
+        valid, msg = PreprocessingService.validate_parameters(preproc_params)
+        if not valid:
+            return False, f"Preprocessing parameters invalid: {msg}"
 
-    def reset_category_to_defaults(self, category: ParameterCategory):
-        """Reset parameters of a specific category to their default values."""
-        # Store existing callbacks for parameters in this category
-        callbacks = {
-            name: param.callbacks
-            for name, param in self._parameters.items()
-            if param.category == category
-        }
+        # Check displacement parameters
+        disp_params = self.get_displacement_parameters()
+        valid, msg = DisplacementService.validate_parameters(disp_params)
+        if not valid:
+            return False, f"Displacement parameters invalid: {msg}"
 
-        # Store parameters from other categories
-        other_params = {
-            name: param
-            for name, param in self._parameters.items()
-            if param.category != category
-        }
+        # Check force parameters
+        force_params = self.get_fttc_parameters()
+        valid, msg = FTTCService.validate_parameters(force_params)
+        if not valid:
+            return False, f"Force parameters invalid: {msg}"
 
-        # Clear and reinitialize all parameters
-        self._parameters.clear()
-        self._initialize_default_parameters()
+        # Check stress parameters
+        stress_params = self.get_msm_parameters()
+        valid, msg = MSMService.validate_parameters(stress_params)
+        if not valid:
+            return False, f"Stress parameters invalid: {msg}"
 
-        # Restore parameters from other categories
-        for name, param in other_params.items():
-            self._parameters[name] = param
-
-        # Restore callbacks for reset category and notify
-        for name, saved_callbacks in callbacks.items():
-            if name in self._parameters:
-                self._parameters[name].callbacks = saved_callbacks
-                # Notify callbacks of new default value
-                for callback in saved_callbacks:
-                    callback(self._parameters[name].value)
-                # Emit signal for the parameter change
-                self.parameter_changed.emit(name, self._parameters[name].value)
+        return True, ""

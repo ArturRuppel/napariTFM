@@ -34,7 +34,7 @@ def setup_debug_environment():
 
             # Verify other critical imports
             from napariTFM.preprocessing_widget import PreprocessingWidget
-            from napariTFM.data_manager import DataManager
+            from napariTFM.data_manager_old import DataManager
             from napariTFM.visualization_manager import VisualizationManager
             logger.debug("Successfully imported all required modules")
 

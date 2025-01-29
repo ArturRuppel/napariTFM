@@ -19,8 +19,8 @@ from qtrangeslider import QRangeSlider
 
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
-from napariTFM.data_manager import DataManager
-from napariTFM.parameter_manager import ParameterManager
+from napariTFM.data_manager_old import DataManager
+from napariTFM.parameter_manager_old import ParameterManager
 from napariTFM.services.preprocessing_service import PreprocessingService, PreprocessingParameters
 from napariTFM.visualization_manager import VisualizationManager
 

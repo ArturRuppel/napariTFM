@@ -7,8 +7,8 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog
 )
 
-from napariTFM.parameter_manager import ParameterManager
-from napariTFM.data_manager import DataManager
+from napariTFM.parameter_manager_old import ParameterManager
+from napariTFM.data_manager_old import DataManager
 from napariTFM.visualization_manager import VisualizationManager
 
 from napariTFM.preprocessing_widget import PreprocessingWidget

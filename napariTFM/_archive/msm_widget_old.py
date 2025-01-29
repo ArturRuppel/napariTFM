@@ -15,7 +15,7 @@ from napariTFM.backend.mesh_generator import MeshParameters, MeshGenerator
 from napariTFM.backend.msm import MonolayerStressMicroscopy
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
-from napariTFM.parameter_manager import ParameterCategory
+from napariTFM.parameter_manager_old import ParameterCategory
 
 
 class MSMWidget(BaseAnalysisWidget):

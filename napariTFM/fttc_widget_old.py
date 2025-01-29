@@ -13,8 +13,8 @@ from qtpy.QtWidgets import (
 from napariTFM.backend.fttc import FTTC
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
-from napariTFM.data_manager import DataManager
-from napariTFM.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.data_manager_old import DataManager
+from napariTFM.parameter_manager_old import ParameterManager, ParameterCategory
 from napariTFM.visualization_manager import VisualizationManager
 
 

@@ -10,8 +10,8 @@ from napari.qt.threading import thread_worker
 
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
-from napariTFM.data_manager import DataManager
-from napariTFM.parameter_manager import ParameterManager
+from napariTFM.data_manager_old import DataManager
+from napariTFM.parameter_manager_old import ParameterManager
 from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters
 
