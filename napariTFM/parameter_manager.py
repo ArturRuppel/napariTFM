@@ -26,7 +26,7 @@ class ParameterCategory(Enum):
 class UnifiedParameters:
     """Single source of truth for all parameters"""
     # General parameters
-    pixel_size: float = 1.0  # µm
+    pixel_size: float = 0.1  # µm
     frame_interval: float = 1.0  # min
 
     # Preprocessing parameters
@@ -54,10 +54,10 @@ class UnifiedParameters:
     downscale_factor: int = 1
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0
-    d_max: float = 5.0  # µm
+    d_max: float = 1.0  # µm
 
     # Force parameters
-    young_modulus: float = 10.0  # kPa
+    young_modulus: float = 5.0  # kPa
     poisson_ratio_substrate: float = 0.5
     gel_height: Optional[float] = None
     lanczos_exp: int = 1
@@ -65,13 +65,13 @@ class UnifiedParameters:
     auto_gcv: bool = False
     force_vector_stride: int = 20
     force_arrow_scale: float = 1.0
-    f_max: float = 1000.0  # Pa
+    f_max: float = 500.0  # Pa
 
     # Stress parameters
     threshold: float = 0.0
     dilation: int = 10
     smoothing_sigma: float = 10.0
-    density_factor: float = 0.025
+    density_factor: float = 0.01
     mesh_algorithm: str = 'Frontal-Del.'
     use_optimization: bool = True
     poisson_ratio_cells: float = 0.5
