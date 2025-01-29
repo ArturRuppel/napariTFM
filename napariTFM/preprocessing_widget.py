@@ -10,13 +10,17 @@ import tifffile
 from napari.layers import Image
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
-from qtpy.QtCore import Qt, Signal, QObject
-from qtrangeslider import QRangeSlider
+from qtpy.QtCore import QObject
+from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QRadioButton, QFileDialog, QSlider,
-    QDoubleSpinBox, QPushButton, QFrame, QScrollArea, QCheckBox, QApplication,
-    QProgressBar, QMessageBox, QComboBox, QSizePolicy
+    QRadioButton, QFileDialog, QFrame, QScrollArea, QCheckBox, QApplication,
+    QProgressBar, QMessageBox, QSizePolicy
 )
+from qtpy.QtWidgets import (
+    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget,
+    QDoubleSpinBox, QPushButton, QComboBox, QSlider
+)
+from qtrangeslider import QRangeSlider
 
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
@@ -28,7 +32,7 @@ class PreprocessingDataPanel(QWidget):
     """Panel for handling data loading and status display."""
 
     data_loaded = Signal(str)  # Emits data type that was loaded
-
+    # region === Initialization
     def __init__(self, data_manager, viewer):
         super().__init__()
         self.data_manager = data_manager
@@ -71,6 +75,9 @@ class PreprocessingDataPanel(QWidget):
         layout.addWidget(data_group)
         self.setLayout(layout)
 
+    # endregion === Initialization
+
+    # region === Controller Setup
     def set_controller(self, controller):
         """Set the controller and connect signals."""
         self.controller = controller
@@ -78,6 +85,9 @@ class PreprocessingDataPanel(QWidget):
         self.load_reference_btn.clicked.connect(lambda: self.controller.load_active_layer('reference'))
         self.load_cells_btn.clicked.connect(lambda: self.controller.load_active_layer('cells'))
 
+    # endregion === Controller Setup
+
+    # region === State Management
     def update_button_states(self, active_layer_exists: bool = False):
         """Update button states based on layer selection."""
         active_layer = self.viewer.layers.selection.active
@@ -116,19 +126,13 @@ class PreprocessingDataPanel(QWidget):
         self.load_reference_btn.setEnabled(not frozen)
         self.load_cells_btn.setEnabled(not frozen)
 
-
-from qtpy.QtCore import Qt, Signal
-from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget,
-    QDoubleSpinBox, QPushButton, QComboBox, QSlider
-)
-from qtrangeslider import QRangeSlider
+    # endregion === State Management
 
 
 class PreprocessingParameterPanel(QWidget):
     """Panel for handling preprocessing parameter inputs."""
 
-    parameter_changed = Signal()
+    parameter_changed = Signal(str, object)  # (param_name, value)
 
     def __init__(self, parameter_manager):
         super().__init__()
@@ -172,10 +176,19 @@ class PreprocessingParameterPanel(QWidget):
         mode_layout = QHBoxLayout()
         mode_layout.addWidget(QLabel("Mode:"))
         self.registration_mode_combo = QComboBox()
+        # Ensure exact same strings as BatchAnalysisWidget
         self.registration_mode_combo.addItems(['Translation', 'Rigid', 'No registration'])
         self.parameter_combos['registration_mode'] = self.registration_mode_combo
         mode_layout.addWidget(self.registration_mode_combo)
         layout.addLayout(mode_layout)
+
+        # Connect signal with case handling
+        self.registration_mode_combo.currentTextChanged.connect(
+            lambda text: self.parameter_manager.set_parameter(
+                'registration_mode',
+                text.lower()  # Convert to lowercase to match batch widget
+            )
+        )
 
         self.registration_note = QLabel(
             "Note: Registration will be performed relative to the reference image."
@@ -185,6 +198,45 @@ class PreprocessingParameterPanel(QWidget):
 
         group.setLayout(layout)
         return group
+
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager values."""
+        # Existing code for registration mode...
+
+        # Sync spin boxes
+        for name, spin in self.parameter_spins.items():
+            value = self.parameter_manager.get_parameter(name)
+            if name == 'young_modulus':
+                value = value / 1000  # Convert Pa to kPa for display
+            elif name == 'gel_height' and value is None:
+                value = 0
+            if isinstance(spin, tuple):
+                # Handle special cases
+                spin_widget, slider = spin
+                self._safe_set_value(spin_widget, value)
+                self._safe_set_value(slider, value)
+            else:
+                self._safe_set_value(spin, value)
+
+        # Sync bead intensity range slider
+        min_intensity = self.parameter_manager.get_parameter('min_intensity_percentile')
+        max_intensity = self.parameter_manager.get_parameter('max_intensity_percentile')
+        min_slider_val = int(min_intensity * 10)  # Convert 0.0-100.0 → 0-1000
+        max_slider_val = int(max_intensity * 10)
+        self.parameter_range_sliders['intensity'].setValue((min_slider_val, max_slider_val))
+
+        # Sync cell intensity range slider
+        cell_min = self.parameter_manager.get_parameter('cell_min_intensity_percentile')
+        cell_max = self.parameter_manager.get_parameter('cell_max_intensity_percentile')
+        cell_min_slider = int(cell_min * 10)
+        cell_max_slider = int(cell_max * 10)
+        self.parameter_range_sliders['cell_intensity'].setValue((cell_min_slider, cell_max_slider))
+
+        # Sync Gaussian sigma sliders
+        sigma = self.parameter_manager.get_parameter('gaussian_sigma')
+        cell_sigma = self.parameter_manager.get_parameter('cell_gaussian_sigma')
+        self.parameter_sliders['gaussian_sigma'].setValue(int(sigma * 10))  # 0.0-10.0 → 0-100
+        self.parameter_sliders['cell_gaussian_sigma'].setValue(int(cell_sigma * 10))
 
     def _create_intensity_range_group(self):
         group = QGroupBox("Bead/Reference Parameters")
@@ -341,7 +393,56 @@ class PreprocessingParameterPanel(QWidget):
         # Update parameters
         self.parameter_manager.set_parameter('min_intensity_percentile', min_percent)
         self.parameter_manager.set_parameter('max_intensity_percentile', max_percent)
-        self.parameter_changed.emit()
+        # Update these two lines to include parameters
+        self.parameter_changed.emit('min_intensity_percentile', min_percent)
+        self.parameter_changed.emit('max_intensity_percentile', max_percent)
+
+    def _update_intensity_from_spinbox(self):
+        """Update intensity slider from spinboxes."""
+        min_spin = self.parameter_spins['min_intensity_percentile']
+        max_spin = self.parameter_spins['max_intensity_percentile']
+        slider = self.parameter_range_sliders['intensity']
+
+        min_val = int(min_spin.value() * 10)
+        max_val = int(max_spin.value() * 10)
+
+        # Update slider without triggering its signal
+        slider.blockSignals(True)
+        slider.setValue((min_val, max_val))
+        slider.blockSignals(False)
+
+        # Update parameters
+        self.parameter_manager.set_parameter('min_intensity_percentile', min_spin.value())
+        self.parameter_manager.set_parameter('max_intensity_percentile', max_spin.value())
+        # Update these two lines to include parameters
+        self.parameter_changed.emit('min_intensity_percentile', min_spin.value())
+        self.parameter_changed.emit('max_intensity_percentile', max_spin.value())
+
+    def _update_sigma_from_slider(self, param: str, value: int):
+        """Update sigma spinbox from slider."""
+        sigma_value = value / 10.0
+        spin = self.parameter_spins[param]
+
+        spin.blockSignals(True)
+        spin.setValue(sigma_value)
+        spin.blockSignals(False)
+
+        self.parameter_manager.set_parameter(param, sigma_value)
+        # Update this line to include parameter
+        self.parameter_changed.emit(param, sigma_value)
+
+    def _update_sigma_from_spinbox(self, param: str, value: float):
+        """Update sigma slider from spinbox."""
+        slider_value = int(value * 10)
+        slider = self.parameter_sliders[param]
+
+        slider.blockSignals(True)
+        slider.setValue(slider_value)
+        slider.blockSignals(False)
+
+        self.parameter_manager.set_parameter(param, value)
+        # Update this line to include parameter
+        self.parameter_changed.emit(param, value)
 
     def _update_cell_intensity_from_slider(self, values):
         """Update cell intensity spinboxes from range slider."""
@@ -361,26 +462,9 @@ class PreprocessingParameterPanel(QWidget):
         # Update parameters
         self.parameter_manager.set_parameter('cell_min_intensity_percentile', min_percent)
         self.parameter_manager.set_parameter('cell_max_intensity_percentile', max_percent)
-        self.parameter_changed.emit()
-
-    def _update_intensity_from_spinbox(self):
-        """Update intensity slider from spinboxes."""
-        min_spin = self.parameter_spins['min_intensity_percentile']
-        max_spin = self.parameter_spins['max_intensity_percentile']
-        slider = self.parameter_range_sliders['intensity']
-
-        min_val = int(min_spin.value() * 10)
-        max_val = int(max_spin.value() * 10)
-
-        # Update slider without triggering its signal
-        slider.blockSignals(True)
-        slider.setValue((min_val, max_val))
-        slider.blockSignals(False)
-
-        # Update parameters
-        self.parameter_manager.set_parameter('min_intensity_percentile', min_spin.value())
-        self.parameter_manager.set_parameter('max_intensity_percentile', max_spin.value())
-        self.parameter_changed.emit()
+        # Update these two lines to include parameters
+        self.parameter_changed.emit('cell_min_intensity_percentile', min_percent)
+        self.parameter_changed.emit('cell_max_intensity_percentile', max_percent)
 
     def _update_cell_intensity_from_spinbox(self):
         """Update cell intensity slider from spinboxes."""
@@ -399,76 +483,9 @@ class PreprocessingParameterPanel(QWidget):
         # Update parameters
         self.parameter_manager.set_parameter('cell_min_intensity_percentile', min_spin.value())
         self.parameter_manager.set_parameter('cell_max_intensity_percentile', max_spin.value())
-        self.parameter_changed.emit()
-
-    def _update_sigma_from_slider(self, param: str, value: int):
-        """Update sigma spinbox from slider."""
-        sigma_value = value / 10.0
-        spin = self.parameter_spins[param]
-
-        spin.blockSignals(True)
-        spin.setValue(sigma_value)
-        spin.blockSignals(False)
-
-        self.parameter_manager.set_parameter(param, sigma_value)
-        self.parameter_changed.emit()
-
-    def _update_sigma_from_spinbox(self, param: str, value: float):
-        """Update sigma slider from spinbox."""
-        slider_value = int(value * 10)
-        slider = self.parameter_sliders[param]
-
-        slider.blockSignals(True)
-        slider.setValue(slider_value)
-        slider.blockSignals(False)
-
-        self.parameter_manager.set_parameter(param, value)
-        self.parameter_changed.emit()
-
-    def _sync_widget_with_parameters(self):
-        """Sync all widget values with parameter manager values."""
-        self._block_widgets(True)
-        try:
-            # Sync intensity ranges
-            min_val = self.parameter_manager.get_parameter('min_intensity_percentile')
-            max_val = self.parameter_manager.get_parameter('max_intensity_percentile')
-
-            if min_val is not None and max_val is not None:
-                self.parameter_spins['min_intensity_percentile'].setValue(min_val)
-                self.parameter_spins['max_intensity_percentile'].setValue(max_val)
-                self.parameter_range_sliders['intensity'].setValue((
-                    int(min_val * 10),
-                    int(max_val * 10)
-                ))
-
-            # Sync cell intensity ranges
-            cell_min = self.parameter_manager.get_parameter('cell_min_intensity_percentile')
-            cell_max = self.parameter_manager.get_parameter('cell_max_intensity_percentile')
-
-            if cell_min is not None and cell_max is not None:
-                self.parameter_spins['cell_min_intensity_percentile'].setValue(cell_min)
-                self.parameter_spins['cell_max_intensity_percentile'].setValue(cell_max)
-                self.parameter_range_sliders['cell_intensity'].setValue((
-                    int(cell_min * 10),
-                    int(cell_max * 10)
-                ))
-
-            # Sync sigma values
-            for param in ['gaussian_sigma', 'cell_gaussian_sigma']:
-                value = self.parameter_manager.get_parameter(param)
-                if value is not None:
-                    self.parameter_spins[param].setValue(value)
-                    self.parameter_sliders[param].setValue(int(value * 10))
-
-            # Sync registration mode
-            reg_mode = self.parameter_manager.get_parameter('registration_mode')
-            if reg_mode is not None:
-                index = self.registration_mode_combo.findText(reg_mode.title())
-                if index >= 0:
-                    self.registration_mode_combo.setCurrentIndex(index)
-
-        finally:
-            self._block_widgets(False)
+        # Update these two lines to include parameters
+        self.parameter_changed.emit('cell_min_intensity_percentile', min_spin.value())
+        self.parameter_changed.emit('cell_max_intensity_percentile', max_spin.value())
 
     def _block_widgets(self, block: bool):
         """Block or unfreeze all widget signals."""
@@ -485,7 +502,6 @@ class PreprocessingParameterPanel(QWidget):
         """Reset all parameters to their default values."""
         self.parameter_manager.reset_preprocessing_parameters()
         self._sync_widget_with_parameters()
-        self.parameter_changed.emit()
 
     def freeze_ui(self, frozen: bool):
         """Freeze or unfreeze UI elements."""
@@ -512,15 +528,24 @@ class PreprocessingParameterPanel(QWidget):
             'registration_mode': self.registration_mode_combo.currentText().lower()
         }
 
-    def update_parameter(self, name: str, value: float):
+    def _update_parameter(self, name: str, value: Any):
+        self.parameter_manager.set_parameter(name, value)
+        self.parameter_changed.emit(name, value)
+
+    def update_parameter(self, name: str, value: Any):
         """Update a single parameter value."""
         if name in self.parameter_spins:
             self.parameter_spins[name].setValue(value)
         elif name == 'registration_mode' and value is not None:
-            index = self.registration_mode_combo.findText(str(value).title())
-            if index >= 0:
-                self.registration_mode_combo.setCurrentIndex(index)
-
+            # Case-insensitive search for the combo box item
+            target_value = str(value).lower()
+            for index in range(self.registration_mode_combo.count()):
+                item_text = self.registration_mode_combo.itemText(index)
+                if item_text.lower() == target_value:
+                    self.registration_mode_combo.setCurrentIndex(index)
+                    break
+        else:
+            print(f"Parameter {name} not recognized or value is None")
     def _safe_set_value(self, widget, value):
         """Safely set widget value."""
         if value is not None and widget is not None:
@@ -550,8 +575,6 @@ class PreprocessingParameterPanel(QWidget):
                     combo.setCurrentIndex(index)
             finally:
                 combo.blockSignals(False)
-
-
 
 
 class PreprocessingController(QObject):
@@ -1195,9 +1218,15 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
         # Connect parameter panel changes
         self.parameter_panel.parameter_changed.connect(self._on_parameter_changed)
+        self.parameter_manager.parameter_changed.connect(self._sync_parameter)
 
         # Add layer selection monitoring
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
+
+    def _sync_parameter(self, param_name: str, value: Any):
+        """Sync a single parameter change from parameter manager"""
+        if self.parameter_panel:
+            self.parameter_panel.update_parameter(param_name, value)
 
     def _on_preview_toggled(self, enabled: bool):
         """Handle preview toggle."""

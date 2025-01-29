@@ -1,3 +1,5 @@
+# TODO get rid of this file
+
 import enum
 import logging
 from dataclasses import dataclass
@@ -34,22 +36,22 @@ class ApplicationError(Exception):
         return error_str
 
 
-class ProcessingError(ApplicationError):
-    """Specific error class for processing-related errors."""
-
-    def __init__(
-            self,
-            message: str,
-            details: str = "",
-            severity: ErrorSeverity = ErrorSeverity.ERROR,
-            recovery_hint: Optional[str] = None
-    ):
-        super().__init__(
-            message=message,
-            details=details,
-            severity=severity,
-            recovery_hint=recovery_hint
-        )
+# class ProcessingError(ApplicationError):
+#     """Specific error class for processing-related errors."""
+#
+#     def __init__(
+#             self,
+#             message: str,
+#             details: str = "",
+#             severity: ErrorSeverity = ErrorSeverity.ERROR,
+#             recovery_hint: Optional[str] = None
+#     ):
+#         super().__init__(
+#             message=message,
+#             details=details,
+#             severity=severity,
+#             recovery_hint=recovery_hint
+#         )
 
 
 class ErrorHandlingMixin:
@@ -58,14 +60,6 @@ class ErrorHandlingMixin:
     def __init__(self):
         self._error_handlers = []
 
-    def add_error_handler(self, handler):
-        """Add an error handler function."""
-        self._error_handlers.append(handler)
-
-    def remove_error_handler(self, handler):
-        """Remove an error handler function."""
-        if handler in self._error_handlers:
-            self._error_handlers.remove(handler)
 
     def handle_error(self, error: ApplicationError):
         """Handle an error by passing it to all registered handlers."""

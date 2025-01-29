@@ -144,11 +144,16 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 combo.currentTextChanged.connect(
                     lambda text, name=name: self.parameter_manager.set_parameter(name, text)
                 )
+                if name == 'registration_mode':
+                   combo.currentTextChanged.connect(
+                        lambda text: self.parameter_manager.set_parameter('registration_mode', text.lower())
+                    )
                 try:
                     value = self.parameter_manager.get_parameter(name)
                     self._safe_set_combo_text(combo, value)
                 except KeyError:
                     print(f"Warning: Parameter {name} not found")
+
 
             # Connect all checkboxes
             for name, checkbox in self.parameter_checks.items():
@@ -1119,7 +1124,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             checkbox.setChecked(bool(checked))
             checkbox.blockSignals(False)
 
-    # endregion === Parameter Management ===
+    # endregion === Parameter Management ===conn
 
     # region === Folder Management ===
     def _add_folder(self):
