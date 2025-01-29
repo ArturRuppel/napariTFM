@@ -21,20 +21,21 @@ class ParameterCategory(Enum):
     VISUALIZATION = auto()
 
 
+# TODO review default values
 @dataclass
 class UnifiedParameters:
     """Single source of truth for all parameters"""
     # General parameters
-    pixel_size: float = 1.0
-    frame_interval: float = 1.0
+    pixel_size: float = 1.0  # µm
+    frame_interval: float = 1.0  # min
 
     # Preprocessing parameters
     min_intensity_percentile: float = 0.0
-    max_intensity_percentile: float = 1.0
+    max_intensity_percentile: float = 100.0
     enable_gaussian_filter: bool = False
     gaussian_sigma: float = 0.0
     cell_min_intensity_percentile: float = 0.0
-    cell_max_intensity_percentile: float = 1.0
+    cell_max_intensity_percentile: float = 100.0
     enable_cell_gaussian_filter: bool = False
     cell_gaussian_sigma: float = 0.0
     registration_mode: str = 'translation'
@@ -53,18 +54,18 @@ class UnifiedParameters:
     downscale_factor: int = 1
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0
-    d_max: float = 5.0
+    d_max: float = 5.0  # µm
 
     # Force parameters
-    young_modulus: float = 10000.0
-    poisson_ratio_substrate: float = 0.49
+    young_modulus: float = 10.0  # kPa
+    poisson_ratio_substrate: float = 0.5
     gel_height: Optional[float] = None
     lanczos_exp: int = 1
     regularization: float = 1e-4
     auto_gcv: bool = False
     force_vector_stride: int = 20
     force_arrow_scale: float = 1.0
-    f_max: float = 1000.0
+    f_max: float = 1000.0  # Pa
 
     # Stress parameters
     threshold: float = 0.0

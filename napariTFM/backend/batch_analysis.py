@@ -524,11 +524,11 @@ class BatchAnalysis:
     def _create_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create preprocessing parameters from config."""
         return PreprocessingParameters(
-            min_intensity_percentile=self.config['parameters']['min_intensity'] / 100,
-            max_intensity_percentile=self.config['parameters']['max_intensity'] / 100,
+            min_intensity_percentile=self.config['parameters']['min_intensity_percentile'] / 100,
+            max_intensity_percentile=self.config['parameters']['max_intensity_percentile'] / 100,
             gaussian_sigma=self.config['parameters']['gaussian_sigma'],
-            cell_min_intensity_percentile=self.config['parameters']['cell_min_intensity'] / 100,
-            cell_max_intensity_percentile=self.config['parameters']['cell_max_intensity'] / 100,
+            cell_min_intensity_percentile=self.config['parameters']['cell_min_intensity_percentile'] / 100,
+            cell_max_intensity_percentile=self.config['parameters']['cell_max_intensity_percentile'] / 100,
             cell_gaussian_sigma=self.config['parameters']['cell_gaussian_sigma'],
             registration_mode=self.config['parameters']['registration_mode']
         )
