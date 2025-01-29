@@ -1,6 +1,4 @@
 # TODO add rangesliders
-# TODO radio button doesn't freeze during processing
-# TODO reference button should have different enable/disable logic
 # TODO parameters don't synch from batch to preprocessing widget
 # TODO only Bead Overlay layer should be visible after preprocessing
 
@@ -343,45 +341,6 @@ class PreprocessingController(QObject):
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
         self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
 
-    def _handle_preprocessing_results(self, results):
-        """Handle successful preprocessing results."""
-        try:
-            if results is None:
-                return
-
-            # Process all results at once
-            processed_images = [r.processed_image for r in results]
-
-            # Update data manager
-            if self.data_manager.bead_stack is not None:
-                n_beads = self.data_manager.bead_stack.shape[0]
-                self.data_manager.set_preprocessed_bead_stack(np.stack(processed_images[:n_beads]))
-                processed_images = processed_images[n_beads:]
-
-            if self.data_manager.reference is not None:
-                self.data_manager.set_preprocessed_reference(processed_images[0])
-                processed_images = processed_images[1:]
-
-            if self.data_manager.cell_stack is not None:
-                n_cells = self.data_manager.cell_stack.shape[0]
-                self.data_manager.set_preprocessed_cell_stack(np.stack(processed_images[:n_cells]))
-
-            # Update visualization
-            self.visualization_manager.update_preprocessing_visualization()
-
-            # Get current parameters for the completion signal
-            current_params = self.parameter_manager.get_preprocessing_parameters()
-
-            self.progress_updated.emit(100, "Preprocessing complete")
-            self.preprocessing_completed.emit({'parameters': current_params.__dict__})
-
-        except Exception as e:
-            error_msg = f"Error handling preprocessing results: {str(e)}"
-            self.preprocessing_failed.emit(error_msg)
-            QMessageBox.critical(None, "Error", error_msg)
-        finally:
-            self.unfreeze_ui()
-
     def run_preprocessing(self):
         """Execute preprocessing on loaded data."""
         try:
@@ -437,6 +396,7 @@ class PreprocessingController(QObject):
                 yield start_progress + frame / total * 100, f"Processing cells: Frame {frame + 1}/{total}"
 
         return results
+
     def cancel_all_operations(self):
         """Cancel all running background operations."""
         for worker in self.active_workers:
@@ -588,8 +548,6 @@ class PreprocessingController(QObject):
                 enable=False
             )
 
-
-
     def _handle_preprocessing_error(self, error):
         """Handle preprocessing error."""
         error_msg = str(error)
@@ -597,6 +555,63 @@ class PreprocessingController(QObject):
         self.progress_updated.emit(0, f"Error: {error_msg}")
         QMessageBox.critical(None, "Error", error_msg)
         self.unfreeze_ui()
+
+    def _handle_preprocessing_results(self, results):
+        """Handle successful preprocessing results."""
+        try:
+            if results is None:
+                return
+
+            # Process all results at once
+            processed_images = [r.processed_image for r in results]
+
+            # Update data manager
+            if self.data_manager.bead_stack is not None:
+                n_beads = self.data_manager.bead_stack.shape[0]
+                self.data_manager.set_preprocessed_bead_stack(np.stack(processed_images[:n_beads]))
+                processed_images = processed_images[n_beads:]
+
+            if self.data_manager.reference is not None:
+                self.data_manager.set_preprocessed_reference(processed_images[0])
+                processed_images = processed_images[1:]
+
+            if self.data_manager.cell_stack is not None:
+                n_cells = self.data_manager.cell_stack.shape[0]
+                self.data_manager.set_preprocessed_cell_stack(np.stack(processed_images[:n_cells]))
+
+            # Update visualization
+            self.visualization_manager.update_preprocessing_visualization()
+
+            # Manage layer visibility
+            bead_overlay_layer = None
+
+            # First pass: find the bead overlay layer and disable all others
+            for layer in self.viewer.layers:
+                if layer.name == 'Bead Overlay':
+                    bead_overlay_layer = layer
+                    layer.visible = True
+                else:
+                    layer.visible = False
+
+            # If bead overlay exists, move it to the top (index 0)
+            if bead_overlay_layer is not None:
+                current_index = self.viewer.layers.index(bead_overlay_layer)
+                # Move to index 0 (top-most position)
+                if current_index > 0:
+                    self.viewer.layers.move(current_index, -1)
+
+            # Get current parameters for the completion signal
+            current_params = self.parameter_manager.get_preprocessing_parameters()
+
+            self.progress_updated.emit(100, "Preprocessing complete")
+            self.preprocessing_completed.emit({'parameters': current_params.__dict__})
+
+        except Exception as e:
+            error_msg = f"Error handling preprocessing results: {str(e)}"
+            self.preprocessing_failed.emit(error_msg)
+            QMessageBox.critical(None, "Error", error_msg)
+        finally:
+            self.unfreeze_ui()
 
     def save_preprocessed_data(self):
         """Save preprocessed data to files."""
@@ -1056,6 +1071,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 self.data_manager.preprocessed_cell_stack is not None
         )
         self.save_btn.setEnabled(has_preprocessed)
+
     def cleanup(self):
         """Clean up resources."""
         if self.colorbar_manager:
