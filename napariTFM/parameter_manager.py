@@ -51,7 +51,7 @@ class UnifiedParameters:
     outer_iterations: int = 5
     scale_step: float = 0.5
     median_filtering: int = 5
-    downscale_factor: int = 1
+    downscale_factor: int = 4
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0
     d_max: float = 1.0  # µm

@@ -1,4 +1,3 @@
-# TODO add tooltips for parameters
 import os
 import subprocess
 import sys
@@ -253,6 +252,33 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
+    def _create_general_params_group(self) -> QGroupBox:
+        """Create general parameters group without setting defaults."""
+        group = QGroupBox("General Parameters")
+        layout = QVBoxLayout()
+        layout.setSpacing(4)
+
+        # Pixel size
+        pixel_row = QHBoxLayout()
+        pixel_row.addWidget(QLabel("Pixel Size (µm):"))
+        pixel_spin = self._create_spinbox(0.01, 10.0, 0.1, 2)
+        pixel_spin.setToolTip("Physical size of each pixel in micrometers. Used for converting image measurements to physical units.")
+        self.parameter_spins['pixel_size'] = pixel_spin
+        pixel_row.addWidget(pixel_spin)
+        layout.addLayout(pixel_row)
+
+        # Frame interval
+        frame_row = QHBoxLayout()
+        frame_row.addWidget(QLabel("Frame Length (min):"))
+        frame_spin = self._create_spinbox(0.001, 1000.0, 0.1, 1)
+        frame_spin.setToolTip("Time interval between consecutive image frames in minutes. Used for temporal analysis and rate calculations.")
+        self.parameter_spins['frame_interval'] = frame_spin
+        frame_row.addWidget(frame_spin)
+        layout.addLayout(frame_row)
+
+        group.setLayout(layout)
+        return group
+
     def _create_preprocessing_params_group(self) -> QGroupBox:
         """Create preprocessing parameters group without setting defaults."""
         group = QGroupBox("Preprocessing Parameters")
@@ -261,30 +287,38 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         # Bead/Reference parameters
         bead_params = [
-            ("min_intensity_percentile", "Min Intensity (%)", 0, 100, 0.1),
-            ("max_intensity_percentile", "Max Intensity (%)", 0, 100, 0.1),
-            ("gaussian_sigma", "Gaussian Sigma", 0.0, 10.0, 0.1)
+            ("min_intensity_percentile", "Min Intensity (%)", 0, 100, 0.1,
+             "Minimum intensity threshold percentile for bead detection. Lower values include dimmer beads."),
+            ("max_intensity_percentile", "Max Intensity (%)", 0, 100, 0.1,
+             "Maximum intensity threshold percentile for bead detection. Higher values include brighter beads."),
+            ("gaussian_sigma", "Gaussian Sigma", 0.0, 10.0, 0.1,
+             "Standard deviation for Gaussian smoothing of bead images. Higher values reduce noise but may blur features.")
         ]
 
-        for name, label, min_val, max_val, step in bead_params:
+        for name, label, min_val, max_val, step, tooltip in bead_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             spin = self._create_spinbox(min_val, max_val, step)
+            spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
 
         # Cell parameters
         cell_params = [
-            ("cell_min_intensity_percentile", "Cell Min Intensity (%)", 0, 100, 0.1),
-            ("cell_max_intensity_percentile", "Cell Max Intensity (%)", 0, 100, 0.1),
-            ("cell_gaussian_sigma", "Cell Gaussian Sigma", 0.0, 10.0, 0.1)
+            ("cell_min_intensity_percentile", "Cell Min Intensity (%)", 0, 100, 0.1,
+             "Minimum intensity threshold percentile for cell detection. Lower values include dimmer cell regions."),
+            ("cell_max_intensity_percentile", "Cell Max Intensity (%)", 0, 100, 0.1,
+             "Maximum intensity threshold percentile for cell detection. Higher values include brighter cell regions."),
+            ("cell_gaussian_sigma", "Cell Gaussian Sigma", 0.0, 10.0, 0.1,
+             "Standard deviation for Gaussian smoothing of cell images. Higher values reduce noise but may blur cell boundaries.")
         ]
 
-        for name, label, min_val, max_val, step in cell_params:
+        for name, label, min_val, max_val, step, tooltip in cell_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             spin = self._create_spinbox(min_val, max_val, step)
+            spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
@@ -294,7 +328,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         reg_row.addWidget(QLabel("Registration Mode:"))
         reg_combo = QComboBox()
         reg_combo.addItems(['Translation', 'Rigid', 'No registration'])
-        reg_combo.setToolTip("Choose registration method")
+        reg_combo.setToolTip("Method for aligning image sequences:\n- Translation: Corrects x-y drift\n- Rigid: Corrects drift and rotation\n- No registration: Uses raw images")
         self.parameter_combos['registration_mode'] = reg_combo
         reg_row.addWidget(reg_combo)
         layout.addLayout(reg_row)
@@ -310,20 +344,31 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         # Optical flow parameters
         flow_params = [
-            ("tau", "Tau:", 0.01, 1.0, 0.01),
-            ("lambda_", "Lambda:", 0.01, 1.0, 0.01),
-            ("theta", "Theta:", 0.1, 1.0, 0.01),
-            ("nscales", "Pyramid Scales:", 1, 10, 1),
-            ("warps", "Warps:", 1, 10, 1),
-            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001),
-            ("inner_iterations", "Inner Iterations:", 1, 50, 1),
-            ("outer_iterations", "Outer Iterations:", 1, 20, 1),
-            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01),
-            ("median_filtering", "Median Filter:", 1, 9, 2),
-            ("downscale_factor", "Downscale Factor:", 1, 10, 1)
+            ("tau", "Tau:", 0.01, 1.0, 0.01,
+             "Weight of the brightness constancy term in the optical flow equation. Higher values enforce stronger brightness consistency."),
+            ("lambda_", "Lambda:", 0.01, 1.0, 0.01,
+             "Weight of the smoothness term in the optical flow equation. Higher values produce smoother displacement fields."),
+            ("theta", "Theta:", 0.1, 1.0, 0.01,
+             "Weight between the brightness constancy and gradient constancy assumptions. Higher values favor gradient constancy."),
+            ("nscales", "Pyramid Scales:", 1, 10, 1,
+             "Number of image pyramid levels for multi-scale analysis. More scales handle larger displacements but increase computation time."),
+            ("warps", "Warps:", 1, 10, 1,
+             "Number of image warping steps per scale. More warps increase accuracy for large displacements but increase computation time."),
+            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001,
+             "Stopping criterion for the optimization. Lower values give more precise results but may require more iterations."),
+            ("inner_iterations", "Inner Iterations:", 1, 50, 1,
+             "Maximum number of iterations for solving the nonlinear system. More iterations increase precision but computation time."),
+            ("outer_iterations", "Outer Iterations:", 1, 20, 1,
+             "Maximum number of outer fixed-point iterations. More iterations may improve accuracy for complex flows."),
+            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01,
+             "Scale factor between pyramid levels. Closer to 1 means finer scale steps but more computation."),
+            ("median_filtering", "Median Filter:", 1, 9, 2,
+             "Size of the median filter kernel for post-processing. Larger values remove more outliers but may smooth legitimate features."),
+            ("downscale_factor", "Downscale Factor:", 1, 10, 1,
+             "Factor by which to downscale displacement fields after processing. Higher values speed up computation fo subsequent steps but reduce spatial resolution.")
         ]
 
-        for name, label, min_val, max_val, step in flow_params:
+        for name, label, min_val, max_val, step, tooltip in flow_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             if isinstance(step, int):
@@ -335,24 +380,29 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 spin.setDecimals(2)
                 if name == "epsilon":
                     spin.setDecimals(3)
+            spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
 
         # Visualization parameters
         vis_params = [
-            ("disp_vector_stride", "Vector Stride:", 1, 100, 1),
-            ("disp_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1),
-            ("d_max", "Max Displacement (µm):", 0.1, 200.0, 0.1)
+            ("disp_vector_stride", "Vector Stride:", 1, 100, 1,
+             "Display every nth displacement vector. Higher values show fewer vectors but improve visualization clarity."),
+            ("disp_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1,
+             "Scaling factor for displacement vector arrows. Adjust to make vectors more visible or less cluttered."),
+            ("d_max", "Max Displacement (µm):", 0.1, 200.0, 0.1,
+             "Maximum displacement magnitude for color scaling. Displacements above this value will be capped for visualization.")
         ]
 
-        for name, label, min_val, max_val, step in vis_params:
+        for name, label, min_val, max_val, step, tooltip in vis_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             spin = self._create_spinbox(min_val, max_val, step) if isinstance(step, float) else QSpinBox()
             if isinstance(spin, QSpinBox):
                 spin.setRange(min_val, max_val)
                 spin.setSingleStep(step)
+            spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
@@ -368,12 +418,15 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         # Material parameters setup
         material_params = [
-            ("young_modulus", "Young's Modulus (kPa):", 0.1, 100, 0.1),
-            ("poisson_ratio_substrate", "Poisson's Ratio:", 0, 0.5, 0.01),
-            ("gel_height", "Gel Height (µm):", 0, 1000, 10)
+            ("young_modulus", "Young's Modulus (kPa):", 0.1, 100, 0.1,
+             "Elastic modulus of the substrate material. Higher values indicate stiffer substrates."),
+            ("poisson_ratio_substrate", "Poisson's Ratio:", 0, 0.5, 0.01,
+             "Poisson's ratio of the substrate material. Describes lateral expansion when compressed (typically 0.45-0.5 for hydrogels)."),
+            ("gel_height", "Gel Height (µm):", 0, 1000, 10,
+             "Thickness of the substrate gel. Set to ∞ for semi-infinite substrate approximation.")
         ]
 
-        for name, label, min_val, max_val, step in material_params:
+        for name, label, min_val, max_val, step, tooltip in material_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             spin = self._create_spinbox(min_val, max_val, step)
@@ -381,6 +434,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 spin.setSpecialValueText("∞")
             if name == "poisson_ratio_substrate":
                 spin.setDecimals(2)
+            spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
@@ -390,6 +444,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         lanczos_row.addWidget(QLabel("Lanczos Exponent:"))
         lanczos_spin = QSpinBox()
         lanczos_spin.setRange(0, 5)
+        lanczos_spin.setToolTip("Exponent for Lanczos regularization in force calculation. Higher values provide stronger regularization.")
         self.parameter_spins['lanczos_exp'] = lanczos_spin
         lanczos_row.addWidget(lanczos_spin)
         layout.addLayout(lanczos_row)
@@ -398,12 +453,14 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         reg_row = QHBoxLayout()
         reg_row.addWidget(QLabel("Regularization (10^x):"))
         reg_spin = self._create_spinbox(-21, 0, 0.5)
+        reg_spin.setToolTip("Regularization parameter for force calculation (10^x). Controls trade-off between solution smoothness and accuracy.")
         self.parameter_spins['regularization'] = reg_spin
         reg_row.addWidget(reg_spin)
         layout.addLayout(reg_row)
 
         # Auto-GCV checkbox
         auto_gcv = QCheckBox("Auto-GCV per frame")
+        auto_gcv.setToolTip("Automatically determine optimal regularization parameter using Generalized Cross-Validation for each frame.")
         self.parameter_checks['auto_gcv'] = auto_gcv
         layout.addWidget(auto_gcv)
 
@@ -415,18 +472,22 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         # Add visualization parameters
         vis_params = [
-            ("force_vector_stride", "Vector Stride:", 1, 100, 1),
-            ("force_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1),
-            ("f_max", "Max Force (Pa):", 0.1, 10000.0, 1.0)
+            ("force_vector_stride", "Vector Stride:", 1, 100, 1,
+             "Display every nth force vector. Higher values show fewer vectors but improve visualization clarity."),
+            ("force_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1,
+             "Scaling factor for force vector arrows. Adjust to make vectors more visible or less cluttered."),
+            ("f_max", "Max Force (Pa):", 0.1, 10000.0, 1.0,
+             "Maximum force magnitude for color scaling. Forces above this value will be capped for visualization.")
         ]
 
-        for name, label, min_val, max_val, step in vis_params:
+        for name, label, min_val, max_val, step, tooltip in vis_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             spin = self._create_spinbox(min_val, max_val, step) if isinstance(step, float) else QSpinBox()
             if isinstance(spin, QSpinBox):
                 spin.setRange(min_val, max_val)
                 spin.setSingleStep(step)
+            spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
@@ -443,11 +504,11 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Mask parameters
         mask_params = [
             ("threshold", "Threshold Percentile (%):", 0, 100, 0.1,
-             "Percentile threshold for cell mask generation"),
+             "Intensity percentile threshold for cell mask generation. Higher values create more restrictive masks."),
             ("dilation", "Mask Dilation (px):", 0, 50, 1,
-             "Number of pixels to dilate the mask"),
+             "Number of pixels to expand the cell mask. Helps include cell edges and compensate for thresholding."),
             ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1,
-             "Sigma for Gaussian smoothing of mask boundary")
+             "Gaussian smoothing sigma for mask boundary. Higher values create smoother cell boundaries.")
         ]
 
         for name, label, min_val, max_val, step, tooltip in mask_params:
@@ -462,7 +523,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 spin = QSpinBox()
                 spin.setRange(min_val, max_val)
                 spin.setSingleStep(step)
-
+            spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
@@ -470,7 +531,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Mesh parameters
         mesh_params = [
             ("density_factor", "Density Factor:", 0.001, 0.1, 0.001,
-             "Controls mesh density. Lower values create finer meshes."),
+             "Controls mesh refinement. Lower values create finer meshes with more elements, increasing accuracy but computation time.")
         ]
 
         for name, label, min_val, max_val, step, tooltip in mesh_params:
@@ -480,31 +541,33 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             row.addWidget(label_widget)
 
             spin = self._create_spinbox(min_val, max_val, step, 3)  # 3 decimals for density factor
+            spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
 
-        # Mesh algorithm combo
+            # Mesh algorithm combo
         algo_row = QHBoxLayout()
         algo_row.addWidget(QLabel("Mesh Algorithm:"))
         algo_combo = QComboBox()
         algo_combo.addItems(self.MESH_ALGORITHMS.keys())
-        algo_combo.setToolTip("Algorithm used for mesh generation")
+        algo_combo.setToolTip(
+            "Algorithm used for mesh generation:\n- Delaunay: Creates triangular mesh optimized for quality\n- Front: Advancing front method for more uniform elements\n- MeshAdapt: Adaptive meshing based on size fields")
         self.parameter_combos['mesh_algorithm'] = algo_combo
         algo_row.addWidget(algo_combo)
         layout.addLayout(algo_row)
 
         # Add optimization checkbox
-        self.parameter_checks['use_optimization'] = QCheckBox("Mesh Optimization")
-        self.parameter_checks['use_optimization'].setToolTip(
-            "Enable mesh quality optimization after generation"
-        )
-        layout.addWidget(self.parameter_checks['use_optimization'])
+        optimization_check = QCheckBox("Mesh Optimization")
+        optimization_check.setToolTip("Enable post-processing optimization of mesh quality. Improves element shapes but increases mesh generation time.")
+        self.parameter_checks['use_optimization'] = optimization_check
+        layout.addWidget(optimization_check)
 
         # Add Poisson ratio and max stress parameters
         poisson_row = QHBoxLayout()
         poisson_row.addWidget(QLabel("Poisson's Ratio:"))
         poisson_spin = self._create_spinbox(0, 1.0, 0.01, 2)
+        poisson_spin.setToolTip("Poisson's ratio of the cell material. Describes how much the material expands perpendicular to applied stress (typically 0.3-0.5 for cells).")
         self.parameter_spins['poisson_ratio_cells'] = poisson_spin
         poisson_row.addWidget(poisson_spin)
         layout.addLayout(poisson_row)
@@ -512,6 +575,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         stress_row = QHBoxLayout()
         stress_row.addWidget(QLabel("Max Stress (mN/m):"))
         max_stress_spin = self._create_spinbox(0.01, 1000.0, 0.1, 2)
+        max_stress_spin.setToolTip("Maximum stress magnitude for color scaling and visualization. Stresses above this value will be capped.")
         self.parameter_spins['max_stress'] = max_stress_spin
         stress_row.addWidget(max_stress_spin)
         layout.addLayout(stress_row)
