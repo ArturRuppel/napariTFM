@@ -1104,6 +1104,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
     preprocessing_completed = Signal(dict)  # Emits processed data
 
+    # region === Initialization
     def __init__(
             self,
             viewer: Viewer,
@@ -1140,6 +1141,9 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._setup_ui()
         self._connect_signals()
 
+    # endregion
+
+    # region === UI Creation
     def _setup_ui(self):
         """Set up the main widget UI."""
         main_layout = QHBoxLayout()
@@ -1267,6 +1271,9 @@ class PreprocessingWidget(BaseAnalysisWidget):
         frame.setLayout(layout)
         return frame
 
+    # endregion
+
+    # region === Signal Handling
     def _connect_signals(self):
         """Connect all widget signals."""
         # Set controller in panels
@@ -1337,51 +1344,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
         if self.preview_check.isChecked():
             self.controller._update_preview()
 
+    # endregion
+
+    # region === State Management
     def _update_status(self, progress: int, message: str):
         """Update status display."""
         self.progress_bar.setValue(progress)
         self.status_label.setText(message)
-
-    def _on_preprocessing_completed(self, results):
-        """Handle preprocessing completion."""
-        self.save_btn.setEnabled(True)
-        self.preprocessing_completed.emit(results)
-
-    def _on_preprocessing_failed(self, error_msg: str):
-        """Handle preprocessing failure."""
-        self.save_btn.setEnabled(False)
-        QMessageBox.critical(self, "Error", error_msg)
-
-    def _has_required_data(self) -> bool:
-        """Check if required data for processing is loaded."""
-        return (self.data_manager.bead_stack is not None and
-                self.data_manager.reference is not None)
-
-    def _check_preprocessed_data(self) -> bool:
-        """Check availability of preprocessed data."""
-        return (self.data_manager.preprocessed_bead_stack is not None or
-                self.data_manager.preprocessed_reference is not None or
-                self.data_manager.preprocessed_cell_stack is not None)
-
-    def _handle_ui_freeze(self, frozen: bool):
-        """Handle UI freeze/unfreeze."""
-        # Disable preview and process buttons during processing
-        self.preview_check.setEnabled(not frozen)
-        self.process_btn.setEnabled(not frozen and self._has_required_data())
-        self.cancel_btn.setEnabled(frozen)  # Enable cancel only when processing
-
-        # Disable radio buttons during processing
-        self.bead_radio.setEnabled(not frozen)
-        self.reference_radio.setEnabled(not frozen)
-        self.cell_radio.setEnabled(not frozen)
-
-        # Update UI state when unfreezing to refresh element states
-        if not frozen:
-            self._update_ui_state()
-
-        # Update save button based on preprocessed data availability
-        has_preprocessed = self._check_preprocessed_data()
-        self.save_btn.setEnabled(not frozen and has_preprocessed)
 
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
@@ -1414,10 +1383,76 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 self.data_manager.preprocessed_cell_stack is not None
         )
         self.save_btn.setEnabled(has_preprocessed)
+    def _handle_ui_freeze(self, frozen: bool):
+        """Handle UI freeze/unfreeze."""
+        # Disable preview and process buttons during processing
+        self.preview_check.setEnabled(not frozen)
+        self.process_btn.setEnabled(not frozen and self._has_required_data())
+        self.cancel_btn.setEnabled(frozen)  # Enable cancel only when processing
 
+        # Disable radio buttons during processing
+        self.bead_radio.setEnabled(not frozen)
+        self.reference_radio.setEnabled(not frozen)
+        self.cell_radio.setEnabled(not frozen)
+
+        # Update UI state when unfreezing to refresh element states
+        if not frozen:
+            self._update_ui_state()
+
+        # Update save button based on preprocessed data availability
+        has_preprocessed = self._check_preprocessed_data()
+        self.save_btn.setEnabled(not frozen and has_preprocessed)
+
+    def _has_required_data(self) -> bool:
+        """Check if required data for processing is loaded."""
+        return (self.data_manager.bead_stack is not None and
+                self.data_manager.reference is not None)
+
+    def _check_preprocessed_data(self) -> bool:
+        """Check availability of preprocessed data."""
+        return (self.data_manager.preprocessed_bead_stack is not None or
+                self.data_manager.preprocessed_reference is not None or
+                self.data_manager.preprocessed_cell_stack is not None)
+    # endregion
+
+    # region === Results Handling
+    def _on_preprocessing_completed(self, results):
+        """Handle preprocessing completion."""
+        self.save_btn.setEnabled(True)
+        self.preprocessing_completed.emit(results)
+
+    def _on_preprocessing_failed(self, error_msg: str):
+        """Handle preprocessing failure."""
+        self.save_btn.setEnabled(False)
+        QMessageBox.critical(self, "Error", error_msg)
+
+    # endregion
+
+    # region === Cleanup
     def cleanup(self):
         """Clean up resources."""
         if self.colorbar_manager:
             self.colorbar_manager.cleanup()
         self.visualization_manager.cleanup()
         super().cleanup()
+
+    # endregion
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
