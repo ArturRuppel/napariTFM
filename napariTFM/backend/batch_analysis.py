@@ -145,6 +145,7 @@ class TeeLogger:
         self.log.close()
         sys.stdout = self.terminal
 
+
 class BatchAnalysis:
     """Handles batch analysis of TFM data using service layer components."""
 
@@ -384,7 +385,6 @@ class BatchAnalysis:
         if displacement_result is None:
             raise RuntimeError("Displacement calculation failed")
 
-
         # Save the displacement field
         np.save(str(tfm_folder / "displacements.npy"), displacement_result)
 
@@ -524,11 +524,11 @@ class BatchAnalysis:
     def _create_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create preprocessing parameters from config."""
         return PreprocessingParameters(
-            min_intensity_percentile=self.config['parameters']['min_intensity_percentile'] / 100,
-            max_intensity_percentile=self.config['parameters']['max_intensity_percentile'] / 100,
+            min_intensity_percentile=self.config['parameters']['min_intensity_percentile'],
+            max_intensity_percentile=self.config['parameters']['max_intensity_percentile'],
             gaussian_sigma=self.config['parameters']['gaussian_sigma'],
-            cell_min_intensity_percentile=self.config['parameters']['cell_min_intensity_percentile'] / 100,
-            cell_max_intensity_percentile=self.config['parameters']['cell_max_intensity_percentile'] / 100,
+            cell_min_intensity_percentile=self.config['parameters']['cell_min_intensity_percentile'],
+            cell_max_intensity_percentile=self.config['parameters']['cell_max_intensity_percentile'],
             cell_gaussian_sigma=self.config['parameters']['cell_gaussian_sigma'],
             registration_mode=self.config['parameters']['registration_mode']
         )
