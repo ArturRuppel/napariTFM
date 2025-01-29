@@ -21,7 +21,6 @@ class ParameterCategory(Enum):
     VISUALIZATION = auto()
 
 
-# TODO review default values
 @dataclass
 class UnifiedParameters:
     """Single source of truth for all parameters"""

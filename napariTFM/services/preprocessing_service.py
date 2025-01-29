@@ -147,8 +147,8 @@ class PreprocessingService:
             gaussian_sigma = self.params.gaussian_sigma
 
         # Calculate intensity limits
-        min_val = np.percentile(processed, min_percentile * 100)
-        max_val = np.percentile(processed, max_percentile * 100)
+        min_val = np.percentile(processed, min_percentile)
+        max_val = np.percentile(processed, max_percentile)
 
         # Apply intensity scaling
         processed = np.clip(processed, min_val, max_val)

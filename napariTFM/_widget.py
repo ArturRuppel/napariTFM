@@ -357,10 +357,10 @@ class napariTFMWidget(QWidget):
         logger.info("Preprocessing completed successfully")
 
         self.preprocessing_widget._update_ui_state()
-        self.displacement_widget._update_ui_state()
-        self.force_widget._update_ui_state()
-        self.msm_widget._update_ui_state()
-        self.batch_widget._update_ui_state()
+        # self.displacement_widget._update_ui_state()
+        # self.force_widget._update_ui_state()
+        # self.msm_widget._update_ui_state()
+        # self.batch_widget._update_ui_state()
 
     def _on_displacement_completed(self, results):
         """Handle completion of displacement analysis"""

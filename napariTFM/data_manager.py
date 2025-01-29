@@ -16,6 +16,7 @@ class DataManager:
         self._cell_stack: Optional[np.ndarray] = None
 
         self._preprocessed_bead_stack: Optional[np.ndarray] = None
+        self._preprocessed_cell_stack: Optional[np.ndarray] = None
         self._preprocessed_reference: Optional[np.ndarray] = None
 
         # Analysis results as service Result objects
@@ -46,7 +47,11 @@ class DataManager:
         self._validate_input_stack(data, "bead stack")
         self._preprocessed_bead_stack = data
         self._invalidate_from_displacement()
-
+    def set_preprocessed_input_cell_stack(self, data: np.ndarray) -> None:
+        """Set and validate input cell stack."""
+        self._validate_input_stack(data, "cell stack")
+        self._preprocessed_cell_stack = data
+        self._invalidate_from_displacement()
     def set_preprocessed_reference(self, data: np.ndarray) -> None:
         """Set and validate input reference image."""
         self._validate_reference_image(data)
@@ -109,6 +114,10 @@ class DataManager:
     @property
     def preprocessed_reference(self) -> Optional[np.ndarray]:
         return self._preprocessed_reference
+
+    @property
+    def preprocessed_cell_stack(self) -> Optional[np.ndarray]:
+        return self._preprocessed_cell_stack
 
     @property
     def displacement_results(self) -> Optional[DisplacementResult]:
