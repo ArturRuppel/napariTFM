@@ -1,6 +1,5 @@
 from typing import Optional
 import numpy as np
-from napariTFM.services.preprocessing_service import PreprocessingResult
 from napariTFM.services.displacement_service import DisplacementResult
 from napariTFM.services.fttc_service import FTTCResult
 from napariTFM.services.msm_service import MSMResult
@@ -12,38 +11,48 @@ class DataManager:
     """
     def __init__(self):
         # Raw input data
-        self._input_bead_stack: Optional[np.ndarray] = None
-        self._input_reference: Optional[np.ndarray] = None
-        self._input_cell_stack: Optional[np.ndarray] = None
+        self._bead_stack: Optional[np.ndarray] = None
+        self._reference: Optional[np.ndarray] = None
+        self._cell_stack: Optional[np.ndarray] = None
+
+        self._preprocessed_bead_stack: Optional[np.ndarray] = None
+        self._preprocessed_reference: Optional[np.ndarray] = None
 
         # Analysis results as service Result objects
-        self._preprocessing_results: Optional[PreprocessingResult] = None
         self._displacement_results: Optional[DisplacementResult] = None
         self._force_results: Optional[FTTCResult] = None
         self._stress_results: Optional[MSMResult] = None
 
-    def set_input_bead_stack(self, data: np.ndarray) -> None:
+    def set_bead_stack(self, data: np.ndarray) -> None:
         """Set and validate input bead stack."""
         self._validate_input_stack(data, "bead stack")
-        self._input_bead_stack = data
+        self._bead_stack = data
         self._invalidate_from_preprocessing()
 
     def set_input_reference(self, data: np.ndarray) -> None:
         """Set and validate input reference image."""
         self._validate_reference_image(data)
-        self._input_reference = data
+        self._reference = data
         self._invalidate_from_preprocessing()
 
     def set_input_cell_stack(self, data: np.ndarray) -> None:
         """Set and validate input cell stack."""
         self._validate_input_stack(data, "cell stack")
-        self._input_cell_stack = data
+        self._cell_stack = data
         self._invalidate_from_preprocessing()
 
-    def set_preprocessing_results(self, results: PreprocessingResult) -> None:
-        """Store preprocessing results and invalidate dependent analyses."""
-        self._preprocessing_results = results
+    def set_preprocessed_bead_stack(self, data: np.ndarray) -> None:
+        """Set and validate input bead stack."""
+        self._validate_input_stack(data, "bead stack")
+        self._preprocessed_bead_stack = data
         self._invalidate_from_displacement()
+
+    def set_preprocessed_reference(self, data: np.ndarray) -> None:
+        """Set and validate input reference image."""
+        self._validate_reference_image(data)
+        self._reference = data
+        self._invalidate_from_displacement()
+
 
     def set_displacement_results(self, results: DisplacementResult) -> None:
         """Store displacement results and invalidate dependent analyses."""
@@ -61,7 +70,8 @@ class DataManager:
 
     def _invalidate_from_preprocessing(self):
         """Invalidate all analysis steps from preprocessing onwards."""
-        self._preprocessing_results = None
+        self._preprocessed_bead_stack = None
+        self._preprocessed_reference = None
         self._invalidate_from_displacement()
 
     def _invalidate_from_displacement(self):
@@ -80,21 +90,25 @@ class DataManager:
 
     # Input data properties
     @property
-    def input_bead_stack(self) -> Optional[np.ndarray]:
-        return self._input_bead_stack
+    def bead_stack(self) -> Optional[np.ndarray]:
+        return self._bead_stack
 
     @property
-    def input_reference(self) -> Optional[np.ndarray]:
-        return self._input_reference
+    def reference(self) -> Optional[np.ndarray]:
+        return self._reference
 
     @property
-    def input_cell_stack(self) -> Optional[np.ndarray]:
-        return self._input_cell_stack
+    def cell_stack(self) -> Optional[np.ndarray]:
+        return self._cell_stack
 
     # Result properties
     @property
-    def preprocessing_results(self) -> Optional[PreprocessingResult]:
-        return self._preprocessing_results
+    def preprocessed_bead_stack(self) -> Optional[np.ndarray]:
+        return self._preprocessed_bead_stack
+
+    @property
+    def preprocessed_reference(self) -> Optional[np.ndarray]:
+        return self._preprocessed_reference
 
     @property
     def displacement_results(self) -> Optional[DisplacementResult]:

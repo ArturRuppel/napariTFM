@@ -20,7 +20,7 @@ class PreprocessingParameters:
 
 
 @dataclass
-class PreprocessingResult:
+class PreprocessingIntermediateResult:
     """Results from preprocessing operations"""
     processed_image: np.ndarray
     transform_matrix: Optional[np.ndarray] = None
@@ -107,7 +107,7 @@ class PreprocessingService:
         return True, ""
 
     def preprocess_frame(self, image: np.ndarray, is_cell: bool = False,
-                         reference_image: Optional[np.ndarray] = None) -> PreprocessingResult:
+                         reference_image: Optional[np.ndarray] = None) -> PreprocessingIntermediateResult:
         """
         Preprocess a single image frame
 
@@ -122,7 +122,7 @@ class PreprocessingService:
 
         Returns
         -------
-        PreprocessingResult
+        PreprocessingIntermediateResult
             Processed image and associated metadata
         """
         info = {
@@ -170,7 +170,7 @@ class PreprocessingService:
             'intensity_range': (float(min_val), float(max_val))
         })
 
-        return PreprocessingResult(
+        return PreprocessingIntermediateResult(
             processed_image=processed,
             transform_matrix=transform_matrix,
             info=info
@@ -181,7 +181,7 @@ class PreprocessingService:
             image_stack: Optional[np.ndarray] = None,
             reference_image: Optional[np.ndarray] = None,
             is_cell: bool = False
-    ) -> Generator[Tuple[PreprocessingResult, int, int], None, List[PreprocessingResult]]:
+    ) -> Generator[Tuple[PreprocessingIntermediateResult, int, int], None, List[PreprocessingIntermediateResult]]:
         """
         Process an image stack, yielding progress updates
 
@@ -201,7 +201,7 @@ class PreprocessingService:
 
         Returns
         -------
-        List[PreprocessingResult]
+        List[PreprocessingIntermediateResult]
             Complete list of preprocessing results
         """
         if image_stack is None:

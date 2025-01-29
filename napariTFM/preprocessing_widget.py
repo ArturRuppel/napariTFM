@@ -99,21 +99,21 @@ class PreprocessingDataPanel(QWidget):
     def update_data_status(self):
         """Update status labels based on loaded data."""
         # Update bead status
-        bead_data = self.data_manager.input_bead_stack
+        bead_data = self.data_manager.bead_stack
         if bead_data is not None:
             self.bead_status.setText(f"Loaded: {bead_data.shape}")
         else:
             self.bead_status.setText("Not loaded")
 
         # Update reference status
-        ref_data = self.data_manager.input_reference
+        ref_data = self.data_manager.reference
         if ref_data is not None:
             self.reference_status.setText(f"Loaded: {ref_data.shape}")
         else:
             self.reference_status.setText("Not loaded")
 
         # Update cell status
-        cell_data = self.data_manager.input_cell_stack
+        cell_data = self.data_manager.cell_stack
         if cell_data is not None:
             self.cell_status.setText(f"Loaded: {cell_data.shape}")
         else:
@@ -423,7 +423,7 @@ class PreprocessingController(QObject):
                     data = data[np.newaxis, ...]
                 elif data.ndim != 3:
                     raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
-                self.data_manager.set_input_bead_stack(data)
+                self.data_manager.set_bead_stack(data)
 
             elif data_type == 'reference':
                 if data.ndim != 2:
@@ -473,11 +473,11 @@ class PreprocessingController(QObject):
         try:
             # Get current data based on type
             if self.current_data_type == 'beads':
-                data = self.data_manager.input_bead_stack
+                data = self.data_manager.bead_stack
             elif self.current_data_type == 'reference':
-                data = self.data_manager.input_reference
+                data = self.data_manager.reference
             else:
-                data = self.data_manager.input_cell_stack
+                data = self.data_manager.cell_stack
 
             if data is None:
                 raise ValueError(f"No {self.current_data_type} data available")
@@ -536,9 +536,9 @@ class PreprocessingController(QObject):
             @thread_worker
             def preprocessing_worker():
                 generator = self.service.preprocess_stack(
-                    bead_stack=self.data_manager.input_bead_stack,
-                    reference_image=self.data_manager.input_reference,
-                    cell_stack=self.data_manager.input_cell_stack
+                    bead_stack=self.data_manager.bead_stack,
+                    reference_image=self.data_manager.reference,
+                    cell_stack=self.data_manager.cell_stack
                 )
 
                 try:

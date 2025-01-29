@@ -11,7 +11,7 @@ from napariTFM.parameter_manager import ParameterManager
 from napariTFM.data_manager import DataManager
 from napariTFM.visualization_manager import VisualizationManager
 
-# from napariTFM.preprocessing_widget import PreprocessingWidget
+from napariTFM.preprocessing_widget import PreprocessingWidget
 # from napariTFM.displacement_analysis_widget import DisplacementAnalysisWidget
 # from napariTFM.fttc_widget import FTTCWidget
 # from napariTFM.msm_widget import MSMWidget
@@ -83,14 +83,14 @@ class napariTFMWidget(QWidget):
         tabs = QTabWidget()
 
         # # Initialize all widgets with parameter_manager
-        # self.preprocessing_widget = PreprocessingWidget(
-        #     self.viewer,
-        #     self.data_manager,
-        #     self.parameter_manager,
-        #     self.visualization_manager,
-        #
-        # )
-        # self.preprocessing_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.preprocessing_widget = PreprocessingWidget(
+            self.viewer,
+            self.data_manager,
+            self.parameter_manager,
+            self.visualization_manager,
+
+        )
+        self.preprocessing_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         #
         # self.displacement_widget = DisplacementAnalysisWidget(
         #     self.viewer,
@@ -121,7 +121,7 @@ class napariTFMWidget(QWidget):
         )
 
         # Add widgets to tabs
-        # tabs.addTab(self.preprocessing_widget, "Preprocessing")
+        tabs.addTab(self.preprocessing_widget, "Preprocessing")
         # tabs.addTab(self.displacement_widget, "Displacement")
         # tabs.addTab(self.force_widget, "Force Analysis")
         # tabs.addTab(self.msm_widget, "Stress Analysis")
@@ -234,7 +234,7 @@ class napariTFMWidget(QWidget):
 
                 # Update all widget states
                 for widget in [
-                    # self.preprocessing_widget,
+                    self.preprocessing_widget,
                     # self.displacement_widget,
                     # self.force_widget,
                     # self.msm_widget,
@@ -283,7 +283,7 @@ class napariTFMWidget(QWidget):
 
     def connect_signals(self):
         """Connect signals between components"""
-        # self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
+        self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
         # self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
         # self.force_widget.force_calculated.connect(self._on_force_completed)
         # self.msm_widget.stress_calculated.connect(self._on_stress_completed)
@@ -296,7 +296,7 @@ class napariTFMWidget(QWidget):
         # For calibration parameters, we need to update all widgets
         if param_name in ['pixel_size', 'frame_interval']:
             for widget in [
-                # self.preprocessing_widget,
+                self.preprocessing_widget,
                 # self.displacement_widget,
                 # self.force_widget,
                 # self.msm_widget,
@@ -340,7 +340,7 @@ class napariTFMWidget(QWidget):
                 self.data_manager.__init__()
 
                 # Update UI state in all widgets
-                # self.preprocessing_widget._update_ui_state()
+                self.preprocessing_widget._update_ui_state()
                 # self.displacement_widget._update_ui_state()
                 # self.force_widget._update_ui_state()
                 # self.msm_widget._update_ui_state()

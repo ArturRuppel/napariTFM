@@ -235,33 +235,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         pixel_row = QHBoxLayout()
         pixel_row.addWidget(QLabel("Pixel Size (µm):"))
         pixel_spin = self._create_spinbox(0.01, 10.0, 0.1, 2)
-        pixel_spin.setToolTip("Physical size of each pixel in micrometers")
-        self.parameter_spins['pixel_size'] = pixel_spin
-        pixel_row.addWidget(pixel_spin)
-        layout.addLayout(pixel_row)
-
-        # Frame interval
-        frame_row = QHBoxLayout()
-        frame_row.addWidget(QLabel("Frame Length (min):"))
-        frame_spin = self._create_spinbox(0.001, 1000.0, 0.1, 1)
-        frame_spin.setToolTip("Time between consecutive frames in minutes")
-        self.parameter_spins['frame_interval'] = frame_spin
-        frame_row.addWidget(frame_spin)
-        layout.addLayout(frame_row)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_general_params_group(self) -> QGroupBox:
-        """Create general parameters group without setting defaults."""
-        group = QGroupBox("General Parameters")
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-
-        # Pixel size
-        pixel_row = QHBoxLayout()
-        pixel_row.addWidget(QLabel("Pixel Size (µm):"))
-        pixel_spin = self._create_spinbox(0.01, 10.0, 0.1, 2)
         pixel_spin.setToolTip("Physical size of each pixel in micrometers. Used for converting image measurements to physical units.")
         self.parameter_spins['pixel_size'] = pixel_spin
         pixel_row.addWidget(pixel_spin)
