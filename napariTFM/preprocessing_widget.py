@@ -994,6 +994,37 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.save_btn.setEnabled(False)
         QMessageBox.critical(self, "Error", error_msg)
 
+    def _has_required_data(self) -> bool:
+        """Check if required data for processing is loaded."""
+        return (self.data_manager.bead_stack is not None and
+                self.data_manager.reference is not None)
+
+    def _check_preprocessed_data(self) -> bool:
+        """Check availability of preprocessed data."""
+        return (self.data_manager.preprocessed_bead_stack is not None or
+                self.data_manager.preprocessed_reference is not None or
+                self.data_manager.preprocessed_cell_stack is not None)
+
+    def _handle_ui_freeze(self, frozen: bool):
+        """Handle UI freeze/unfreeze."""
+        # Disable preview and process buttons during processing
+        self.preview_check.setEnabled(not frozen)
+        self.process_btn.setEnabled(not frozen and self._has_required_data())
+        self.cancel_btn.setEnabled(frozen)  # Enable cancel only when processing
+
+        # Disable radio buttons during processing
+        self.bead_radio.setEnabled(not frozen)
+        self.reference_radio.setEnabled(not frozen)
+        self.cell_radio.setEnabled(not frozen)
+
+        # Update UI state when unfreezing to refresh element states
+        if not frozen:
+            self._update_ui_state()
+
+        # Update save button based on preprocessed data availability
+        has_preprocessed = self._check_preprocessed_data()
+        self.save_btn.setEnabled(not frozen and has_preprocessed)
+
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
         # Update data panel
@@ -1007,6 +1038,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 self.data_manager.cell_stack is not None
         )
         self.preview_check.setEnabled(has_data)
+
+        # Update radio button availability based on loaded data
+        self.bead_radio.setEnabled(self.data_manager.bead_stack is not None)
+        self.reference_radio.setEnabled(self.data_manager.reference is not None)
+        self.cell_radio.setEnabled(self.data_manager.cell_stack is not None)
+
+        # Uncheck preview if no data
         if not has_data and self.preview_check.isChecked():
             self.preview_check.setChecked(False)
 
@@ -1018,21 +1056,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 self.data_manager.preprocessed_cell_stack is not None
         )
         self.save_btn.setEnabled(has_preprocessed)
-
-    def _handle_ui_freeze(self, frozen: bool):
-        """Handle UI freeze/unfreeze."""
-        self.preview_check.setEnabled(not frozen)
-        self.process_btn.setEnabled(not frozen)
-
-        # Check if any preprocessed data exists
-        has_preprocessed = (
-                self.data_manager.preprocessed_bead_stack is not None or
-                self.data_manager.preprocessed_reference is not None or
-                self.data_manager.preprocessed_cell_stack is not None
-        )
-
-        self.save_btn.setEnabled(not frozen and has_preprocessed)
-
     def cleanup(self):
         """Clean up resources."""
         if self.colorbar_manager:
