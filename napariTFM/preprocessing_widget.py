@@ -1,16 +1,10 @@
-# TODO add rangesliders
-# TODO UI doesn't freeze during processing
-# TODO reference button should have different enable/disable logic
-# TODO parameters don't synch from batch to preprocessing widget
-# TODO only Bead Overlay layer should be visible after preprocessing
-
 from pathlib import Path
 from typing import Optional, Any
 import numpy as np
 from qtpy.QtCore import Qt, Signal, QObject
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QSpinBox, QRadioButton, QFileDialog,
-    QDoubleSpinBox, QPushButton, QFrame, QScrollArea, QCheckBox,
+    QDoubleSpinBox, QPushButton, QFrame, QScrollArea, QCheckBox, QApplication,
     QProgressBar, QMessageBox, QComboBox, QSizePolicy
 )
 import os
@@ -489,6 +483,10 @@ class PreprocessingController(QObject):
                                           self.data_manager.cell_stack] if x is not None)
             items_processed = 0
 
+            # Add check for cancellation
+            if not hasattr(self, 'running') or not self.running:
+                raise RuntimeError("Processing cancelled")
+
             # Process bead stack
             if self.data_manager.bead_stack is not None:
                 yield items_processed / total_items * 100, "Processing bead stack..."
@@ -499,6 +497,10 @@ class PreprocessingController(QObject):
                 results['beads'] = bead_results
                 items_processed += 1
 
+                # Check for cancellation after each major operation
+                if not hasattr(self, 'running') or not self.running:
+                    raise RuntimeError("Processing cancelled")
+
             # Process reference
             if self.data_manager.reference is not None:
                 yield items_processed / total_items * 100, "Processing reference image..."
@@ -507,6 +509,9 @@ class PreprocessingController(QObject):
                 ))
                 results['reference'] = ref_results
                 items_processed += 1
+
+                if not hasattr(self, 'running') or not self.running:
+                    raise RuntimeError("Processing cancelled")
 
             # Process cell stack
             if self.data_manager.cell_stack is not None:
@@ -518,9 +523,17 @@ class PreprocessingController(QObject):
                 results['cells'] = cell_results
                 items_processed += 1
 
+                if not hasattr(self, 'running') or not self.running:
+                    raise RuntimeError("Processing cancelled")
+
             yield 100, "Processing complete"
             return results
 
+        except RuntimeError as e:
+            if str(e) == "Processing cancelled":
+                yield 0, "Processing cancelled"
+                return None
+            raise
         except Exception as e:
             raise RuntimeError(f"Processing failed: {str(e)}")
 
@@ -739,8 +752,27 @@ class PreprocessingController(QObject):
         except Exception as e:
             QMessageBox.critical(None, "Error", f"Failed to save data: {str(e)}")
 
+    def cancel_all_operations(self):
+        """Cancel all running background operations."""
+        for worker in self.active_workers:
+            try:
+                worker.running = False  # Set cancellation flag
+                worker.quit()
+                worker.wait(500)  # Wait up to 500ms
+                if worker.isRunning():
+                    worker.terminate()
+                worker.deleteLater()
+            except Exception as e:
+                print(f"Error cancelling worker: {str(e)}")
+        self.active_workers.clear()
+
+        # Update UI status
+        self.progress_updated.emit(0, "Operations cancelled")
+        QApplication.processEvents()
+        self.unfreeze_ui()
+
     def freeze_ui(self):
-        """Disable all interactive UI elements."""
+        """Disable all interactive UI elements except cancel button."""
         if self.data_panel:
             self.data_panel.freeze_ui(True)
         if self.parameter_panel:
@@ -889,14 +921,20 @@ class PreprocessingWidget(BaseAnalysisWidget):
     def _create_action_frame(self) -> QFrame:
         """Create action buttons frame."""
         frame = QFrame()
-        layout = QHBoxLayout()
+        layout = QVBoxLayout()  # Changed to VBoxLayout for stacked buttons
 
+        # Create button row
+        button_layout = QHBoxLayout()
         self.process_btn = QPushButton("Run Preprocessing")
         self.save_btn = QPushButton("Save Preprocessed Images")
         self.save_btn.setEnabled(False)
+        button_layout.addWidget(self.process_btn)
+        button_layout.addWidget(self.save_btn)
+        layout.addLayout(button_layout)
 
-        layout.addWidget(self.process_btn)
-        layout.addWidget(self.save_btn)
+        # Add cancel button (full width)
+        self.cancel_btn = QPushButton("Cancel All Operations")
+        layout.addWidget(self.cancel_btn)
 
         frame.setLayout(layout)
         return frame
@@ -929,6 +967,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Connect action buttons
         self.process_btn.clicked.connect(self._on_process_clicked)
         self.save_btn.clicked.connect(self._on_save_clicked)
+        self.cancel_btn.clicked.connect(self.controller.cancel_all_operations)
 
         # Connect controller signals
         self.controller.progress_updated.connect(self._update_status)
