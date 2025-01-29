@@ -1,5 +1,5 @@
 # TODO add rangesliders
-# TODO UI doesn't freeze during processing
+# TODO radio button doesn't freeze during processing
 # TODO reference button should have different enable/disable logic
 # TODO parameters don't synch from batch to preprocessing widget
 # TODO only Bead Overlay layer should be visible after preprocessing
@@ -710,19 +710,41 @@ class PreprocessingController(QObject):
 
     def freeze_ui(self):
         """Disable all interactive UI elements except cancel button."""
-        if self.data_panel:
+        if self.data_panel is not None:
             self.data_panel.freeze_ui(True)
-        if self.parameter_panel:
+        if self.parameter_panel is not None:
             self.parameter_panel.freeze_ui(True)
         self.ui_frozen.emit(True)
 
     def unfreeze_ui(self):
         """Re-enable UI elements and refresh state."""
-        if self.data_panel:
+        if self.data_panel is not None:
             self.data_panel.freeze_ui(False)
-        if self.parameter_panel:
+        if self.parameter_panel is not None:
             self.parameter_panel.freeze_ui(False)
         self.ui_frozen.emit(False)
+
+    def _handle_ui_freeze(self, frozen: bool):
+        """Handle UI freeze/unfreeze."""
+        # Disable preview and process buttons during processing
+        self.preview_check.setEnabled(not frozen)
+        self.process_btn.setEnabled(not frozen and self._has_required_data())
+        self.cancel_btn.setEnabled(frozen)  # Enable cancel only when processing
+
+        # Update save button based on preprocessed data availability
+        has_preprocessed = self._check_preprocessed_data()
+        self.save_btn.setEnabled(not frozen and has_preprocessed)
+
+    def _has_required_data(self):
+        """Check if required data for processing is loaded."""
+        return (self.data_manager.bead_stack is not None and
+                self.data_manager.reference is not None)
+
+    def _check_preprocessed_data(self):
+        """Check availability of preprocessed data."""
+        return (self.data_manager.preprocessed_bead_stack is not None or
+                self.data_manager.preprocessed_reference is not None or
+                self.data_manager.preprocessed_cell_stack is not None)
 
 
 class PreprocessingWidget(BaseAnalysisWidget):
@@ -756,6 +778,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager
         )
+
+        self.controller.set_panels(self.parameter_panel, self.data_panel)
 
         # Set controller in panels
         self.data_panel.set_controller(self.controller)
@@ -912,7 +936,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.controller.preprocessing_failed.connect(self._on_preprocessing_failed)
         self.controller.data_updated.connect(self._update_ui_state)
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
-
         # Connect parameter panel changes
         self.parameter_panel.parameter_changed.connect(self._on_parameter_changed)
 
