@@ -200,39 +200,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
-    def _create_general_params_group(self) -> QGroupBox:
-        """Create general parameters group."""
-        group = QGroupBox("General Parameters")
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-
-        # Pixel size
-        pixel_row = QHBoxLayout()
-        pixel_row.addWidget(QLabel("Pixel Size (µm):"))
-        pixel_spin = QDoubleSpinBox()
-        pixel_spin.setRange(0.01, 10.0)
-        pixel_spin.setSingleStep(0.01)
-        pixel_spin.setDecimals(2)
-        pixel_spin.setToolTip("Physical size of each pixel in micrometers")
-        self.parameter_spins['pixel_size'] = pixel_spin
-        pixel_row.addWidget(pixel_spin)
-        layout.addLayout(pixel_row)
-
-        # Frame interval
-        frame_row = QHBoxLayout()
-        frame_row.addWidget(QLabel("Frame Length (min):"))
-        frame_spin = QDoubleSpinBox()
-        frame_spin.setRange(0.001, 1000.0)
-        frame_spin.setSingleStep(0.1)
-        frame_spin.setDecimals(1)
-        frame_spin.setToolTip("Time between consecutive frames in minutes")
-        self.parameter_spins['frame_interval'] = frame_spin
-        frame_row.addWidget(frame_spin)
-        layout.addLayout(frame_row)
-
-        group.setLayout(layout)
-        return group
-
     def _create_file_paths_group(self) -> QGroupBox:
         """Create group for input/output file paths."""
         group = QGroupBox("File Paths")
@@ -258,6 +225,39 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             self.file_inputs[key] = line_edit
             row.addWidget(line_edit)
             layout.addLayout(row)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_general_params_group(self) -> QGroupBox:
+        """Create general parameters group."""
+        group = QGroupBox("General Parameters")
+        layout = QVBoxLayout()
+        layout.setSpacing(4)
+
+        # Pixel size
+        pixel_row = QHBoxLayout()
+        pixel_row.addWidget(QLabel("Pixel Size (µm):"))
+        pixel_spin = QDoubleSpinBox()
+        pixel_spin.setRange(0.01, 10.0)
+        pixel_spin.setSingleStep(0.1)
+        pixel_spin.setDecimals(2)
+        pixel_spin.setToolTip("Physical size of each pixel in micrometers")
+        self.parameter_spins['pixel_size'] = pixel_spin
+        pixel_row.addWidget(pixel_spin)
+        layout.addLayout(pixel_row)
+
+        # Frame interval
+        frame_row = QHBoxLayout()
+        frame_row.addWidget(QLabel("Frame Length (min):"))
+        frame_spin = QDoubleSpinBox()
+        frame_spin.setRange(0.001, 1000.0)
+        frame_spin.setSingleStep(0.1)
+        frame_spin.setDecimals(1)
+        frame_spin.setToolTip("Time between consecutive frames in minutes")
+        self.parameter_spins['frame_interval'] = frame_spin
+        frame_row.addWidget(frame_spin)
+        layout.addLayout(frame_row)
 
         group.setLayout(layout)
         return group
@@ -386,8 +386,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         # Material parameters setup
         material_params = [
-            ("young_modulus", "Young's Modulus (kPa):", 0.1, 1000, 0.1, 10),
-            ("poisson_ratio_substrate", "Poisson's Ratio:", 0, 0.5, 0.01, 0.49),
+            ("young_modulus", "Young's Modulus (kPa):", 0.1, 10, 0.1, 10),
+            ("poisson_ratio_substrate", "Poisson's Ratio:", 0, 0.5, 0.01, 0.5),
             ("gel_height", "Gel Height (µm):", 0, 1000, 10, 0)
         ]
 

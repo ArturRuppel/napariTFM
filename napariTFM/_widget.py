@@ -17,8 +17,6 @@ from napariTFM.visualization_manager import VisualizationManager
 # from napariTFM.msm_widget import MSMWidget
 from napariTFM.batch_analysis_widget import BatchAnalysisWidget
 
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -174,20 +172,12 @@ class napariTFMWidget(QWidget):
         spinbox_layout.addLayout(frame_layout)
 
         # Register callbacks for parameter changes
-        self.parameter_manager.register_callback('pixel_size',
-                                                 lambda value: self.pixel_spin.setValue(value)
-                                                 )
-        self.parameter_manager.register_callback('frame_interval',
-                                                 lambda value: self.frame_spin.setValue(value)
-                                                 )
+        self.parameter_manager.register_callback('pixel_size', lambda value: self.pixel_spin.setValue(value))
+        self.parameter_manager.register_callback('frame_interval', lambda value: self.frame_spin.setValue(value))
 
         # Connect spinbox signals to parameter manager
-        self.pixel_spin.valueChanged.connect(
-            lambda value: self.parameter_manager.set_parameter('pixel_size', value)
-        )
-        self.frame_spin.valueChanged.connect(
-            lambda value: self.parameter_manager.set_parameter('frame_interval', value)
-        )
+        self.pixel_spin.valueChanged.connect(lambda value: self.parameter_manager.set_parameter('pixel_size', value))
+        self.frame_spin.valueChanged.connect(lambda value: self.parameter_manager.set_parameter('frame_interval', value))
 
         # Initialize spinbox values from parameter manager
         self.pixel_spin.setValue(self.parameter_manager.get_parameter('pixel_size'))
@@ -398,4 +388,3 @@ class napariTFMWidget(QWidget):
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
         self.batch_widget._update_ui_state()
-
