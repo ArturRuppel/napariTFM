@@ -47,7 +47,7 @@ class DataManager:
         self._validate_input_stack(data, "bead stack")
         self._preprocessed_bead_stack = data
         self._invalidate_from_displacement()
-    def set_preprocessed_input_cell_stack(self, data: np.ndarray) -> None:
+    def set_preprocessed_cell_stack(self, data: np.ndarray) -> None:
         """Set and validate input cell stack."""
         self._validate_input_stack(data, "cell stack")
         self._preprocessed_cell_stack = data

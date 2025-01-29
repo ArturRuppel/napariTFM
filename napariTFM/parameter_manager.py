@@ -31,11 +31,9 @@ class UnifiedParameters:
     # Preprocessing parameters
     min_intensity_percentile: float = 0.0
     max_intensity_percentile: float = 100.0
-    enable_gaussian_filter: bool = False
     gaussian_sigma: float = 0.0
     cell_min_intensity_percentile: float = 0.0
     cell_max_intensity_percentile: float = 100.0
-    enable_cell_gaussian_filter: bool = False
     cell_gaussian_sigma: float = 0.0
     registration_mode: str = 'translation'
 
@@ -82,11 +80,9 @@ class UnifiedParameters:
         return PreprocessingParameters(
             min_intensity_percentile=self.min_intensity_percentile,
             max_intensity_percentile=self.max_intensity_percentile,
-            enable_gaussian_filter=self.enable_gaussian_filter,
             gaussian_sigma=self.gaussian_sigma,
             cell_min_intensity_percentile=self.cell_min_intensity_percentile,
             cell_max_intensity_percentile=self.cell_max_intensity_percentile,
-            enable_cell_gaussian_filter=self.enable_cell_gaussian_filter,
             cell_gaussian_sigma=self.cell_gaussian_sigma,
             registration_mode=self.registration_mode
         )

@@ -3,18 +3,14 @@ from typing import Optional, Tuple, Dict, Any, List, Generator
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
-
-# TODO service has basically the same class, should just keep one
 @dataclass
 class PreprocessingParameters:
     """Parameters for image preprocessing"""
     min_intensity_percentile: float = 0.0
-    max_intensity_percentile: float = 1.0
-    enable_gaussian_filter: bool = False
+    max_intensity_percentile: float = 100
     gaussian_sigma: float = 0.0
     cell_min_intensity_percentile: float = 0.0
-    cell_max_intensity_percentile: float = 1.0
-    enable_cell_gaussian_filter: bool = False
+    cell_max_intensity_percentile: float = 100
     cell_gaussian_sigma: float = 0.0
     registration_mode: str = 'translation'
 
@@ -66,10 +62,10 @@ class PreprocessingService:
         if not 0 <= params.cell_min_intensity_percentile < params.cell_max_intensity_percentile <= 100:
             return False, "Invalid cell intensity percentile range"
 
-        if params.enable_gaussian_filter and params.gaussian_sigma < 0:
+        if params.gaussian_sigma < 0:
             return False, "Gaussian sigma must be non-negative"
 
-        if params.enable_cell_gaussian_filter and params.cell_gaussian_sigma < 0:
+        if params.cell_gaussian_sigma < 0:
             return False, "Cell gaussian sigma must be non-negative"
 
         if params.registration_mode not in ['translation', 'rigid', 'no registration']:
@@ -138,13 +134,18 @@ class PreprocessingService:
         if is_cell:
             min_percentile = self.params.cell_min_intensity_percentile
             max_percentile = self.params.cell_max_intensity_percentile
-            use_gaussian = self.params.enable_cell_gaussian_filter
             gaussian_sigma = self.params.cell_gaussian_sigma
         else:
             min_percentile = self.params.min_intensity_percentile
             max_percentile = self.params.max_intensity_percentile
-            use_gaussian = self.params.enable_gaussian_filter
             gaussian_sigma = self.params.gaussian_sigma
+
+        # Apply gaussian filter if sigma is non-zero
+        if gaussian_sigma > 0:
+            processed = gaussian_filter(processed, sigma=gaussian_sigma)
+            info['gaussian_sigma'] = gaussian_sigma
+        else:
+            info['gaussian_sigma'] = 0
 
         # Calculate intensity limits
         min_val = np.percentile(processed, min_percentile)
@@ -153,10 +154,6 @@ class PreprocessingService:
         # Apply intensity scaling
         processed = np.clip(processed, min_val, max_val)
         processed = (processed - min_val) / (max_val - min_val)
-
-        # Apply gaussian filter if enabled
-        if use_gaussian:
-            processed = gaussian_filter(processed, gaussian_sigma)
 
         # Perform registration if reference image is provided
         transform_matrix = None

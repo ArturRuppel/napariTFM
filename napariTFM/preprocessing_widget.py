@@ -1,7 +1,7 @@
-# TODO Gaussian blur doesn't do anything
 # TODO add rangesliders
 # TODO UI doesn't freeze during processing
 # TODO reference button should have different enable/disable logic
+# TODO parameters don't synch from batch to preprocessing widget
 
 from pathlib import Path
 from typing import Optional, Any
@@ -165,6 +165,11 @@ class PreprocessingParameterPanel(QWidget):
             row.addWidget(spin)
             layout.addLayout(row)
 
+        # Add note about Gaussian blur
+        note = QLabel("Set Gaussian Sigma to 0 to disable blur")
+        note.setStyleSheet("color: gray;")
+        layout.addWidget(note)
+
         group.setLayout(layout)
         return group
 
@@ -186,6 +191,11 @@ class PreprocessingParameterPanel(QWidget):
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
+
+        # Add note about Gaussian blur
+        note = QLabel("Set Gaussian Sigma to 0 to disable blur")
+        note.setStyleSheet("color: gray;")
+        layout.addWidget(note)
 
         group.setLayout(layout)
         return group
