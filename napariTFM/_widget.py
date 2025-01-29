@@ -7,14 +7,14 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog
 )
 
-from napariTFM.parameter_manager_old import ParameterManager
-from napariTFM.data_manager_old import DataManager
+from napariTFM.parameter_manager import ParameterManager
+from napariTFM.data_manager import DataManager
 from napariTFM.visualization_manager import VisualizationManager
 
-from napariTFM.preprocessing_widget import PreprocessingWidget
-from napariTFM.displacement_analysis_widget import DisplacementAnalysisWidget
-from napariTFM.fttc_widget import FTTCWidget
-from napariTFM.msm_widget import MSMWidget
+# from napariTFM.preprocessing_widget import PreprocessingWidget
+# from napariTFM.displacement_analysis_widget import DisplacementAnalysisWidget
+# from napariTFM.fttc_widget import FTTCWidget
+# from napariTFM.msm_widget import MSMWidget
 from napariTFM.batch_analysis_widget import BatchAnalysisWidget
 
 
@@ -84,36 +84,36 @@ class napariTFMWidget(QWidget):
         # Create tab widget for different components
         tabs = QTabWidget()
 
-        # Initialize all widgets with parameter_manager
-        self.preprocessing_widget = PreprocessingWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager,
-
-        )
-        self.preprocessing_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-
-        self.displacement_widget = DisplacementAnalysisWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager
-        )
-
-        self.force_widget = FTTCWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager
-        )
-
-        self.msm_widget = MSMWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager
-        )
+        # # Initialize all widgets with parameter_manager
+        # self.preprocessing_widget = PreprocessingWidget(
+        #     self.viewer,
+        #     self.data_manager,
+        #     self.parameter_manager,
+        #     self.visualization_manager,
+        #
+        # )
+        # self.preprocessing_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        #
+        # self.displacement_widget = DisplacementAnalysisWidget(
+        #     self.viewer,
+        #     self.data_manager,
+        #     self.parameter_manager,
+        #     self.visualization_manager
+        # )
+        #
+        # self.force_widget = FTTCWidget(
+        #     self.viewer,
+        #     self.data_manager,
+        #     self.parameter_manager,
+        #     self.visualization_manager
+        # )
+        #
+        # self.msm_widget = MSMWidget(
+        #     self.viewer,
+        #     self.data_manager,
+        #     self.parameter_manager,
+        #     self.visualization_manager
+        # )
 
         self.batch_widget = BatchAnalysisWidget(
             self.viewer,
@@ -123,10 +123,10 @@ class napariTFMWidget(QWidget):
         )
 
         # Add widgets to tabs
-        tabs.addTab(self.preprocessing_widget, "Preprocessing")
-        tabs.addTab(self.displacement_widget, "Displacement")
-        tabs.addTab(self.force_widget, "Force Analysis")
-        tabs.addTab(self.msm_widget, "Stress Analysis")
+        # tabs.addTab(self.preprocessing_widget, "Preprocessing")
+        # tabs.addTab(self.displacement_widget, "Displacement")
+        # tabs.addTab(self.force_widget, "Force Analysis")
+        # tabs.addTab(self.msm_widget, "Stress Analysis")
         tabs.addTab(self.batch_widget, "Batch Analysis")
 
         # Add tabs to container
@@ -183,15 +183,15 @@ class napariTFMWidget(QWidget):
 
         # Connect spinbox signals to parameter manager
         self.pixel_spin.valueChanged.connect(
-            lambda value: self.parameter_manager.set_value('pixel_size', value)
+            lambda value: self.parameter_manager.set_parameter('pixel_size', value)
         )
         self.frame_spin.valueChanged.connect(
-            lambda value: self.parameter_manager.set_value('frame_interval', value)
+            lambda value: self.parameter_manager.set_parameter('frame_interval', value)
         )
 
         # Initialize spinbox values from parameter manager
-        self.pixel_spin.setValue(self.parameter_manager.get_value('pixel_size'))
-        self.frame_spin.setValue(self.parameter_manager.get_value('frame_interval'))
+        self.pixel_spin.setValue(self.parameter_manager.get_parameter('pixel_size'))
+        self.frame_spin.setValue(self.parameter_manager.get_parameter('frame_interval'))
 
         spinbox_layout.addStretch()
         calibration_layout.addLayout(spinbox_layout)
@@ -240,14 +240,14 @@ class napariTFMWidget(QWidget):
 
             if reply == QMessageBox.Yes:
                 # Reset parameters
-                self.parameter_manager.reset_to_defaults()
+                self.parameter_manager.reset_all_parameters()
 
                 # Update all widget states
                 for widget in [
-                    self.preprocessing_widget,
-                    self.displacement_widget,
-                    self.force_widget,
-                    self.msm_widget,
+                    # self.preprocessing_widget,
+                    # self.displacement_widget,
+                    # self.force_widget,
+                    # self.msm_widget,
                     self.batch_widget
                 ]:
                     if hasattr(widget, '_update_ui_state'):
@@ -293,10 +293,10 @@ class napariTFMWidget(QWidget):
 
     def connect_signals(self):
         """Connect signals between components"""
-        self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
-        self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
-        self.force_widget.force_calculated.connect(self._on_force_completed)
-        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
+        # self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
+        # self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
+        # self.force_widget.force_calculated.connect(self._on_force_completed)
+        # self.msm_widget.stress_calculated.connect(self._on_stress_completed)
 
         # Connect parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
@@ -306,10 +306,10 @@ class napariTFMWidget(QWidget):
         # For calibration parameters, we need to update all widgets
         if param_name in ['pixel_size', 'frame_interval']:
             for widget in [
-                self.preprocessing_widget,
-                self.displacement_widget,
-                self.force_widget,
-                self.msm_widget,
+                # self.preprocessing_widget,
+                # self.displacement_widget,
+                # self.force_widget,
+                # self.msm_widget,
                 self.batch_widget
             ]:
                 # Use _update_calibration instead of _update_parameters
@@ -347,13 +347,13 @@ class napariTFMWidget(QWidget):
         if reply == QMessageBox.Yes:
             try:
                 # Clear data manager
-                self.data_manager.clear_all_data()
+                self.data_manager.__init__()
 
                 # Update UI state in all widgets
-                self.preprocessing_widget._update_ui_state()
-                self.displacement_widget._update_ui_state()
-                self.force_widget._update_ui_state()
-                self.msm_widget._update_ui_state()
+                # self.preprocessing_widget._update_ui_state()
+                # self.displacement_widget._update_ui_state()
+                # self.force_widget._update_ui_state()
+                # self.msm_widget._update_ui_state()
                 self.batch_widget._update_ui_state()
 
                 logger.info("All data cleared successfully")

@@ -76,9 +76,15 @@ class UnifiedParameters:
     poisson_ratio_cells: float = 0.5
     max_stress: float = 1.0
 
-    # Visualization parameters (you can add more as needed)
-    show_vectors: bool = True
-    show_colormap: bool = True
+    # Visualization parameters
+    save_bead_overlay: bool = True
+    save_displacement_map: bool = True
+    save_force_map: bool = True
+    save_force_cell_overlay: bool = True
+    save_sigma_xx: bool = True
+    save_sigma_yy: bool = True
+    save_normal_stress: bool = True
+    save_mesh: bool = True
 
     def to_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create PreprocessingParameters from unified parameters"""
@@ -216,6 +222,98 @@ class ParameterManager(QObject):
     def get_msm_parameters(self) -> MSMParameters:
         """Get parameters for MSM service"""
         return self._parameters.to_msm_parameters()
+
+    def get_all_parameters(self) -> Dict[str, Any]:
+        """
+        Get all parameters as a dictionary.
+
+        Returns:
+            Dict[str, Any]: Dictionary of all parameters with their current values
+        """
+        # Start with all parameters from the dataclass
+        parameters = {}
+
+        # Get all fields from UnifiedParameters
+        for field in fields(self._parameters):
+            value = getattr(self._parameters, field.name)
+
+            # Handle special cases
+            if field.name == 'young_modulus':
+                # Store in Pa even though it's displayed in kPa
+                parameters[field.name] = value
+            elif field.name == 'gel_height' and value is None:
+                # Convert None to 0 for infinity
+                parameters[field.name] = 0
+            elif field.name == 'regularization':
+                # Store actual value, not log10
+                parameters[field.name] = value
+            else:
+                parameters[field.name] = value
+
+        return parameters
+
+    def get_category_parameters(self, category: ParameterCategory) -> Dict[str, Any]:
+        """
+        Get parameters for a specific category.
+
+        Args:
+            category: ParameterCategory enum value
+
+        Returns:
+            Dict[str, Any]: Dictionary of parameters for the specified category
+        """
+        category_parameters = {}
+
+        # Map categories to their parameter prefixes or names
+        category_mappings = {
+            ParameterCategory.GENERAL: ['pixel_size', 'frame_interval'],
+            ParameterCategory.PREPROCESSING: [
+                'min_intensity', 'max_intensity', 'gaussian_sigma',
+                'cell_min_intensity', 'cell_max_intensity', 'cell_gaussian_sigma',
+                'registration_mode'
+            ],
+            ParameterCategory.DISPLACEMENT: [
+                'tau', 'lambda_', 'theta', 'nscales', 'warps', 'epsilon',
+                'inner_iterations', 'outer_iterations', 'scale_step',
+                'median_filtering', 'downscale_factor',
+                'disp_vector_stride', 'disp_arrow_scale', 'd_max'
+            ],
+            ParameterCategory.FORCE: [
+                'young_modulus', 'poisson_ratio_substrate', 'gel_height',
+                'lanczos_exp', 'regularization', 'auto_gcv',
+                'force_vector_stride', 'force_arrow_scale', 'f_max'
+            ],
+            ParameterCategory.STRESS: [
+                'threshold', 'dilation', 'smoothing_sigma', 'density_factor',
+                'mesh_algorithm', 'use_optimization', 'poisson_ratio_cells',
+                'max_stress'
+            ],
+            ParameterCategory.VISUALIZATION: [
+                'save_bead_overlay', 'save_displacement_map', 'save_force_map',
+                'save_force_cell_overlay', 'save_sigma_xx', 'save_sigma_yy',
+                'save_normal_stress', 'save_mesh', 'show_vectors', 'show_colormap'
+            ]
+        }
+
+        # Get parameters for the requested category
+        if category in category_mappings:
+            for param_name in category_mappings[category]:
+                if hasattr(self._parameters, param_name):
+                    value = getattr(self._parameters, param_name)
+                    # Apply any necessary conversions
+                    if param_name == 'young_modulus':
+                        # Store in Pa even though it's displayed in kPa
+                        category_parameters[param_name] = value
+                    elif param_name == 'gel_height' and value is None:
+                        # Convert None to 0 for infinity
+                        category_parameters[param_name] = 0
+                    elif param_name == 'regularization':
+                        # Store actual value, not log10
+                        category_parameters[param_name] = value
+                    else:
+                        category_parameters[param_name] = value
+
+        return category_parameters
 
     def reset_all_parameters(self) -> None:
         """Reset all parameters to default values"""
