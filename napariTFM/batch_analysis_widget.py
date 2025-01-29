@@ -1,6 +1,3 @@
-# TODO add reset config
-# TODO Default value for young's modulus should be 10. Conversion from kPa to Pa correct?
-# TODO young's modulus resets to default value as soon as I change it
 # TODO add tooltips for parameters
 import os
 import subprocess
@@ -230,7 +227,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         return group
 
     def _create_general_params_group(self) -> QGroupBox:
-        """Create general parameters group."""
+        """Create general parameters group without setting defaults."""
         group = QGroupBox("General Parameters")
         layout = QVBoxLayout()
         layout.setSpacing(4)
@@ -238,10 +235,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Pixel size
         pixel_row = QHBoxLayout()
         pixel_row.addWidget(QLabel("Pixel Size (µm):"))
-        pixel_spin = QDoubleSpinBox()
-        pixel_spin.setRange(0.01, 10.0)
-        pixel_spin.setSingleStep(0.1)
-        pixel_spin.setDecimals(2)
+        pixel_spin = self._create_spinbox(0.01, 10.0, 0.1, 2)
         pixel_spin.setToolTip("Physical size of each pixel in micrometers")
         self.parameter_spins['pixel_size'] = pixel_spin
         pixel_row.addWidget(pixel_spin)
@@ -250,10 +244,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Frame interval
         frame_row = QHBoxLayout()
         frame_row.addWidget(QLabel("Frame Length (min):"))
-        frame_spin = QDoubleSpinBox()
-        frame_spin.setRange(0.001, 1000.0)
-        frame_spin.setSingleStep(0.1)
-        frame_spin.setDecimals(1)
+        frame_spin = self._create_spinbox(0.001, 1000.0, 0.1, 1)
         frame_spin.setToolTip("Time between consecutive frames in minutes")
         self.parameter_spins['frame_interval'] = frame_spin
         frame_row.addWidget(frame_spin)
@@ -263,45 +254,37 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         return group
 
     def _create_preprocessing_params_group(self) -> QGroupBox:
-        """Create preprocessing parameters group."""
+        """Create preprocessing parameters group without setting defaults."""
         group = QGroupBox("Preprocessing Parameters")
         layout = QVBoxLayout()
         layout.setSpacing(4)
 
         # Bead/Reference parameters
         bead_params = [
-            ("min_intensity_percentile", "Min Intensity (%)", 0, 100, 0.1, 0),
-            ("max_intensity_percentile", "Max Intensity (%)", 0, 100, 0.1, 100),
-            ("gaussian_sigma", "Gaussian Sigma", 0.0, 10.0, 0.1, 0.0)
+            ("min_intensity_percentile", "Min Intensity (%)", 0, 100, 0.1),
+            ("max_intensity_percentile", "Max Intensity (%)", 0, 100, 0.1),
+            ("gaussian_sigma", "Gaussian Sigma", 0.0, 10.0, 0.1)
         ]
 
-        for name, label, min_val, max_val, step, default in bead_params:
+        for name, label, min_val, max_val, step in bead_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = QDoubleSpinBox()
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
-            spin.setDecimals(1)
+            spin = self._create_spinbox(min_val, max_val, step)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
 
         # Cell parameters
         cell_params = [
-            ("cell_min_intensity_percentile", "Cell Min Intensity (%)", 0, 100, 0.1, 0),
-            ("cell_max_intensity_percentile", "Cell Max Intensity (%)", 0, 100, 0.1, 100),
-            ("cell_gaussian_sigma", "Cell Gaussian Sigma", 0.0, 10.0, 0.1, 0.0)
+            ("cell_min_intensity_percentile", "Cell Min Intensity (%)", 0, 100, 0.1),
+            ("cell_max_intensity_percentile", "Cell Max Intensity (%)", 0, 100, 0.1),
+            ("cell_gaussian_sigma", "Cell Gaussian Sigma", 0.0, 10.0, 0.1)
         ]
 
-        for name, label, min_val, max_val, step, default in cell_params:
+        for name, label, min_val, max_val, step in cell_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = QDoubleSpinBox()
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
-            spin.setDecimals(1)
+            spin = self._create_spinbox(min_val, max_val, step)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
@@ -320,57 +303,56 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         return group
 
     def _create_displacement_params_group(self) -> QGroupBox:
-        """Create displacement analysis parameters group."""
+        """Create displacement analysis parameters group without setting defaults."""
         group = QGroupBox("Displacement Parameters")
         layout = QVBoxLayout()
         layout.setSpacing(4)
 
         # Optical flow parameters
         flow_params = [
-            ("tau", "Tau:", 0.01, 1.0, 0.01, 0.25),
-            ("lambda_", "Lambda:", 0.01, 1.0, 0.01, 0.4),
-            ("theta", "Theta:", 0.1, 1.0, 0.1, 0.3),
-            ("nscales", "Pyramid Scales:", 1, 10, 1, 3),
-            ("warps", "Warps:", 1, 10, 1, 3),
-            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001, 0.01),
-            ("inner_iterations", "Inner Iterations:", 1, 50, 1, 15),
-            ("outer_iterations", "Outer Iterations:", 1, 20, 1, 5),
-            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01, 0.5),
-            ("median_filtering", "Median Filter:", 1, 9, 2, 5),
-            ("downscale_factor", "Downscale Factor:", 1, 10, 1, 1)
+            ("tau", "Tau:", 0.01, 1.0, 0.01),
+            ("lambda_", "Lambda:", 0.01, 1.0, 0.01),
+            ("theta", "Theta:", 0.1, 1.0, 0.01),
+            ("nscales", "Pyramid Scales:", 1, 10, 1),
+            ("warps", "Warps:", 1, 10, 1),
+            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001),
+            ("inner_iterations", "Inner Iterations:", 1, 50, 1),
+            ("outer_iterations", "Outer Iterations:", 1, 20, 1),
+            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01),
+            ("median_filtering", "Median Filter:", 1, 9, 2),
+            ("downscale_factor", "Downscale Factor:", 1, 10, 1)
         ]
 
-        for name, label, min_val, max_val, step, default in flow_params:
+        for name, label, min_val, max_val, step in flow_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             if isinstance(step, int):
                 spin = QSpinBox()
+                spin.setRange(min_val, max_val)
+                spin.setSingleStep(step)
             else:
-                spin = QDoubleSpinBox()
+                spin = self._create_spinbox(min_val, max_val, step)
                 spin.setDecimals(2)
-            if name == "epsilon":
-                spin.setDecimals(3)
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
+                if name == "epsilon":
+                    spin.setDecimals(3)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
 
         # Visualization parameters
         vis_params = [
-            ("disp_vector_stride", "Vector Stride:", 1, 100, 1, 20),
-            ("disp_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1, 1.0),
-            ("d_max", "Max Displacement (µm):", 0.1, 200.0, 0.1, 5.0)
+            ("disp_vector_stride", "Vector Stride:", 1, 100, 1),
+            ("disp_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1),
+            ("d_max", "Max Displacement (µm):", 0.1, 200.0, 0.1)
         ]
 
-        for name, label, min_val, max_val, step, default in vis_params:
+        for name, label, min_val, max_val, step in vis_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = QDoubleSpinBox() if isinstance(step, float) else QSpinBox()
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
+            spin = self._create_spinbox(min_val, max_val, step) if isinstance(step, float) else QSpinBox()
+            if isinstance(spin, QSpinBox):
+                spin.setRange(min_val, max_val)
+                spin.setSingleStep(step)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
@@ -379,49 +361,43 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         return group
 
     def _create_force_params_group(self) -> QGroupBox:
-        """Create force analysis parameters group."""
+        """Create force analysis parameters group without setting defaults."""
         group = QGroupBox("Force Parameters")
         layout = QVBoxLayout()
         layout.setSpacing(4)
 
         # Material parameters setup
         material_params = [
-            ("young_modulus", "Young's Modulus (kPa):", 0.1, 10, 0.1, 10),
-            ("poisson_ratio_substrate", "Poisson's Ratio:", 0, 0.5, 0.01, 0.5),
-            ("gel_height", "Gel Height (µm):", 0, 1000, 10, 0)
+            ("young_modulus", "Young's Modulus (kPa):", 0.1, 100, 0.1),
+            ("poisson_ratio_substrate", "Poisson's Ratio:", 0, 0.5, 0.01),
+            ("gel_height", "Gel Height (µm):", 0, 1000, 10)
         ]
 
-        for name, label, min_val, max_val, step, default in material_params:
+        for name, label, min_val, max_val, step in material_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = QDoubleSpinBox()
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
+            spin = self._create_spinbox(min_val, max_val, step)
             if name == "gel_height":
                 spin.setSpecialValueText("∞")
+            if name == "poisson_ratio_substrate":
+                spin.setDecimals(2)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
 
-        # Lanczos exponent (integer spinbox)
+        # Lanczos exponent
         lanczos_row = QHBoxLayout()
         lanczos_row.addWidget(QLabel("Lanczos Exponent:"))
-        lanczos_spin = QSpinBox()  # Changed to QSpinBox
+        lanczos_spin = QSpinBox()
         lanczos_spin.setRange(0, 5)
-        lanczos_spin.setValue(1)
         self.parameter_spins['lanczos_exp'] = lanczos_spin
         lanczos_row.addWidget(lanczos_spin)
         layout.addLayout(lanczos_row)
 
-        # Regularization parameter (as log10)
+        # Regularization parameter
         reg_row = QHBoxLayout()
         reg_row.addWidget(QLabel("Regularization (10^x):"))
-        reg_spin = QDoubleSpinBox()
-        reg_spin.setRange(-21, 0)
-        reg_spin.setSingleStep(0.5)
-        reg_spin.setValue(-4)
-        reg_spin.setDecimals(1)
+        reg_spin = self._create_spinbox(-21, 0, 0.5)
         self.parameter_spins['regularization'] = reg_spin
         reg_row.addWidget(reg_spin)
         layout.addLayout(reg_row)
@@ -439,18 +415,18 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         # Add visualization parameters
         vis_params = [
-            ("force_vector_stride", "Vector Stride:", 1, 100, 1, 20),
-            ("force_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1, 1.0),
-            ("f_max", "Max Force (Pa):", 0.1, 10000.0, 1, 1000.0)
+            ("force_vector_stride", "Vector Stride:", 1, 100, 1),
+            ("force_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1),
+            ("f_max", "Max Force (Pa):", 0.1, 10000.0, 1.0)
         ]
 
-        for name, label, min_val, max_val, step, default in vis_params:
+        for name, label, min_val, max_val, step in vis_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = QDoubleSpinBox() if isinstance(step, float) else QSpinBox()
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
+            spin = self._create_spinbox(min_val, max_val, step) if isinstance(step, float) else QSpinBox()
+            if isinstance(spin, QSpinBox):
+                spin.setRange(min_val, max_val)
+                spin.setSingleStep(step)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
             layout.addLayout(row)
@@ -459,33 +435,33 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         return group
 
     def _create_stress_params_group(self) -> QGroupBox:
-        """Create stress parameters group with proper parameter manager integration."""
+        """Create stress parameters group without setting defaults."""
         group = QGroupBox("Stress Parameters")
         layout = QVBoxLayout()
         layout.setSpacing(4)
 
         # Mask parameters
         mask_params = [
-            ("threshold", "Threshold Percentile:", 0, 100, 0.1, 0,
+            ("threshold", "Threshold Percentile (%):", 0, 100, 0.1,
              "Percentile threshold for cell mask generation"),
-            ("dilation", "Mask Dilation (px):", 0, 50, 1, 10,
+            ("dilation", "Mask Dilation (px):", 0, 50, 1,
              "Number of pixels to dilate the mask"),
-            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1, 10,
+            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1,
              "Sigma for Gaussian smoothing of mask boundary")
         ]
 
-        for name, label, min_val, max_val, step, default, tooltip in mask_params:
+        for name, label, min_val, max_val, step, tooltip in mask_params:
             row = QHBoxLayout()
             label_widget = QLabel(label)
             label_widget.setToolTip(tooltip)
             row.addWidget(label_widget)
 
-            spin = QDoubleSpinBox() if isinstance(step, float) else QSpinBox()
-            spin.setRange(min_val, max_val)
-            spin.setSingleStep(step)
-            spin.setValue(default)
-            if isinstance(spin, QDoubleSpinBox):
-                spin.setDecimals(1)
+            if isinstance(step, float):
+                spin = self._create_spinbox(min_val, max_val, step)
+            else:
+                spin = QSpinBox()
+                spin.setRange(min_val, max_val)
+                spin.setSingleStep(step)
 
             self.parameter_spins[name] = spin
             row.addWidget(spin)
@@ -493,62 +469,49 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         # Mesh parameters
         mesh_params = [
-            ("density_factor", "Density Factor:", 0.001, 0.1, 0.001, 0.025,
+            ("density_factor", "Density Factor:", 0.001, 0.1, 0.001,
              "Controls mesh density. Lower values create finer meshes."),
-            ("mesh_algorithm", "Mesh Algorithm:", None, None, None, "Frontal-Del.",
-             "Algorithm used for mesh generation"),
         ]
 
-        for name, label, min_val, max_val, step, default, tooltip in mesh_params:
+        for name, label, min_val, max_val, step, tooltip in mesh_params:
             row = QHBoxLayout()
             label_widget = QLabel(label)
             label_widget.setToolTip(tooltip)
             row.addWidget(label_widget)
 
-            if name == "mesh_algorithm":
-                combo = QComboBox()
-                combo.addItems(self.MESH_ALGORITHMS.keys())
-                combo.setCurrentText(default)
-                self.parameter_combos[name] = combo
-                row.addWidget(combo)
-            else:
-                spin = QDoubleSpinBox()
-                spin.setRange(min_val, max_val)
-                spin.setSingleStep(step)
-                spin.setValue(default)
-                spin.setDecimals(3)
-                self.parameter_spins[name] = spin
-                row.addWidget(spin)
-
+            spin = self._create_spinbox(min_val, max_val, step, 3)  # 3 decimals for density factor
+            self.parameter_spins[name] = spin
+            row.addWidget(spin)
             layout.addLayout(row)
+
+        # Mesh algorithm combo
+        algo_row = QHBoxLayout()
+        algo_row.addWidget(QLabel("Mesh Algorithm:"))
+        algo_combo = QComboBox()
+        algo_combo.addItems(self.MESH_ALGORITHMS.keys())
+        algo_combo.setToolTip("Algorithm used for mesh generation")
+        self.parameter_combos['mesh_algorithm'] = algo_combo
+        algo_row.addWidget(algo_combo)
+        layout.addLayout(algo_row)
 
         # Add optimization checkbox
         self.parameter_checks['use_optimization'] = QCheckBox("Mesh Optimization")
-        self.parameter_checks['use_optimization'].setChecked(True)
         self.parameter_checks['use_optimization'].setToolTip(
             "Enable mesh quality optimization after generation"
         )
         layout.addWidget(self.parameter_checks['use_optimization'])
 
-        # Add max stress visualization parameter
+        # Add Poisson ratio and max stress parameters
         poisson_row = QHBoxLayout()
         poisson_row.addWidget(QLabel("Poisson's Ratio:"))
-        poisson_spin = QDoubleSpinBox()
-        poisson_spin.setRange(0, 1.0)
-        poisson_spin.setSingleStep(0.01)
-        poisson_spin.setValue(1.0)
-        poisson_spin.setDecimals(2)
+        poisson_spin = self._create_spinbox(0, 1.0, 0.01, 2)
         self.parameter_spins['poisson_ratio_cells'] = poisson_spin
         poisson_row.addWidget(poisson_spin)
         layout.addLayout(poisson_row)
 
         stress_row = QHBoxLayout()
         stress_row.addWidget(QLabel("Max Stress (mN/m):"))
-        max_stress_spin = QDoubleSpinBox()
-        max_stress_spin.setRange(0.01, 1000.0)
-        max_stress_spin.setSingleStep(0.1)
-        max_stress_spin.setValue(1.0)
-        max_stress_spin.setDecimals(2)
+        max_stress_spin = self._create_spinbox(0.01, 1000.0, 0.1, 2)
         self.parameter_spins['max_stress'] = max_stress_spin
         stress_row.addWidget(max_stress_spin)
         layout.addLayout(stress_row)
@@ -572,8 +535,35 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self.analysis_checkboxes = {}
         for key, label in steps:
             checkbox = QCheckBox(label)
-            checkbox.setChecked(False)  # Default to False as per config
+            checkbox.setChecked(True)
             self.analysis_checkboxes[key] = checkbox
+            layout.addWidget(checkbox)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_visualization_group(self) -> QGroupBox:
+        """Create visualization options group."""
+        group = QGroupBox("Visualizations")
+        layout = QVBoxLayout()
+
+        # Define visualization options
+        viz_options = [
+            ("bead_overlay", "Bead Overlay"),
+            ("displacement_map", "Displacement Map"),
+            ("force_map", "Force Map"),
+            ("force_cell_overlay", "Force Cell Overlay"),
+            ("sigma_xx", "Sigma XX"),
+            ("sigma_yy", "Sigma YY"),
+            ("normal_stress", "Normal Stress"),
+            ("mesh", "Mesh")
+        ]
+
+        self.visualization_checkboxes = {}
+        for key, label in viz_options:
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(True)
+            self.visualization_checkboxes[key] = checkbox
             layout.addWidget(checkbox)
 
         group.setLayout(layout)
@@ -625,48 +615,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
-    def _create_visualization_group(self) -> QGroupBox:
-        """Create visualization options group."""
-        group = QGroupBox("Visualizations")
-        layout = QVBoxLayout()
-
-        # Update visualization options to match parameter manager
-        viz_options = [
-            ("bead_overlay", "Bead Overlay", "save_bead_overlay"),
-            ("displacement_map", "Displacement Map", "save_displacement_map"),
-            ("force_map", "Force Map", "save_force_map"),
-            ("force_cell_overlay", "Force Cell Overlay", "save_force_cell_overlay"),
-            ("sigma_xx", "Sigma XX", "save_sigma_xx"),
-            ("sigma_yy", "Sigma YY", "save_sigma_yy"),
-            ("normal_stress", "Normal Stress", "save_normal_stress"),
-            ("mesh", "Mesh", "save_mesh")
-        ]
-
-        self.visualization_checkboxes = {}
-        for ui_key, label, param_name in viz_options:
-            checkbox = QCheckBox(label)
-            try:
-                checkbox.setChecked(self.parameter_manager.get_parameter(param_name))
-            except KeyError:
-                print(f"Warning: Parameter {param_name} not found in parameter manager")
-                checkbox.setChecked(True)  # Default to True if parameter not found
-
-            # Store checkbox with parameter name (including 'save_' prefix)
-            self.visualization_checkboxes[param_name] = checkbox
-
-            # Connect checkbox to parameter manager
-            def make_callback(param_name=param_name):
-                def callback(state):
-                    self.parameter_manager.set_parameter(param_name, state == Qt.Checked)
-
-                return callback
-
-            checkbox.stateChanged.connect(make_callback())
-            layout.addWidget(checkbox)
-
-        group.setLayout(layout)
-        return group
-
     def _create_status_frame(self) -> QFrame:
         """Create status frame."""
         frame = QFrame()
@@ -681,6 +629,14 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         frame.setLayout(layout)
         return frame
+
+    def _create_spinbox(self, min_val: float, max_val: float, step: float, decimals: int = 1) -> QDoubleSpinBox:
+        """Helper method to create a spinbox without setting default value"""
+        spin = QDoubleSpinBox()
+        spin.setRange(min_val, max_val)
+        spin.setSingleStep(step)
+        spin.setDecimals(decimals)
+        return spin
 
     # endregion === UI Creation Groups ===
 
@@ -1029,6 +985,10 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             # Sync all parameters
             for name, spin in self.parameter_spins.items():
                 value = self.parameter_manager.get_parameter(name)
+                if name == 'young_modulus':
+                    value = value / 1000  # Convert Pa to kPa for display
+                elif name == 'gel_height' and value is None:
+                    value = 0
                 if isinstance(spin, tuple):
                     # Handle special cases like threshold
                     spin_widget, slider = spin
@@ -1048,10 +1008,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 value = self.parameter_manager.get_parameter(name)
                 self._safe_set_checked(checkbox, bool(value))
 
-            # Sync visualization checkboxes
-            for param_name, checkbox in self.visualization_checkboxes.items():
-                value = self.parameter_manager.get_parameter(param_name)
-                self._safe_set_checked(checkbox, bool(value))
 
         finally:
             self._block_parameter_widgets(False)

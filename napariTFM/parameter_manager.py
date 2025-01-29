@@ -57,7 +57,7 @@ class UnifiedParameters:
     d_max: float = 1.0  # µm
 
     # Force parameters
-    young_modulus: float = 5.0  # kPa
+    young_modulus: float = 5000  # Pa
     poisson_ratio_substrate: float = 0.5
     gel_height: Optional[float] = None
     lanczos_exp: int = 1
@@ -77,15 +77,6 @@ class UnifiedParameters:
     poisson_ratio_cells: float = 0.5
     max_stress: float = 1.0
 
-    # Visualization parameters
-    save_bead_overlay: bool = True
-    save_displacement_map: bool = True
-    save_force_map: bool = True
-    save_force_cell_overlay: bool = True
-    save_sigma_xx: bool = True
-    save_sigma_yy: bool = True
-    save_normal_stress: bool = True
-    save_mesh: bool = True
 
     def to_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create PreprocessingParameters from unified parameters"""

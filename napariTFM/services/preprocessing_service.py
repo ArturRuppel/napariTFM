@@ -60,10 +60,10 @@ class PreprocessingService:
         Tuple[bool, str]
             (is_valid, error_message)
         """
-        if not 0 <= params.min_intensity_percentile < params.max_intensity_percentile <= 1:
+        if not 0 <= params.min_intensity_percentile < params.max_intensity_percentile <= 100:
             return False, "Invalid intensity percentile range"
 
-        if not 0 <= params.cell_min_intensity_percentile < params.cell_max_intensity_percentile <= 1:
+        if not 0 <= params.cell_min_intensity_percentile < params.cell_max_intensity_percentile <= 100:
             return False, "Invalid cell intensity percentile range"
 
         if params.enable_gaussian_filter and params.gaussian_sigma < 0:
