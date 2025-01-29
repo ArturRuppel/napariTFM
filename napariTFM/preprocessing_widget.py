@@ -1,5 +1,3 @@
-# TODO colorbar go to 16 bit
-
 from pathlib import Path
 from typing import Any
 

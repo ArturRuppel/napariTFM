@@ -1,20 +1,29 @@
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, Qt, QObject
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QFileDialog, QScrollArea, QCheckBox,
     QSpinBox, QDoubleSpinBox, QPushButton, QMessageBox,
     QSizePolicy, QFrame, QProgressBar
 )
+from napari.layers import Image
+
 from napari.qt.threading import thread_worker
 
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
-from napariTFM.data_manager_old import DataManager
-from napariTFM.parameter_manager_old import ParameterManager
+from napariTFM.data_manager import DataManager
+from napariTFM.parameter_manager import ParameterManager
 from napariTFM.visualization_manager import VisualizationManager
-from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters
-
+from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
+# TODO preview current frame throws error
+# TODO calculate all frames throws error after finishing
+# TODO make UI clean and pretty, switch order of loading buttons
+# TODO make parameters synch from batch to displacement widget
+# TODO update visualization manager methods to use datamanager
 
 class DisplacementParameterPanel(QWidget):
     """Panel for handling all displacement parameter inputs."""
@@ -22,48 +31,84 @@ class DisplacementParameterPanel(QWidget):
     parameter_changed = Signal()
     parameter_value_changed = Signal(str, object)
 
+    """Panel for handling all displacement parameter inputs."""
+
+    parameter_changed = Signal(str, object)  # (param_name, value)
+
     def __init__(self, parameter_manager):
         super().__init__()
         self.parameter_manager = parameter_manager
-        self.parameter_widgets = {}
+        self.parameter_spins = {}
+        self.parameter_combos = {}
         self._setup_ui()
-        self._connect_signals()
 
     def _setup_ui(self):
         layout = QVBoxLayout()
 
-        # Create parameter groups
+        # Add parameter groups
         layout.addWidget(self._create_flow_parameters())
         layout.addWidget(self._create_analysis_parameters())
         layout.addWidget(self._create_visualization_parameters())
 
         # Add reset button
-        self.reset_params_btn = QPushButton("Reset Parameters")
-        layout.addWidget(self.reset_params_btn)
+        self.reset_btn = QPushButton("Reset Parameters")
+        self.reset_btn.setToolTip("Reset all displacement parameters to their default values")
+        layout.addWidget(self.reset_btn)
 
         self.setLayout(layout)
+        self._connect_signals()
+        self._sync_widget_with_parameters()
 
     def _create_flow_parameters(self) -> QGroupBox:
         """Create optical flow parameter group."""
         group = QGroupBox("Optical Flow Parameters")
         layout = QVBoxLayout()
 
+        # Define parameters with tooltips
         params = [
-            ("tau", "Tau:", 0.01, 1.0, 0.01, 0.25),
-            ("lambda_", "Lambda:", 0.01, 1.0, 0.01, 0.4),
-            ("theta", "Theta:", 0.1, 1.0, 0.1, 0.3),
-            ("nscales", "Pyramid Scales:", 1, 10, 1, 3),
-            ("warps", "Warps:", 1, 10, 1, 3),
-            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001, 0.01),
-            ("inner_iterations", "Inner Iterations:", 1, 50, 1, 15),
-            ("outer_iterations", "Outer Iterations:", 1, 20, 1, 5),
-            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01, 0.5),
-            ("median_filtering", "Median Filter:", 1, 9, 2, 5),
+            ("tau", "Tau:", 0.01, 1.0, 0.01,
+             "Time step for optical flow computation. Lower values give more accurate but slower results"),
+            ("lambda_", "Lambda:", 0.01, 1.0, 0.01,
+             "Regularization parameter. Higher values produce smoother flow fields"),
+            ("theta", "Theta:", 0.1, 1.0, 0.1,
+             "Weight parameter for the divergence term. Controls flow field smoothness"),
+            ("nscales", "Pyramid Scales:", 1, 10, 1,
+             "Number of pyramid levels. More levels handle larger displacements but increase computation time"),
+            ("warps", "Warps:", 1, 10, 1,
+             "Number of warping steps per scale. More warps increase accuracy for large displacements"),
+            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001,
+             "Stopping criterion threshold. Lower values give more precise results but longer computation times"),
+            ("inner_iterations", "Inner Iterations:", 1, 50, 1,
+             "Maximum number of inner iterations. More iterations improve accuracy but increase computation time"),
+            ("outer_iterations", "Outer Iterations:", 1, 20, 1,
+             "Maximum number of outer iterations. More iterations improve accuracy but increase computation time"),
+            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01,
+             "Scale factor between pyramid levels. Lower values create more pyramid levels"),
+            ("median_filtering", "Median Filter:", 1, 9, 2,
+             "Size of median filter for post-processing. Larger values remove more noise but may lose detail"),
         ]
 
-        for name, label, min_val, max_val, step, default in params:
-            widget = self._create_parameter_widget(name, label, min_val, max_val, step, default)
-            layout.addLayout(widget)
+        for name, label, min_val, max_val, step, tooltip in params:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+
+            if isinstance(step, int):
+                spin = QSpinBox()
+                spin.setRange(min_val, max_val)
+                spin.setSingleStep(step)
+            else:
+                spin = QDoubleSpinBox()
+                spin.setRange(min_val, max_val)
+                spin.setSingleStep(step)
+                if name == "epsilon":
+                    spin.setDecimals(3)
+                else:
+                    spin.setDecimals(2)
+
+            spin.setToolTip(tooltip)
+            self.parameter_spins[name] = spin
+            row.addWidget(spin)
+            layout.addLayout(row)
 
         group.setLayout(layout)
         return group
@@ -74,33 +119,113 @@ class DisplacementParameterPanel(QWidget):
         layout = QVBoxLayout()
 
         # Downscale factor
-        layout.addLayout(
-            self._create_parameter_widget(
-                "downscale_factor", "Downscale Factor:",
-                1, 10, 1, 1
-            )
+        downscale_layout = QHBoxLayout()
+        downscale_layout.addWidget(QLabel("Downscale Factor:"))
+        downscale_spin = QSpinBox()
+        downscale_spin.setRange(1, 10)
+        downscale_spin.setToolTip(
+            "Factor for spatial averaging of displacement field.\n"
+            "1 = no averaging (full resolution)\n"
+            "Higher values reduce resolution but improve signal-to-noise ratio"
         )
+        self.parameter_spins['downscale_factor'] = downscale_spin
+        downscale_layout.addWidget(downscale_spin)
+        layout.addLayout(downscale_layout)
 
         group.setLayout(layout)
         return group
 
     def _create_visualization_parameters(self) -> QGroupBox:
         """Create visualization parameter group."""
-        group = QGroupBox("Visualization Parameters")
+        group = QGroupBox("Visualization")
         layout = QVBoxLayout()
 
         params = [
-            ("d_max", "Max Displacement (µm):", 0.1, 200.0, 0.1, 10.0),
-            ("disp_vector_stride", "Vector Stride:", 1, 100, 1, 20),
-            ("disp_arrow_scale", "Arrow Scale:", 0.1, 10.0, 0.1, 1.0),
+            ("disp_vector_stride", "Vector Stride:", 1, 100, 1,
+             "Display every nth vector. Higher values show fewer vectors but improve clarity"),
+            ("disp_arrow_scale", "Arrow Scale:", 0.1, 10.0, 0.1,
+             "Scale factor for displacement vectors. Adjust to make vectors more visible"),
+            ("d_max", "Max Displacement (µm):", 0.1, 200.0, 0.1,
+             "Maximum displacement value for color scaling"),
         ]
 
-        for name, label, min_val, max_val, step, default in params:
-            widget = self._create_parameter_widget(name, label, min_val, max_val, step, default)
-            layout.addLayout(widget)
+        for name, label, min_val, max_val, step, tooltip in params:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+
+            if isinstance(step, int):
+                spin = QSpinBox()
+            else:
+                spin = QDoubleSpinBox()
+                spin.setDecimals(1)
+
+            spin.setRange(min_val, max_val)
+            spin.setSingleStep(step)
+            spin.setToolTip(tooltip)
+            self.parameter_spins[name] = spin
+            row.addWidget(spin)
+            layout.addLayout(row)
 
         group.setLayout(layout)
         return group
+
+    def _connect_signals(self):
+        """Connect widget signals."""
+        # Connect all spinboxes
+        for name, spin in self.parameter_spins.items():
+            spin.valueChanged.connect(
+                lambda value, n=name: self._on_value_changed(n, value)
+            )
+
+        # Connect reset button
+        self.reset_btn.clicked.connect(self._reset_parameters)
+
+    def _on_value_changed(self, param_name: str, value: object):
+        """Handle parameter value changes."""
+        self.parameter_manager.set_parameter(param_name, value)
+        self.parameter_changed.emit(param_name, value)
+
+    def _reset_parameters(self):
+        """Reset parameters to defaults."""
+        self.parameter_manager.reset_displacement_parameters()
+
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager."""
+        self._block_widgets(True)
+        try:
+            for name, spin in self.parameter_spins.items():
+                value = self.parameter_manager.get_parameter(name)
+                if value is not None:
+                    self._safe_set_value(spin, value)
+        finally:
+            self._block_widgets(False)
+
+    def update_parameter(self, name: str, value: Any):
+        """Update a single parameter value."""
+        if name in self.parameter_spins:
+            self._safe_set_value(self.parameter_spins[name], value)
+
+    def _safe_set_value(self, widget, value):
+        """Safely set widget value."""
+        if value is not None and widget is not None:
+            widget.blockSignals(True)
+            try:
+                value = max(widget.minimum(), min(widget.maximum(), value))
+                widget.setValue(value)
+            except Exception as e:
+                print(f"Error setting widget value: {str(e)}")
+            widget.blockSignals(False)
+
+    def _block_widgets(self, block: bool):
+        """Block or unblock all widget signals."""
+        for widget in self.parameter_spins.values():
+            widget.blockSignals(block)
+
+    def freeze_ui(self, frozen: bool):
+        """Freeze or unfreeze UI elements."""
+        for spin in self.parameter_spins.values():
+            spin.setEnabled(not frozen)
+        self.reset_btn.setEnabled(not frozen)
 
     def _create_parameter_widget(self, name, label, min_val, max_val, step, default) -> QHBoxLayout:
         """Create a parameter widget with label and input."""
@@ -125,21 +250,6 @@ class DisplacementParameterPanel(QWidget):
 
         return layout
 
-    def _connect_signals(self):
-        """Connect widget signals to parameter manager."""
-        for name, widget in self.parameter_widgets.items():
-            widget.valueChanged.connect(
-                lambda value, n=name: self._on_value_changed(n, value)
-            )
-
-        self.parameter_manager.parameter_changed.connect(self._update_widget_value)
-
-    def _on_value_changed(self, param_name: str, value: object):
-        """Handle parameter value changes."""
-        self.parameter_manager.set_value(param_name, value)
-        self.parameter_value_changed.emit(param_name, value)
-        self.parameter_changed.emit()
-
     def _update_widget_value(self, param_name: str, value: object):
         """Update widget when parameter changes externally."""
         if param_name in self.parameter_widgets:
@@ -147,12 +257,6 @@ class DisplacementParameterPanel(QWidget):
             widget.blockSignals(True)
             widget.setValue(value)
             widget.blockSignals(False)
-
-    def freeze_ui(self, freeze=True):
-        """Disable/enable interactive elements in parameter panel"""
-        for widget in self.parameter_widgets.values():
-            widget.setEnabled(not freeze)
-        self.reset_params_btn.setEnabled(not freeze)
 
 
 class DisplacementDataPanel(QWidget):
@@ -199,7 +303,37 @@ class DisplacementDataPanel(QWidget):
     def set_controller(self, controller):
         """Set the controller and connect signals."""
         self.controller = controller
-        self._connect_signals()
+        self.load_beads_btn.clicked.connect(lambda: self.controller.load_active_layer('beads'))
+        self.load_reference_btn.clicked.connect(lambda: self.controller.load_active_layer('reference'))
+
+    def update_button_states(self, active_layer_exists: bool = False):
+        """Update button states based on layer selection."""
+        active_layer = self.viewer.layers.selection.active
+        has_valid_layer = active_layer is not None and isinstance(active_layer, Image)
+
+        self.load_beads_btn.setEnabled(has_valid_layer)
+        self.load_reference_btn.setEnabled(has_valid_layer)
+
+    def update_data_status(self):
+        """Update status labels based on loaded data."""
+        # Update reference status
+        ref_data = self.data_manager.preprocessed_reference
+        if ref_data is not None:
+            self.reference_status.setText(f"Loaded: {ref_data.shape}")
+        else:
+            self.reference_status.setText("Not loaded")
+
+        # Update bead status
+        bead_data = self.data_manager.preprocessed_bead_stack
+        if bead_data is not None:
+            self.bead_status.setText(f"Loaded: {bead_data.shape}")
+        else:
+            self.bead_status.setText("Not loaded")
+
+    def freeze_ui(self, frozen: bool):
+        """Freeze or unfreeze UI elements."""
+        self.load_beads_btn.setEnabled(not frozen)
+        self.load_reference_btn.setEnabled(not frozen)
 
     def _connect_signals(self):
         """Connect UI signals to controller methods."""
@@ -243,25 +377,6 @@ class DisplacementDataPanel(QWidget):
                 "Please select an image layer first."
             )
         return active_layer
-
-    def freeze_ui(self, freeze=True):
-        """Disable/enable interactive elements in data panel"""
-        self.load_reference_btn.setEnabled(not freeze)
-        self.load_beads_btn.setEnabled(not freeze)
-
-    def update_data_status(self):
-        """Update both status labels based on data manager state."""
-        if self.data_manager.preprocessed_reference is not None:
-            ref_shape = self.data_manager.preprocessed_reference.shape
-            self.reference_status.setText(f"Loaded: {ref_shape}")
-        else:
-            self.reference_status.setText("Not loaded")
-
-        if self.data_manager.preprocessed_bead_stack is not None:
-            bead_shape = self.data_manager.preprocessed_bead_stack.shape
-            self.bead_status.setText(f"Loaded: {bead_shape}")
-        else:
-            self.bead_status.setText("Not loaded")
 
 
 class DisplacementActionPanel(QWidget):
@@ -336,7 +451,7 @@ class DisplacementController(QObject):
 
     progress_updated = Signal(int, str)  # (progress_value, status_message)
     analysis_started = Signal()
-    analysis_completed = Signal(object)  # Results object
+    analysis_completed = Signal(DisplacementResult)  # Results object
     analysis_failed = Signal(str)  # Error message
     data_updated = Signal(str)  # Data type that was updated
     ui_frozen = Signal(bool)
@@ -355,11 +470,50 @@ class DisplacementController(QObject):
         # Initialize panel attributes
         self.parameter_panel = None
         self.action_panel = None
+        self.preview_enabled = False
+
+        # Connect to parameter manager signals
+        self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
+        self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
 
     def set_panels(self, parameter_panel, action_panel):
-        """Set the parameter and action panels after initialization."""
+        """Set the parameter and action panels."""
         self.parameter_panel = parameter_panel
         self.action_panel = action_panel
+
+    def load_active_layer(self, data_type: str):
+        """Load the currently active layer as the specified data type."""
+        active_layer = self.viewer.layers.selection.active
+        if active_layer is None:
+            QMessageBox.warning(None, "Error", "No active image layer found")
+            return
+
+        try:
+            data = active_layer.data
+
+            # Handle data based on type
+            if data_type == 'beads':
+                # Convert 2D data to 3D with single frame if needed
+                if data.ndim == 2:
+                    data = data[np.newaxis, ...]
+                elif data.ndim != 3:
+                    raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
+                self.data_manager.set_preprocessed_bead_stack(data)
+
+            elif data_type == 'reference':
+                if data.ndim != 2:
+                    raise ValueError("Reference image must be 2D (height, width)")
+                self.data_manager.set_preprocessed_reference(data)
+            else:
+                raise ValueError(f"Invalid data type: {data_type}")
+
+            # Update UI state and emit signal
+            self.data_updated.emit(data_type)
+            if self.preview_enabled:
+                self._update_preview()
+
+        except Exception as e:
+            QMessageBox.warning(None, "Error", str(e))
 
     def preview_displacement(self):
         """Preview displacement calculation on current frame."""
@@ -368,31 +522,32 @@ class DisplacementController(QObject):
                 return
 
             self.freeze_ui()
-            self._update_progress(0, "Calculating displacement preview...")
+            self.progress_updated.emit(0, "Calculating displacement preview...")
 
-            # Get current frame data and parameters
+            # Get current frame data
             current_frame = self.viewer.dims.current_step[0]
-            params = self._get_current_parameters()
-
-            # Get reference and moving image
-            reference = self.data_manager.preprocessed_reference
             moving = self.data_manager.preprocessed_bead_stack[current_frame]
+            reference = self.data_manager.preprocessed_reference
+
+            # Get parameters and update service
+            params = self.parameter_manager.get_displacement_parameters()
+            self.service.update_parameters(params)
 
             # Calculate displacement field
-            result = self.service.calculate_displacement_field(reference, moving, params)
+            result = self.service.calculate_displacement_field(reference, moving)
 
             # Update visualization
             self.visualization_manager.visualize_displacement_preview(
-                result.flow,
+                result.displacement_field[0],  # Single frame result
                 params.d_max,
-                params.vector_stride,
-                params.arrow_scale,
+                params.disp_vector_stride,
+                params.disp_arrow_scale,
                 downscale_factor=params.downscale_factor
             )
 
             # Update status with statistics
-            stats = self.visualization_manager.get_displacement_statistics(result.flow)
-            self._update_progress(
+            stats = self.visualization_manager.get_displacement_statistics(result.displacement_field[0])
+            self.progress_updated.emit(
                 100,
                 f"Maximum displacement: {stats['max']:.2f} µm\n"
                 f"Mean displacement: {stats['mean']:.2f} µm"
@@ -410,72 +565,25 @@ class DisplacementController(QObject):
                 return
 
             self.freeze_ui()
-            self._update_progress(0, "Starting displacement analysis...")
+            self.progress_updated.emit(0, "Starting displacement analysis...")
 
-            params = self._get_current_parameters()
-            reference = self.data_manager.preprocessed_reference
-            bead_stack = self.data_manager.preprocessed_bead_stack
+            # Get parameters and update service
+            params = self.parameter_manager.get_displacement_parameters()
+            self.service.update_parameters(params)
 
-            # Create and start worker
-            worker = self._create_displacement_worker(reference, bead_stack, params)
-            worker.running = True
+            # Create worker for processing
+            worker = self._create_displacement_worker(
+                self.data_manager.preprocessed_reference,
+                self.data_manager.preprocessed_bead_stack,
+                params
+            )
+
             self.active_workers.append(worker)
+            self.analysis_started.emit()
 
-            def on_yielded(progress_data):
-                result, current_frame, total_frames = progress_data
-                progress = int((current_frame + 1) / total_frames * 100)
-                self._update_progress(
-                    progress,
-                    f"Processing frame {current_frame + 1}/{total_frames}..."
-                )
-
-            def on_returned(results):
-                # Process results
-                flows = [r.flow for r in results]
-                flow_stack = np.stack(flows)
-
-                # Update data manager
-                self.data_manager.set_displacement_results(
-                    flow_stack,
-                    {
-                        'pixel_size': params.pixel_size,
-                        'frame_interval': params.frame_interval,
-                        'downscale_factor': params.downscale_factor,
-                        'visualization_params': {
-                            'd_max': params.d_max,
-                            'vector_stride': params.vector_stride,
-                            'arrow_scale': params.arrow_scale
-                        }
-                    }
-                )
-
-                # Update visualization
-                self.visualization_manager.visualize_displacement_results({
-                    'flows': flow_stack,
-                    'parameters': params,
-                    'original_shape': results[0].original_shape,
-                    'displacement_field_shape': results[0].displacement_field_shape,
-                    'units': 'micrometers'
-                })
-
-                self._update_progress(100, "Analysis completed successfully")
-                self.analysis_completed.emit(results)
-                self.active_workers.remove(worker)
-                if not self.active_workers:
-                    self.unfreeze_ui()
-
-            def on_errored(exc):
-                error_msg = f"Analysis failed: {str(exc)}"
-                self._update_progress(0, error_msg)
-                self.analysis_failed.emit(error_msg)
-                QMessageBox.critical(None, "Error", error_msg)
-                self.active_workers.remove(worker)
-                if not self.active_workers:
-                    self.unfreeze_ui()
-
-            worker.yielded.connect(on_yielded)
-            worker.returned.connect(on_returned)
-            worker.errored.connect(on_errored)
+            worker.yielded.connect(self._handle_progress)
+            worker.returned.connect(self._handle_analysis_results)
+            worker.errored.connect(self._handle_error)
             worker.start()
 
         except Exception as e:
@@ -484,34 +592,82 @@ class DisplacementController(QObject):
 
     @thread_worker
     def _create_displacement_worker(self, reference, bead_stack, params):
-        """Thread worker for displacement calculation."""
-        generator = self.service.calculate_flow_stack(
-            reference=reference,
-            bead_stack=bead_stack,
-            params=params
-        )
-
+        """Create worker for processing data."""
         try:
-            while True:
-                yield next(generator)
-        except StopIteration as e:
-            return e.value
+            for result, frame, total in self.service.calculate_displacement_field(reference, bead_stack):
+                yield {'progress': frame / total * 100,
+                       'message': f"Processing frame {frame + 1}/{total}"}
+
+            return result
+
+        except Exception as e:
+            raise ValueError(f"Displacement calculation failed: {str(e)}")
 
     def save_results(self):
         """Save displacement results to file."""
         try:
-            # Implement save functionality similar to MSM widget
-            pass
+            if self.data_manager.displacement_results is None:
+                raise ValueError("No displacement results to save")
+
+            save_path, _ = QFileDialog.getSaveFileName(
+                None,
+                "Save Displacement Results",
+                str(Path.home()),
+                "NumPy Files (*.npy)"
+            )
+
+            if save_path:
+                # Get results and save
+                results = self.data_manager.displacement_results
+                np.save(save_path, {
+                    'displacement_field': results.displacement_field,
+                    'parameters': results.parameters,
+                    'original_shape': results.original_shape,
+                    'displacement_field_shape': results.displacement_field_shape,
+                    'physical_scale': results.physical_scale
+                })
+                self.progress_updated.emit(100, f"Results saved to {save_path}")
+
         except Exception as e:
-            self._handle_error(str(e))
+            self._handle_error(f"Failed to save results: {str(e)}")
 
     def load_results(self):
         """Load displacement results from file."""
         try:
-            # Implement load functionality similar to MSM widget
-            pass
+            load_path, _ = QFileDialog.getOpenFileName(
+                None,
+                "Load Displacement Results",
+                str(Path.home()),
+                "NumPy Files (*.npy)"
+            )
+
+            if load_path:
+                # Load data
+                data = np.load(load_path, allow_pickle=True).item()
+
+                # Create DisplacementResult object
+                result = DisplacementResult(
+                    displacement_field=data['displacement_field'],
+                    original_shape=data['original_shape'],
+                    displacement_field_shape=data['displacement_field_shape'],
+                    parameters=data['parameters'],
+                    physical_scale=data['physical_scale']
+                )
+
+                # Update data manager and visualization
+                self.data_manager.set_displacement_results(result)
+                self.visualization_manager.visualize_displacement_results({
+                    'flows': result.displacement_field,
+                    'parameters': result.parameters,
+                    'original_shape': result.original_shape,
+                    'displacement_field_shape': result.displacement_field_shape
+                })
+
+                self.progress_updated.emit(100, f"Results loaded from {load_path}")
+                self.analysis_completed.emit(result)
+
         except Exception as e:
-            self._handle_error(str(e))
+            self._handle_error(f"Failed to load results: {str(e)}")
 
     def cancel_operation(self):
         """Cancel all running operations."""
@@ -526,8 +682,84 @@ class DisplacementController(QObject):
             except Exception:
                 pass
         self.active_workers.clear()
-        self._update_progress(0, "Operations cancelled")
+        self.progress_updated.emit(0, "Operations cancelled")
         self.unfreeze_ui()
+
+    def _validate_prerequisites(self) -> bool:
+        """Check if required data is available."""
+        if self.data_manager.preprocessed_reference is None:
+            QMessageBox.warning(None, "Warning", "No reference image loaded")
+            return False
+        if self.data_manager.preprocessed_bead_stack is None:
+            QMessageBox.warning(None, "Warning", "No bead stack loaded")
+            return False
+        return True
+
+    def _handle_progress(self, progress_info: dict):
+        """Handle progress updates."""
+        self.progress_updated.emit(
+            progress_info['progress'],
+            progress_info['message']
+        )
+
+    def _handle_analysis_results(self, result: DisplacementResult):
+        """Handle completed analysis results."""
+        try:
+            # Update data manager
+            self.data_manager.set_displacement_results(result)
+
+            # Update visualization
+            self.visualization_manager.visualize_displacement_results({
+                'flows': result.displacement_field,
+                'parameters': result.parameters,
+                'original_shape': result.original_shape,
+                'displacement_field_shape': result.displacement_field_shape
+            })
+
+            self.progress_updated.emit(100, "Analysis completed successfully")
+            self.analysis_completed.emit(result)
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self.active_workers.clear()
+            self.unfreeze_ui()
+
+    def _handle_error(self, error_msg: str):
+        """Handle errors."""
+        self.progress_updated.emit(0, f"Error: {error_msg}")
+        self.analysis_failed.emit(error_msg)
+        QMessageBox.critical(None, "Error", error_msg)
+
+    def _on_parameter_changed(self, param_name: str, value: Any):
+        """Handle parameter changes."""
+        if self.preview_enabled:
+            self._update_preview()
+
+    def _on_parameters_reset(self, category):
+        """Handle parameter reset events."""
+        if self.preview_enabled:
+            self._update_preview()
+
+    def freeze_ui(self):
+        """Disable all interactive UI elements."""
+        if self.data_panel:
+            self.data_panel.freeze_ui(True)
+        if self.parameter_panel:
+            self.parameter_panel.freeze_ui(True)
+        if self.action_panel:
+            self.action_panel.freeze_ui(True)
+        self.ui_frozen.emit(True)
+
+    def unfreeze_ui(self):
+        """Re-enable UI elements and refresh state."""
+        if self.data_panel:
+            self.data_panel.freeze_ui(False)
+        if self.parameter_panel:
+            self.parameter_panel.freeze_ui(False)
+        if self.action_panel:
+            self.action_panel.freeze_ui(False)
+        self.ui_frozen.emit(False)
 
     def _get_current_parameters(self) -> DisplacementParameters:
         """Get current parameters from parameter manager."""
@@ -550,44 +782,9 @@ class DisplacementController(QObject):
             arrow_scale=self.parameter_manager.get_value('disp_arrow_scale')
         )
 
-    def _validate_prerequisites(self) -> bool:
-        """Check if required data is available."""
-        if self.data_manager.preprocessed_reference is None:
-            QMessageBox.warning(None, "Warning", "No reference image loaded")
-            return False
-        if self.data_manager.preprocessed_bead_stack is None:
-            QMessageBox.warning(None, "Warning", "No bead stack loaded")
-            return False
-        return True
-
     def _update_progress(self, progress: int, message: str):
         """Update progress information."""
         self.progress_updated.emit(progress, message)
-
-    def _handle_error(self, error_msg: str):
-        """Handle errors uniformly."""
-        self._update_progress(0, f"Error: {error_msg}")
-        QMessageBox.critical(None, "Error", error_msg)
-
-    def freeze_ui(self):
-        """Disable all interactive UI elements."""
-        if self.data_panel:
-            self.data_panel.freeze_ui(True)
-        if self.parameter_panel:
-            self.parameter_panel.freeze_ui(True)
-        if self.action_panel:
-            self.action_panel.freeze_ui(True)
-        self.ui_frozen.emit(True)
-
-    def unfreeze_ui(self):
-        """Re-enable UI elements and refresh state."""
-        if self.data_panel:
-            self.data_panel.freeze_ui(False)
-        if self.parameter_panel:
-            self.parameter_panel.freeze_ui(False)
-        if self.action_panel:
-            self.action_panel.freeze_ui(False)
-        self.ui_frozen.emit(False)
 
 
 class DisplacementAnalysisWidget(BaseAnalysisWidget):
@@ -595,13 +792,31 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     displacement_calculated = Signal(object)
 
-    def __init__(self, viewer: Viewer, data_manager: DataManager,
-                 parameter_manager: ParameterManager,
-                 visualization_manager: VisualizationManager):
+    def __init__(
+            self,
+            viewer: Viewer,
+            data_manager: DataManager,
+            parameter_manager: ParameterManager,
+            visualization_manager: VisualizationManager
+    ):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Initialize service and managers
-        self.service = DisplacementService()
+        # Store managers and create service
+        self.parameter_manager = parameter_manager
+        self.service = DisplacementService(parameter_manager.get_displacement_parameters())
+        self.colorbar_manager = ColorbarManager()
+
+        # Create all UI elements first
+        self.preview_check = None
+        self.preview_btn = None
+        self.process_btn = None
+        self.save_btn = None
+        self.load_btn = None
+        self.cancel_btn = None
+        self.progress_bar = None
+        self.status_label = None
+
+        # Initialize panels
         self.parameter_panel = DisplacementParameterPanel(parameter_manager)
         self.data_panel = DisplacementDataPanel(data_manager, viewer)
 
@@ -615,17 +830,17 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             data_panel=self.data_panel
         )
 
-        # Initialize action panel
+        # Initialize action panel with controller
         self.action_panel = DisplacementActionPanel(self.controller)
 
-        # Set panels in controller
+        # Set controller in panels
+        self.data_panel.set_controller(self.controller)
         self.controller.set_panels(self.parameter_panel, self.action_panel)
 
-        # Connect data panel to controller
-        self.data_panel.set_controller(self.controller)
-
-        # Setup UI and connect signals
+        # Set up the UI
         self._setup_ui()
+
+        # Connect signals after UI is fully set up
         self._connect_signals()
 
         # Monitor frame changes
@@ -641,9 +856,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         colorbar_container = QWidget()
         colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(0, 0, 0, 0)
+        colorbar_layout.setContentsMargins(6, 6, 6, 6)
 
-        self.colorbar_manager = ColorbarManager()
         colorbar_group = self.create_colorbar_widget(
             colormap_name='viridis',
             label="Displacement (µm)",
@@ -653,64 +867,222 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        colorbar_layout.addStretch()
         colorbar_container.setLayout(colorbar_layout)
-
         main_layout.addWidget(colorbar_container)
 
-        # Right side: Control panels
+        # Right side panels
         right_container = QWidget()
         right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         right_layout = QVBoxLayout()
         right_layout.setSpacing(8)
         right_layout.setContentsMargins(6, 6, 6, 6)
 
-        # Add panels
-        right_layout.addWidget(self.data_panel)
-        right_layout.addWidget(self.parameter_panel)
-        right_layout.addWidget(self.action_panel)
+        # Create scroll area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        scroll.setFixedWidth(360)
 
-        # Add status panel
-        status_frame = QFrame()
-        status_layout = QVBoxLayout()
-        self.progress_bar = QProgressBar()
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-        status_layout.addWidget(self.progress_bar)
-        status_layout.addWidget(self.status_label)
-        status_frame.setLayout(status_layout)
-        right_layout.addWidget(status_frame)
+        # Container for scrollable content
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout()
+        scroll_layout.setSpacing(8)
 
+        # Create UI elements
+        preview_frame = self._create_preview_frame()
+        action_frame = self._create_action_frame()
+        status_frame = self._create_status_frame()
+
+        # Add all elements to scroll layout
+        scroll_layout.addWidget(self.data_panel)
+        scroll_layout.addWidget(self.parameter_panel)
+        scroll_layout.addWidget(preview_frame)
+        scroll_layout.addWidget(action_frame)
+        scroll_layout.addWidget(status_frame)
+        scroll_layout.addStretch()
+
+        # Set up scroll area
+        scroll_content.setLayout(scroll_layout)
+        scroll.setWidget(scroll_content)
+        right_layout.addWidget(scroll)
         right_container.setLayout(right_layout)
-        right_container.setFixedWidth(360)
-
         main_layout.addWidget(right_container)
 
         self.setLayout(main_layout)
 
+    def _create_preview_frame(self) -> QFrame:
+        """Create preview control frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
+
+        # Create preview toggle
+        preview_layout = QHBoxLayout()
+        self.preview_check = QCheckBox("Show Preview")
+        self.preview_check.setToolTip("Show live preview of displacement calculation for current frame")
+        preview_layout.addWidget(self.preview_check)
+        preview_layout.addStretch()
+        layout.addLayout(preview_layout)
+
+        frame.setLayout(layout)
+        return frame
+
     def _connect_signals(self):
         """Connect all widget signals."""
+        # Make sure widgets exist before connecting signals
+        if self.preview_check is not None:
+            self.preview_check.toggled.connect(self._on_preview_toggled)
+
+        if hasattr(self, 'preview_btn') and self.preview_btn is not None:
+            self.preview_btn.clicked.connect(self.controller.preview_displacement)
+        if hasattr(self, 'process_btn') and self.process_btn is not None:
+            self.process_btn.clicked.connect(self.controller.calculate_all_frames)
+        if hasattr(self, 'save_btn') and self.save_btn is not None:
+            self.save_btn.clicked.connect(self.controller.save_results)
+        if hasattr(self, 'load_btn') and self.load_btn is not None:
+            self.load_btn.clicked.connect(self.controller.load_results)
+        if hasattr(self, 'cancel_btn') and self.cancel_btn is not None:
+            self.cancel_btn.clicked.connect(self.controller.cancel_operation)
+
         # Connect controller signals
         self.controller.progress_updated.connect(self._update_status)
         self.controller.analysis_completed.connect(self._on_analysis_completed)
         self.controller.analysis_failed.connect(self._on_analysis_failed)
+        self.controller.data_updated.connect(self._update_ui_state)
+        self.controller.ui_frozen.connect(self._handle_ui_freeze)
 
-        # Connect data panel signals
-        self.data_panel.data_loaded.connect(self._on_data_loaded)
-
-        # Connect parameter panel changes
+        # Connect parameter panel signals
         self.parameter_panel.parameter_changed.connect(self._on_parameter_changed)
+
+        # Add layer selection monitoring
+        self.viewer.layers.selection.events.active.connect(self._update_ui_state)
+
+    def _create_action_frame(self) -> QFrame:
+        """Create action buttons frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
+
+        # Create button rows
+        row1_layout = QHBoxLayout()
+        self.preview_btn = QPushButton("Preview Current Frame")
+        self.process_btn = QPushButton("Calculate All Frames")
+        row1_layout.addWidget(self.preview_btn)
+        row1_layout.addWidget(self.process_btn)
+        layout.addLayout(row1_layout)
+
+        row2_layout = QHBoxLayout()
+        self.save_btn = QPushButton("Save Results")
+        self.load_btn = QPushButton("Load Results")
+        row2_layout.addWidget(self.save_btn)
+        row2_layout.addWidget(self.load_btn)
+        layout.addLayout(row2_layout)
+
+        # Add cancel button
+        self.cancel_btn = QPushButton("Cancel Operation")
+        layout.addWidget(self.cancel_btn)
+
+        frame.setLayout(layout)
+        return frame
+
+    def _create_status_frame(self) -> QFrame:
+        """Create status display frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
+
+        self.progress_bar = QProgressBar()
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.status_label)
+
+        frame.setLayout(layout)
+        return frame
+
+    def _on_preview_toggled(self, enabled: bool):
+        """Handle preview toggle."""
+        if hasattr(self.controller, 'preview_enabled'):
+            self.controller.preview_enabled = enabled
+
+        if enabled:
+            self.controller.preview_displacement()
+        else:
+            self.visualization_manager.handle_preview(
+                frame=None,
+                enable=False
+            )
+    def _on_analysis_completed(self, results):
+        """Handle completed analysis."""
+        self.save_btn.setEnabled(True)
+        self.displacement_calculated.emit(results)
+
+    def _on_analysis_failed(self, error_msg: str):
+        """Handle analysis failure."""
+        self.save_btn.setEnabled(False)
+        QMessageBox.critical(self, "Error", error_msg)
+
+    def _on_parameter_changed(self, param_name: str, value: Any):
+        """Handle parameter changes."""
+        if self.preview_check.isChecked():
+            self.controller.preview_displacement()
+
+    def _on_frame_changed(self, event=None):
+        """Handle frame change events."""
+        if self.data_manager.displacement_results is not None:
+            self.visualization_manager.update_displacement_frame(
+                self.viewer.dims.current_step[0]
+            )
 
     def _update_status(self, progress: int, message: str):
         """Update status display."""
         self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
-    def _on_frame_changed(self, event=None):
-        """Handle frame change events."""
-        if self.data_manager.displacement_field is not None:
-            self.visualization_manager.update_displacement_frame(
-                self.viewer.dims.current_step[0]
-            )
+    def _update_ui_state(self, event=None):
+        """Update UI state based on current data and selection."""
+        # Update data panel
+        self.data_panel.update_button_states()
+        self.data_panel.update_data_status()
+
+        # Update button states
+        has_data = (
+                self.data_manager.preprocessed_reference is not None and
+                self.data_manager.preprocessed_bead_stack is not None
+        )
+        has_results = self.data_manager.displacement_results is not None
+
+        self.preview_btn.setEnabled(has_data)
+        self.process_btn.setEnabled(has_data)
+        self.save_btn.setEnabled(has_results)
+        self.preview_check.setEnabled(has_data)
+
+        if not has_data and self.preview_check.isChecked():
+            self.preview_check.setChecked(False)
+
+    def _handle_ui_freeze(self, frozen: bool):
+        """Handle UI freeze/unfreeze."""
+        if hasattr(self, 'preview_check'):
+            self.preview_check.setEnabled(not frozen and self._has_required_data())
+        self.preview_btn.setEnabled(not frozen and self._has_required_data())
+        self.process_btn.setEnabled(not frozen and self._has_required_data())
+        self.save_btn.setEnabled(not frozen and self.data_manager.displacement_results is not None)
+        self.load_btn.setEnabled(not frozen)
+        self.cancel_btn.setEnabled(frozen)
+    def _has_required_data(self) -> bool:
+        """Check if required data is available."""
+        return (
+                self.data_manager.preprocessed_reference is not None and
+                self.data_manager.preprocessed_bead_stack is not None
+        )
+
+    def cleanup(self):
+        """Clean up resources."""
+        if self.colorbar_manager:
+            self.colorbar_manager.cleanup()
+        if hasattr(self, 'viewer') and self.viewer is not None:
+            self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
+        super().cleanup()
 
     def _on_data_loaded(self, data_type: str):
         """Handle data loading events."""
@@ -721,22 +1093,4 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             has_results=self.data_manager.displacement_field is not None
         )
 
-    def _on_parameter_changed(self):
-        """Handle parameter changes."""
-        if hasattr(self, 'preview_active') and self.preview_active:
-            self.controller.preview_displacement()
 
-    def _on_analysis_completed(self, results):
-        """Handle completed analysis."""
-        self.displacement_calculated.emit(results)
-
-    def _on_analysis_failed(self, error_msg: str):
-        """Handle analysis failure."""
-        self._update_status(0, f"Analysis failed: {error_msg}")
-
-    def cleanup(self):
-        """Clean up resources."""
-        if self.colorbar_manager:
-            self.colorbar_manager.cleanup()
-        self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
-        super().cleanup()
