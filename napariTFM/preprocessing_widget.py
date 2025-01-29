@@ -1,4 +1,3 @@
-# TODO load data logic
 # TODO colorbar go to 16 bit
 
 from pathlib import Path
@@ -1170,7 +1169,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         colorbar_group = self.create_colorbar_widget(
             colormap_name='gray',
             label="Intensity Value",
-            clim=(255, 0),
+            clim=(65535, 0),
             colorbar_manager=self.colorbar_manager
         )
         colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
