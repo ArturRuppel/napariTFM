@@ -405,57 +405,36 @@ class BatchVisualizationSaver:
         else:
             figsize = (base_size * aspect_ratio, base_size)
 
-        total_frames = len(stress_results.nodes)  # Number of frames based on number of meshes
+        total_frames = len(stress_results.nodes)
 
         for frame_idx in range(total_frames):
-            # Get current frame's nodes and elements
             points = np.array(stress_results.nodes[frame_idx])
             triangles = np.array(stress_results.elements[frame_idx], dtype=np.int32)
 
             print(f"Processing mesh frame {frame_idx + 1}/{total_frames}")
 
-            # Create figure with high DPI for better resolution
+            # Create figure with high DPI and no margins
             fig = plt.figure(figsize=figsize, dpi=300)
-            ax = fig.add_axes([0.1, 0.1, 0.8, 0.8])  # Add axes with padding
+            ax = fig.add_axes([0, 0, 1, 1])  # No padding
 
             try:
                 # Create mesh visualization
                 edges = []
                 for triangle in triangles:
-                    # Convert indices to integers and create edge arrays
                     i0, i1, i2 = triangle[0], triangle[1], triangle[2]
                     edges.append(np.vstack([points[i0], points[i1]]))
                     edges.append(np.vstack([points[i1], points[i2]]))
                     edges.append(np.vstack([points[i2], points[i0]]))
 
-                # Create line collection with thinner lines
                 lc = plt.matplotlib.collections.LineCollection(edges, colors='b', alpha=1.0, linewidth=0.4)
                 ax.add_collection(lc)
 
                 # Plot nodes with smaller markers
                 ax.plot(points[:, 0], points[:, 1], 'r.', markersize=0.6, alpha=1.0)
 
-                # Calculate mesh quality metrics
-                mesh_gen = MeshGenerator(None)  # Initialize without parameters for quality calculation
-                quality_metrics = mesh_gen.analyze_mesh_quality(points, triangles)
-
-                # Add quality metrics text with adjusted font size
-                metrics_text = (
-                    f"Frame {frame_idx + 1}/{total_frames}\n"
-                    f"Elements: {quality_metrics['n_elements']}\n"
-                    f"Min Angle: {quality_metrics['min_angle']:.1f}°\n"
-                    f"Mean Quality: {quality_metrics['mean_quality']:.2f}\n"
-                    f"Max Aspect Ratio: {quality_metrics['max_aspect_ratio']:.2f}"
-                )
-                ax.text(0.02, 0.98, metrics_text,
-                        transform=ax.transAxes,
-                        verticalalignment='top',
-                        fontsize=8,
-                        bbox=dict(facecolor='white', alpha=1.0, pad=0.5))
-
-                # Configure axes
-                ax.set_xlim(-0.02 * mask_width, 1.02 * mask_width)
-                ax.set_ylim(-0.02 * mask_height, 1.02 * mask_height)
+                # Configure axes to exactly match mask dimensions
+                ax.set_xlim(0, mask_width)
+                ax.set_ylim(0, mask_height)
                 ax.set_aspect('equal')
                 ax.set_xticks([])
                 ax.set_yticks([])
@@ -463,7 +442,6 @@ class BatchVisualizationSaver:
 
                 # Convert figure to image with high resolution
                 fig.canvas.draw()
-                # Get the RGBA buffer from the figure
                 w, h = fig.canvas.get_width_height()
                 buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
                 frame = buf.reshape((h, w, 3))
@@ -471,20 +449,10 @@ class BatchVisualizationSaver:
 
             except Exception as e:
                 print(f"Warning: Failed to generate mesh visualization for frame {frame_idx + 1}: {str(e)}")
-                # Create error frame
-                ax.text(0.5, 0.5, f"Mesh visualization failed:\n{str(e)}",
-                        ha='center', va='center', transform=ax.transAxes,
-                        fontsize=10)
-                fig.canvas.draw()
-                w, h = fig.canvas.get_width_height()
-                buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-                frame = buf.reshape((h, w, 3))
-                frames.append(frame)
 
             plt.close(fig)
 
         if frames:
-            # Save as GIF with higher quality settings
             output_path = self.viz_folder / 'mesh_visualization.gif'
             imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, quality=95, loop=0)
             print(f"Saved mesh visualization to {output_path}")

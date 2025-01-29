@@ -612,6 +612,7 @@ class MonolayerStressMicroscopy:
                 raise ValueError("Input tractions are all NaN")
 
             # Prepare forces
+            self.mask = self.mask.astype(bool)
             f_x, f_y = self._prepare_forces(traction_x, traction_y, self.mask)
 
             # Format mesh for FEM solver
