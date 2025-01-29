@@ -1,6 +1,5 @@
 # TODO add rangesliders
 # TODO parameters don't synch from batch to preprocessing widget
-# TODO only Bead Overlay layer should be visible after preprocessing
 
 
 from pathlib import Path
