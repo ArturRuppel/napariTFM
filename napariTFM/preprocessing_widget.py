@@ -1,18 +1,24 @@
+# TODO add rangesliders
+# TODO UI doesn't freeze during processing
+# TODO reference button should have different enable/disable logic
+# TODO parameters don't synch from batch to preprocessing widget
+# TODO only Bead Overlay layer should be visible after preprocessing
+
+
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any
+
 import numpy as np
+import tifffile
+from napari.layers import Image
+from napari.qt.threading import thread_worker
+from napari.viewer import Viewer
 from qtpy.QtCore import Qt, Signal, QObject
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QSpinBox, QRadioButton, QFileDialog,
+    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QRadioButton, QFileDialog,
     QDoubleSpinBox, QPushButton, QFrame, QScrollArea, QCheckBox, QApplication,
     QProgressBar, QMessageBox, QComboBox, QSizePolicy
 )
-import os
-import tifffile
-from qtrangeslider import QRangeSlider
-from napari.layers import Image
-from napari.viewer import Viewer
-from napari.qt.threading import thread_worker
 
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
@@ -337,6 +343,119 @@ class PreprocessingController(QObject):
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
         self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
 
+    def _handle_preprocessing_results(self, results):
+        """Handle successful preprocessing results."""
+        try:
+            if results is None:
+                return
+
+            # Process all results at once
+            processed_images = [r.processed_image for r in results]
+
+            # Update data manager
+            if self.data_manager.bead_stack is not None:
+                n_beads = self.data_manager.bead_stack.shape[0]
+                self.data_manager.set_preprocessed_bead_stack(np.stack(processed_images[:n_beads]))
+                processed_images = processed_images[n_beads:]
+
+            if self.data_manager.reference is not None:
+                self.data_manager.set_preprocessed_reference(processed_images[0])
+                processed_images = processed_images[1:]
+
+            if self.data_manager.cell_stack is not None:
+                n_cells = self.data_manager.cell_stack.shape[0]
+                self.data_manager.set_preprocessed_cell_stack(np.stack(processed_images[:n_cells]))
+
+            # Update visualization
+            self.visualization_manager.update_preprocessing_visualization()
+
+            # Get current parameters for the completion signal
+            current_params = self.parameter_manager.get_preprocessing_parameters()
+
+            self.progress_updated.emit(100, "Preprocessing complete")
+            self.preprocessing_completed.emit({'parameters': current_params.__dict__})
+
+        except Exception as e:
+            error_msg = f"Error handling preprocessing results: {str(e)}"
+            self.preprocessing_failed.emit(error_msg)
+            QMessageBox.critical(None, "Error", error_msg)
+        finally:
+            self.unfreeze_ui()
+
+    def run_preprocessing(self):
+        """Execute preprocessing on loaded data."""
+        try:
+            if self.data_manager.bead_stack is None:
+                raise ValueError("Bead stack must be loaded before preprocessing")
+            if self.data_manager.reference is None:
+                raise ValueError("Reference image must be loaded before preprocessing")
+
+            worker = self._create_processing_worker()
+            self.active_workers.append(worker)
+            self.preprocessing_started.emit()
+            self.freeze_ui()
+
+            worker.yielded.connect(lambda x: self.progress_updated.emit(*x))
+            worker.returned.connect(self._handle_preprocessing_results)
+            worker.errored.connect(self._handle_preprocessing_error)
+            worker.start()
+
+        except Exception as e:
+            self.preprocessing_failed.emit(str(e))
+            QMessageBox.critical(None, "Error", str(e))
+            self.unfreeze_ui()
+
+    @thread_worker
+    def _create_processing_worker(self):
+        """Create worker for processing data."""
+        params = self.parameter_manager.get_preprocessing_parameters()
+        self.service.update_parameters(params)
+
+        results = []
+
+        # Process bead stack with generator
+        if self.data_manager.bead_stack is not None:
+            for result, frame, total in self.service.preprocess_stack(
+                    image_stack=self.data_manager.bead_stack,
+                    reference_image=self.data_manager.reference
+            ):
+                results.append(result)
+                yield frame / total * 100, f"Processing beads: Frame {frame + 1}/{total}"
+
+        # Process reference image
+        if self.data_manager.reference is not None:
+            results.append(self.service.preprocess_frame(self.data_manager.reference))
+
+        # Process cell stack if available
+        if self.data_manager.cell_stack is not None:
+            start_progress = len(results)
+            for result, frame, total in self.service.preprocess_stack(
+                    image_stack=self.data_manager.cell_stack,
+                    is_cell=True
+            ):
+                results.append(result)
+                yield start_progress + frame / total * 100, f"Processing cells: Frame {frame + 1}/{total}"
+
+        return results
+    def cancel_all_operations(self):
+        """Cancel all running background operations."""
+        for worker in self.active_workers:
+            try:
+                worker.running = False
+                worker.quit()
+                worker.wait(500)
+                if worker.isRunning():
+                    worker.terminate()
+                worker.deleteLater()
+            except Exception as e:
+                print(f"Error cancelling worker: {str(e)}")
+        self.active_workers.clear()
+
+        # Update UI status and ensure responsiveness
+        self.progress_updated.emit(0, "Operations cancelled")
+        QApplication.processEvents()
+        self.unfreeze_ui()
+
     def set_panels(self, parameter_panel, data_panel):
         """Set the parameter and data panels."""
         self.parameter_panel = parameter_panel
@@ -469,170 +588,7 @@ class PreprocessingController(QObject):
                 enable=False
             )
 
-    @thread_worker
-    def _process_data(self):
-        """Process data in a background thread."""
-        try:
-            # Get parameters and update service
-            params = self.parameter_manager.get_preprocessing_parameters()
-            self.service.update_parameters(params)
 
-            results = {}
-            total_items = sum(1 for x in [self.data_manager.bead_stack,
-                                          self.data_manager.reference,
-                                          self.data_manager.cell_stack] if x is not None)
-            items_processed = 0
-
-            # Add check for cancellation
-            if not hasattr(self, 'running') or not self.running:
-                raise RuntimeError("Processing cancelled")
-
-            # Process bead stack
-            if self.data_manager.bead_stack is not None:
-                yield items_processed / total_items * 100, "Processing bead stack..."
-                bead_results = list(self.service.preprocess_stack(
-                    image_stack=self.data_manager.bead_stack,
-                    reference_image=self.data_manager.reference
-                ))
-                results['beads'] = bead_results
-                items_processed += 1
-
-                # Check for cancellation after each major operation
-                if not hasattr(self, 'running') or not self.running:
-                    raise RuntimeError("Processing cancelled")
-
-            # Process reference
-            if self.data_manager.reference is not None:
-                yield items_processed / total_items * 100, "Processing reference image..."
-                ref_results = list(self.service.preprocess_stack(
-                    image_stack=self.data_manager.reference
-                ))
-                results['reference'] = ref_results
-                items_processed += 1
-
-                if not hasattr(self, 'running') or not self.running:
-                    raise RuntimeError("Processing cancelled")
-
-            # Process cell stack
-            if self.data_manager.cell_stack is not None:
-                yield items_processed / total_items * 100, "Processing cell stack..."
-                cell_results = list(self.service.preprocess_stack(
-                    image_stack=self.data_manager.cell_stack,
-                    is_cell=True
-                ))
-                results['cells'] = cell_results
-                items_processed += 1
-
-                if not hasattr(self, 'running') or not self.running:
-                    raise RuntimeError("Processing cancelled")
-
-            yield 100, "Processing complete"
-            return results
-
-        except RuntimeError as e:
-            if str(e) == "Processing cancelled":
-                yield 0, "Processing cancelled"
-                return None
-            raise
-        except Exception as e:
-            raise RuntimeError(f"Processing failed: {str(e)}")
-
-    def run_preprocessing(self):
-        """Execute preprocessing on loaded data using PreprocessingService."""
-        try:
-            self.preprocessing_started.emit()
-            self.freeze_ui()
-
-            # Validate data availability
-            if self.data_manager.bead_stack is None:
-                raise ValueError("Bead stack must be loaded before preprocessing")
-            if self.data_manager.reference is None:
-                raise ValueError("Reference image must be loaded before preprocessing")
-
-            # Get parameters and initialize service
-            params = self.parameter_manager.get_preprocessing_parameters()
-            self.service.update_parameters(params)
-
-            # Process bead stack
-            bead_results = []
-            for result, frame, total in self.service.preprocess_stack(
-                    self.data_manager.bead_stack,
-                    self.data_manager.reference
-            ):
-                bead_results.append(result)
-                progress = (frame / total) * 100
-                if self.data_manager.cell_stack is None:
-                    self.progress_updated.emit(progress, f"Processing beads: Frame {frame}/{total}")
-                else:
-                    self.progress_updated.emit(progress / 2, f"Processing beads: Frame {frame}/{total}")
-
-            # Process reference
-            reference_result = self.service.preprocess_frame(self.data_manager.reference)
-
-            # Process cell stack if available
-            cell_results = []
-            if self.data_manager.cell_stack is not None:
-                for result, frame, total in self.service.preprocess_stack(
-                        self.data_manager.cell_stack,
-                        reference_image=None,
-                        is_cell=True
-                ):
-                    cell_results.append(result)
-                    progress = (frame / total) * 100
-                    self.progress_updated.emit(50 + progress / 2, f"Processing cells: Frame {frame}/{total}")
-
-            # Update data manager with processed data
-            self.data_manager.set_preprocessed_bead_stack(np.stack([r.processed_image for r in bead_results]))
-            self.data_manager.set_preprocessed_reference(reference_result.processed_image)
-
-            if cell_results:
-                self.data_manager.set_preprocessed_cell_stack(np.stack([r.processed_image for r in cell_results]))
-
-            # Let visualization manager handle visualization using data from data manager
-            self.visualization_manager.update_preprocessing_visualization()
-
-            self.progress_updated.emit(100, "Preprocessing complete")
-            self.preprocessing_completed.emit({
-                'parameters': params.__dict__
-            })
-
-        except Exception as e:
-            self.preprocessing_failed.emit(str(e))
-            raise
-        finally:
-            self.unfreeze_ui()
-
-    def _handle_preprocessing_results(self, results):
-        """Handle successful preprocessing results."""
-        try:
-            # Update data manager with processed results
-            if 'beads' in results:
-                self.data_manager.set_preprocessed_bead_stack(
-                    np.stack([r.processed_image for r in results['beads']])
-                )
-
-            if 'reference' in results:
-                self.data_manager.set_preprocessed_reference(
-                    results['reference'][0].processed_image
-                )
-
-            if 'cells' in results:
-                self.data_manager.set_preprocessed_cell_stack(
-                    np.stack([r.processed_image for r in results['cells']])
-                )
-
-            # Update visualization
-            self.visualization_manager.update_preprocessing_visualization(results)
-
-            self.progress_updated.emit(100, "Preprocessing complete")
-            self.preprocessing_completed.emit(results)
-
-        except Exception as e:
-            error_msg = f"Error handling preprocessing results: {str(e)}"
-            self.preprocessing_failed.emit(error_msg)
-            QMessageBox.critical(None, "Error", error_msg)
-        finally:
-            self.unfreeze_ui()
 
     def _handle_preprocessing_error(self, error):
         """Handle preprocessing error."""
@@ -751,25 +707,6 @@ class PreprocessingController(QObject):
 
         except Exception as e:
             QMessageBox.critical(None, "Error", f"Failed to save data: {str(e)}")
-
-    def cancel_all_operations(self):
-        """Cancel all running background operations."""
-        for worker in self.active_workers:
-            try:
-                worker.running = False  # Set cancellation flag
-                worker.quit()
-                worker.wait(500)  # Wait up to 500ms
-                if worker.isRunning():
-                    worker.terminate()
-                worker.deleteLater()
-            except Exception as e:
-                print(f"Error cancelling worker: {str(e)}")
-        self.active_workers.clear()
-
-        # Update UI status
-        self.progress_updated.emit(0, "Operations cancelled")
-        QApplication.processEvents()
-        self.unfreeze_ui()
 
     def freeze_ui(self):
         """Disable all interactive UI elements except cancel button."""
