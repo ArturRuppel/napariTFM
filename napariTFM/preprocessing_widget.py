@@ -1,4 +1,3 @@
-# TODO parameters don't synch from batch to preprocessing widget
 # TODO clicking preview only shows preview after changing a param
 
 
@@ -133,7 +132,57 @@ class PreprocessingParameterPanel(QWidget):
     """Panel for handling preprocessing parameter inputs."""
 
     parameter_changed = Signal(str, object)  # (param_name, value)
-
+    # Initialization
+    #
+    # __init__
+    #
+    # _setup_ui
+    #
+    # UI
+    # Creation
+    #
+    # _create_intensity_range_group
+    #
+    # _create_cell_params_group
+    #
+    # _create_registration_group
+    #
+    # _create_spinbox
+    #
+    # Signal
+    # Handling
+    #
+    # _connect_signals
+    #
+    # _update_intensity_from_slider
+    #
+    # _update_intensity_from_spinbox
+    #
+    # _update_sigma_from_slider
+    #
+    # _update_sigma_from_spinbox
+    #
+    # _update_cell_intensity_from_slider
+    #
+    # _update_cell_intensity_from_spinbox
+    #
+    # Parameter
+    # Management
+    #
+    # _sync_widget_with_parameters
+    #
+    # _reset_parameters
+    #
+    # update_parameter
+    #
+    # get_parameters
+    #
+    # State
+    # Management
+    #
+    # freeze_ui
+    #
+    # _block_widgets
     def __init__(self, parameter_manager):
         super().__init__()
         self.parameter_manager = parameter_manager
@@ -271,6 +320,7 @@ class PreprocessingParameterPanel(QWidget):
         blur_label.setFixedWidth(40)
 
         sigma_spin = self._create_spinbox(0, 10, 0.1)
+        sigma_spin.setFixedWidth(102)
         self.parameter_spins['gaussian_sigma'] = sigma_spin
 
         sigma_slider = QSlider(Qt.Horizontal)
@@ -318,6 +368,7 @@ class PreprocessingParameterPanel(QWidget):
         blur_label.setFixedWidth(40)
 
         sigma_spin = self._create_spinbox(0, 10, 0.1)
+        sigma_spin.setFixedWidth(102)
         self.parameter_spins['cell_gaussian_sigma'] = sigma_spin
 
         sigma_slider = QSlider(Qt.Horizontal)
