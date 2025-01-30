@@ -20,7 +20,6 @@ from napariTFM.parameter_manager import ParameterManager
 from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
 # TODO visualization after preview or full results should disable all other layers
-# TODO colorbar doesn't update
 # TODO make UI clean and pretty, switch order of loading buttons
 # TODO make parameters synch from batch to displacement widget
 
