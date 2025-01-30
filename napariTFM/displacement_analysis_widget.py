@@ -19,8 +19,8 @@ from napariTFM.data_manager import DataManager
 from napariTFM.parameter_manager import ParameterManager
 from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
-# TODO clicking preview should clear the vector cache
 # TODO visualization after preview or full results should disable all other layers
+# TODO colorbar doesn't update
 # TODO make UI clean and pretty, switch order of loading buttons
 # TODO make parameters synch from batch to displacement widget
 
@@ -552,6 +552,8 @@ class DisplacementController(QObject):
             if final_result is None:
                 raise RuntimeError("Preview calculation failed")
 
+            self.analysis_completed.emit(final_result)
+
             # Update visualization with preview result
             self.visualization_manager.visualize_displacement_preview(
                 final_result.displacement_field[0],  # Single frame result
@@ -665,13 +667,7 @@ class DisplacementController(QObject):
             if save_path:
                 # Get results and save
                 results = self.data_manager.displacement_results
-                np.save(save_path, {
-                    'displacement_field': results.displacement_field,
-                    'parameters': results.parameters,
-                    'original_shape': results.original_shape,
-                    'displacement_field_shape': results.displacement_field_shape,
-                    'physical_scale': results.physical_scale
-                })
+                np.save(save_path, results)
                 self.progress_updated.emit(100, f"Results saved to {save_path}")
 
         except Exception as e:
@@ -689,25 +685,11 @@ class DisplacementController(QObject):
 
             if load_path:
                 # Load data
-                data = np.load(load_path, allow_pickle=True).item()
-
-                # Create DisplacementResult object
-                result = DisplacementResult(
-                    displacement_field=data['displacement_field'],
-                    original_shape=data['original_shape'],
-                    displacement_field_shape=data['displacement_field_shape'],
-                    parameters=data['parameters'],
-                    physical_scale=data['physical_scale']
-                )
+                result = np.load(load_path, allow_pickle=True).item()
 
                 # Update data manager and visualization
                 self.data_manager.set_displacement_results(result)
-                self.visualization_manager.visualize_displacement_results({
-                    'flows': result.displacement_field,
-                    'parameters': result.parameters,
-                    'original_shape': result.original_shape,
-                    'displacement_field_shape': result.displacement_field_shape
-                })
+                self.visualization_manager.visualize_displacement_results()
 
                 self.progress_updated.emit(100, f"Results loaded from {load_path}")
                 self.analysis_completed.emit(result)
@@ -830,7 +812,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.colorbar_manager = ColorbarManager()
 
         # Create all UI elements first
-        self.preview_check = None
         self.preview_btn = None
         self.process_btn = None
         self.save_btn = None
@@ -884,7 +865,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         colorbar_group = self.create_colorbar_widget(
             colormap_name='viridis',
             label="Displacement (µm)",
-            clim=(0, 10),
+            clim=(0, self.parameter_manager.get_displacement_parameters().d_max),
             colorbar_manager=self.colorbar_manager
         )
         colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -914,14 +895,12 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         scroll_layout.setSpacing(8)
 
         # Create UI elements
-        preview_frame = self._create_preview_frame()
         action_frame = self._create_action_frame()
         status_frame = self._create_status_frame()
 
         # Add all elements to scroll layout
         scroll_layout.addWidget(self.data_panel)
         scroll_layout.addWidget(self.parameter_panel)
-        scroll_layout.addWidget(preview_frame)
         scroll_layout.addWidget(action_frame)
         scroll_layout.addWidget(status_frame)
         scroll_layout.addStretch()
@@ -935,28 +914,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         self.setLayout(main_layout)
 
-    def _create_preview_frame(self) -> QFrame:
-        """Create preview control frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        # Create preview toggle
-        preview_layout = QHBoxLayout()
-        self.preview_check = QCheckBox("Show Preview")
-        self.preview_check.setToolTip("Show live preview of displacement calculation for current frame")
-        preview_layout.addWidget(self.preview_check)
-        preview_layout.addStretch()
-        layout.addLayout(preview_layout)
-
-        frame.setLayout(layout)
-        return frame
-
     def _connect_signals(self):
         """Connect all widget signals."""
-        # Make sure widgets exist before connecting signals
-        if self.preview_check is not None:
-            self.preview_check.toggled.connect(self._on_preview_toggled)
-
         if hasattr(self, 'preview_btn') and self.preview_btn is not None:
             self.preview_btn.clicked.connect(self.controller.preview_displacement)
         if hasattr(self, 'process_btn') and self.process_btn is not None:
@@ -1023,21 +982,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         frame.setLayout(layout)
         return frame
 
-    def _on_preview_toggled(self, enabled: bool):
-        """Handle preview toggle."""
-        if hasattr(self.controller, 'preview_enabled'):
-            self.controller.preview_enabled = enabled
-
-        if enabled:
-            self.controller.preview_displacement()
-        else:
-            self.visualization_manager.handle_preview(
-                frame=None,
-                enable=False
-            )
     def _on_analysis_completed(self, results):
         """Handle completed analysis."""
         self.save_btn.setEnabled(True)
+        # Update colorbar before visualization
+        if hasattr(results, 'parameters'):
+            d_max = results.parameters.d_max
+            self.colorbar_manager.update_limits(0, d_max)
         self.displacement_calculated.emit(results)
 
     def _on_analysis_failed(self, error_msg: str):
@@ -1047,8 +998,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _on_parameter_changed(self, param_name: str, value: Any):
         """Handle parameter changes."""
-        if self.preview_check.isChecked():
-            self.controller.preview_displacement()
+        pass
 
     def _on_frame_changed(self, event=None):
         """Handle frame change events."""
@@ -1078,20 +1028,15 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.preview_btn.setEnabled(has_data)
         self.process_btn.setEnabled(has_data)
         self.save_btn.setEnabled(has_results)
-        self.preview_check.setEnabled(has_data)
-
-        if not has_data and self.preview_check.isChecked():
-            self.preview_check.setChecked(False)
 
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze."""
-        if hasattr(self, 'preview_check'):
-            self.preview_check.setEnabled(not frozen and self._has_required_data())
         self.preview_btn.setEnabled(not frozen and self._has_required_data())
         self.process_btn.setEnabled(not frozen and self._has_required_data())
         self.save_btn.setEnabled(not frozen and self.data_manager.displacement_results is not None)
         self.load_btn.setEnabled(not frozen)
         self.cancel_btn.setEnabled(frozen)
+
     def _has_required_data(self) -> bool:
         """Check if required data is available."""
         return (
@@ -1115,5 +1060,34 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             has_beads=self.data_manager.preprocessed_bead_stack is not None,
             has_results=self.data_manager.displacement_field is not None
         )
+
+    def _create_preview_frame(self) -> QFrame:
+        """Create preview control frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
+
+        # Create preview toggle
+        preview_layout = QHBoxLayout()
+        self.preview_check = QCheckBox("Show Preview")
+        self.preview_check.setToolTip("Show live preview of displacement calculation for current frame")
+        preview_layout.addWidget(self.preview_check)
+        preview_layout.addStretch()
+        layout.addLayout(preview_layout)
+
+        frame.setLayout(layout)
+        return frame
+
+    def _on_preview_toggled(self, enabled: bool):
+        """Handle preview toggle."""
+        if hasattr(self.controller, 'preview_enabled'):
+            self.controller.preview_enabled = enabled
+
+        if enabled:
+            self.controller.preview_displacement()
+        else:
+            self.visualization_manager.handle_preview(
+                frame=None,
+                enable=False
+            )
 
 

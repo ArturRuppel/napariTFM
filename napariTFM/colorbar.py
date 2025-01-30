@@ -57,7 +57,9 @@ class EnhancedColorBarWidget(Widget):
 
         # Invert the clim values for the colorbar visual
         vmin, vmax = clim
-        inverted_clim = (vmax, vmin)
+
+        formatted_clim = (float(f"{vmin:.1f}"), float(f"{vmax:.1f}"))
+        inverted_clim = (formatted_clim[1], formatted_clim[0])
 
         # Create the ColorBarVisual with inverted limits
         self._colorbar = ColorBarVisual(
@@ -429,6 +431,9 @@ class ColorbarManager:
         """Update the colorbar limits"""
         if self._colorbar is not None:
             vmin, vmax = min(vmin, vmax), max(vmin, vmax)
+            vmin = float(f"{vmin:.1f}")
+            vmax = float(f"{vmax:.1f}")
+
             # Store the original limits
             self._current_clim = (vmin, vmax)
             # Invert the limits for the colorbar visual
