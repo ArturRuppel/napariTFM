@@ -19,14 +19,12 @@ from napariTFM.data_manager import DataManager
 from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
-# TODO make UI clean and pretty, switch order of loading buttons
-# TODO parameter reset should give a status update
 
 class DisplacementParameterPanel(QWidget):
     """Panel for handling all displacement parameter inputs."""
 
     parameter_changed = Signal(str, object)  # (param_name, value)
-
+    parameters_reset = Signal()
     def __init__(self, parameter_manager):
         super().__init__()
         self.parameter_manager = parameter_manager
@@ -252,6 +250,7 @@ class DisplacementParameterPanel(QWidget):
     def _reset_parameters(self):
         """Reset parameters to defaults."""
         self.parameter_manager.reset_displacement_parameters()
+        self.parameters_reset.emit()
 
     def update_parameter(self, name: str, value: Any):
         """Update a single parameter value."""
@@ -1021,6 +1020,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         # Connect parameter panel signals
         self.parameter_panel.parameter_changed.connect(self._on_parameter_changed)
+        self.parameter_panel.parameters_reset.connect(self._on_parameters_reset)
 
         # Add layer selection monitoring
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
@@ -1053,6 +1053,10 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     def _on_parameter_changed(self, param_name: str, value: Any):
         """Handle parameter changes."""
         pass
+
+    def _on_parameters_reset(self):
+        """Handle parameter reset and update status."""
+        self._update_status(0, "Displacement parameters reset to default values.")
 
     def _on_frame_changed(self, event=None):
         """Handle frame change events."""

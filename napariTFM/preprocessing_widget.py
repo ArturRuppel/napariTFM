@@ -22,8 +22,11 @@ from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
 from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.services.preprocessing_service import PreprocessingService
+
+
 # TODO setting bead stack invalidates subsequent steps but setting reference doesn't
 # TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
+# TODO Run preprocessing should be disabled at application start
 
 
 class PreprocessingDataPanel(QWidget):
@@ -132,6 +135,7 @@ class PreprocessingParameterPanel(QWidget):
     """Panel for handling preprocessing parameter inputs."""
 
     parameter_changed = Signal(str, object)  # (param_name, value)
+    parameters_reset = Signal()
 
     # region === Initialization
     def __init__(self, parameter_manager):
@@ -540,6 +544,7 @@ class PreprocessingParameterPanel(QWidget):
         """Reset all parameters to their default values."""
         self.parameter_manager.reset_preprocessing_parameters()
         self._sync_widget_with_parameters()
+        self.parameters_reset.emit()
 
     def update_parameter(self, name: str, value: Any):
         """Update a single parameter value."""
@@ -552,6 +557,7 @@ class PreprocessingParameterPanel(QWidget):
                 self._safe_set_combo_text(self.parameter_combos[name], str(value))
         except Exception as e:
             print(f"Error updating parameter {name}: {str(e)}")
+
     def get_parameters(self):
         """Get current parameter values."""
         return {
@@ -1293,6 +1299,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Connect parameter panel changes
         self.parameter_panel.parameter_changed.connect(self._on_parameter_changed)
         self.parameter_manager.parameter_changed.connect(self._sync_parameter)
+        self.parameter_panel.parameters_reset.connect(self._on_parameters_reset)
 
         # Add layer selection monitoring
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
@@ -1339,6 +1346,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
         if self.preview_check.isChecked():
             self.controller._update_preview()
 
+    def _on_parameters_reset(self):
+        """Handle parameter reset and update status."""
+        self._update_status(0, "Preprocessing parameters reset to default values.")
+
     # endregion
 
     # region === State Management
@@ -1378,6 +1389,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 self.data_manager.preprocessed_cell_stack is not None
         )
         self.save_btn.setEnabled(has_preprocessed)
+
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze."""
         # Disable preview and process buttons during processing
@@ -1408,6 +1420,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         return (self.data_manager.preprocessed_bead_stack is not None or
                 self.data_manager.preprocessed_reference is not None or
                 self.data_manager.preprocessed_cell_stack is not None)
+
     # endregion
 
     # region === Results Handling
@@ -1432,22 +1445,3 @@ class PreprocessingWidget(BaseAnalysisWidget):
         super().cleanup()
 
     # endregion
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
