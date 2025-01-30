@@ -40,7 +40,6 @@ class FTTCDataPanel(QWidget):
     def _setup_ui(self):
         """Set up the user interface."""
         layout = QVBoxLayout()
-        layout.setSpacing(4)
 
         # Create data input group
         data_group = QGroupBox("Input Data")
@@ -149,34 +148,6 @@ class FTTCParameterPanel(QWidget):
         # Emit our own signal
         self.parameter_changed.emit(param_name, value)
 
-    def _create_regularization_parameters(self) -> QGroupBox:
-        """Create regularization parameter group."""
-        group = QGroupBox("Regularization Parameters")
-        layout = QVBoxLayout()
-
-        # Regularization value spinbox
-        reg_layout = QHBoxLayout()
-        reg_label = QLabel("Parameter (10^x):")
-        reg_label.setFixedWidth(150)
-        reg_layout.addWidget(reg_label)
-
-        reg_spin = QDoubleSpinBox()
-        reg_spin.setRange(-21, 0)  # This range is now handled by parameter manager
-        reg_spin.setSingleStep(0.5)
-        reg_spin.setDecimals(1)
-        reg_spin.setToolTip(
-            "Tikhonov regularization parameter as a power of 10.\n"
-            "Lower values give more detailed but potentially noisier results"
-        )
-        self.parameter_spins['regularization'] = reg_spin
-        reg_layout.addWidget(reg_spin)
-        layout.addLayout(reg_layout)
-
-        # Rest of the method remains the same...
-        return group
-
-
-
     def _sync_widget_with_parameters(self):
         """Sync widget values with parameter manager."""
         self._block_widgets(True)
@@ -231,8 +202,11 @@ class FTTCParameterPanel(QWidget):
 
             if isinstance(step, int):
                 spin = QSpinBox()
+                spin.setFixedWidth(135)
+
             else:
                 spin = QDoubleSpinBox()
+                spin.setFixedWidth(135)
                 spin.setDecimals(2)
 
             spin.setRange(min_val, max_val)
@@ -260,6 +234,7 @@ class FTTCParameterPanel(QWidget):
         reg_layout.addWidget(reg_label)
 
         reg_spin = QDoubleSpinBox()
+        reg_spin.setFixedWidth(135)
         reg_spin.setRange(-21, 0)
         reg_spin.setValue(-4)
         reg_spin.setSingleStep(0.5)
@@ -279,6 +254,7 @@ class FTTCParameterPanel(QWidget):
             "Automatically optimize regularization parameter for each frame\n"
             "using Generalized Cross-Validation"
         )
+        self.auto_gcv_checkbox.setFixedWidth(150)
         gcv_layout.addWidget(self.auto_gcv_checkbox)
 
         self.gcv_button = QPushButton("Auto-select (GCV)")
@@ -286,6 +262,8 @@ class FTTCParameterPanel(QWidget):
             "Calculate optimal regularization parameter for current frame\n"
             "using Generalized Cross-Validation"
         )
+        self.gcv_button.setFixedWidth(135)
+
         gcv_layout.addWidget(self.gcv_button)
         layout.addLayout(gcv_layout)
 
@@ -315,8 +293,10 @@ class FTTCParameterPanel(QWidget):
 
             if isinstance(step, int):
                 spin = QSpinBox()
+                spin.setFixedWidth(135)
             else:
                 spin = QDoubleSpinBox()
+                spin.setFixedWidth(135)
                 if name == "force_arrow_scale":
                     spin.setDecimals(1)
                 else:
@@ -1021,8 +1001,6 @@ class FTTCWidget(BaseAnalysisWidget):
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
-        main_layout.setSpacing(0)
-        main_layout.setContentsMargins(0, 0, 0, 0)
 
         # Left: Colorbar
         colorbar_container = self._create_colorbar_container()
@@ -1039,7 +1017,6 @@ class FTTCWidget(BaseAnalysisWidget):
         container = QWidget()
         container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         layout = QVBoxLayout()
-        layout.setContentsMargins(6, 6, 6, 6)
 
         colorbar_group = self.create_colorbar_widget(
             colormap_name='inferno',
@@ -1060,8 +1037,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
         container = QWidget()
         layout = QVBoxLayout()
-        layout.setSpacing(8)
-        layout.setContentsMargins(6, 6, 6, 6)
 
         # Add panels
         layout.addWidget(self.data_panel)

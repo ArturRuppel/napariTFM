@@ -52,6 +52,8 @@ class PreprocessingDataPanel(QWidget):
         # Bead data row
         bead_layout = QHBoxLayout()
         self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_beads_btn.setFixedWidth(150)
+
         self.bead_status = QLabel("Not loaded")
         bead_layout.addWidget(self.load_beads_btn)
         bead_layout.addWidget(self.bead_status)
@@ -60,6 +62,7 @@ class PreprocessingDataPanel(QWidget):
         # Reference data row
         ref_layout = QHBoxLayout()
         self.load_reference_btn = QPushButton("Load Reference Image")
+        self.load_reference_btn.setFixedWidth(150)
         self.reference_status = QLabel("Not loaded")
         ref_layout.addWidget(self.load_reference_btn)
         ref_layout.addWidget(self.reference_status)
@@ -68,6 +71,7 @@ class PreprocessingDataPanel(QWidget):
         # Cell data row
         cell_layout = QHBoxLayout()
         self.load_cells_btn = QPushButton("Load Cell Stack")
+        self.load_cells_btn.setFixedWidth(150)
         self.cell_status = QLabel("Not loaded")
         cell_layout.addWidget(self.load_cells_btn)
         cell_layout.addWidget(self.cell_status)
@@ -208,7 +212,7 @@ class PreprocessingParameterPanel(QWidget):
             "Standard deviation for Gaussian smoothing of bead images.\n"
             "Higher values reduce noise but may blur bead features."
         )
-        sigma_spin.setFixedWidth(102)
+        sigma_spin.setFixedWidth(99)
         self.parameter_spins['gaussian_sigma'] = sigma_spin
 
         sigma_slider = QSlider(Qt.Horizontal)
@@ -272,7 +276,7 @@ class PreprocessingParameterPanel(QWidget):
             "Standard deviation for Gaussian smoothing of cell images.\n"
             "Higher values reduce noise but may blur cell boundaries."
         )
-        sigma_spin.setFixedWidth(102)
+        sigma_spin.setFixedWidth(99)
         self.parameter_spins['cell_gaussian_sigma'] = sigma_spin
 
         sigma_slider = QSlider(Qt.Horizontal)
@@ -1103,8 +1107,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
     def _setup_ui(self):
         """Set up the main widget UI."""
         main_layout = QHBoxLayout()
-        main_layout.setSpacing(0)
-        main_layout.setContentsMargins(0, 0, 0, 0)
 
         # Add colorbar container
         colorbar_container = self._create_colorbar_container()
@@ -1121,7 +1123,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         container = QWidget()
         container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         layout = QVBoxLayout()
-        layout.setContentsMargins(6, 6, 6, 6)
 
         colorbar_group = self.create_colorbar_widget(
             colormap_name='gray',
@@ -1146,8 +1147,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         container = QWidget()
         layout = QVBoxLayout()
-        layout.setSpacing(8)
-        layout.setContentsMargins(6, 6, 6, 6)
 
         # Add components
         layout.addWidget(self.data_panel)
@@ -1199,14 +1198,15 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Create button row
         button_layout = QHBoxLayout()
         self.process_btn = QPushButton("Run Preprocessing")
-        self.save_btn = QPushButton("Save Preprocessed Images")
-        self.save_btn.setEnabled(False)
+        self.save_btn = QPushButton("Save Result Images")
+        self.process_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.save_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         button_layout.addWidget(self.process_btn)
         button_layout.addWidget(self.save_btn)
         layout.addLayout(button_layout)
 
         # Add cancel button (full width)
-        self.cancel_btn = QPushButton("Cancel All Operations")
+        self.cancel_btn = QPushButton("Cancel Operation")
         layout.addWidget(self.cancel_btn)
 
         frame.setLayout(layout)

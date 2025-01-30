@@ -48,7 +48,10 @@ class DisplacementDataPanel(QWidget):
         # Bead data row
         bead_layout = QHBoxLayout()
         self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.load_beads_btn.setFixedWidth(150)
+        self.load_beads_btn.setToolTip("Load bead stack data from active layer")
         self.bead_status = QLabel("Not loaded")
+        self.bead_status.setWordWrap(True)
         bead_layout.addWidget(self.load_beads_btn)
         bead_layout.addWidget(self.bead_status)
         group_layout.addLayout(bead_layout)
@@ -56,10 +59,20 @@ class DisplacementDataPanel(QWidget):
         # Reference data row
         ref_layout = QHBoxLayout()
         self.load_reference_btn = QPushButton("Load Reference Image")
+        self.load_reference_btn.setFixedWidth(150)
+        self.load_reference_btn.setToolTip("Load reference image from active layer")
         self.reference_status = QLabel("Not loaded")
+        self.reference_status.setWordWrap(True)
         ref_layout.addWidget(self.load_reference_btn)
         ref_layout.addWidget(self.reference_status)
         group_layout.addLayout(ref_layout)
+
+        # Add description label for required data
+        info_label = QLabel(
+            "Required: Reference image and bead stack from previous preprocessing step"
+        )
+        info_label.setWordWrap(True)
+        group_layout.addWidget(info_label)
 
         data_group.setLayout(group_layout)
         layout.addWidget(data_group)
@@ -366,61 +379,82 @@ class DisplacementActionPanel(QWidget):
         self._connect_signals()
 
     def _setup_ui(self):
+        """Set up the user interface."""
         layout = QVBoxLayout()
 
-        # Create grid of button pairs
-        button_layout = QVBoxLayout()
-
-        # Row 1: Preview and Calculate
+        # Create button pairs in rows
+        # Row 1: Preview and Calculate buttons
         row1_layout = QHBoxLayout()
         self.preview_btn = QPushButton("Preview Current Frame")
-        self.analyze_btn = QPushButton("Calculate All Frames")
+        self.preview_btn.setToolTip(
+            "Calculate and visualize displacement for the current frame only"
+        )
+        self.calculate_btn = QPushButton("Calculate All Frames")
+        self.calculate_btn.setToolTip(
+            "Calculate displacements for all frames in the dataset"
+        )
         row1_layout.addWidget(self.preview_btn)
-        row1_layout.addWidget(self.analyze_btn)
-        button_layout.addLayout(row1_layout)
+        row1_layout.addWidget(self.calculate_btn)
+        layout.addLayout(row1_layout)
 
-        # Row 2: Save and Load
+        # Row 2: Save and Load buttons
         row2_layout = QHBoxLayout()
         self.save_btn = QPushButton("Save Displacements")
+        self.save_btn.setToolTip(
+            "Save displacement calculation results to file"
+        )
         self.load_btn = QPushButton("Load Displacements")
+        self.load_btn.setToolTip(
+            "Load previously saved displacement results"
+        )
         row2_layout.addWidget(self.save_btn)
         row2_layout.addWidget(self.load_btn)
-        button_layout.addLayout(row2_layout)
+        layout.addLayout(row2_layout)
 
-        layout.addLayout(button_layout)
-
-        # Cancel button
+        # Cancel button in its own centered container
+        cancel_layout = QHBoxLayout()
         self.cancel_btn = QPushButton("Cancel Operation")
-        layout.addWidget(self.cancel_btn)
+        self.cancel_btn.setToolTip(
+            "Cancel the current operation"
+        )
+        cancel_layout.addWidget(self.cancel_btn)
+        layout.addLayout(cancel_layout)
 
         self.setLayout(layout)
 
     def _connect_signals(self):
         """Connect action panel buttons to controller methods."""
         self.preview_btn.clicked.connect(self.controller.preview_displacement)
-        self.analyze_btn.clicked.connect(self.controller.calculate_all_frames)
+        self.calculate_btn.clicked.connect(self.controller.calculate_all_frames)
         self.save_btn.clicked.connect(self.controller.save_results)
         self.load_btn.clicked.connect(self.controller.load_results)
         self.cancel_btn.clicked.connect(self.controller.cancel_operation)
 
-    def freeze_ui(self, freeze=True):
-        """Disable/enable action buttons (keep cancel enabled)"""
-        buttons = [
-            self.preview_btn, self.analyze_btn,
-            self.save_btn, self.load_btn
+    def freeze_ui(self, freeze: bool = True):
+        """Disable/enable action buttons during processing."""
+        # Disable all buttons except cancel during processing
+        action_buttons = [
+            self.preview_btn,
+            self.calculate_btn,
+            self.save_btn,
+            self.load_btn
         ]
-        for btn in buttons:
+        for btn in action_buttons:
             btn.setEnabled(not freeze)
-        self.cancel_btn.setEnabled(True)
 
-    def update_button_states(self, has_reference: bool = False,
+        # Cancel button is enabled only during processing
+        self.cancel_btn.setEnabled(freeze)
+
+    def update_button_states(self,
+                             has_reference: bool = False,
                              has_beads: bool = False,
                              has_results: bool = False):
         """Update button states based on data availability."""
         self.preview_btn.setEnabled(has_reference and has_beads)
-        self.analyze_btn.setEnabled(has_reference and has_beads)
+        self.calculate_btn.setEnabled(has_reference and has_beads)
         self.save_btn.setEnabled(has_results)
         self.load_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
 
 
 class DisplacementController(QObject):
@@ -908,10 +942,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     # region === UI Creation
     def _setup_ui(self):
         main_layout = QHBoxLayout()
-        main_layout.setSpacing(0)
-        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Left: Colorbar (same as preprocessing)
+        # Left: Colorbar
         colorbar_container = self._create_colorbar_container()
         main_layout.addWidget(colorbar_container)
 
@@ -921,38 +953,66 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         self.setLayout(main_layout)
 
-    def _create_content_container(self):
+    def _create_colorbar_container(self) -> QWidget:
+        """Create the colorbar container."""
+        container = QWidget()
+        container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        layout = QVBoxLayout()
+
+        colorbar_group = self.create_colorbar_widget(
+            colormap_name='viridis',
+            label="Displacement (µm)",
+            clim=(0, self.parameter_manager.get_parameter('d_max')),
+            colorbar_manager=self.colorbar_manager
+        )
+        layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        layout.addStretch()
+        container.setLayout(layout)
+        return container
+
+    def _create_content_container(self) -> QWidget:
+        """Create the main content container."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(360)  # Fixed width for the scroll area
+        scroll.setFixedWidth(360)  # Fixed width for consistency
 
         container = QWidget()
-        container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)  # Constrain width
         layout = QVBoxLayout()
-        layout.setSpacing(8)
-        layout.setContentsMargins(6, 6, 6, 6)
 
-        # Match preprocessing's component order
+        # Add panels
         layout.addWidget(self.data_panel)
         layout.addWidget(self.parameter_panel)
-        layout.addWidget(self._create_action_frame())  # Ensure this is called
+        layout.addWidget(self.action_panel)
         layout.addWidget(self._create_status_frame())
+        layout.addStretch()
 
         container.setLayout(layout)
         scroll.setWidget(container)
         return scroll
 
+    def _create_status_frame(self) -> QFrame:
+        """Create the status display frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
+
+        self.progress_bar = QProgressBar()
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)  # Enable text wrapping
+        self.status_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.status_label)
+
+        frame.setLayout(layout)
+        return frame
+
     def _create_action_frame(self):
         frame = QFrame()
         frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)  # Constrain height
         layout = QVBoxLayout()
-        layout.setSpacing(6)
-        layout.setContentsMargins(0, 0, 0, 0)  # Minimize margins
 
         # Main action row
         action_layout = QHBoxLayout()
-        action_layout.setSpacing(6)
-        action_layout.setContentsMargins(0, 0, 0, 0)  # Minimize margins
 
         self.preview_btn = QPushButton("Preview Current Frame")
         self.process_btn = QPushButton("Run Displacement Analysis")
@@ -967,8 +1027,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         # Data buttons
         data_layout = QHBoxLayout()
-        data_layout.setSpacing(6)
-        data_layout.setContentsMargins(0, 0, 0, 0)  # Minimize margins
         self.save_btn = QPushButton("Save Displacements")
         self.load_btn = QPushButton("Load Displacements")
 
@@ -983,38 +1041,9 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         # Cancel button
         self.cancel_btn = QPushButton("Cancel All Operations")
-        self.cancel_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.cancel_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout.addWidget(self.cancel_btn)
 
-        frame.setLayout(layout)
-        return frame
-
-    def _create_colorbar_container(self):
-        # Identical to preprocessing's implementation
-        container = QWidget()
-        container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        layout = QVBoxLayout()
-        layout.setContentsMargins(6, 6, 6, 6)
-
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='viridis',
-            label="Displacement (µm)",
-            clim=(0, self.parameter_manager.get_parameter('d_max')),
-            colorbar_manager=self.colorbar_manager
-        )
-        layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        layout.addStretch()
-        container.setLayout(layout)
-        return container
-
-    def _create_status_frame(self):
-        # Identical implementation to preprocessing
-        frame = QFrame()
-        layout = QVBoxLayout()
-        self.progress_bar = QProgressBar()
-        self.status_label = QLabel("")
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.status_label)
         frame.setLayout(layout)
         return frame
 
@@ -1023,17 +1052,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     # region === Signal Handling
     def _connect_signals(self):
         """Connect all widget signals."""
-        if hasattr(self, 'preview_btn') and self.preview_btn is not None:
-            self.preview_btn.clicked.connect(self.controller.preview_displacement)
-        if hasattr(self, 'process_btn') and self.process_btn is not None:
-            self.process_btn.clicked.connect(self.controller.calculate_all_frames)
-        if hasattr(self, 'save_btn') and self.save_btn is not None:
-            self.save_btn.clicked.connect(self.controller.save_results)
-        if hasattr(self, 'load_btn') and self.load_btn is not None:
-            self.load_btn.clicked.connect(self.controller.load_results)
-        if hasattr(self, 'cancel_btn') and self.cancel_btn is not None:
-            self.cancel_btn.clicked.connect(self.controller.cancel_operation)
-
         # Connect controller signals
         self.controller.progress_updated.connect(self._update_status)
         self.controller.analysis_completed.connect(self._on_analysis_completed)
@@ -1064,34 +1082,32 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
+    def _handle_ui_freeze(self, frozen: bool):
+        """Handle UI freeze/unfreeze."""
+        if self.action_panel:
+            self.action_panel.freeze_ui(frozen)
+            self.action_panel.update_button_states(
+                has_reference=self.data_manager.preprocessed_reference is not None,
+                has_beads=self.data_manager.preprocessed_bead_stack is not None,
+                has_results=self.data_manager.displacement_results is not None
+            )
+
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
         # Update data panel
         self.data_panel.update_button_states()
         self.data_panel.update_data_status()
 
-        # Update button states
-        has_data = (
-                self.data_manager.preprocessed_reference is not None and
-                self.data_manager.preprocessed_bead_stack is not None
-        )
-        has_results = self.data_manager.displacement_results is not None
-
-        # Check if preview_btn exists before using it
-        if hasattr(self, 'preview_btn') and self.preview_btn is not None:
-            self.preview_btn.setEnabled(has_data)
-        if hasattr(self, 'process_btn') and self.process_btn is not None:
-            self.process_btn.setEnabled(has_data)
-        if hasattr(self, 'save_btn') and self.save_btn is not None:
-            self.save_btn.setEnabled(has_results)
-
-    def _handle_ui_freeze(self, frozen: bool):
-        """Handle UI freeze/unfreeze."""
-        self.preview_btn.setEnabled(not frozen and self._has_required_data())
-        self.process_btn.setEnabled(not frozen and self._has_required_data())
-        self.save_btn.setEnabled(not frozen and self.data_manager.displacement_results is not None)
-        self.load_btn.setEnabled(not frozen)
-        self.cancel_btn.setEnabled(frozen)
+        # Update action panel button states
+        if self.action_panel:
+            has_reference = self.data_manager.preprocessed_reference is not None
+            has_beads = self.data_manager.preprocessed_bead_stack is not None
+            has_results = self.data_manager.displacement_results is not None
+            self.action_panel.update_button_states(
+                has_reference=has_reference,
+                has_beads=has_beads,
+                has_results=has_results
+            )
 
     def _has_required_data(self) -> bool:
         """Check if required data is available."""
@@ -1106,8 +1122,15 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _on_analysis_completed(self, results):
         """Handle completed analysis."""
-        self.save_btn.setEnabled(True)
-        # Update colorbar before visualization
+        # Update action panel button states
+        if self.action_panel:
+            self.action_panel.update_button_states(
+                has_reference=self.data_manager.preprocessed_reference is not None,
+                has_beads=self.data_manager.preprocessed_bead_stack is not None,
+                has_results=True
+            )
+
+        # Update colorbar
         if hasattr(results, 'parameters'):
             d_max = results.parameters.d_max
             self.colorbar_manager.update_limits(0, d_max)
@@ -1115,7 +1138,12 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _on_analysis_failed(self, error_msg: str):
         """Handle analysis failure."""
-        self.save_btn.setEnabled(False)
+        if self.action_panel:
+            self.action_panel.update_button_states(
+                has_reference=self.data_manager.preprocessed_reference is not None,
+                has_beads=self.data_manager.preprocessed_bead_stack is not None,
+                has_results=False
+            )
         QMessageBox.critical(self, "Error", error_msg)
 
     def _on_frame_changed(self, event=None):

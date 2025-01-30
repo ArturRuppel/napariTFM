@@ -20,6 +20,8 @@ from napariTFM.visualization_manager import VisualizationManager
 
 
 # TODO implement loading and saving
+# TODO load forces throws error
+
 class MSMParameterPanel(QWidget):
     """Panel for handling all MSM parameter inputs."""
 
