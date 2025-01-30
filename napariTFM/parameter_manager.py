@@ -54,12 +54,25 @@ class ParameterManager(QObject):
         """Get a parameter value"""
         if not hasattr(self._parameters, name):
             raise ValueError(f"Unknown parameter: {name}")
-        return getattr(self._parameters, name)
+        value = getattr(self._parameters, name)
+
+        # Special handling for gel_height
+        if name == 'gel_height':
+            # Convert None or infinity to 0 for UI display
+            if value is None or value == float('inf'):
+                return 0
+        return value
 
     def set_parameter(self, name: str, value: Any) -> None:
         """Set a parameter value and trigger callbacks"""
         if not hasattr(self._parameters, name):
             raise ValueError(f"Unknown parameter: {name}")
+
+        # Special handling for gel_height
+        if name == 'gel_height':
+            # Convert 0 to None for internal storage
+            if value == 0 or value == float('inf'):
+                value = None
 
         current_value = getattr(self._parameters, name)
         if current_value != value:

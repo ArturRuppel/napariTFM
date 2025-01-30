@@ -19,9 +19,7 @@ from napariTFM.visualization_manager import VisualizationManager
 
 
 # TODO Load displacement button should not disable
-# TODO regularization doesn't synch
 # TODO layer visibility after calculations (preview and full)
-# TODO reset parameters doesn't reset gel height
 
 class FTTCDataPanel(QWidget):
     """Panel for handling FTTC data loading and status display."""
@@ -125,6 +123,84 @@ class FTTCParameterPanel(QWidget):
 
         self.setLayout(layout)
         self._sync_widget_with_parameters()
+
+    def _sync_parameter(self, param_name: str, value: Any):
+        """Sync a single parameter from parameter manager."""
+        if param_name in self.parameter_spins:
+            if param_name == 'young_modulus':
+                value = value / 1000  # Convert Pa to kPa
+            # No need for regularization conversion here as parameter manager handles it
+            self._safe_set_value(self.parameter_spins[param_name], value)
+        elif param_name == 'auto_gcv':
+            self.auto_gcv_checkbox.setChecked(bool(value))
+
+    def _on_value_changed(self, param_name: str, value: object):
+        """Handle parameter value changes."""
+        if param_name == 'young_modulus':
+            # Convert kPa to Pa for the parameter manager
+            value = value * 1000
+        # No need for regularization conversion here as parameter manager will handle it
+
+        # Update parameter manager
+        self.parameter_manager.set_parameter(param_name, value)
+        # Emit our own signal
+        self.parameter_changed.emit(param_name, value)
+
+    def _create_regularization_parameters(self) -> QGroupBox:
+        """Create regularization parameter group."""
+        group = QGroupBox("Regularization Parameters")
+        layout = QVBoxLayout()
+
+        # Regularization value spinbox
+        reg_layout = QHBoxLayout()
+        reg_label = QLabel("Parameter (10^x):")
+        reg_label.setFixedWidth(150)
+        reg_layout.addWidget(reg_label)
+
+        reg_spin = QDoubleSpinBox()
+        reg_spin.setRange(-21, 0)  # This range is now handled by parameter manager
+        reg_spin.setSingleStep(0.5)
+        reg_spin.setDecimals(1)
+        reg_spin.setToolTip(
+            "Tikhonov regularization parameter as a power of 10.\n"
+            "Lower values give more detailed but potentially noisier results"
+        )
+        self.parameter_spins['regularization'] = reg_spin
+        reg_layout.addWidget(reg_spin)
+        layout.addLayout(reg_layout)
+
+        # Rest of the method remains the same...
+        return group
+
+
+
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager."""
+        self._block_widgets(True)
+        try:
+            for name, spin in self.parameter_spins.items():
+                value = self.parameter_manager.get_parameter(name)
+                if value is not None:
+                    if name == 'young_modulus':
+                        # Convert Pa to kPa for display
+                        value = value / 1000
+                    elif name == 'regularization':
+                        # Convert to log10 for display
+                        value = np.log10(value)
+                    elif name == 'gel_height':
+                        # Handle infinity case
+                        if value == float('inf'):
+                            value = 0  # Will display as "∞"
+                    self._safe_set_value(spin, value)
+
+            # Sync GCV checkbox
+            auto_gcv = self.parameter_manager.get_parameter('auto_gcv')
+            self.auto_gcv_checkbox.setChecked(bool(auto_gcv))
+            self.parameter_spins['regularization'].setEnabled(not auto_gcv)
+            self.gcv_button.setEnabled(not auto_gcv)
+
+        finally:
+            self._block_widgets(False)
 
     def _create_material_parameters(self) -> QGroupBox:
         """Create material parameter group."""
@@ -268,20 +344,6 @@ class FTTCParameterPanel(QWidget):
         # Connect reset button
         self.reset_btn.clicked.connect(self._reset_parameters)
 
-    def _on_value_changed(self, param_name: str, value: object):
-        """Handle parameter value changes."""
-        if param_name == 'young_modulus':
-            # Convert kPa to Pa for the parameter manager
-            value = value * 1000
-        elif param_name == 'regularization':
-            # Convert from log10 to actual value
-            value = 10 ** value
-
-        # Update parameter manager
-        self.parameter_manager.set_parameter(param_name, value)
-        # Emit our own signal
-        self.parameter_changed.emit(param_name, value)
-
     def _on_auto_gcv_changed(self, state):
         """Handle auto GCV checkbox state changes."""
         is_checked = state == Qt.Checked
@@ -298,41 +360,6 @@ class FTTCParameterPanel(QWidget):
         """Handle parameter reset events."""
         if category == ParameterCategory.FORCE:
             self._sync_widget_with_parameters()
-
-    def _sync_widget_with_parameters(self):
-        """Sync widget values with parameter manager."""
-        self._block_widgets(True)
-        try:
-            for name, spin in self.parameter_spins.items():
-                value = self.parameter_manager.get_parameter(name)
-                if value is not None:
-                    if name == 'young_modulus':
-                        # Convert Pa to kPa for display
-                        value = value / 1000
-                    elif name == 'regularization':
-                        # Convert to log10 for display
-                        value = np.log10(value)
-                    self._safe_set_value(spin, value)
-
-            # Sync GCV checkbox
-            auto_gcv = self.parameter_manager.get_parameter('auto_gcv')
-            self.auto_gcv_checkbox.setChecked(bool(auto_gcv))
-            self.parameter_spins['regularization'].setEnabled(not auto_gcv)
-            self.gcv_button.setEnabled(not auto_gcv)
-
-        finally:
-            self._block_widgets(False)
-
-    def _sync_parameter(self, param_name: str, value: Any):
-        """Sync a single parameter from parameter manager."""
-        if param_name in self.parameter_spins:
-            if param_name == 'young_modulus':
-                value = value / 1000  # Convert Pa to kPa
-            elif param_name == 'regularization':
-                value = np.log10(value)  # Convert to log10
-            self._safe_set_value(self.parameter_spins[param_name], value)
-        elif param_name == 'auto_gcv':
-            self.auto_gcv_checkbox.setChecked(bool(value))
 
     def _reset_parameters(self):
         """Reset parameters to defaults."""
@@ -704,9 +731,13 @@ class FTTCController(QObject):
                 elif param_name == 'regularization':
                     # Store actual value, UI will convert to log10
                     self.parameter_manager.set_parameter(param_name, value)
+                elif param_name == 'gel_height':
+                    # Handle infinity case
+                    if value == 0:
+                        value = float('inf')
+                    self.parameter_manager.set_parameter(param_name, value)
                 else:
                     self.parameter_manager.set_parameter(param_name, value)
-
     def cancel_operation(self):
         """Cancel any running operations."""
         for worker in self.active_workers:
