@@ -207,9 +207,9 @@ class FTTCService:
         return True, ""
 
     def update_parameters(self, parameters: FTTCParameters):
-        """Update preprocessing parameters"""
+        """Update FTTC parameters"""
         is_valid, error_msg = self.validate_parameters(parameters)
         if not is_valid:
             raise ValueError(error_msg)
-        self.analyzer = FTTC(parameters)
+        self.calculator = FTTC(parameters)
         self.params = parameters

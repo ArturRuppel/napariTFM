@@ -3,6 +3,7 @@ from typing import Any
 
 import numpy as np
 from napari.qt.threading import thread_worker
+from napari.layers import Image
 from napari.viewer import Viewer
 from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal, Qt
@@ -15,7 +16,8 @@ from napariTFM.data_manager import DataManager
 from napariTFM.parameter_manager import ParameterCategory, ParameterManager
 from napariTFM.services.fttc_service import FTTCService, FTTCResult
 from napariTFM.visualization_manager import VisualizationManager
-# TODO force preview throws error
+
+
 # TODO Load displacement button not working
 # TODO colorbar should only update after triggering force calculations
 # TODO regularization doesn't synch
@@ -508,7 +510,17 @@ class FTTCController(QObject):
             self.progress_updated.emit(0, "Calculating force preview...")
 
             # Get current frame data
-            current_frame = self.viewer.dims.current_step[0]
+            # Find the first image layer and get its current frame
+            current_frame = 0
+            found_image_layer = False
+            for layer in self.viewer.layers:
+                if isinstance(layer, Image):
+                    current_frame = self.viewer.dims.current_step[0]
+                    found_image_layer = True
+                    break
+
+            if not found_image_layer:
+                self.progress_updated.emit(0, "No image layer found, previewing frame 0")
             displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
 
             # Create and configure service

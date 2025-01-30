@@ -470,7 +470,17 @@ class DisplacementController(QObject):
             self.progress_updated.emit(0, "Calculating displacement preview...")
 
             # Get current frame data
-            current_frame = self.viewer.dims.current_step[0]
+            # Find the first image layer and get its current frame
+            current_frame = 0
+            found_image_layer = False
+            for layer in self.viewer.layers:
+                if isinstance(layer, Image):
+                    current_frame = self.viewer.dims.current_step[0]
+                    found_image_layer = True
+                    break
+
+            if not found_image_layer:
+                self.progress_updated.emit(0, "No image layer found, previewing frame 0")
             moving = self.data_manager.preprocessed_bead_stack[current_frame]
             reference = self.data_manager.preprocessed_reference
 

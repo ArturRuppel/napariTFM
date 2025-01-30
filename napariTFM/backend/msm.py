@@ -86,7 +86,7 @@ def timer_decorator(func):
 
     return wrapper
 
-
+# TODO make init accept MSMParameter dataclass
 class MonolayerStressMicroscopy:
     def __init__(self, mask, density_factor=0.02, mesh_algorithm=2,
                  use_optimization=False, poisson_ratio=0.5,
