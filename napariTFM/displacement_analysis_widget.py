@@ -19,7 +19,6 @@ from napariTFM.data_manager import DataManager
 from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
-# TODO visualization after preview or full results should disable all other layers
 # TODO make UI clean and pretty, switch order of loading buttons
 # TODO parameter reset should give a status update
 
@@ -136,6 +135,7 @@ class DisplacementParameterPanel(QWidget):
         """Create optical flow parameter group."""
         group = QGroupBox("Optical Flow Parameters")
         layout = QVBoxLayout()
+        layout.setContentsMargins(6, 10, 6, 10)
 
         # Define parameters with tooltips
         params = [
@@ -324,7 +324,7 @@ class DisplacementDataPanel(QWidget):
 
         # Reference data row
         ref_layout = QHBoxLayout()
-        self.load_reference_btn = QPushButton("Load Reference")
+        self.load_reference_btn = QPushButton("Load Reference Image")
         self.reference_status = QLabel("Not loaded")
         ref_layout.addWidget(self.load_reference_btn)
         ref_layout.addWidget(self.reference_status)
@@ -942,68 +942,78 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
 
     def _setup_ui(self):
-        """Set up the user interface."""
         main_layout = QHBoxLayout()
         main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Left side: Colorbar
-        colorbar_container = QWidget()
-        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(6, 6, 6, 6)
+        # Left: Colorbar (same as preprocessing)
+        colorbar_container = self._create_colorbar_container()
+        main_layout.addWidget(colorbar_container)
+
+        # Right: Scrollable content
+        content_container = self._create_content_container()
+        main_layout.addWidget(content_container)
+
+        self.setLayout(main_layout)
+
+    def _create_colorbar_container(self):
+        # Identical to preprocessing's implementation
+        container = QWidget()
+        container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(6, 6, 6, 6)
 
         colorbar_group = self.create_colorbar_widget(
             colormap_name='viridis',
             label="Displacement (µm)",
-            clim=(0, self.parameter_manager.get_displacement_parameters().d_max),
+            clim=(0, self.parameter_manager.get_parameter('d_max')),
             colorbar_manager=self.colorbar_manager
         )
-        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        layout.addStretch()
+        container.setLayout(layout)
+        return container
 
-        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        colorbar_layout.addStretch()
-        colorbar_container.setLayout(colorbar_layout)
-        main_layout.addWidget(colorbar_container)
-
-        # Right side panels
-        right_container = QWidget()
-        right_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        right_layout = QVBoxLayout()
-        right_layout.setSpacing(8)
-        right_layout.setContentsMargins(6, 6, 6, 6)
-
-        # Create scroll area
+    def _create_content_container(self):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         scroll.setFixedWidth(360)
 
-        # Container for scrollable content
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout()
-        scroll_layout.setSpacing(8)
+        container = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
 
-        # Create UI elements
-        action_frame = self._create_action_frame()
-        status_frame = self._create_status_frame()
+        # Match preprocessing's component order
+        layout.addWidget(self.data_panel)
+        layout.addWidget(self.parameter_panel)
+        layout.addWidget(self._create_action_frame())
+        layout.addWidget(self._create_status_frame())
 
-        # Add all elements to scroll layout
-        scroll_layout.addWidget(self.data_panel)
-        scroll_layout.addWidget(self.parameter_panel)
-        scroll_layout.addWidget(action_frame)
-        scroll_layout.addWidget(status_frame)
-        scroll_layout.addStretch()
+        container.setLayout(layout)
+        scroll.setWidget(container)
+        return scroll
 
-        # Set up scroll area
-        scroll_content.setLayout(scroll_layout)
-        scroll.setWidget(scroll_content)
-        right_layout.addWidget(scroll)
-        right_container.setLayout(right_layout)
-        main_layout.addWidget(right_container)
+    def _create_action_frame(self):
+        frame = QFrame()
+        layout = QVBoxLayout()
 
-        self.setLayout(main_layout)
+        # Main action row
+        action_layout = QHBoxLayout()
+        self.process_btn = QPushButton("Run Displacement Analysis")
+        self.save_btn = QPushButton("Save Displacements")
+        action_layout.addWidget(self.process_btn)
+        action_layout.addWidget(self.save_btn)
+
+        # Additional buttons
+        self.load_btn = QPushButton("Load Displacements")  # Moved from main row
+        self.cancel_btn = QPushButton("Cancel All Operations")
+
+        layout.addLayout(action_layout)
+        layout.addWidget(self.load_btn)  # Separate row for load
+        layout.addWidget(self.cancel_btn)
+        frame.setLayout(layout)
+        return frame
 
     def _connect_signals(self):
         """Connect all widget signals."""
@@ -1031,45 +1041,14 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Add layer selection monitoring
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
 
-    def _create_action_frame(self) -> QFrame:
-        """Create action buttons frame."""
+    def _create_status_frame(self):
+        # Identical implementation to preprocessing
         frame = QFrame()
         layout = QVBoxLayout()
-
-        # Create button rows
-        row1_layout = QHBoxLayout()
-        self.preview_btn = QPushButton("Preview Current Frame")
-        self.process_btn = QPushButton("Calculate All Frames")
-        row1_layout.addWidget(self.preview_btn)
-        row1_layout.addWidget(self.process_btn)
-        layout.addLayout(row1_layout)
-
-        row2_layout = QHBoxLayout()
-        self.save_btn = QPushButton("Save Results")
-        self.load_btn = QPushButton("Load Results")
-        row2_layout.addWidget(self.save_btn)
-        row2_layout.addWidget(self.load_btn)
-        layout.addLayout(row2_layout)
-
-        # Add cancel button
-        self.cancel_btn = QPushButton("Cancel Operation")
-        layout.addWidget(self.cancel_btn)
-
-        frame.setLayout(layout)
-        return frame
-
-    def _create_status_frame(self) -> QFrame:
-        """Create status display frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
         self.progress_bar = QProgressBar()
         self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
-
         frame.setLayout(layout)
         return frame
 
