@@ -234,6 +234,11 @@ class VisualizationManager(ErrorHandlingMixin):
             interpolation=cv2.INTER_LINEAR
         )
 
+    def clear_disp_vector_cache(self) -> None:
+        """Clear displacement vector cache from data manager."""
+        if hasattr(self.data_manager, 'displacement_vector_cache'):
+            self.data_manager.displacement_vector_cache = None
+
     def visualize_displacement_preview(
             self,
             flow: np.ndarray,
@@ -244,6 +249,9 @@ class VisualizationManager(ErrorHandlingMixin):
     ) -> None:
         """Visualize displacement preview for a single frame."""
         try:
+            # Clear vector cache first
+            self.clear_disp_vector_cache()
+
             # Clear existing layers
             self._clear_layers(['Displacement Magnitude', 'Displacement Vectors'])
 
@@ -787,23 +795,34 @@ class VisualizationManager(ErrorHandlingMixin):
 
     def update_displacement_frame(self, frame_index: int) -> None:
         """Update vector visualization for the current frame."""
-        if not hasattr(self.data_manager, 'displacement_results'):
-            return
+        try:
+            # Check if we have displacement results and vector cache
+            if not hasattr(self.data_manager, 'displacement_results'):
+                return
 
-        results = self.data_manager.displacement_results
-        if not results or 'vector_cache' not in results:
-            return
+            if not hasattr(self.data_manager, 'displacement_vector_cache'):
+                return
 
-        cache = results['vector_cache']
-        if frame_index >= len(cache['data']):
-            return
+            cache = self.data_manager.displacement_vector_cache
+            if frame_index >= len(cache['data']):
+                return
 
-        # Update vectors using stored layer reference
-        if 'vectors' in self._layers and self._layers['vectors'] is not None:
-            with self.viewer.events.blocker_all():
-                # Update vectors and colors for current frame
-                self._layers['vectors'].data = cache['data'][frame_index]
-                self._layers['vectors'].edge_color = cache['colors'][frame_index]
+            # Update vectors using stored layer reference
+            if 'displacement_vectors' in self._layers and self._layers['displacement_vectors'] is not None:
+                with self.viewer.events.blocker_all():
+                    self._layers['displacement_vectors'].data = cache['data'][frame_index]
+                    self._layers['displacement_vectors'].edge_color = cache['colors'][frame_index]
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to update displacement frame",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check displacement results and vector cache consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
 
     def _create_vector_visualization(
             self,
