@@ -20,6 +20,7 @@ from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
 
+# TODO Fix UI. Make all buttons the same length etc., make UI have a fixedwidth etc.
 
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""
@@ -28,7 +29,6 @@ class DisplacementDataPanel(QWidget):
     reference_loaded = Signal(object)
     beads_loaded = Signal(object)
 
-    # region === Initialization
     def __init__(self, data_manager, viewer):
         super().__init__()
         self.data_manager = data_manager
@@ -63,18 +63,12 @@ class DisplacementDataPanel(QWidget):
         layout.addWidget(data_group)
         self.setLayout(layout)
 
-    # endregion === Initialization
-
-    # region === Controller Setup
     def set_controller(self, controller):
         """Set the controller and connect signals."""
         self.controller = controller
         self.load_beads_btn.clicked.connect(lambda: self.controller.load_active_layer('beads'))
         self.load_reference_btn.clicked.connect(lambda: self.controller.load_active_layer('reference'))
 
-    # endregion === Controller Setup
-
-    # region === State Management
     def update_button_states(self, active_layer_exists: bool = False):
         """Update button states based on layer selection."""
         active_layer = self.viewer.layers.selection.active
@@ -103,8 +97,6 @@ class DisplacementDataPanel(QWidget):
         """Freeze or unfreeze UI elements."""
         self.load_beads_btn.setEnabled(not frozen)
         self.load_reference_btn.setEnabled(not frozen)
-
-    # endregion === State Management
 
 
 class DisplacementParameterPanel(QWidget):
@@ -439,6 +431,7 @@ class DisplacementController(QObject):
     data_updated = Signal(str)  # Data type that was updated
     ui_frozen = Signal(bool)
 
+    # region === Initialization
     def __init__(self, viewer, service, data_manager, parameter_manager,
                  visualization_manager, data_panel):
         super().__init__()
@@ -464,40 +457,9 @@ class DisplacementController(QObject):
         self.parameter_panel = parameter_panel
         self.action_panel = action_panel
 
-    def load_active_layer(self, data_type: str):
-        """Load the currently active layer as the specified data type."""
-        active_layer = self.viewer.layers.selection.active
-        if active_layer is None:
-            QMessageBox.warning(None, "Error", "No active image layer found")
-            return
+    # endregion === Initialization
 
-        try:
-            data = active_layer.data
-
-            # Handle data based on type
-            if data_type == 'beads':
-                # Convert 2D data to 3D with single frame if needed
-                if data.ndim == 2:
-                    data = data[np.newaxis, ...]
-                elif data.ndim != 3:
-                    raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
-                self.data_manager.set_preprocessed_bead_stack(data)
-
-            elif data_type == 'reference':
-                if data.ndim != 2:
-                    raise ValueError("Reference image must be 2D (height, width)")
-                self.data_manager.set_preprocessed_reference(data)
-            else:
-                raise ValueError(f"Invalid data type: {data_type}")
-
-            # Update UI state and emit signal
-            self.data_updated.emit(data_type)
-            if self.preview_enabled:
-                self._update_preview()
-
-        except Exception as e:
-            QMessageBox.warning(None, "Error", str(e))
-
+    # region === Processing Execution
     def preview_displacement(self):
         """Preview displacement calculation on current frame."""
         try:
@@ -586,6 +548,38 @@ class DisplacementController(QObject):
         finally:
             self.unfreeze_ui()
 
+    def calculate_all_frames(self):
+        """Calculate displacements for all frames."""
+        try:
+            if not self._validate_prerequisites():
+                return
+
+            self.freeze_ui()
+            self.progress_updated.emit(0, "Starting displacement analysis...")
+
+            # Get parameters and update service
+            params = self.parameter_manager.get_displacement_parameters()
+            self.service.update_parameters(params)
+
+            # Create worker for processing
+            worker = self._create_displacement_worker(
+                self.data_manager.preprocessed_reference,
+                self.data_manager.preprocessed_bead_stack,
+                params
+            )
+
+            self.active_workers.append(worker)
+            self.analysis_started.emit()
+
+            worker.yielded.connect(self._handle_progress)
+            worker.returned.connect(self._handle_analysis_results)
+            worker.errored.connect(self._handle_error)
+            worker.start()
+
+        except Exception as e:
+            self._handle_error(str(e))
+            self.unfreeze_ui()
+
     @thread_worker
     def _create_displacement_worker(self, reference, bead_stack, params):
         """Create worker for processing data."""
@@ -607,6 +601,128 @@ class DisplacementController(QObject):
 
         except Exception as e:
             raise ValueError(f"Displacement calculation failed: {str(e)}")
+
+    def cancel_operation(self):
+        """Cancel all running operations."""
+        for worker in self.active_workers:
+            try:
+                worker.running = False
+                worker.quit()
+                worker.wait(500)
+                if worker.isRunning():
+                    worker.terminate()
+                worker.deleteLater()
+            except Exception:
+                pass
+        self.active_workers.clear()
+        self.progress_updated.emit(0, "Operations cancelled")
+        self.unfreeze_ui()
+
+    # endregion === Processing Execution
+
+    # region === Parameter Handling
+    def _on_parameter_changed(self, param_name: str, value: Any):
+        """Handle parameter changes."""
+        if self.preview_enabled:
+            self._update_preview()
+
+    def _on_parameters_reset(self, category):
+        """Handle parameter reset events."""
+        if self.preview_enabled:
+            self._update_preview()
+
+    # endregion === Parameter Handling
+
+    # region === Data Management
+    def load_active_layer(self, data_type: str):
+        """Load the currently active layer as the specified data type."""
+        active_layer = self.viewer.layers.selection.active
+        if active_layer is None:
+            QMessageBox.warning(None, "Error", "No active image layer found")
+            return
+
+        try:
+            data = active_layer.data
+
+            # Handle data based on type
+            if data_type == 'beads':
+                # Convert 2D data to 3D with single frame if needed
+                if data.ndim == 2:
+                    data = data[np.newaxis, ...]
+                elif data.ndim != 3:
+                    raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
+                self.data_manager.set_preprocessed_bead_stack(data)
+
+            elif data_type == 'reference':
+                if data.ndim != 2:
+                    raise ValueError("Reference image must be 2D (height, width)")
+                self.data_manager.set_preprocessed_reference(data)
+            else:
+                raise ValueError(f"Invalid data type: {data_type}")
+
+            # Update UI state and emit signal
+            self.data_updated.emit(data_type)
+            if self.preview_enabled:
+                self._update_preview()
+
+        except Exception as e:
+            QMessageBox.warning(None, "Error", str(e))
+
+    def save_results(self):
+        """Save displacement results to file."""
+        try:
+            if self.data_manager.displacement_results is None:
+                raise ValueError("No displacement results to save")
+
+            save_path, _ = QFileDialog.getSaveFileName(
+                None,
+                "Save Displacement Results",
+                str(Path.home()),
+                "NumPy Files (*.npy)"
+            )
+
+            if save_path:
+                # Get results and save
+                results = self.data_manager.displacement_results
+                np.save(save_path, results)
+                self.progress_updated.emit(100, f"Results saved to {save_path}")
+
+        except Exception as e:
+            self._handle_error(f"Failed to save results: {str(e)}")
+
+    def load_results(self):
+        """Load displacement results from file."""
+        try:
+            load_path, _ = QFileDialog.getOpenFileName(
+                None,
+                "Load Displacement Results",
+                str(Path.home()),
+                "NumPy Files (*.npy)"
+            )
+
+            if load_path:
+                # Load data
+                result = np.load(load_path, allow_pickle=True).item()
+
+                # Update data manager and visualization
+                self.data_manager.set_displacement_results(result)
+                self.visualization_manager.visualize_displacement_results()
+
+                self.progress_updated.emit(100, f"Results loaded from {load_path}")
+                self.analysis_completed.emit(result)
+
+        except Exception as e:
+            self._handle_error(f"Failed to load results: {str(e)}")
+
+    def _validate_prerequisites(self) -> bool:
+        """Check if required data is available."""
+        if self.data_manager.preprocessed_reference is None:
+            QMessageBox.warning(None, "Warning", "No reference image loaded")
+            return False
+        if self.data_manager.preprocessed_bead_stack is None:
+            QMessageBox.warning(None, "Warning", "No bead stack loaded")
+            return False
+        return True
 
     def _handle_analysis_results(self, result: DisplacementResult):
         """Handle completed analysis results."""
@@ -657,110 +773,6 @@ class DisplacementController(QObject):
             self.active_workers.clear()
             self.unfreeze_ui()
 
-    def calculate_all_frames(self):
-        """Calculate displacements for all frames."""
-        try:
-            if not self._validate_prerequisites():
-                return
-
-            self.freeze_ui()
-            self.progress_updated.emit(0, "Starting displacement analysis...")
-
-            # Get parameters and update service
-            params = self.parameter_manager.get_displacement_parameters()
-            self.service.update_parameters(params)
-
-            # Create worker for processing
-            worker = self._create_displacement_worker(
-                self.data_manager.preprocessed_reference,
-                self.data_manager.preprocessed_bead_stack,
-                params
-            )
-
-            self.active_workers.append(worker)
-            self.analysis_started.emit()
-
-            worker.yielded.connect(self._handle_progress)
-            worker.returned.connect(self._handle_analysis_results)
-            worker.errored.connect(self._handle_error)
-            worker.start()
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.unfreeze_ui()
-
-    def save_results(self):
-        """Save displacement results to file."""
-        try:
-            if self.data_manager.displacement_results is None:
-                raise ValueError("No displacement results to save")
-
-            save_path, _ = QFileDialog.getSaveFileName(
-                None,
-                "Save Displacement Results",
-                str(Path.home()),
-                "NumPy Files (*.npy)"
-            )
-
-            if save_path:
-                # Get results and save
-                results = self.data_manager.displacement_results
-                np.save(save_path, results)
-                self.progress_updated.emit(100, f"Results saved to {save_path}")
-
-        except Exception as e:
-            self._handle_error(f"Failed to save results: {str(e)}")
-
-    def load_results(self):
-        """Load displacement results from file."""
-        try:
-            load_path, _ = QFileDialog.getOpenFileName(
-                None,
-                "Load Displacement Results",
-                str(Path.home()),
-                "NumPy Files (*.npy)"
-            )
-
-            if load_path:
-                # Load data
-                result = np.load(load_path, allow_pickle=True).item()
-
-                # Update data manager and visualization
-                self.data_manager.set_displacement_results(result)
-                self.visualization_manager.visualize_displacement_results()
-
-                self.progress_updated.emit(100, f"Results loaded from {load_path}")
-                self.analysis_completed.emit(result)
-
-        except Exception as e:
-            self._handle_error(f"Failed to load results: {str(e)}")
-
-    def cancel_operation(self):
-        """Cancel all running operations."""
-        for worker in self.active_workers:
-            try:
-                worker.running = False
-                worker.quit()
-                worker.wait(500)
-                if worker.isRunning():
-                    worker.terminate()
-                worker.deleteLater()
-            except Exception:
-                pass
-        self.active_workers.clear()
-        self.progress_updated.emit(0, "Operations cancelled")
-        self.unfreeze_ui()
-
-    def _validate_prerequisites(self) -> bool:
-        """Check if required data is available."""
-        if self.data_manager.preprocessed_reference is None:
-            QMessageBox.warning(None, "Warning", "No reference image loaded")
-            return False
-        if self.data_manager.preprocessed_bead_stack is None:
-            QMessageBox.warning(None, "Warning", "No bead stack loaded")
-            return False
-        return True
-
     def _handle_progress(self, progress_info: dict):
         """Handle progress updates."""
         self.progress_updated.emit(
@@ -774,16 +786,9 @@ class DisplacementController(QObject):
         self.analysis_failed.emit(error_msg)
         QMessageBox.critical(None, "Error", error_msg)
 
-    def _on_parameter_changed(self, param_name: str, value: Any):
-        """Handle parameter changes."""
-        if self.preview_enabled:
-            self._update_preview()
+    # endregion === Data Management
 
-    def _on_parameters_reset(self, category):
-        """Handle parameter reset events."""
-        if self.preview_enabled:
-            self._update_preview()
-
+    # region === State Management
     def freeze_ui(self):
         """Disable all interactive UI elements."""
         if self.data_panel:
@@ -804,12 +809,15 @@ class DisplacementController(QObject):
             self.action_panel.freeze_ui(False)
         self.ui_frozen.emit(False)
 
+    # endregion === State Management
+
 
 class DisplacementAnalysisWidget(BaseAnalysisWidget):
     """Widget for analyzing bead displacements using optical flow."""
 
     displacement_calculated = Signal(object)
 
+    # region === Initialization
     def __init__(
             self,
             viewer: Viewer,
@@ -854,6 +862,9 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Monitor frame changes
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
 
+    # endregion
+
+    # region === UI Creation
     def _setup_ui(self):
         main_layout = QHBoxLayout()
         main_layout.setSpacing(0)
@@ -937,27 +948,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         frame.setLayout(layout)
         return frame
 
-    def _update_ui_state(self, event=None):
-        """Update UI state based on current data and selection."""
-        # Update data panel
-        self.data_panel.update_button_states()
-        self.data_panel.update_data_status()
-
-        # Update button states
-        has_data = (
-                self.data_manager.preprocessed_reference is not None and
-                self.data_manager.preprocessed_bead_stack is not None
-        )
-        has_results = self.data_manager.displacement_results is not None
-
-        # Check if preview_btn exists before using it
-        if hasattr(self, 'preview_btn') and self.preview_btn is not None:
-            self.preview_btn.setEnabled(has_data)
-        if hasattr(self, 'process_btn') and self.process_btn is not None:
-            self.process_btn.setEnabled(has_data)
-        if hasattr(self, 'save_btn') and self.save_btn is not None:
-            self.save_btn.setEnabled(has_results)
-
     def _create_colorbar_container(self):
         # Identical to preprocessing's implementation
         container = QWidget()
@@ -976,6 +966,20 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         container.setLayout(layout)
         return container
 
+    def _create_status_frame(self):
+        # Identical implementation to preprocessing
+        frame = QFrame()
+        layout = QVBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.status_label = QLabel("")
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.status_label)
+        frame.setLayout(layout)
+        return frame
+
+    # endregion
+
+    # region === Signal Handling
     def _connect_signals(self):
         """Connect all widget signals."""
         if hasattr(self, 'preview_btn') and self.preview_btn is not None:
@@ -1003,31 +1007,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Add layer selection monitoring
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
 
-    def _create_status_frame(self):
-        # Identical implementation to preprocessing
-        frame = QFrame()
-        layout = QVBoxLayout()
-        self.progress_bar = QProgressBar()
-        self.status_label = QLabel("")
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.status_label)
-        frame.setLayout(layout)
-        return frame
-
-    def _on_analysis_completed(self, results):
-        """Handle completed analysis."""
-        self.save_btn.setEnabled(True)
-        # Update colorbar before visualization
-        if hasattr(results, 'parameters'):
-            d_max = results.parameters.d_max
-            self.colorbar_manager.update_limits(0, d_max)
-        self.displacement_calculated.emit(results)
-
-    def _on_analysis_failed(self, error_msg: str):
-        """Handle analysis failure."""
-        self.save_btn.setEnabled(False)
-        QMessageBox.critical(self, "Error", error_msg)
-
     def _on_parameter_changed(self, param_name: str, value: Any):
         """Handle parameter changes."""
         pass
@@ -1036,17 +1015,34 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         """Handle parameter reset and update status."""
         self._update_status(0, "Displacement parameters reset to default values.")
 
-    def _on_frame_changed(self, event=None):
-        """Handle frame change events."""
-        if self.data_manager.displacement_results is not None:
-            self.visualization_manager.update_displacement_frame(
-                self.viewer.dims.current_step[0]
-            )
+    # endregion
 
+    # region === State Management
     def _update_status(self, progress: int, message: str):
         """Update status display."""
         self.progress_bar.setValue(progress)
         self.status_label.setText(message)
+
+    def _update_ui_state(self, event=None):
+        """Update UI state based on current data and selection."""
+        # Update data panel
+        self.data_panel.update_button_states()
+        self.data_panel.update_data_status()
+
+        # Update button states
+        has_data = (
+                self.data_manager.preprocessed_reference is not None and
+                self.data_manager.preprocessed_bead_stack is not None
+        )
+        has_results = self.data_manager.displacement_results is not None
+
+        # Check if preview_btn exists before using it
+        if hasattr(self, 'preview_btn') and self.preview_btn is not None:
+            self.preview_btn.setEnabled(has_data)
+        if hasattr(self, 'process_btn') and self.process_btn is not None:
+            self.process_btn.setEnabled(has_data)
+        if hasattr(self, 'save_btn') and self.save_btn is not None:
+            self.save_btn.setEnabled(has_results)
 
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze."""
@@ -1063,6 +1059,34 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 self.data_manager.preprocessed_bead_stack is not None
         )
 
+    # endregion
+
+    # region === Results Handling
+
+    def _on_analysis_completed(self, results):
+        """Handle completed analysis."""
+        self.save_btn.setEnabled(True)
+        # Update colorbar before visualization
+        if hasattr(results, 'parameters'):
+            d_max = results.parameters.d_max
+            self.colorbar_manager.update_limits(0, d_max)
+        self.displacement_calculated.emit(results)
+
+    def _on_analysis_failed(self, error_msg: str):
+        """Handle analysis failure."""
+        self.save_btn.setEnabled(False)
+        QMessageBox.critical(self, "Error", error_msg)
+
+    def _on_frame_changed(self, event=None):
+        """Handle frame change events."""
+        if self.data_manager.displacement_results is not None:
+            self.visualization_manager.update_displacement_frame(
+                self.viewer.dims.current_step[0]
+            )
+
+    # endregion
+
+    # region === Cleanup
     def cleanup(self):
         """Clean up resources."""
         if self.colorbar_manager:
@@ -1070,3 +1094,5 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         if hasattr(self, 'viewer') and self.viewer is not None:
             self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
         super().cleanup()
+
+    # endregion

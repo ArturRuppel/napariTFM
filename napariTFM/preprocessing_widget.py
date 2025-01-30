@@ -26,7 +26,8 @@ from napariTFM.services.preprocessing_service import PreprocessingService
 
 # TODO setting bead stack invalidates subsequent steps but setting reference doesn't
 # TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
-# TODO Run preprocessing should be disabled at application start
+# TODO most buttons should be disabled at application start
+# TODO Fix UI. Make all buttons the same length etc., make UI have a fixedwidth etc.
 
 
 class PreprocessingDataPanel(QWidget):
@@ -34,7 +35,6 @@ class PreprocessingDataPanel(QWidget):
 
     data_loaded = Signal(str)  # Emits data type that was loaded
 
-    # region === Initialization
     def __init__(self, data_manager, viewer):
         super().__init__()
         self.data_manager = data_manager
@@ -77,9 +77,6 @@ class PreprocessingDataPanel(QWidget):
         layout.addWidget(data_group)
         self.setLayout(layout)
 
-    # endregion === Initialization
-
-    # region === Controller Setup
     def set_controller(self, controller):
         """Set the controller and connect signals."""
         self.controller = controller
@@ -87,9 +84,6 @@ class PreprocessingDataPanel(QWidget):
         self.load_reference_btn.clicked.connect(lambda: self.controller.load_active_layer('reference'))
         self.load_cells_btn.clicked.connect(lambda: self.controller.load_active_layer('cells'))
 
-    # endregion === Controller Setup
-
-    # region === State Management
     def update_button_states(self, active_layer_exists: bool = False):
         """Update button states based on layer selection."""
         active_layer = self.viewer.layers.selection.active
@@ -127,8 +121,6 @@ class PreprocessingDataPanel(QWidget):
         self.load_beads_btn.setEnabled(not frozen)
         self.load_reference_btn.setEnabled(not frozen)
         self.load_cells_btn.setEnabled(not frozen)
-
-    # endregion === State Management
 
 
 class PreprocessingParameterPanel(QWidget):
@@ -558,22 +550,6 @@ class PreprocessingParameterPanel(QWidget):
         except Exception as e:
             print(f"Error updating parameter {name}: {str(e)}")
 
-    def get_parameters(self):
-        """Get current parameter values."""
-        return {
-            'min_intensity_percentile': self.parameter_spins['min_intensity_percentile'].value(),
-            'max_intensity_percentile': self.parameter_spins['max_intensity_percentile'].value(),
-            'gaussian_sigma': self.parameter_spins['gaussian_sigma'].value(),
-            'cell_min_intensity_percentile': self.parameter_spins['cell_min_intensity_percentile'].value(),
-            'cell_max_intensity_percentile': self.parameter_spins['cell_max_intensity_percentile'].value(),
-            'cell_gaussian_sigma': self.parameter_spins['cell_gaussian_sigma'].value(),
-            'registration_mode': self.registration_mode_combo.currentText().lower()
-        }
-
-    def _update_parameter(self, name: str, value: Any):
-        self.parameter_manager.set_parameter(name, value)
-        self.parameter_changed.emit(name, value)
-
     def _safe_set_value(self, widget, value):
         """Safely set widget value."""
         if value is not None and widget is not None:
@@ -890,17 +866,6 @@ class PreprocessingController(QObject):
         QMessageBox.critical(None, "Error", error_msg)
         self.unfreeze_ui()
 
-    def _has_required_data(self):
-        """Check if required data for processing is loaded."""
-        return (self.data_manager.bead_stack is not None and
-                self.data_manager.reference is not None)
-
-    def _check_preprocessed_data(self):
-        """Check availability of preprocessed data."""
-        return (self.data_manager.preprocessed_bead_stack is not None or
-                self.data_manager.preprocessed_reference is not None or
-                self.data_manager.preprocessed_cell_stack is not None)
-
     def _handle_preprocessing_results(self, results):
         """Handle successful preprocessing results."""
         try:
@@ -1087,16 +1052,6 @@ class PreprocessingController(QObject):
             self.parameter_panel.freeze_ui(False)
         self.ui_frozen.emit(False)
 
-    def _handle_ui_freeze(self, frozen: bool):
-        """Handle UI freeze/unfreeze."""
-        # Disable preview and process buttons during processing
-        self.preview_check.setEnabled(not frozen)
-        self.process_btn.setEnabled(not frozen and self._has_required_data())
-        self.cancel_btn.setEnabled(frozen)  # Enable cancel only when processing
-
-        # Update save button based on preprocessed data availability
-        has_preprocessed = self._check_preprocessed_data()
-        self.save_btn.setEnabled(not frozen and has_preprocessed)
     # endregion === State Management
 
 
