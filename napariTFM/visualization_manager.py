@@ -468,81 +468,78 @@ class VisualizationManager(ErrorHandlingMixin):
             self.handle_error(error)
             raise
 
-    def visualize_force_results(
-            self,
-            results: Dict[str, Any],
-            downscale_factor: int = 1
-    ) -> None:
-        """Visualize force results for all frames."""
+    def visualize_force_results(self) -> None:
+        """Visualize force results for all frames using data from data manager."""
         try:
+            # Check if force results exist
+            if self.data_manager.force_results is None:
+                raise ValueError("No force results available in data manager")
+
+            # Get results from data manager
+            results = self.data_manager.force_results
+            force_fields = results.force_field
+            params = results.parameters
+
+            downscale_factor = params.downscale_factor
+
             # Clear existing layers
             self._clear_layers(['Force Magnitude', 'Force Vectors'])
 
-            # First get the traction force components
-            tx = np.array(results['tx'])  # Ensure numpy array
-            ty = np.array(results['ty'])
-            num_frames = len(tx)
-
             # Create visualization stacks
+            num_frames = len(force_fields)
             upscaled_shape = (
-                tx.shape[1] * downscale_factor,
-                tx.shape[2] * downscale_factor
+                force_fields[0].shape[0] * downscale_factor,
+                force_fields[0].shape[1] * downscale_factor
             )
-            magnitude_stack = np.zeros((num_frames, *upscaled_shape))
+            magnitudes = np.zeros((num_frames, *upscaled_shape))
 
             # Get visualization parameters
-            vis_params = results.get('parameters', {}).get('visualization', {})
-            if not vis_params:  # Fallback to direct visualization params if not in parameters
-                vis_params = results.get('visualization_params', {})
-
-            f_max = float(vis_params.get('f_max', 1000.0))
-            vector_stride = int(vis_params.get('vector_stride', 20))
-            arrow_scale = float(vis_params.get('arrow_scale', 1.0))
+            vis_params = {
+                'f_max': params.f_max,
+                'vector_stride': params.force_vector_stride,
+                'arrow_scale': params.force_arrow_scale
+            }
 
             # Create vector cache
             vector_cache = {
                 'data': [],
                 'colors': [],
                 'parameters': vis_params.copy(),
-                'original_resolution': (tx.shape[1], tx.shape[2])
+                'original_resolution': force_fields[0].shape[:2]
             }
 
-            for frame_idx in range(num_frames):
-                force_field = np.stack([
-                    tx[frame_idx],
-                    ty[frame_idx]
-                ], axis=-1)
-
-                display_force = self._upscale_field(force_field, downscale_factor)
+            # Process each frame
+            for i in range(num_frames):
+                display_force = self._upscale_field(force_fields[i], downscale_factor)
 
                 # Calculate magnitude
                 magnitude = np.sqrt(np.sum(display_force ** 2, axis=-1))
-                magnitude_stack[frame_idx] = np.clip(magnitude, 0, f_max)
+                magnitudes[i] = magnitude
 
-                # Calculate vectors
-                force_scaled = display_force * arrow_scale / f_max * 50
+                # Calculate vector data
+                force_scaled = display_force * vis_params['arrow_scale'] / vis_params['f_max'] * 50
                 vectors, colors = self._create_vector_visualization(
                     force_scaled,
                     display_force,
-                    vector_stride,
-                    f_max,
+                    vis_params['vector_stride'],
+                    vis_params['f_max'],
                     colormap='inferno'
                 )
                 vector_cache['data'].append(vectors)
                 vector_cache['colors'].append(colors)
 
-            # Store vector cache in results and data manager
-            results['force_vector_cache'] = vector_cache
-            self.data_manager.force_vector_cache = vector_cache  # Add this line to store in data manager
+            # Store vector cache in data manager
+            self.data_manager.force_vector_cache = vector_cache
 
             # Add visualization layers
             with self.viewer.events.blocker_all():
                 self._layers['force_magnitude'] = self.viewer.add_image(
-                    magnitude_stack,
+                    magnitudes,
                     name='Force Magnitude',
                     colormap='inferno',
                     blending='additive',
-                    contrast_limits=(0, f_max)
+                    contrast_limits=(0, vis_params['f_max']),
+                    visible=True
                 )
 
                 # Add initial vector layer
@@ -557,21 +554,6 @@ class VisualizationManager(ErrorHandlingMixin):
                         blending='additive',
                         length=1
                     )
-
-                # Clear existing callback
-                self._clear_displacement_callback()
-
-                def _on_force_dims_change(event=None):
-                    current_frame = self.viewer.dims.current_step[0]
-                    if (current_frame < len(vector_cache['data']) and
-                            'force_vectors' in self._layers and
-                            self._layers['force_vectors'] is not None):
-                        self._layers['force_vectors'].data = vector_cache['data'][current_frame]
-                        self._layers['force_vectors'].edge_color = vector_cache['colors'][current_frame]
-
-                # Store and register the callback
-                self._displacement_dims_callback = _on_force_dims_change
-                self.viewer.dims.events.current_step.connect(self._displacement_dims_callback)
 
         except Exception as e:
             error = self.create_error(
@@ -819,6 +801,37 @@ class VisualizationManager(ErrorHandlingMixin):
                 details=str(e),
                 severity=ErrorSeverity.ERROR,
                 recovery_hint="Check displacement results and vector cache consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+
+    def update_force_frame(self, frame_index: int) -> None:
+        """Update force vector visualization for the current frame."""
+        try:
+            # Check if we have force results and vector cache
+            if not hasattr(self.data_manager, 'force_results'):
+                return
+
+            if not hasattr(self.data_manager, 'force_vector_cache'):
+                return
+
+            cache = self.data_manager.force_vector_cache
+            if frame_index >= len(cache['data']):
+                return
+
+            # Update vectors using stored layer reference
+            if 'force_vectors' in self._layers and self._layers['force_vectors'] is not None:
+                with self.viewer.events.blocker_all():
+                    self._layers['force_vectors'].data = cache['data'][frame_index]
+                    self._layers['force_vectors'].edge_color = cache['colors'][frame_index]
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to update force frame",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check force results and vector cache consistency",
                 original_error=e,
                 source="visualization"
             )

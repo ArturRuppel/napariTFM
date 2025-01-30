@@ -13,8 +13,8 @@ from napariTFM.visualization_manager import VisualizationManager
 
 from napariTFM.preprocessing_widget import PreprocessingWidget
 from napariTFM.displacement_analysis_widget import DisplacementAnalysisWidget
-# from napariTFM.fttc_widget import FTTCWidget
-# from napariTFM.msm_widget import MSMWidget
+from napariTFM.fttc_widget import FTTCWidget
+from napariTFM.msm_widget import MSMWidget
 from napariTFM.batch_analysis_widget import BatchAnalysisWidget
 
 logger = logging.getLogger(__name__)
@@ -98,20 +98,20 @@ class napariTFMWidget(QWidget):
             self.parameter_manager,
             self.visualization_manager
         )
-        #
-        # self.force_widget = FTTCWidget(
-        #     self.viewer,
-        #     self.data_manager,
-        #     self.parameter_manager,
-        #     self.visualization_manager
-        # )
-        #
-        # self.msm_widget = MSMWidget(
-        #     self.viewer,
-        #     self.data_manager,
-        #     self.parameter_manager,
-        #     self.visualization_manager
-        # )
+
+        self.force_widget = FTTCWidget(
+            self.viewer,
+            self.data_manager,
+            self.parameter_manager,
+            self.visualization_manager
+        )
+
+        self.msm_widget = MSMWidget(
+            self.viewer,
+            self.data_manager,
+            self.parameter_manager,
+            self.visualization_manager
+        )
 
         self.batch_widget = BatchAnalysisWidget(
             self.viewer,
@@ -123,8 +123,8 @@ class napariTFMWidget(QWidget):
         # Add widgets to tabs
         tabs.addTab(self.preprocessing_widget, "Preprocessing")
         tabs.addTab(self.displacement_widget, "Displacement")
-        # tabs.addTab(self.force_widget, "Force Analysis")
-        # tabs.addTab(self.msm_widget, "Stress Analysis")
+        tabs.addTab(self.force_widget, "Force Analysis")
+        tabs.addTab(self.msm_widget, "Stress Analysis")
         tabs.addTab(self.batch_widget, "Batch Analysis")
 
         # Add tabs to container
@@ -236,8 +236,8 @@ class napariTFMWidget(QWidget):
                 for widget in [
                     self.preprocessing_widget,
                     self.displacement_widget,
-                    # self.force_widget,
-                    # self.msm_widget,
+                    self.force_widget,
+                    self.msm_widget,
                     self.batch_widget
                 ]:
                     if hasattr(widget, '_update_ui_state'):
@@ -285,8 +285,8 @@ class napariTFMWidget(QWidget):
         """Connect signals between components"""
         self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
         self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
-        # self.force_widget.force_calculated.connect(self._on_force_completed)
-        # self.msm_widget.stress_calculated.connect(self._on_stress_completed)
+        self.force_widget.force_calculated.connect(self._on_force_completed)
+        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
 
         # Connect parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
@@ -298,8 +298,8 @@ class napariTFMWidget(QWidget):
             for widget in [
                 self.preprocessing_widget,
                 self.displacement_widget,
-                # self.force_widget,
-                # self.msm_widget,
+                self.force_widget,
+                self.msm_widget,
                 self.batch_widget
             ]:
                 # Use _update_calibration instead of _update_parameters
@@ -342,8 +342,8 @@ class napariTFMWidget(QWidget):
                 # Update UI state in all widgets
                 self.preprocessing_widget._update_ui_state()
                 self.displacement_widget._update_ui_state()
-                # self.force_widget._update_ui_state()
-                # self.msm_widget._update_ui_state()
+                self.force_widget._update_ui_state()
+                self.msm_widget._update_ui_state()
                 self.batch_widget._update_ui_state()
 
                 logger.info("All data cleared successfully")
@@ -358,18 +358,18 @@ class napariTFMWidget(QWidget):
 
         self.preprocessing_widget._update_ui_state()
         self.displacement_widget._update_ui_state()
-        # self.force_widget._update_ui_state()
-        # self.msm_widget._update_ui_state()
-        # self.batch_widget._update_ui_state()
+        self.force_widget._update_ui_state()
+        self.msm_widget._update_ui_state()
+        self.batch_widget._update_ui_state()
 
     def _on_displacement_completed(self, results):
         """Handle completion of displacement analysis"""
         logger.info("Displacement analysis completed successfully")
         self.preprocessing_widget._update_ui_state()
         self.displacement_widget._update_ui_state()
-        # self.force_widget._update_ui_state()
-        # self.msm_widget._update_ui_state()
-        # self.batch_widget._update_ui_state()
+        self.force_widget._update_ui_state()
+        self.msm_widget._update_ui_state()
+        self.batch_widget._update_ui_state()
 
     def _on_force_completed(self, results):
         """Handle completion of force calculation"""
