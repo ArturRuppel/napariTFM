@@ -135,7 +135,6 @@ class DisplacementParameterPanel(QWidget):
         """Create optical flow parameter group."""
         group = QGroupBox("Optical Flow Parameters")
         layout = QVBoxLayout()
-        layout.setContentsMargins(6, 10, 6, 10)
 
         # Define parameters with tooltips
         params = [
@@ -167,10 +166,13 @@ class DisplacementParameterPanel(QWidget):
 
             if isinstance(step, int):
                 spin = QSpinBox()
+                spin.setFixedWidth(135)
                 spin.setRange(min_val, max_val)
                 spin.setSingleStep(step)
             else:
                 spin = QDoubleSpinBox()
+                spin.setFixedWidth(135)
+
                 spin.setRange(min_val, max_val)
                 spin.setSingleStep(step)
                 if name == "epsilon":
@@ -195,6 +197,8 @@ class DisplacementParameterPanel(QWidget):
         downscale_layout = QHBoxLayout()
         downscale_layout.addWidget(QLabel("Downscale Factor:"))
         downscale_spin = QSpinBox()
+        downscale_spin.setFixedWidth(135)
+
         downscale_spin.setRange(1, 10)
         downscale_spin.setToolTip(
             "Factor for spatial averaging of displacement field.\n"
@@ -228,8 +232,11 @@ class DisplacementParameterPanel(QWidget):
 
             if isinstance(step, int):
                 spin = QSpinBox()
+                spin.setFixedWidth(135)
+
             else:
                 spin = QDoubleSpinBox()
+                spin.setFixedWidth(135)
                 spin.setDecimals(1)
 
             spin.setRange(min_val, max_val)
@@ -260,29 +267,6 @@ class DisplacementParameterPanel(QWidget):
         for spin in self.parameter_spins.values():
             spin.setEnabled(not frozen)
         self.reset_btn.setEnabled(not frozen)
-
-    def _create_parameter_widget(self, name, label, min_val, max_val, step, default) -> QHBoxLayout:
-        """Create a parameter widget with label and input."""
-        layout = QHBoxLayout()
-        layout.addWidget(QLabel(label))
-
-        if isinstance(step, int):
-            spin = QSpinBox()
-        else:
-            spin = QDoubleSpinBox()
-            if name == "epsilon":
-                spin.setDecimals(3)
-            else:
-                spin.setDecimals(2)
-
-        spin.setRange(min_val, max_val)
-        spin.setSingleStep(step)
-        spin.setValue(default)
-
-        self.parameter_widgets[name] = spin
-        layout.addWidget(spin)
-
-        return layout
 
     def _update_widget_value(self, param_name: str, value: object):
         """Update widget when parameter changes externally."""
