@@ -20,8 +20,9 @@ from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
 
+
 # TODO Fix UI. Make all buttons the same length etc., make UI have a fixedwidth etc.
-# TODO loading displacement results should update parameters
+
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""
 
@@ -641,6 +642,16 @@ class DisplacementController(QObject):
         if self.preview_enabled:
             self._update_preview()
 
+    def _sync_parameters_with_results(self, result):
+        """Sync parameters from loaded results."""
+        if not hasattr(result, 'parameters'):
+            return
+
+        params = result.parameters
+        for param_name, value in vars(params).items():
+            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
+                self.parameter_manager.set_parameter(param_name, value)
+
     # endregion === Parameter Handling
 
     # region === Data Management
@@ -714,11 +725,30 @@ class DisplacementController(QObject):
                 # Load data
                 result = np.load(load_path, allow_pickle=True).item()
 
+                # Update parameters if they exist in the results
+                if hasattr(result, 'parameters'):
+                    # Block parameter change signals temporarily
+                    if self.parameter_panel:
+                        self.parameter_panel._block_widgets(True)
+                    try:
+                        # Update parameter manager with loaded parameters
+                        params = result.parameters
+                        for param_name, value in vars(params).items():
+                            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
+                                self.parameter_manager.set_parameter(param_name, value)
+
+                        # Sync UI with new parameters
+                        if self.parameter_panel:
+                            self.parameter_panel._sync_widget_with_parameters()
+                    finally:
+                        if self.parameter_panel:
+                            self.parameter_panel._block_widgets(False)
+
                 # Update data manager and visualization
                 self.data_manager.set_displacement_results(result)
                 self.visualization_manager.visualize_displacement_results()
 
-                self.progress_updated.emit(100, f"Results loaded from {load_path}")
+                self.progress_updated.emit(100, f"Results and parameters loaded from {load_path}")
                 self.analysis_completed.emit(result)
 
         except Exception as e:
