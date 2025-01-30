@@ -27,6 +27,7 @@ class DisplacementDataPanel(QWidget):
     data_loaded = Signal(str)  # Emits data type that was loaded
     reference_loaded = Signal(object)
     beads_loaded = Signal(object)
+
     # region === Initialization
     def __init__(self, data_manager, viewer):
         super().__init__()
@@ -61,14 +62,6 @@ class DisplacementDataPanel(QWidget):
         data_group.setLayout(group_layout)
         layout.addWidget(data_group)
         self.setLayout(layout)
-    def _connect_signals(self):
-        """Connect UI signals to controller methods."""
-        self.load_beads_btn.clicked.connect(
-            lambda: self._load_data('beads')
-        )
-        self.load_reference_btn.clicked.connect(
-            lambda: self._load_data('reference')
-        )
 
     # endregion === Initialization
 
@@ -78,40 +71,6 @@ class DisplacementDataPanel(QWidget):
         self.controller = controller
         self.load_beads_btn.clicked.connect(lambda: self.controller.load_active_layer('beads'))
         self.load_reference_btn.clicked.connect(lambda: self.controller.load_active_layer('reference'))
-
-    def _load_data(self, data_type: str):
-        """Load data from active layer."""
-        active_layer = self._get_active_layer()
-        if active_layer is None:
-            return
-
-        try:
-            data = active_layer.data
-
-            if data_type == 'beads':
-                self.data_manager.set_preprocessing_results(bead_stack=data)
-                self.bead_status.setText(f"Loaded: {data.shape}")
-                self.beads_loaded.emit(data)
-            else:  # reference
-                self.data_manager.set_preprocessing_results(reference=data)
-                self.reference_status.setText(f"Loaded: {data.shape}")
-                self.reference_loaded.emit(data)
-
-            self.data_loaded.emit(data_type)
-
-        except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
-
-    def _get_active_layer(self):
-        """Get the currently active napari layer."""
-        active_layer = self.viewer.layers.selection.active
-        if active_layer is None:
-            QMessageBox.warning(
-                self,
-                "No Layer Selected",
-                "Please select an image layer first."
-            )
-        return active_layer
 
     # endregion === Controller Setup
 
@@ -148,14 +107,13 @@ class DisplacementDataPanel(QWidget):
     # endregion === State Management
 
 
-
-
 class DisplacementParameterPanel(QWidget):
     """Panel for handling all displacement parameter inputs."""
 
     parameter_changed = Signal(str, object)  # (param_name, value)
     parameters_reset = Signal()
 
+    # region === Initialization
     def __init__(self, parameter_manager):
         super().__init__()
         self.parameter_manager = parameter_manager
@@ -167,81 +125,6 @@ class DisplacementParameterPanel(QWidget):
         # Connect to parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._sync_parameter)
         self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
-
-    def _connect_signals(self):
-        """Connect widget signals."""
-        # Connect all spinboxes
-        for name, spin in self.parameter_spins.items():
-            spin.valueChanged.connect(
-                lambda value, n=name: self._on_value_changed(n, value)
-            )
-
-        # Connect reset button
-        self.reset_btn.clicked.connect(self._reset_parameters)
-
-    def _on_value_changed(self, param_name: str, value: object):
-        """Handle parameter value changes."""
-        # Update parameter manager
-        self.parameter_manager.set_parameter(param_name, value)
-        # Emit our own signal
-        self.parameter_changed.emit(param_name, value)
-
-    def _sync_parameter(self, param_name: str, value: Any):
-        """Sync a single parameter from parameter manager."""
-        if param_name in self.parameter_spins:
-            self._safe_set_value(self.parameter_spins[param_name], value)
-        elif param_name in self.parameter_combos:
-            self._safe_set_combo_text(self.parameter_combos[param_name], value)
-
-    def _on_parameters_reset(self, category):
-        """Handle parameter reset events."""
-        if category == ParameterCategory.DISPLACEMENT:
-            self._sync_widget_with_parameters()
-
-    def _sync_widget_with_parameters(self):
-        """Sync widget values with parameter manager."""
-        self._block_widgets(True)
-        try:
-            for name, spin in self.parameter_spins.items():
-                value = self.parameter_manager.get_parameter(name)
-                if value is not None:
-                    self._safe_set_value(spin, value)
-
-            for name, combo in self.parameter_combos.items():
-                value = self.parameter_manager.get_parameter(name)
-                if value is not None:
-                    self._safe_set_combo_text(combo, value)
-        finally:
-            self._block_widgets(False)
-
-    def _safe_set_value(self, widget, value):
-        """Safely set widget value."""
-        if value is not None and widget is not None:
-            widget.blockSignals(True)
-            try:
-                value = max(widget.minimum(), min(widget.maximum(), value))
-                widget.setValue(value)
-            except Exception as e:
-                print(f"Error setting widget value: {str(e)}")
-            widget.blockSignals(False)
-
-    def _safe_set_combo_text(self, combo, text):
-        """Safely set combo box text."""
-        if combo is not None and text is not None:
-            combo.blockSignals(True)
-            try:
-                index = combo.findText(str(text), Qt.MatchFixedString)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-            finally:
-                combo.blockSignals(False)
-
-    def _block_widgets(self, block: bool):
-        """Block or unblock all widget signals."""
-        for widget in self.parameter_spins.values():
-            widget.blockSignals(block)
-        for widget in self.parameter_combos.values():
-            widget.blockSignals(block)
 
     def _setup_ui(self):
         layout = QVBoxLayout()
@@ -260,6 +143,9 @@ class DisplacementParameterPanel(QWidget):
         self._connect_signals()
         self._sync_widget_with_parameters()
 
+    # endregion === Initialization
+
+    # region === UI Creation
     def _create_flow_parameters(self) -> QGroupBox:
         """Create optical flow parameter group."""
         group = QGroupBox("Optical Flow Parameters")
@@ -378,34 +264,102 @@ class DisplacementParameterPanel(QWidget):
         group.setLayout(layout)
         return group
 
+    # endregion === UI Creation
+
+    # region === Signal Handling
+    def _connect_signals(self):
+        """Connect widget signals."""
+        # Connect all spinboxes
+        for name, spin in self.parameter_spins.items():
+            spin.valueChanged.connect(
+                lambda value, n=name: self._on_value_changed(n, value)
+            )
+
+        # Connect reset button
+        self.reset_btn.clicked.connect(self._reset_parameters)
+
+    def _on_value_changed(self, param_name: str, value: object):
+        """Handle parameter value changes."""
+        # Update parameter manager
+        self.parameter_manager.set_parameter(param_name, value)
+        # Emit our own signal
+        self.parameter_changed.emit(param_name, value)
+
+    def _on_parameters_reset(self, category):
+        """Handle parameter reset events."""
+        if category == ParameterCategory.DISPLACEMENT:
+            self._sync_widget_with_parameters()
+
+    # endregion === Signal Handling
+
+    # region === Parameter Management
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager."""
+        self._block_widgets(True)
+        try:
+            for name, spin in self.parameter_spins.items():
+                value = self.parameter_manager.get_parameter(name)
+                if value is not None:
+                    self._safe_set_value(spin, value)
+
+            for name, combo in self.parameter_combos.items():
+                value = self.parameter_manager.get_parameter(name)
+                if value is not None:
+                    self._safe_set_combo_text(combo, value)
+        finally:
+            self._block_widgets(False)
+
+    def _sync_parameter(self, param_name: str, value: Any):
+        """Sync a single parameter from parameter manager."""
+        if param_name in self.parameter_spins:
+            self._safe_set_value(self.parameter_spins[param_name], value)
+        elif param_name in self.parameter_combos:
+            self._safe_set_combo_text(self.parameter_combos[param_name], value)
+
     def _reset_parameters(self):
         """Reset parameters to defaults."""
         self.parameter_manager.reset_displacement_parameters()
         self.parameters_reset.emit()
 
-    def update_parameter(self, name: str, value: Any):
-        """Update a single parameter value."""
-        try:
-            if name in self.parameter_spins:
-                self._safe_set_value(self.parameter_spins[name], value)
-            elif name in self.parameter_combos:
-                self._safe_set_combo_text(self.parameter_combos[name], value)
-        except Exception as e:
-            print(f"Error updating parameter {name}: {str(e)}")
+    def _safe_set_value(self, widget, value):
+        """Safely set widget value."""
+        if value is not None and widget is not None:
+            widget.blockSignals(True)
+            try:
+                value = max(widget.minimum(), min(widget.maximum(), value))
+                widget.setValue(value)
+            except Exception as e:
+                print(f"Error setting widget value: {str(e)}")
+            widget.blockSignals(False)
 
+    def _safe_set_combo_text(self, combo, text):
+        """Safely set combo box text."""
+        if combo is not None and text is not None:
+            combo.blockSignals(True)
+            try:
+                index = combo.findText(str(text), Qt.MatchFixedString)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+            finally:
+                combo.blockSignals(False)
+
+    # endregion === Parameter Management
+
+    # region === State Management
     def freeze_ui(self, frozen: bool):
         """Freeze or unfreeze UI elements."""
         for spin in self.parameter_spins.values():
             spin.setEnabled(not frozen)
         self.reset_btn.setEnabled(not frozen)
 
-    def _update_widget_value(self, param_name: str, value: object):
-        """Update widget when parameter changes externally."""
-        if param_name in self.parameter_widgets:
-            widget = self.parameter_widgets[param_name]
-            widget.blockSignals(True)
-            widget.setValue(value)
-            widget.blockSignals(False)
+    def _block_widgets(self, block: bool):
+        """Block or unblock all widget signals."""
+        for widget in self.parameter_spins.values():
+            widget.blockSignals(block)
+        for widget in self.parameter_combos.values():
+            widget.blockSignals(block)
+
+    # endregion === State Management
 
 
 class DisplacementActionPanel(QWidget):
@@ -850,31 +804,6 @@ class DisplacementController(QObject):
             self.action_panel.freeze_ui(False)
         self.ui_frozen.emit(False)
 
-    def _get_current_parameters(self) -> DisplacementParameters:
-        """Get current parameters from parameter manager."""
-        return DisplacementParameters(
-            tau=self.parameter_manager.get_value('tau'),
-            lambda_=self.parameter_manager.get_value('lambda_'),
-            theta=self.parameter_manager.get_value('theta'),
-            nscales=self.parameter_manager.get_value('nscales'),
-            warps=self.parameter_manager.get_value('warps'),
-            epsilon=self.parameter_manager.get_value('epsilon'),
-            inner_iterations=self.parameter_manager.get_value('inner_iterations'),
-            outer_iterations=self.parameter_manager.get_value('outer_iterations'),
-            scale_step=self.parameter_manager.get_value('scale_step'),
-            median_filtering=self.parameter_manager.get_value('median_filtering'),
-            downscale_factor=self.parameter_manager.get_value('downscale_factor'),
-            pixel_size=self.parameter_manager.get_value('pixel_size'),
-            frame_interval=self.parameter_manager.get_value('frame_interval'),
-            d_max=self.parameter_manager.get_value('d_max'),
-            disp_vector_stride=self.parameter_manager.get_value('disp_vector_stride'),
-            disp_arrow_scale=self.parameter_manager.get_value('disp_arrow_scale')
-        )
-
-    def _update_progress(self, progress: int, message: str):
-        """Update progress information."""
-        self.progress_updated.emit(progress, message)
-
 
 class DisplacementAnalysisWidget(BaseAnalysisWidget):
     """Widget for analyzing bead displacements using optical flow."""
@@ -990,7 +919,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         data_layout.setContentsMargins(0, 0, 0, 0)  # Minimize margins
         self.save_btn = QPushButton("Save Displacements")
         self.load_btn = QPushButton("Load Displacements")
-
 
         # Set size policies for additional buttons
         self.save_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
@@ -1142,41 +1070,3 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         if hasattr(self, 'viewer') and self.viewer is not None:
             self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
         super().cleanup()
-
-    def _on_data_loaded(self, data_type: str):
-        """Handle data loading events."""
-        self.data_panel.update_data_status()
-        self.action_panel.update_button_states(
-            has_reference=self.data_manager.preprocessed_reference is not None,
-            has_beads=self.data_manager.preprocessed_bead_stack is not None,
-            has_results=self.data_manager.displacement_field is not None
-        )
-
-    def _create_preview_frame(self) -> QFrame:
-        """Create preview control frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        # Create preview toggle
-        preview_layout = QHBoxLayout()
-        self.preview_check = QCheckBox("Show Preview")
-        self.preview_check.setToolTip("Show live preview of displacement calculation for current frame")
-        preview_layout.addWidget(self.preview_check)
-        preview_layout.addStretch()
-        layout.addLayout(preview_layout)
-
-        frame.setLayout(layout)
-        return frame
-
-    def _on_preview_toggled(self, enabled: bool):
-        """Handle preview toggle."""
-        if hasattr(self.controller, 'preview_enabled'):
-            self.controller.preview_enabled = enabled
-
-        if enabled:
-            self.controller.preview_displacement()
-        else:
-            self.visualization_manager.handle_preview(
-                frame=None,
-                enable=False
-            )
