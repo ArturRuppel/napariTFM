@@ -4,41 +4,26 @@ from typing import Optional, Dict, Generator
 import cv2
 import numpy as np
 
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 
-@dataclass
-class TVL1Parameters:
-    """Parameters for TV-L1 optical flow analysis."""
-    tau: float = 0.25
-    lambda_: float = 0.4
-    theta: float = 0.3
-    nscales: int = 3
-    warps: int = 3
-    epsilon: float = 0.01
-    inner_iterations: int = 15
-    outer_iterations: int = 5
-    scale_step: float = 0.5
-    gamma: float = 0.0
-    median_filtering: int = 5
-    use_initial_flow: bool = False
-    downscale_factor: int = 1
 
 class DisplacementAnalyzer:
     """Analyzes displacements using TV-L1 optical flow."""
 
-    def __init__(self, params: Optional[TVL1Parameters] = None):
+    def __init__(self, params: Optional[DisplacementParameters] = None):
         """
         Initialize TV-L1 optical flow analyzer.
 
         Args:
             params: TVL1Parameters instance with algorithm parameters
         """
-        self.params = params or TVL1Parameters()
+        self.params = params or DisplacementParameters()
         self.flow_algorithm = cv2.optflow.DualTVL1OpticalFlow_create(
             self.params.tau, self.params.lambda_, self.params.theta,
             self.params.nscales, self.params.warps, self.params.epsilon,
             self.params.inner_iterations, self.params.outer_iterations,
             self.params.scale_step, self.params.gamma,
-            self.params.median_filtering, self.params.use_initial_flow
+            self.params.median_filtering, False
         )
 
     # deprecated

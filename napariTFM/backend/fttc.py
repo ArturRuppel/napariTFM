@@ -27,23 +27,25 @@ from typing import Tuple, Optional
 from scipy import optimize
 
 from napariTFM.backend.fttc_numba_functions import *
+from napariTFM.backend.parameter_dataclasses import FTTCParameters
 
 
 class FTTC:
-    def __init__(self, E: float, nu: float, lanczos_exp: int = 1, gel_height: float = float('inf')):
+    def __init__(self, params: FTTCParameters):
         """
         Initialize FTTC calculator.
 
         Args:
-            E: Young's modulus in Pa
-            nu: Poisson ratio
-            lanczos_exp: Lanczos filter exponent
-            gel_height: Gel height for correction (default: infinity)
+            params: FTTCParameters object containing:
+                - young_modulus: Young's modulus in Pa
+                - poisson_ratio_substrate: Poisson ratio
+                - lanczos_exp: Lanczos filter exponent
+                - gel_height: Gel height for correction (None for infinity)
         """
-        self.E = E
-        self.nu = nu
-        self.lanczos_exp = lanczos_exp
-        self.gel_height = gel_height
+        self.E = params.young_modulus
+        self.nu = params.poisson_ratio_substrate
+        self.lanczos_exp = params.lanczos_exp
+        self.gel_height = params.gel_height
     def calculate_traction(self, displacements: Tuple[np.ndarray, np.ndarray],
                            pixel_size: float,
                            downscale_factor: int = 1,

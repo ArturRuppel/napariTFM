@@ -88,7 +88,7 @@ def timer_decorator(func):
 
 
 class MonolayerStressMicroscopy:
-    def __init__(self, mask, density_factor=0.02, algorithm=2,
+    def __init__(self, mask, density_factor=0.02, mesh_algorithm=2,
                  use_optimization=False, poisson_ratio=0.5,
                  young_modulus=1, nodes=None, elements=None):
         """Initialize with optional pre-generated nodes/elements"""

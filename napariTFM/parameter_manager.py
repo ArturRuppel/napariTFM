@@ -4,11 +4,11 @@ from enum import Enum, auto
 import yaml
 from pathlib import Path
 from qtpy.QtCore import QObject, Signal
-
-from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters
-from napariTFM.services.fttc_service import FTTCService, FTTCParameters
-from napariTFM.services.msm_service import MSMService, MSMParameters
-from napariTFM.services.preprocessing_service import PreprocessingService, PreprocessingParameters
+from napariTFM.backend.parameter_dataclasses import PreprocessingParameters, DisplacementParameters, FTTCParameters, MSMParameters, UnifiedParameters
+from napariTFM.services.displacement_service import DisplacementService
+from napariTFM.services.fttc_service import FTTCService
+from napariTFM.services.msm_service import MSMService
+from napariTFM.services.preprocessing_service import PreprocessingService
 
 
 class ParameterCategory(Enum):
@@ -19,128 +19,6 @@ class ParameterCategory(Enum):
     FORCE = auto()
     STRESS = auto()
     VISUALIZATION = auto()
-
-
-@dataclass
-class UnifiedParameters:
-    """Single source of truth for all parameters"""
-    # General parameters
-    pixel_size: float = 0.1  # µm
-    frame_interval: float = 1.0  # min
-
-    # Preprocessing parameters
-    min_intensity_percentile: float = 0.0
-    max_intensity_percentile: float = 100.0
-    gaussian_sigma: float = 0.0
-    cell_min_intensity_percentile: float = 0.0
-    cell_max_intensity_percentile: float = 100.0
-    cell_gaussian_sigma: float = 0.0
-    registration_mode: str = 'translation'
-
-    # Displacement parameters
-    tau: float = 0.25
-    lambda_: float = 0.4
-    theta: float = 0.3
-    nscales: int = 3
-    warps: int = 3
-    epsilon: float = 0.01
-    inner_iterations: int = 15
-    outer_iterations: int = 5
-    scale_step: float = 0.5
-    median_filtering: int = 5
-    downscale_factor: int = 4
-    disp_vector_stride: int = 20
-    disp_arrow_scale: float = 1.0
-    d_max: float = 1.0  # µm
-
-    # Force parameters
-    young_modulus: float = 5000  # Pa
-    poisson_ratio_substrate: float = 0.5
-    gel_height: Optional[float] = None
-    lanczos_exp: int = 1
-    regularization: float = 1e-4
-    auto_gcv: bool = False
-    force_vector_stride: int = 20
-    force_arrow_scale: float = 1.0
-    f_max: float = 500.0  # Pa
-
-    # Stress parameters
-    threshold: float = 0.0
-    dilation: int = 10
-    smoothing_sigma: float = 10.0
-    density_factor: float = 0.01
-    mesh_algorithm: str = 'Frontal-Del.'
-    use_optimization: bool = True
-    poisson_ratio_cells: float = 0.5
-    max_stress: float = 1.0
-
-
-    def to_preprocessing_parameters(self) -> PreprocessingParameters:
-        """Create PreprocessingParameters from unified parameters"""
-        return PreprocessingParameters(
-            min_intensity_percentile=self.min_intensity_percentile,
-            max_intensity_percentile=self.max_intensity_percentile,
-            gaussian_sigma=self.gaussian_sigma,
-            cell_min_intensity_percentile=self.cell_min_intensity_percentile,
-            cell_max_intensity_percentile=self.cell_max_intensity_percentile,
-            cell_gaussian_sigma=self.cell_gaussian_sigma,
-            registration_mode=self.registration_mode
-        )
-
-    def to_displacement_parameters(self) -> DisplacementParameters:
-        """Create DisplacementParameters from unified parameters"""
-        return DisplacementParameters(
-            tau=self.tau,
-            lambda_=self.lambda_,
-            theta=self.theta,
-            nscales=self.nscales,
-            warps=self.warps,
-            epsilon=self.epsilon,
-            inner_iterations=self.inner_iterations,
-            outer_iterations=self.outer_iterations,
-            scale_step=self.scale_step,
-            median_filtering=self.median_filtering,
-            downscale_factor=self.downscale_factor,
-            pixel_size=self.pixel_size,
-            frame_interval=self.frame_interval,
-            d_max=self.d_max,
-            disp_vector_stride=self.disp_vector_stride,
-            disp_arrow_scale=self.disp_arrow_scale
-        )
-
-    def to_fttc_parameters(self) -> FTTCParameters:
-        """Create FTTCParameters from unified parameters"""
-        return FTTCParameters(
-            young_modulus=self.young_modulus,
-            poisson_ratio_substrate=self.poisson_ratio_substrate,
-            gel_height=self.gel_height,
-            lanczos_exp=self.lanczos_exp,
-            regularization=self.regularization,
-            auto_gcv=self.auto_gcv,
-            downscale_factor=self.downscale_factor,
-            pixel_size=self.pixel_size,
-            frame_interval=self.frame_interval,
-            force_vector_stride=self.force_vector_stride,
-            force_arrow_scale=self.force_arrow_scale,
-            f_max=self.f_max
-        )
-
-    def to_msm_parameters(self) -> MSMParameters:
-        """Create MSMParameters from unified parameters"""
-        return MSMParameters(
-            threshold=self.threshold,
-            dilation=self.dilation,
-            smoothing_sigma=self.smoothing_sigma,
-            density_factor=self.density_factor,
-            algorithm=self.mesh_algorithm,
-            use_optimization=self.use_optimization,
-            poisson_ratio_cells=self.poisson_ratio_cells,
-            young_modulus=self.young_modulus,
-            pixel_size=self.pixel_size,
-            downscale_factor=self.downscale_factor,
-            frame_interval=self.frame_interval,
-            max_stress=self.max_stress
-        )
 
 
 class ParameterManager(QObject):

@@ -405,8 +405,7 @@ class VisualizationManager(ErrorHandlingMixin):
 
     def visualize_force_preview(
             self,
-            force_x: np.ndarray,
-            force_y: np.ndarray,
+            force_field: np.ndarray,
             f_max: float,
             vector_stride: int,
             arrow_scale: float,
@@ -417,8 +416,6 @@ class VisualizationManager(ErrorHandlingMixin):
             # Clear existing layers
             self._clear_layers(['Force Magnitude', 'Force Vectors'])
 
-            # Create and upscale force field
-            force_field = np.stack([force_x, force_y], axis=-1)
             display_force = self._upscale_field(force_field, downscale_factor)
 
             # Add visualization layers

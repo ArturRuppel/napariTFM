@@ -21,7 +21,7 @@ from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
 
 # TODO Fix UI. Make all buttons the same length etc., make UI have a fixedwidth etc.
-
+# TODO loading displacement results should update parameters
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""
 

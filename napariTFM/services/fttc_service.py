@@ -1,32 +1,10 @@
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any, List, Generator, Union
+from typing import Tuple, Generator
+
 import numpy as np
 
 from napariTFM.backend.fttc import FTTC
-
-
-@dataclass
-class FTTCParameters:
-    """Parameters for FTTC calculations"""
-    # Material parameters
-    young_modulus: float  # Pa
-    poisson_ratio_substrate: float
-    gel_height: Optional[float]  # μm (None for infinite thickness)
-    lanczos_exp: int
-
-    # Processing parameters
-    regularization: float
-    auto_gcv: bool
-    downscale_factor: int
-    pixel_size: float
-
-    # Time parameters
-    frame_interval: float  # minutes
-
-    # Visualization parameters
-    force_vector_stride: int
-    force_arrow_scale: float
-    f_max: float
+from napariTFM.backend.parameter_dataclasses import FTTCParameters
 
 
 @dataclass
@@ -57,12 +35,7 @@ class FTTCService:
         if not is_valid:
             raise ValueError(error_msg)
 
-        self.calculator = FTTC(
-            E=params.young_modulus,
-            nu=params.poisson_ratio_substrate,
-            lanczos_exp=params.lanczos_exp,
-            gel_height=params.gel_height
-        )
+        self.calculator = FTTC(params)
         self.params = params
 
     def calculate_forces(
@@ -238,4 +211,5 @@ class FTTCService:
         is_valid, error_msg = self.validate_parameters(parameters)
         if not is_valid:
             raise ValueError(error_msg)
+        self.analyzer = FTTC(parameters)
         self.params = parameters

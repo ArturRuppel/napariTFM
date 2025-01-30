@@ -10,11 +10,12 @@ from qtpy.QtWidgets import (
 )
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
 
+from napariTFM.backend.parameter_dataclasses import MSMParameters
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
 from napariTFM.data_manager import DataManager
 from napariTFM.parameter_manager import ParameterManager, ParameterCategory
-from napariTFM.services.msm_service import MSMParameters, MSMService, MSMResult
+from napariTFM.services.msm_service import MSMService, MSMResult
 from napariTFM.visualization_manager import VisualizationManager
 
 

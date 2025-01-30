@@ -1,10 +1,12 @@
-import sys
 import logging
+import os
+import sys
 from pathlib import Path
+
 import napari
 from qtpy.QtWidgets import QMessageBox
 
-import os
+from napariTFM._widget import napariTFMWidget
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
@@ -26,24 +28,8 @@ def setup_debug_environment():
             sys.path.insert(0, str(parent_dir))
             logger.debug(f"Added {parent_dir} to Python path")
 
-        # Import the widget
-        try:
-            # Import the main widget class
-            from napariTFM._widget import napariTFMWidget
-            logger.debug("Successfully imported napariTFMWidget")
+        return napariTFMWidget
 
-            # Verify other critical imports
-            from napariTFM.preprocessing_widget import PreprocessingWidget
-            from napariTFM.data_manager import DataManager
-            from napariTFM.visualization_manager import VisualizationManager
-            logger.debug("Successfully imported all required modules")
-
-            return napariTFMWidget
-
-        except ImportError as e:
-            logger.error(f"Failed to import required modules: {e}")
-            raise ImportError(f"Failed to import required modules: {e}\n"
-                              f"Please ensure all required files are in the correct location.")
 
     except Exception as e:
         logger.error(f"Error setting up debug environment: {e}")

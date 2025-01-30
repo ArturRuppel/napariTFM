@@ -1,35 +1,10 @@
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any, List, Generator, Union
+from typing import Tuple, Generator
+
 import numpy as np
-from skimage.transform import resize
 
-from napariTFM.backend.displacement_analysis import DisplacementAnalyzer, TVL1Parameters
-
-
-@dataclass
-class DisplacementParameters:
-    """Parameters for displacement analysis"""
-    # TV-L1 optical flow parameters
-    tau: float
-    lambda_: float
-    theta: float
-    nscales: int
-    warps: int
-    epsilon: float
-    inner_iterations: int
-    outer_iterations: int
-    scale_step: float
-    median_filtering: int
-
-    # Analysis parameters
-    downscale_factor: int
-    pixel_size: float
-    frame_interval: float
-
-    # Visualization parameters
-    d_max: float
-    disp_vector_stride: int
-    disp_arrow_scale: float
+from napariTFM.backend.displacement_analysis import DisplacementAnalyzer
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 
 
 @dataclass
@@ -63,7 +38,7 @@ class DisplacementService:
         if not is_valid:
             raise ValueError(error_msg)
 
-        tvl1_params = TVL1Parameters(
+        tvl1_params = DisplacementParameters(
             tau=params.tau,
             lambda_=params.lambda_,
             theta=params.theta,
@@ -98,7 +73,7 @@ class DisplacementService:
         if not is_valid:
             raise ValueError(error_msg)
 
-        tvl1_params = TVL1Parameters(
+        tvl1_params = DisplacementParameters(
             tau=parameters.tau,
             lambda_=parameters.lambda_,
             theta=parameters.theta,

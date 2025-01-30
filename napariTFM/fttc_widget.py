@@ -22,6 +22,7 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO layer visibility after calculations (preview and full)
 # TODO reset parameters doesn't reset gel height
 # TODO young's modulus has no impact on results
+# TODO loading displacement or force results should update parameters
 
 class FTTCDataPanel(QWidget):
     """Panel for handling FTTC data loading and status display."""
@@ -725,7 +726,8 @@ class FTTCController(QObject):
                 result.force_field[0],
                 result.parameters.f_max,
                 result.parameters.force_vector_stride,
-                result.parameters.force_arrow_scale
+                result.parameters.force_arrow_scale,
+                downscale_factor=result.parameters.downscale_factor
             )
 
             # Calculate and show statistics

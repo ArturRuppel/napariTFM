@@ -3,19 +3,8 @@ from typing import Optional, Tuple, Dict, Any, List, Generator
 
 import numpy as np
 
+from napariTFM.backend.parameter_dataclasses import PreprocessingParameters
 from napariTFM.backend.preprocessing import ImageProcessor
-
-
-@dataclass
-class PreprocessingParameters:
-    """Parameters for image preprocessing"""
-    min_intensity_percentile: float = 0.0
-    max_intensity_percentile: float = 100
-    gaussian_sigma: float = 0.0
-    cell_min_intensity_percentile: float = 0.0
-    cell_max_intensity_percentile: float = 100
-    cell_gaussian_sigma: float = 0.0
-    registration_mode: str = 'translation'
 
 
 @dataclass
@@ -83,7 +72,7 @@ class PreprocessingService:
         return True, ""
 
     def preprocess_frame(self, image: np.ndarray, is_cell: bool = False,
-                        reference_image: Optional[np.ndarray] = None) -> PreprocessingIntermediateResult:
+                         reference_image: Optional[np.ndarray] = None) -> PreprocessingIntermediateResult:
         """Preprocess a single image frame"""
         info = {
             'original_dtype': image.dtype,
@@ -95,12 +84,12 @@ class PreprocessingService:
         # Select appropriate parameters
         if is_cell:
             params = (self.params.cell_min_intensity_percentile,
-                     self.params.cell_max_intensity_percentile,
-                     self.params.cell_gaussian_sigma)
+                      self.params.cell_max_intensity_percentile,
+                      self.params.cell_gaussian_sigma)
         else:
             params = (self.params.min_intensity_percentile,
-                     self.params.max_intensity_percentile,
-                     self.params.gaussian_sigma)
+                      self.params.max_intensity_percentile,
+                      self.params.gaussian_sigma)
 
         # Apply processing steps using domain layer
         processed = self._processor.apply_gaussian_filter(image, params[2])

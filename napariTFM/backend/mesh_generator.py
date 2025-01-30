@@ -5,14 +5,7 @@ import gmsh
 import numpy as np
 from skimage import measure
 
-
-@dataclass
-class MeshParameters:
-    """Parameters for mesh generation"""
-    mask: np.ndarray
-    density_factor: float = 0.01
-    algorithm: int = 2
-    use_optimization: bool = True
+from napariTFM.backend.parameter_dataclasses import MeshParameters
 
 
 class MeshGenerator:

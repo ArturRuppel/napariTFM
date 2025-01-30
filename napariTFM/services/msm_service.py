@@ -1,38 +1,12 @@
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any, List, Generator, Union
+from typing import Optional, Tuple, Dict, List, Generator
+
 import numpy as np
 from skimage.transform import resize
 
-from napariTFM.backend.msm import MonolayerStressMicroscopy
 from napariTFM.backend.mesh_generator import MeshParameters, MeshGenerator
-
-
-@dataclass
-class MSMParameters:
-    """Parameters for MSM calculations"""
-    # Mask creation parameters
-    threshold: float
-    dilation: int
-    smoothing_sigma: float
-
-    # Mesh parameters
-    density_factor: float
-    algorithm: str
-    use_optimization: bool
-
-    # Material parameters
-    poisson_ratio_cells: float
-    young_modulus: float
-
-    # Scaling parameter
-    pixel_size: float  # in µm
-    downscale_factor: int
-
-    # Time parameters
-    frame_interval: float  # minutes
-
-    # Visualization parameters
-    max_stress: float
+from napariTFM.backend.msm import MonolayerStressMicroscopy
+from napariTFM.backend.parameter_dataclasses import MSMParameters
 
 
 @dataclass
@@ -68,7 +42,7 @@ class MSMService:
         self.analyzer = MonolayerStressMicroscopy(
             mask=None,  # Will be set during calculation
             density_factor=params.density_factor,
-            algorithm=self._get_algorithm_code(params.algorithm),
+            mesh_algorithm=self._get_algorithm_code(params.mesh_algorithm),
             use_optimization=params.use_optimization,
             poisson_ratio=params.poisson_ratio_cells,
             young_modulus=params.young_modulus

@@ -19,7 +19,7 @@ from napariTFM.batch_analysis_widget import BatchAnalysisWidget
 
 logger = logging.getLogger(__name__)
 
-
+# TODO test in all widgets whether or not loading external data updates params
 class SpinBoxEventFilter(QObject):
     def eventFilter(self, obj, event):
         # Check for all spinnable input widgets
