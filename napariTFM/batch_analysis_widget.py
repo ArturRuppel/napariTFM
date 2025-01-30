@@ -1026,30 +1026,38 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         try:
             # Sync all parameters
             for name, spin in self.parameter_spins.items():
-                value = self.parameter_manager.get_parameter(name)
-                if name == 'young_modulus':
-                    value = value / 1000  # Convert Pa to kPa for display
-                elif name == 'gel_height' and value is None:
-                    value = 0
-                if isinstance(spin, tuple):
-                    # Handle special cases like threshold
-                    spin_widget, slider = spin
-                    self._safe_set_value(spin_widget, value)
-                    self._safe_set_value(slider, value)
-                else:
-                    self._safe_set_value(spin, value)
+                try:
+                    value = self.parameter_manager.get_parameter(name)
+                    if name == 'young_modulus':
+                        value = value / 1000  # Convert Pa to kPa for display
+                    elif name == 'gel_height' and value is None:
+                        value = 0
+                    if isinstance(spin, tuple):
+                        spin_widget, slider = spin
+                        self._safe_set_value(spin_widget, value)
+                        self._safe_set_value(slider, value)
+                    else:
+                        self._safe_set_value(spin, value)
+                except Exception as e:
+                    print(f"Error syncing parameter {name}: {str(e)}")
 
             # Sync combo boxes
             for name, combo in self.parameter_combos.items():
-                value = self.parameter_manager.get_parameter(name)
-                if value:
-                    self._safe_set_combo_text(combo, str(value))
+                try:
+                    value = self.parameter_manager.get_parameter(name)
+                    if value:
+                        self._safe_set_combo_text(combo, str(value))
+                except Exception as e:
+                    print(f"Error syncing combo parameter {name}: {str(e)}")
 
             # Sync checkboxes
             for name, checkbox in self.parameter_checks.items():
-                value = self.parameter_manager.get_parameter(name)
-                self._safe_set_checked(checkbox, bool(value))
-
+                try:
+                    value = self.parameter_manager.get_parameter(name)
+                    if value is not None:
+                        self._safe_set_checked(checkbox, bool(value))
+                except Exception as e:
+                    print(f"Error syncing checkbox parameter {name}: {str(e)}")
 
         finally:
             self._block_parameter_widgets(False)

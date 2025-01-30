@@ -16,19 +16,14 @@ from napari.qt.threading import thread_worker
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
 from napariTFM.data_manager import DataManager
-from napariTFM.parameter_manager import ParameterManager
+from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
 # TODO visualization after preview or full results should disable all other layers
 # TODO make UI clean and pretty, switch order of loading buttons
-# TODO make parameters synch from batch to displacement widget
+# TODO parameter reset should give a status update
 
 class DisplacementParameterPanel(QWidget):
-    """Panel for handling all displacement parameter inputs."""
-
-    parameter_changed = Signal()
-    parameter_value_changed = Signal(str, object)
-
     """Panel for handling all displacement parameter inputs."""
 
     parameter_changed = Signal(str, object)  # (param_name, value)
@@ -39,6 +34,86 @@ class DisplacementParameterPanel(QWidget):
         self.parameter_spins = {}
         self.parameter_combos = {}
         self._setup_ui()
+        self._connect_signals()
+
+        # Connect to parameter manager signals
+        self.parameter_manager.parameter_changed.connect(self._sync_parameter)
+        self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
+
+    def _connect_signals(self):
+        """Connect widget signals."""
+        # Connect all spinboxes
+        for name, spin in self.parameter_spins.items():
+            spin.valueChanged.connect(
+                lambda value, n=name: self._on_value_changed(n, value)
+            )
+
+        # Connect reset button
+        self.reset_btn.clicked.connect(self._reset_parameters)
+
+    def _on_value_changed(self, param_name: str, value: object):
+        """Handle parameter value changes."""
+        # Update parameter manager
+        self.parameter_manager.set_parameter(param_name, value)
+        # Emit our own signal
+        self.parameter_changed.emit(param_name, value)
+
+    def _sync_parameter(self, param_name: str, value: Any):
+        """Sync a single parameter from parameter manager."""
+        if param_name in self.parameter_spins:
+            self._safe_set_value(self.parameter_spins[param_name], value)
+        elif param_name in self.parameter_combos:
+            self._safe_set_combo_text(self.parameter_combos[param_name], value)
+
+    def _on_parameters_reset(self, category):
+        """Handle parameter reset events."""
+        if category == ParameterCategory.DISPLACEMENT:
+            self._sync_widget_with_parameters()
+
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager."""
+        self._block_widgets(True)
+        try:
+            for name, spin in self.parameter_spins.items():
+                value = self.parameter_manager.get_parameter(name)
+                if value is not None:
+                    self._safe_set_value(spin, value)
+
+            for name, combo in self.parameter_combos.items():
+                value = self.parameter_manager.get_parameter(name)
+                if value is not None:
+                    self._safe_set_combo_text(combo, value)
+        finally:
+            self._block_widgets(False)
+
+    def _safe_set_value(self, widget, value):
+        """Safely set widget value."""
+        if value is not None and widget is not None:
+            widget.blockSignals(True)
+            try:
+                value = max(widget.minimum(), min(widget.maximum(), value))
+                widget.setValue(value)
+            except Exception as e:
+                print(f"Error setting widget value: {str(e)}")
+            widget.blockSignals(False)
+
+    def _safe_set_combo_text(self, combo, text):
+        """Safely set combo box text."""
+        if combo is not None and text is not None:
+            combo.blockSignals(True)
+            try:
+                index = combo.findText(str(text), Qt.MatchFixedString)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+            finally:
+                combo.blockSignals(False)
+
+    def _block_widgets(self, block: bool):
+        """Block or unblock all widget signals."""
+        for widget in self.parameter_spins.values():
+            widget.blockSignals(block)
+        for widget in self.parameter_combos.values():
+            widget.blockSignals(block)
 
     def _setup_ui(self):
         layout = QVBoxLayout()
@@ -167,58 +242,19 @@ class DisplacementParameterPanel(QWidget):
         group.setLayout(layout)
         return group
 
-    def _connect_signals(self):
-        """Connect widget signals."""
-        # Connect all spinboxes
-        for name, spin in self.parameter_spins.items():
-            spin.valueChanged.connect(
-                lambda value, n=name: self._on_value_changed(n, value)
-            )
-
-        # Connect reset button
-        self.reset_btn.clicked.connect(self._reset_parameters)
-
-    def _on_value_changed(self, param_name: str, value: object):
-        """Handle parameter value changes."""
-        self.parameter_manager.set_parameter(param_name, value)
-        self.parameter_changed.emit(param_name, value)
-
     def _reset_parameters(self):
         """Reset parameters to defaults."""
         self.parameter_manager.reset_displacement_parameters()
 
-    def _sync_widget_with_parameters(self):
-        """Sync widget values with parameter manager."""
-        self._block_widgets(True)
-        try:
-            for name, spin in self.parameter_spins.items():
-                value = self.parameter_manager.get_parameter(name)
-                if value is not None:
-                    self._safe_set_value(spin, value)
-        finally:
-            self._block_widgets(False)
-
     def update_parameter(self, name: str, value: Any):
         """Update a single parameter value."""
-        if name in self.parameter_spins:
-            self._safe_set_value(self.parameter_spins[name], value)
-
-    def _safe_set_value(self, widget, value):
-        """Safely set widget value."""
-        if value is not None and widget is not None:
-            widget.blockSignals(True)
-            try:
-                value = max(widget.minimum(), min(widget.maximum(), value))
-                widget.setValue(value)
-            except Exception as e:
-                print(f"Error setting widget value: {str(e)}")
-            widget.blockSignals(False)
-
-    def _block_widgets(self, block: bool):
-        """Block or unblock all widget signals."""
-        for widget in self.parameter_spins.values():
-            widget.blockSignals(block)
-
+        try:
+            if name in self.parameter_spins:
+                self._safe_set_value(self.parameter_spins[name], value)
+            elif name in self.parameter_combos:
+                self._safe_set_combo_text(self.parameter_combos[name], value)
+        except Exception as e:
+            print(f"Error updating parameter {name}: {str(e)}")
     def freeze_ui(self, frozen: bool):
         """Freeze or unfreeze UI elements."""
         for spin in self.parameter_spins.values():

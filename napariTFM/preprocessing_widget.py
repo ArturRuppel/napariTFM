@@ -23,6 +23,7 @@ from napariTFM.colorbar import ColorbarManager
 from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.services.preprocessing_service import PreprocessingService
 # TODO setting bead stack invalidates subsequent steps but setting reference doesn't
+# TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
 
 
 class PreprocessingDataPanel(QWidget):
@@ -542,19 +543,15 @@ class PreprocessingParameterPanel(QWidget):
 
     def update_parameter(self, name: str, value: Any):
         """Update a single parameter value."""
-        if name in self.parameter_spins:
-            self.parameter_spins[name].setValue(value)
-        elif name == 'registration_mode' and value is not None:
-            # Case-insensitive search for the combo box item
-            target_value = str(value).lower()
-            for index in range(self.registration_mode_combo.count()):
-                item_text = self.registration_mode_combo.itemText(index)
-                if item_text.lower() == target_value:
-                    self.registration_mode_combo.setCurrentIndex(index)
-                    break
-        else:
-            print(f"Parameter {name} not recognized or value is None")
-
+        try:
+            if name in self.parameter_spins:
+                self._safe_set_value(self.parameter_spins[name], value)
+            elif name == 'registration_mode' and value is not None:
+                self._safe_set_combo_text(self.registration_mode_combo, str(value))
+            elif name in self.parameter_combos:
+                self._safe_set_combo_text(self.parameter_combos[name], str(value))
+        except Exception as e:
+            print(f"Error updating parameter {name}: {str(e)}")
     def get_parameters(self):
         """Get current parameter values."""
         return {
