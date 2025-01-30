@@ -18,11 +18,10 @@ from napariTFM.services.fttc_service import FTTCService, FTTCResult
 from napariTFM.visualization_manager import VisualizationManager
 
 
-# TODO Load displacement button not working
+# TODO Load displacement button should not disable
 # TODO regularization doesn't synch
 # TODO layer visibility after calculations (preview and full)
 # TODO reset parameters doesn't reset gel height
-# TODO young's modulus has no impact on results
 # TODO loading displacement or force results should update parameters
 
 class FTTCDataPanel(QWidget):
@@ -598,28 +597,24 @@ class FTTCController(QObject):
     def load_displacement_data(self):
         """Load displacement data from active layer or file."""
         try:
-            # First try to get displacement data from data manager
-            displacement_data = self.data_manager.displacement_results
+            # If no data in manager, try to load from file
+            file_path, _ = QFileDialog.getOpenFileName(
+                None,
+                "Load Displacement Data",
+                str(Path.home()),
+                "NumPy Files (*.npy)"
+            )
 
-            if displacement_data is None:
-                # If no data in manager, try to load from file
-                file_path, _ = QFileDialog.getOpenFileName(
-                    None,
-                    "Load Displacement Data",
-                    str(Path.home()),
-                    "NumPy Files (*.npy)"
-                )
+            if file_path:
+                displacement_data = np.load(file_path, allow_pickle=True).item()
+                self.data_manager.set_displacement_results(displacement_data)
 
-                if file_path:
-                    displacement_data = np.load(file_path, allow_pickle=True).item()
-                    self.data_manager.set_displacement_results(displacement_data)
-
-            if displacement_data is not None:
-                self.data_updated.emit('displacement')
-                self.progress_updated.emit(
-                    100,
-                    f"Displacement data loaded: {displacement_data.displacement_field.shape}"
-                )
+                if displacement_data is not None:
+                    self.data_updated.emit('displacement')
+                    self.progress_updated.emit(
+                        100,
+                        f"Displacement data loaded: {displacement_data.displacement_field.shape}"
+                    )
             else:
                 self.progress_updated.emit(0, "No displacement data loaded")
 
@@ -869,6 +864,8 @@ class FTTCWidget(BaseAnalysisWidget):
             visualization_manager=visualization_manager,
             data_panel=self.data_panel
         )
+
+        self.data_panel.set_controller(self.controller)
 
         # Initialize action panel with controller
         self.action_panel = FTTCActionPanel(self.controller)
