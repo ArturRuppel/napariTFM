@@ -20,11 +20,142 @@ from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
 
+
+class DisplacementDataPanel(QWidget):
+    """Panel for handling data loading and status display."""
+
+    data_loaded = Signal(str)  # Emits data type that was loaded
+    reference_loaded = Signal(object)
+    beads_loaded = Signal(object)
+    # region === Initialization
+    def __init__(self, data_manager, viewer):
+        super().__init__()
+        self.data_manager = data_manager
+        self.viewer = viewer
+        self.controller = None
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout()
+
+        # Create data input group
+        data_group = QGroupBox("Input Data")
+        group_layout = QVBoxLayout()
+
+        # Bead data row
+        bead_layout = QHBoxLayout()
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.bead_status = QLabel("Not loaded")
+        bead_layout.addWidget(self.load_beads_btn)
+        bead_layout.addWidget(self.bead_status)
+        group_layout.addLayout(bead_layout)
+
+        # Reference data row
+        ref_layout = QHBoxLayout()
+        self.load_reference_btn = QPushButton("Load Reference Image")
+        self.reference_status = QLabel("Not loaded")
+        ref_layout.addWidget(self.load_reference_btn)
+        ref_layout.addWidget(self.reference_status)
+        group_layout.addLayout(ref_layout)
+
+        data_group.setLayout(group_layout)
+        layout.addWidget(data_group)
+        self.setLayout(layout)
+    def _connect_signals(self):
+        """Connect UI signals to controller methods."""
+        self.load_beads_btn.clicked.connect(
+            lambda: self._load_data('beads')
+        )
+        self.load_reference_btn.clicked.connect(
+            lambda: self._load_data('reference')
+        )
+
+    # endregion === Initialization
+
+    # region === Controller Setup
+    def set_controller(self, controller):
+        """Set the controller and connect signals."""
+        self.controller = controller
+        self.load_beads_btn.clicked.connect(lambda: self.controller.load_active_layer('beads'))
+        self.load_reference_btn.clicked.connect(lambda: self.controller.load_active_layer('reference'))
+
+    def _load_data(self, data_type: str):
+        """Load data from active layer."""
+        active_layer = self._get_active_layer()
+        if active_layer is None:
+            return
+
+        try:
+            data = active_layer.data
+
+            if data_type == 'beads':
+                self.data_manager.set_preprocessing_results(bead_stack=data)
+                self.bead_status.setText(f"Loaded: {data.shape}")
+                self.beads_loaded.emit(data)
+            else:  # reference
+                self.data_manager.set_preprocessing_results(reference=data)
+                self.reference_status.setText(f"Loaded: {data.shape}")
+                self.reference_loaded.emit(data)
+
+            self.data_loaded.emit(data_type)
+
+        except Exception as e:
+            QMessageBox.warning(self, "Error", str(e))
+
+    def _get_active_layer(self):
+        """Get the currently active napari layer."""
+        active_layer = self.viewer.layers.selection.active
+        if active_layer is None:
+            QMessageBox.warning(
+                self,
+                "No Layer Selected",
+                "Please select an image layer first."
+            )
+        return active_layer
+
+    # endregion === Controller Setup
+
+    # region === State Management
+    def update_button_states(self, active_layer_exists: bool = False):
+        """Update button states based on layer selection."""
+        active_layer = self.viewer.layers.selection.active
+        has_valid_layer = active_layer is not None and isinstance(active_layer, Image)
+
+        self.load_beads_btn.setEnabled(has_valid_layer)
+        self.load_reference_btn.setEnabled(has_valid_layer)
+
+    def update_data_status(self):
+        """Update status labels based on loaded data."""
+        # Update reference status
+        ref_data = self.data_manager.preprocessed_reference
+        if ref_data is not None:
+            self.reference_status.setText(f"Loaded: {ref_data.shape}")
+        else:
+            self.reference_status.setText("Not loaded")
+
+        # Update bead status
+        bead_data = self.data_manager.preprocessed_bead_stack
+        if bead_data is not None:
+            self.bead_status.setText(f"Loaded: {bead_data.shape}")
+        else:
+            self.bead_status.setText("Not loaded")
+
+    def freeze_ui(self, frozen: bool):
+        """Freeze or unfreeze UI elements."""
+        self.load_beads_btn.setEnabled(not frozen)
+        self.load_reference_btn.setEnabled(not frozen)
+
+    # endregion === State Management
+
+
+
+
 class DisplacementParameterPanel(QWidget):
     """Panel for handling all displacement parameter inputs."""
 
     parameter_changed = Signal(str, object)  # (param_name, value)
     parameters_reset = Signal()
+
     def __init__(self, parameter_manager):
         super().__init__()
         self.parameter_manager = parameter_manager
@@ -261,6 +392,7 @@ class DisplacementParameterPanel(QWidget):
                 self._safe_set_combo_text(self.parameter_combos[name], value)
         except Exception as e:
             print(f"Error updating parameter {name}: {str(e)}")
+
     def freeze_ui(self, frozen: bool):
         """Freeze or unfreeze UI elements."""
         for spin in self.parameter_spins.values():
@@ -274,128 +406,6 @@ class DisplacementParameterPanel(QWidget):
             widget.blockSignals(True)
             widget.setValue(value)
             widget.blockSignals(False)
-
-
-class DisplacementDataPanel(QWidget):
-    """Panel for handling data loading and status display."""
-
-    data_loaded = Signal(str)  # Emits data type that was loaded
-    reference_loaded = Signal(object)
-    beads_loaded = Signal(object)
-
-    def __init__(self, data_manager, viewer):
-        super().__init__()
-        self.data_manager = data_manager
-        self.viewer = viewer
-        self.controller = None
-        self._setup_ui()
-
-    def _setup_ui(self):
-        layout = QVBoxLayout()
-
-        # Create data input group
-        data_group = QGroupBox("Input Data")
-        group_layout = QVBoxLayout()
-
-        # Bead data row
-        bead_layout = QHBoxLayout()
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.bead_status = QLabel("Not loaded")
-        bead_layout.addWidget(self.load_beads_btn)
-        bead_layout.addWidget(self.bead_status)
-        group_layout.addLayout(bead_layout)
-
-        # Reference data row
-        ref_layout = QHBoxLayout()
-        self.load_reference_btn = QPushButton("Load Reference Image")
-        self.reference_status = QLabel("Not loaded")
-        ref_layout.addWidget(self.load_reference_btn)
-        ref_layout.addWidget(self.reference_status)
-        group_layout.addLayout(ref_layout)
-
-
-        data_group.setLayout(group_layout)
-        layout.addWidget(data_group)
-        self.setLayout(layout)
-
-    def set_controller(self, controller):
-        """Set the controller and connect signals."""
-        self.controller = controller
-        self.load_beads_btn.clicked.connect(lambda: self.controller.load_active_layer('beads'))
-        self.load_reference_btn.clicked.connect(lambda: self.controller.load_active_layer('reference'))
-
-    def update_button_states(self, active_layer_exists: bool = False):
-        """Update button states based on layer selection."""
-        active_layer = self.viewer.layers.selection.active
-        has_valid_layer = active_layer is not None and isinstance(active_layer, Image)
-
-        self.load_beads_btn.setEnabled(has_valid_layer)
-        self.load_reference_btn.setEnabled(has_valid_layer)
-
-    def update_data_status(self):
-        """Update status labels based on loaded data."""
-        # Update reference status
-        ref_data = self.data_manager.preprocessed_reference
-        if ref_data is not None:
-            self.reference_status.setText(f"Loaded: {ref_data.shape}")
-        else:
-            self.reference_status.setText("Not loaded")
-
-        # Update bead status
-        bead_data = self.data_manager.preprocessed_bead_stack
-        if bead_data is not None:
-            self.bead_status.setText(f"Loaded: {bead_data.shape}")
-        else:
-            self.bead_status.setText("Not loaded")
-
-    def freeze_ui(self, frozen: bool):
-        """Freeze or unfreeze UI elements."""
-        self.load_beads_btn.setEnabled(not frozen)
-        self.load_reference_btn.setEnabled(not frozen)
-
-    def _connect_signals(self):
-        """Connect UI signals to controller methods."""
-        self.load_beads_btn.clicked.connect(
-            lambda: self._load_data('beads')
-        )
-        self.load_reference_btn.clicked.connect(
-            lambda: self._load_data('reference')
-        )
-
-
-    def _load_data(self, data_type: str):
-        """Load data from active layer."""
-        active_layer = self._get_active_layer()
-        if active_layer is None:
-            return
-
-        try:
-            data = active_layer.data
-
-            if data_type == 'beads':
-                self.data_manager.set_preprocessing_results(bead_stack=data)
-                self.bead_status.setText(f"Loaded: {data.shape}")
-                self.beads_loaded.emit(data)
-            else:  # reference
-                self.data_manager.set_preprocessing_results(reference=data)
-                self.reference_status.setText(f"Loaded: {data.shape}")
-                self.reference_loaded.emit(data)
-
-            self.data_loaded.emit(data_type)
-
-        except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
-
-    def _get_active_layer(self):
-        """Get the currently active napari layer."""
-        active_layer = self.viewer.layers.selection.active
-        if active_layer is None:
-            QMessageBox.warning(
-                self,
-                "No Layer Selected",
-                "Please select an image layer first."
-            )
-        return active_layer
 
 
 class DisplacementActionPanel(QWidget):
@@ -885,15 +895,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.service = DisplacementService(parameter_manager.get_displacement_parameters())
         self.colorbar_manager = ColorbarManager()
 
-        # Create all UI elements first
-        self.preview_btn = None
-        self.process_btn = None
-        self.save_btn = None
-        self.load_btn = None
-        self.cancel_btn = None
-        self.progress_bar = None
-        self.status_label = None
-
         # Initialize panels
         self.parameter_panel = DisplacementParameterPanel(parameter_manager)
         self.data_panel = DisplacementDataPanel(data_manager, viewer)
@@ -939,6 +940,96 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         self.setLayout(main_layout)
 
+    def _create_content_container(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedWidth(360)  # Fixed width for the scroll area
+
+        container = QWidget()
+        container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)  # Constrain width
+        layout = QVBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        # Match preprocessing's component order
+        layout.addWidget(self.data_panel)
+        layout.addWidget(self.parameter_panel)
+        layout.addWidget(self._create_action_frame())  # Ensure this is called
+        layout.addWidget(self._create_status_frame())
+
+        container.setLayout(layout)
+        scroll.setWidget(container)
+        return scroll
+
+    def _create_action_frame(self):
+        frame = QFrame()
+        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)  # Constrain height
+        layout = QVBoxLayout()
+        layout.setSpacing(6)
+        layout.setContentsMargins(0, 0, 0, 0)  # Minimize margins
+
+        # Main action row
+        action_layout = QHBoxLayout()
+        action_layout.setSpacing(6)
+        action_layout.setContentsMargins(0, 0, 0, 0)  # Minimize margins
+
+        self.preview_btn = QPushButton("Preview Current Frame")
+        self.process_btn = QPushButton("Run Displacement Analysis")
+
+        # Set size policies for buttons to prevent expansion
+        self.preview_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.process_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+
+        action_layout.addWidget(self.preview_btn)
+        action_layout.addWidget(self.process_btn)
+        layout.addLayout(action_layout)
+
+        # Data buttons
+        data_layout = QHBoxLayout()
+        data_layout.setSpacing(6)
+        data_layout.setContentsMargins(0, 0, 0, 0)  # Minimize margins
+        self.save_btn = QPushButton("Save Displacements")
+        self.load_btn = QPushButton("Load Displacements")
+
+
+        # Set size policies for additional buttons
+        self.save_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.load_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+
+        data_layout.addWidget(self.save_btn)
+        data_layout.addWidget(self.load_btn)
+
+        layout.addLayout(data_layout)
+
+        # Cancel button
+        self.cancel_btn = QPushButton("Cancel All Operations")
+        self.cancel_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        layout.addWidget(self.cancel_btn)
+
+        frame.setLayout(layout)
+        return frame
+
+    def _update_ui_state(self, event=None):
+        """Update UI state based on current data and selection."""
+        # Update data panel
+        self.data_panel.update_button_states()
+        self.data_panel.update_data_status()
+
+        # Update button states
+        has_data = (
+                self.data_manager.preprocessed_reference is not None and
+                self.data_manager.preprocessed_bead_stack is not None
+        )
+        has_results = self.data_manager.displacement_results is not None
+
+        # Check if preview_btn exists before using it
+        if hasattr(self, 'preview_btn') and self.preview_btn is not None:
+            self.preview_btn.setEnabled(has_data)
+        if hasattr(self, 'process_btn') and self.process_btn is not None:
+            self.process_btn.setEnabled(has_data)
+        if hasattr(self, 'save_btn') and self.save_btn is not None:
+            self.save_btn.setEnabled(has_results)
+
     def _create_colorbar_container(self):
         # Identical to preprocessing's implementation
         container = QWidget()
@@ -956,47 +1047,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         layout.addStretch()
         container.setLayout(layout)
         return container
-
-    def _create_content_container(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(360)
-
-        container = QWidget()
-        layout = QVBoxLayout()
-        layout.setSpacing(8)
-        layout.setContentsMargins(6, 6, 6, 6)
-
-        # Match preprocessing's component order
-        layout.addWidget(self.data_panel)
-        layout.addWidget(self.parameter_panel)
-        layout.addWidget(self._create_action_frame())
-        layout.addWidget(self._create_status_frame())
-
-        container.setLayout(layout)
-        scroll.setWidget(container)
-        return scroll
-
-    def _create_action_frame(self):
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        # Main action row
-        action_layout = QHBoxLayout()
-        self.process_btn = QPushButton("Run Displacement Analysis")
-        self.save_btn = QPushButton("Save Displacements")
-        action_layout.addWidget(self.process_btn)
-        action_layout.addWidget(self.save_btn)
-
-        # Additional buttons
-        self.load_btn = QPushButton("Load Displacements")  # Moved from main row
-        self.cancel_btn = QPushButton("Cancel All Operations")
-
-        layout.addLayout(action_layout)
-        layout.addWidget(self.load_btn)  # Separate row for load
-        layout.addWidget(self.cancel_btn)
-        frame.setLayout(layout)
-        return frame
 
     def _connect_signals(self):
         """Connect all widget signals."""
@@ -1070,23 +1120,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
-    def _update_ui_state(self, event=None):
-        """Update UI state based on current data and selection."""
-        # Update data panel
-        self.data_panel.update_button_states()
-        self.data_panel.update_data_status()
-
-        # Update button states
-        has_data = (
-                self.data_manager.preprocessed_reference is not None and
-                self.data_manager.preprocessed_bead_stack is not None
-        )
-        has_results = self.data_manager.displacement_results is not None
-
-        self.preview_btn.setEnabled(has_data)
-        self.process_btn.setEnabled(has_data)
-        self.save_btn.setEnabled(has_results)
-
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze."""
         self.preview_btn.setEnabled(not frozen and self._has_required_data())
@@ -1147,5 +1180,3 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 frame=None,
                 enable=False
             )
-
-
