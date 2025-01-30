@@ -22,7 +22,8 @@ from napariTFM.services.displacement_service import DisplacementService, Displac
 
 
 # TODO Fix UI. Make all buttons the same length etc., make UI have a fixedwidth etc.
-
+# TODO review button disable/enable logic
+# TODO load displacement moves layers to the top but doesn't disable other layers
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""
 

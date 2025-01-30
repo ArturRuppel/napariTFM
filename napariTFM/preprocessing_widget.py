@@ -26,8 +26,8 @@ from napariTFM.services.preprocessing_service import PreprocessingService
 
 # TODO setting bead stack invalidates subsequent steps but setting reference doesn't
 # TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
-# TODO most buttons should be disabled at application start
 # TODO Fix UI. Make all buttons the same length etc., make UI have a fixedwidth etc.
+# TODO review button disable/enable logic
 
 
 class PreprocessingDataPanel(QWidget):

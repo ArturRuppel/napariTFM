@@ -20,6 +20,9 @@ from napariTFM.visualization_manager import VisualizationManager
 
 # TODO Load displacement button should not disable
 # TODO layer visibility after calculations (preview and full)
+# TODO auto select gcv picks current frame from vector layer
+# TODO load displacement data should trigger visualization
+# TODO review button disable/enable logic
 
 class FTTCDataPanel(QWidget):
     """Panel for handling FTTC data loading and status display."""
@@ -797,6 +800,7 @@ class FTTCController(QObject):
         except Exception as e:
             raise ValueError(f"GCV calculation failed: {str(e)}")
 
+    # In the FTTCController class, update the _handle_preview_results method:
     def _handle_preview_results(self, result: FTTCResult):
         """Handle preview calculation results."""
         try:
@@ -811,6 +815,34 @@ class FTTCController(QObject):
                 result.parameters.force_arrow_scale,
                 downscale_factor=result.parameters.downscale_factor
             )
+
+            # Manage layer visibility and order
+            vector_layer = None
+            magnitude_layer = None
+
+            # First pass: find the force layers and disable all others
+            for layer in self.viewer.layers:
+                if layer.name == 'Force Vectors':
+                    vector_layer = layer
+                    layer.visible = True
+                elif layer.name == 'Force Magnitude':
+                    magnitude_layer = layer
+                    layer.visible = True
+                else:
+                    layer.visible = False
+
+            # Move layers to desired positions if they exist
+            if magnitude_layer is not None:
+                current_index = self.viewer.layers.index(magnitude_layer)
+                # Move magnitude layer to second from top (-2)
+                if current_index != -2:
+                    self.viewer.layers.move(current_index, -2)
+
+            if vector_layer is not None:
+                current_index = self.viewer.layers.index(vector_layer)
+                # Move vector layer to top (-1)
+                if current_index != -1:
+                    self.viewer.layers.move(current_index, -1)
 
             # Calculate and show statistics
             magnitude = np.sqrt(np.sum(result.force_field[0] ** 2, axis=-1))
@@ -836,6 +868,34 @@ class FTTCController(QObject):
 
             # Update visualization
             self.visualization_manager.visualize_force_results()
+
+            # Manage layer visibility and order
+            vector_layer = None
+            magnitude_layer = None
+
+            # First pass: find the force layers and disable all others
+            for layer in self.viewer.layers:
+                if layer.name == 'Force Vectors':
+                    vector_layer = layer
+                    layer.visible = True
+                elif layer.name == 'Force Magnitude':
+                    magnitude_layer = layer
+                    layer.visible = True
+                else:
+                    layer.visible = False
+
+            # Move layers to desired positions if they exist
+            if magnitude_layer is not None:
+                current_index = self.viewer.layers.index(magnitude_layer)
+                # Move magnitude layer to second from top (-2)
+                if current_index != -2:
+                    self.viewer.layers.move(current_index, -2)
+
+            if vector_layer is not None:
+                current_index = self.viewer.layers.index(vector_layer)
+                # Move vector layer to top (-1)
+                if current_index != -1:
+                    self.viewer.layers.move(current_index, -1)
 
             self.progress_updated.emit(100, "Analysis completed successfully")
             self.analysis_completed.emit(result)
