@@ -1125,8 +1125,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         colorbar_group = self.create_colorbar_widget(
             colormap_name='gray',
-            label="Intensity Value",
-            clim=(65535, 0),
+            label="Relative Intensity Value",
+            clim=(1, 0),
             colorbar_manager=self.colorbar_manager
         )
         colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)

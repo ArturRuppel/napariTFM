@@ -19,7 +19,6 @@ from napariTFM.visualization_manager import VisualizationManager
 
 
 # TODO Load displacement button not working
-# TODO colorbar should only update after triggering force calculations
 # TODO regularization doesn't synch
 # TODO layer visibility after calculations (preview and full)
 # TODO reset parameters doesn't reset gel height
@@ -744,6 +743,7 @@ class FTTCController(QObject):
 
             # Calculate and show statistics
             magnitude = np.sqrt(np.sum(result.force_field[0] ** 2, axis=-1))
+            self.analysis_completed.emit(result)
             self.progress_updated.emit(
                 100,
                 f"Preview statistics:\n"
@@ -965,7 +965,6 @@ class FTTCWidget(BaseAnalysisWidget):
         self.controller.data_updated.connect(self._update_ui_state)
 
         # Connect parameter panel signals
-        self.parameter_panel.parameter_changed.connect(self._on_parameter_changed)
         self.parameter_panel.parameters_reset.connect(self._on_parameters_reset)
 
         # Connect to layer selection changes
@@ -989,11 +988,6 @@ class FTTCWidget(BaseAnalysisWidget):
             has_displacement=has_displacement,
             has_results=has_results
         )
-
-    def _on_parameter_changed(self, param_name: str, value: Any):
-        """Handle parameter changes."""
-        if param_name == 'f_max':
-            self.colorbar_manager.update_limits(0, value)
 
     def _on_parameters_reset(self):
         """Handle parameter reset."""
