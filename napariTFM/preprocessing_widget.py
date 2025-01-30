@@ -10,7 +10,7 @@ from qtpy.QtCore import QObject
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QRadioButton, QFileDialog, QFrame, QScrollArea, QCheckBox, QApplication,
-    QProgressBar, QMessageBox, QSizePolicy
+    QProgressBar, QMessageBox, QSizePolicy, QSpacerItem
 )
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget,
@@ -26,7 +26,6 @@ from napariTFM.services.preprocessing_service import PreprocessingService
 
 # TODO setting bead stack invalidates subsequent steps but setting reference doesn't
 # TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
-# TODO Fix UI. Make all buttons the same length etc., make UI have a fixedwidth etc.
 # TODO review button disable/enable logic
 
 
@@ -1153,9 +1152,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Add components
         layout.addWidget(self.data_panel)
+        layout.addItem(QSpacerItem(0, -12, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.parameter_panel)
+        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_preview_frame())
+        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_action_frame())
+        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
         layout.addStretch()
 

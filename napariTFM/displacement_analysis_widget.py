@@ -2,26 +2,23 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from napari.layers import Image
+from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, Qt, QObject
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QFileDialog, QScrollArea, QCheckBox,
-    QSpinBox, QDoubleSpinBox, QPushButton, QMessageBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QFileDialog, QScrollArea, QSpinBox, QDoubleSpinBox, QPushButton, QMessageBox, QSpacerItem,
     QSizePolicy, QFrame, QProgressBar
 )
-from napari.layers import Image
-
-from napari.qt.threading import thread_worker
 
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
 from napariTFM.data_manager import DataManager
 from napariTFM.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.services.displacement_service import DisplacementService, DisplacementResult
 from napariTFM.visualization_manager import VisualizationManager
-from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
 
 
-# TODO Fix UI. Make all buttons the same length etc., make UI have a fixedwidth etc.
 # TODO review button disable/enable logic
 # TODO load displacement moves layers to the top but doesn't disable other layers
 class DisplacementDataPanel(QWidget):
@@ -69,7 +66,7 @@ class DisplacementDataPanel(QWidget):
 
         # Add description label for required data
         info_label = QLabel(
-            "Required: Reference image and bead stack from previous preprocessing step"
+            "Required: Reference image and bead stack"
         )
         info_label.setWordWrap(True)
         group_layout.addWidget(info_label)
@@ -984,10 +981,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         # Add panels
         layout.addWidget(self.data_panel)
+        layout.addItem(QSpacerItem(0, -12, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.parameter_panel)
+        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.action_panel)
+        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
-        layout.addStretch()
+        layout.addItem(QSpacerItem(0, -20, QSizePolicy.Minimum, QSizePolicy.Fixed))
 
         container.setLayout(layout)
         scroll.setWidget(container)
