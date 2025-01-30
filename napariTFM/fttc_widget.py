@@ -1037,6 +1037,8 @@ class FTTCWidget(BaseAnalysisWidget):
 
         container = QWidget()
         layout = QVBoxLayout()
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         # Add panels
         layout.addWidget(self.data_panel)

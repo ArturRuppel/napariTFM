@@ -50,7 +50,7 @@ class napariTFMWidget(QWidget):
         QTimer.singleShot(0, install_filter_on_inputs)
 
         # Set fixed width for entire widget
-        self.setFixedWidth(530)
+        self.setFixedWidth(540)
 
         # Create scroll area for widgets
         scroll = QScrollArea()

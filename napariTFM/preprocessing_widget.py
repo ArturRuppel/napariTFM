@@ -1148,6 +1148,9 @@ class PreprocessingWidget(BaseAnalysisWidget):
         container = QWidget()
         layout = QVBoxLayout()
 
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+
         # Add components
         layout.addWidget(self.data_panel)
         layout.addWidget(self.parameter_panel)
