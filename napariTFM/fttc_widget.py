@@ -22,7 +22,6 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO regularization doesn't synch
 # TODO layer visibility after calculations (preview and full)
 # TODO reset parameters doesn't reset gel height
-# TODO loading displacement or force results should update parameters
 
 class FTTCDataPanel(QWidget):
     """Panel for handling FTTC data loading and status display."""
@@ -653,14 +652,60 @@ class FTTCController(QObject):
             )
 
             if load_path:
+                # Load data
                 results = np.load(load_path, allow_pickle=True).item()
+
+                # Update parameters if they exist in the results
+                if hasattr(results, 'parameters'):
+                    # Block parameter change signals temporarily
+                    if self.parameter_panel:
+                        self.parameter_panel._block_widgets(True)
+                    try:
+                        # Update parameter manager with loaded parameters
+                        params = results.parameters
+                        for param_name, value in vars(params).items():
+                            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
+                                if param_name == 'young_modulus':
+                                    # Convert Pa to kPa for UI display
+                                    self.parameter_manager.set_parameter(param_name, value)
+                                elif param_name == 'regularization':
+                                    # Store actual value, UI will convert to log10
+                                    self.parameter_manager.set_parameter(param_name, value)
+                                else:
+                                    self.parameter_manager.set_parameter(param_name, value)
+
+                        # Sync UI with new parameters
+                        if self.parameter_panel:
+                            self.parameter_panel._sync_widget_with_parameters()
+                    finally:
+                        if self.parameter_panel:
+                            self.parameter_panel._block_widgets(False)
+
+                # Update data manager and visualization
                 self.data_manager.set_force_results(results)
                 self.visualization_manager.visualize_force_results()
-                self.progress_updated.emit(100, f"Results loaded from {load_path}")
+                self.progress_updated.emit(100, f"Results and parameters loaded from {load_path}")
                 self.analysis_completed.emit(results)
 
         except Exception as e:
             self._handle_error(f"Failed to load results: {str(e)}")
+
+    def _sync_parameters_with_results(self, result):
+        """Sync parameters from loaded results."""
+        if not hasattr(result, 'parameters'):
+            return
+
+        params = result.parameters
+        for param_name, value in vars(params).items():
+            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
+                if param_name == 'young_modulus':
+                    # Store in Pa, UI will convert to kPa
+                    self.parameter_manager.set_parameter(param_name, value)
+                elif param_name == 'regularization':
+                    # Store actual value, UI will convert to log10
+                    self.parameter_manager.set_parameter(param_name, value)
+                else:
+                    self.parameter_manager.set_parameter(param_name, value)
 
     def cancel_operation(self):
         """Cancel any running operations."""
