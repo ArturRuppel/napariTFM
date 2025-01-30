@@ -19,11 +19,10 @@ from napariTFM.data_manager import DataManager
 from napariTFM.parameter_manager import ParameterManager
 from napariTFM.visualization_manager import VisualizationManager
 from napariTFM.services.displacement_service import DisplacementService, DisplacementParameters, DisplacementResult
-# TODO preview current frame throws error
-# TODO calculate all frames throws error after finishing
+# TODO clicking preview should clear the vector cache
+# TODO visualization after preview or full results should disable all other layers
 # TODO make UI clean and pretty, switch order of loading buttons
 # TODO make parameters synch from batch to displacement widget
-# TODO update visualization manager methods to use datamanager
 
 class DisplacementParameterPanel(QWidget):
     """Panel for handling all displacement parameter inputs."""
@@ -280,6 +279,14 @@ class DisplacementDataPanel(QWidget):
         data_group = QGroupBox("Input Data")
         group_layout = QVBoxLayout()
 
+        # Bead data row
+        bead_layout = QHBoxLayout()
+        self.load_beads_btn = QPushButton("Load Bead Stack")
+        self.bead_status = QLabel("Not loaded")
+        bead_layout.addWidget(self.load_beads_btn)
+        bead_layout.addWidget(self.bead_status)
+        group_layout.addLayout(bead_layout)
+
         # Reference data row
         ref_layout = QHBoxLayout()
         self.load_reference_btn = QPushButton("Load Reference")
@@ -288,13 +295,6 @@ class DisplacementDataPanel(QWidget):
         ref_layout.addWidget(self.reference_status)
         group_layout.addLayout(ref_layout)
 
-        # Bead data row
-        bead_layout = QHBoxLayout()
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.bead_status = QLabel("Not loaded")
-        bead_layout.addWidget(self.load_beads_btn)
-        bead_layout.addWidget(self.bead_status)
-        group_layout.addLayout(bead_layout)
 
         data_group.setLayout(group_layout)
         layout.addWidget(data_group)
@@ -337,12 +337,13 @@ class DisplacementDataPanel(QWidget):
 
     def _connect_signals(self):
         """Connect UI signals to controller methods."""
-        self.load_reference_btn.clicked.connect(
-            lambda: self._load_data('reference')
-        )
         self.load_beads_btn.clicked.connect(
             lambda: self._load_data('beads')
         )
+        self.load_reference_btn.clicked.connect(
+            lambda: self._load_data('reference')
+        )
+
 
     def _load_data(self, data_type: str):
         """Load data from active layer."""
@@ -533,12 +534,27 @@ class DisplacementController(QObject):
             params = self.parameter_manager.get_displacement_parameters()
             self.service.update_parameters(params)
 
-            # Calculate displacement field
+            # Calculate displacement field for single frame
             result = self.service.calculate_displacement_field(reference, moving)
 
-            # Update visualization
+            # Process generator to get the result
+            try:
+                while True:
+                    displacement_field, frame, total = next(result)
+                    self.progress_updated.emit(
+                        int((frame + 1) / total * 100),
+                        f"Processing preview frame..."
+                    )
+            except StopIteration as e:
+                # Get final result from generator
+                final_result = e.value
+
+            if final_result is None:
+                raise RuntimeError("Preview calculation failed")
+
+            # Update visualization with preview result
             self.visualization_manager.visualize_displacement_preview(
-                result.displacement_field[0],  # Single frame result
+                final_result.displacement_field[0],  # Single frame result
                 params.d_max,
                 params.disp_vector_stride,
                 params.disp_arrow_scale,
@@ -546,7 +562,7 @@ class DisplacementController(QObject):
             )
 
             # Update status with statistics
-            stats = self.visualization_manager.get_displacement_statistics(result.displacement_field[0])
+            stats = self.visualization_manager.get_displacement_statistics(final_result.displacement_field[0])
             self.progress_updated.emit(
                 100,
                 f"Maximum displacement: {stats['max']:.2f} µm\n"
@@ -556,6 +572,49 @@ class DisplacementController(QObject):
         except Exception as e:
             self._handle_error(str(e))
         finally:
+            self.unfreeze_ui()
+
+    @thread_worker
+    def _create_displacement_worker(self, reference, bead_stack, params):
+        """Create worker for processing data."""
+        try:
+            # Get the generator from the service
+            displacement_generator = self.service.calculate_displacement_field(reference, bead_stack)
+
+            # Process all frames through the generator
+            try:
+                while True:
+                    displacement_field, frame, total = next(displacement_generator)
+                    yield {
+                        'progress': (frame + 1) / total * 100,
+                        'message': f"Processing frame {frame + 1}/{total}"
+                    }
+            except StopIteration as e:
+                # Return the final result from the generator
+                return e.value
+
+        except Exception as e:
+            raise ValueError(f"Displacement calculation failed: {str(e)}")
+
+    def _handle_analysis_results(self, result: DisplacementResult):
+        """Handle completed analysis results."""
+        try:
+            if result is None:
+                raise RuntimeError("Analysis failed to produce results")
+
+            # Update data manager
+            self.data_manager.set_displacement_results(result)
+
+            # Update visualization
+            self.visualization_manager.visualize_displacement_results()
+
+            self.progress_updated.emit(100, "Analysis completed successfully")
+            self.analysis_completed.emit(result)
+
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self.active_workers.clear()
             self.unfreeze_ui()
 
     def calculate_all_frames(self):
@@ -589,19 +648,6 @@ class DisplacementController(QObject):
         except Exception as e:
             self._handle_error(str(e))
             self.unfreeze_ui()
-
-    @thread_worker
-    def _create_displacement_worker(self, reference, bead_stack, params):
-        """Create worker for processing data."""
-        try:
-            for result, frame, total in self.service.calculate_displacement_field(reference, bead_stack):
-                yield {'progress': frame / total * 100,
-                       'message': f"Processing frame {frame + 1}/{total}"}
-
-            return result
-
-        except Exception as e:
-            raise ValueError(f"Displacement calculation failed: {str(e)}")
 
     def save_results(self):
         """Save displacement results to file."""
@@ -701,29 +747,6 @@ class DisplacementController(QObject):
             progress_info['progress'],
             progress_info['message']
         )
-
-    def _handle_analysis_results(self, result: DisplacementResult):
-        """Handle completed analysis results."""
-        try:
-            # Update data manager
-            self.data_manager.set_displacement_results(result)
-
-            # Update visualization
-            self.visualization_manager.visualize_displacement_results({
-                'flows': result.displacement_field,
-                'parameters': result.parameters,
-                'original_shape': result.original_shape,
-                'displacement_field_shape': result.displacement_field_shape
-            })
-
-            self.progress_updated.emit(100, "Analysis completed successfully")
-            self.analysis_completed.emit(result)
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self.active_workers.clear()
-            self.unfreeze_ui()
 
     def _handle_error(self, error_msg: str):
         """Handle errors."""

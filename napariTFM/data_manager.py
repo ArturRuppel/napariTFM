@@ -40,7 +40,6 @@ class DataManager:
         """Set and validate input cell stack."""
         self._validate_input_stack(data, "cell stack")
         self._cell_stack = data
-        self._invalidate_from_preprocessing()
 
     def set_preprocessed_bead_stack(self, data: np.ndarray) -> None:
         """Set and validate input bead stack."""
@@ -51,7 +50,7 @@ class DataManager:
         """Set and validate input cell stack."""
         self._validate_input_stack(data, "cell stack")
         self._preprocessed_cell_stack = data
-        self._invalidate_from_displacement()
+
     def set_preprocessed_reference(self, data: np.ndarray) -> None:
         """Set and validate input reference image."""
         self._validate_reference_image(data)

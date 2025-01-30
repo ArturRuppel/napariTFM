@@ -263,7 +263,7 @@ class VisualizationManager(ErrorHandlingMixin):
                     colormap='viridis',
                     blending='additive',
                     contrast_limits=(0, d_max),
-                    visible=False
+                    visible=True
                 )
 
                 # Create vector data and add layer
@@ -297,20 +297,19 @@ class VisualizationManager(ErrorHandlingMixin):
             self.handle_error(error)
             raise
 
-    def visualize_displacement_results(
-            self,
-            results: Dict[str, Any],
-            downscale_factor: Optional[int] = None
-    ) -> None:
-        """Visualize displacement results for all frames."""
+    def visualize_displacement_results(self) -> None:
+        """Visualize displacement results for all frames using data from data manager."""
         try:
-            flows = results['flows']
-            params = results['parameters']
-            vis_params = params['visualization_params']
+            # Check if displacement results exist
+            if self.data_manager.displacement_results is None:
+                raise ValueError("No displacement results available in data manager")
 
-            # Use provided downscale_factor or get from parameters
-            if downscale_factor is None:
-                downscale_factor = params.get('downscale_factor', 1)
+            # Get results from data manager
+            results = self.data_manager.displacement_results
+            flows = results.displacement_field
+            params = results.parameters
+
+            downscale_factor = params.downscale_factor
 
             # Clear existing layers
             self._clear_layers(['Displacement Magnitude', 'Displacement Vectors'])
@@ -322,6 +321,13 @@ class VisualizationManager(ErrorHandlingMixin):
                 flows[0].shape[1] * downscale_factor
             )
             magnitudes = np.zeros((num_frames, *upscaled_shape))
+
+            # Get visualization parameters
+            vis_params = {
+                'd_max': params.d_max,
+                'vector_stride': params.disp_vector_stride,
+                'arrow_scale': params.disp_arrow_scale
+            }
 
             # Create vector cache
             vector_cache = {

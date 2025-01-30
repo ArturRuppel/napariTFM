@@ -22,7 +22,7 @@ from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
 from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.services.preprocessing_service import PreprocessingService
-
+# TODO setting bead stack invalidates subsequent steps but setting reference doesn't
 
 
 class PreprocessingDataPanel(QWidget):
