@@ -9,7 +9,6 @@ from napariTFM.services.displacement_service import DisplacementService, Displac
 from napariTFM.services.fttc_service import FTTCService, FTTCParameters
 from napariTFM.services.msm_service import MSMService, MSMParameters
 from napariTFM.services.preprocessing_service import PreprocessingService, PreprocessingParameters
-# TODO check if all the invalidations are working
 
 
 class ParameterCategory(Enum):

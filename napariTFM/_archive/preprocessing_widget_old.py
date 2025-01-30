@@ -197,7 +197,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             elif data_type == 'reference':
                 if data.ndim != 2:
                     raise ValueError("Reference image must be 2D (height, width)")
-                self.data_manager.set_input_reference(data)
+                self.data_manager.set_reference(data)
 
             elif data_type == 'cells':
                 # Convert 2D data to 3D with single frame if needed
@@ -205,7 +205,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
                     data = data[np.newaxis, ...]
                 elif data.ndim != 3:
                     raise ValueError("Cell stack must be 2D or 3D (frames, height, width)")
-                self.data_manager.set_input_cell_stack(data)
+                self.data_manager.set_cell_stack(data)
             else:
                 raise ValueError(f"Invalid data type: {data_type}")
 

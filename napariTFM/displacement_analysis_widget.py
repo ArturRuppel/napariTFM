@@ -778,8 +778,8 @@ class DisplacementController(QObject):
             pixel_size=self.parameter_manager.get_value('pixel_size'),
             frame_interval=self.parameter_manager.get_value('frame_interval'),
             d_max=self.parameter_manager.get_value('d_max'),
-            vector_stride=self.parameter_manager.get_value('disp_vector_stride'),
-            arrow_scale=self.parameter_manager.get_value('disp_arrow_scale')
+            disp_vector_stride=self.parameter_manager.get_value('disp_vector_stride'),
+            disp_arrow_scale=self.parameter_manager.get_value('disp_arrow_scale')
         )
 
     def _update_progress(self, progress: int, message: str):

@@ -30,13 +30,13 @@ class DataManager:
         self._bead_stack = data
         self._invalidate_from_preprocessing()
 
-    def set_input_reference(self, data: np.ndarray) -> None:
+    def set_reference(self, data: np.ndarray) -> None:
         """Set and validate input reference image."""
         self._validate_reference_image(data)
         self._reference = data
         self._invalidate_from_preprocessing()
 
-    def set_input_cell_stack(self, data: np.ndarray) -> None:
+    def set_cell_stack(self, data: np.ndarray) -> None:
         """Set and validate input cell stack."""
         self._validate_input_stack(data, "cell stack")
         self._cell_stack = data
