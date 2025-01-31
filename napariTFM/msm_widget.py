@@ -614,7 +614,11 @@ class MSMController(QObject):
                 return
 
             self._update_progress(0, "Generating stress preview...")
-            current_frame = self.viewer.dims.current_step[0]
+            if len(self.viewer.dims.current_step) == 2:
+                current_frame = 0
+                self.progress_updated.emit(0, "No image stack found, previewing frame 0")
+            else:
+                current_frame = self.viewer.dims.current_step[0]
             params = self._get_current_parameters()
 
             # Get current frame data
@@ -876,7 +880,11 @@ class MSMController(QObject):
                 return
 
             self._update_progress(0, "Generating mesh preview...")
-            current_frame = self.viewer.dims.current_step[0]
+            if len(self.viewer.dims.current_step) == 2:
+                current_frame = 0
+                self.progress_updated.emit(0, "No image stack found, previewing frame 0")
+            else:
+                current_frame = self.viewer.dims.current_step[0]
             params = self._get_current_parameters()
 
             # Get mask and resize if needed

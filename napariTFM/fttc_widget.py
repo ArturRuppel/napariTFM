@@ -17,12 +17,12 @@ from napariTFM.parameter_manager import ParameterCategory, ParameterManager
 from napariTFM.services.fttc_service import FTTCService, FTTCResult
 from napariTFM.visualization_manager import VisualizationManager
 
-
-# TODO Load displacement button should not disable
+# TODO preview and auto-gcv through errors when current layer is a vector layer
 # TODO layer visibility after calculations (preview and full)
-# TODO auto select gcv picks current frame from vector layer
 # TODO load displacement data should trigger visualization
 # TODO review button disable/enable logic
+# TODO preview button should clear vector cache
+# TODO auto-gcv puts a 0 in the UI
 
 class FTTCDataPanel(QWidget):
     """Panel for handling FTTC data loading and status display."""
@@ -514,18 +514,12 @@ class FTTCController(QObject):
             self.freeze_ui()
             self.progress_updated.emit(0, "Calculating force preview...")
 
-            # Get current frame data
-            # Find the first image layer and get its current frame
-            current_frame = 0
-            found_image_layer = False
-            for layer in self.viewer.layers:
-                if isinstance(layer, Image):
-                    current_frame = self.viewer.dims.current_step[0]
-                    found_image_layer = True
-                    break
+            if len(self.viewer.dims.current_step) == 2:
+                current_frame = 0
+                self.progress_updated.emit(0, "No image stack found, previewing frame 0")
+            else:
+                current_frame = self.viewer.dims.current_step[0]
 
-            if not found_image_layer:
-                self.progress_updated.emit(0, "No image layer found, previewing frame 0")
             displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
 
             # Create and configure service
@@ -583,8 +577,12 @@ class FTTCController(QObject):
             self.freeze_ui()
             self.progress_updated.emit(0, "Calculating optimal regularization...")
 
-            # Get current frame displacement field
-            current_frame = self.viewer.dims.current_step[0]
+            if len(self.viewer.dims.current_step) == 2:
+                current_frame = 0
+                self.progress_updated.emit(0, "No image stack found, previewing frame 0")
+            else:
+                current_frame = self.viewer.dims.current_step[0]
+
             displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
 
             # Create worker for GCV calculation
@@ -778,7 +776,6 @@ class FTTCController(QObject):
         except Exception as e:
             raise ValueError(f"GCV calculation failed: {str(e)}")
 
-    # In the FTTCController class, update the _handle_preview_results method:
     def _handle_preview_results(self, result: FTTCResult):
         """Handle preview calculation results."""
         try:
@@ -1048,7 +1045,7 @@ class FTTCWidget(BaseAnalysisWidget):
         layout.addWidget(self.action_panel)
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
-        layout.addItem(QSpacerItem(0, -20, QSizePolicy.Minimum, QSizePolicy.Fixed))
+        layout.addItem(QSpacerItem(0, -15, QSizePolicy.Minimum, QSizePolicy.Fixed))
 
         container.setLayout(layout)
         scroll.setWidget(container)

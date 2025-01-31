@@ -21,6 +21,8 @@ from napariTFM.visualization_manager import VisualizationManager
 
 # TODO review button disable/enable logic
 # TODO load displacement moves layers to the top but doesn't disable other layers
+# TODO preview and auto-gcv through errors when current layer is a vector layer
+
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""
 
@@ -502,18 +504,12 @@ class DisplacementController(QObject):
             self.freeze_ui()
             self.progress_updated.emit(0, "Calculating displacement preview...")
 
-            # Get current frame data
-            # Find the first image layer and get its current frame
-            current_frame = 0
-            found_image_layer = False
-            for layer in self.viewer.layers:
-                if isinstance(layer, Image):
-                    current_frame = self.viewer.dims.current_step[0]
-                    found_image_layer = True
-                    break
+            if len(self.viewer.dims.current_step) == 2:
+                current_frame = 0
+                self.progress_updated.emit(0, "No image stack found, previewing frame 0")
+            else:
+                current_frame = self.viewer.dims.current_step[0]
 
-            if not found_image_layer:
-                self.progress_updated.emit(0, "No image layer found, previewing frame 0")
             moving = self.data_manager.preprocessed_bead_stack[current_frame]
             reference = self.data_manager.preprocessed_reference
 
@@ -988,7 +984,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         layout.addWidget(self.action_panel)
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
-        layout.addItem(QSpacerItem(0, -20, QSizePolicy.Minimum, QSizePolicy.Fixed))
+        layout.addItem(QSpacerItem(0, -15, QSizePolicy.Minimum, QSizePolicy.Fixed))
 
         container.setLayout(layout)
         scroll.setWidget(container)

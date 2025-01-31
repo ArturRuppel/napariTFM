@@ -4,7 +4,7 @@ from vispy import scene
 from vispy.scene.widgets import Widget
 from vispy.visuals import ColorBarVisual
 
-
+# TODO adjust title to the center
 class EnhancedColorBarWidget(Widget):
     """Enhanced ColorBar Widget with fine-grained control over appearance and positioning
 
