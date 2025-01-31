@@ -43,6 +43,7 @@ class FTTCDataPanel(QWidget):
 
         # Create data input group
         data_group = QGroupBox("Input Data")
+        data_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         group_layout = QVBoxLayout()
 
         # Displacement data row
@@ -62,7 +63,6 @@ class FTTCDataPanel(QWidget):
         )
         info_label.setWordWrap(True)
         group_layout.addWidget(info_label)
-
         data_group.setLayout(group_layout)
         layout.addWidget(data_group)
         self.setLayout(layout)
@@ -1034,6 +1034,7 @@ class FTTCWidget(BaseAnalysisWidget):
         scroll.setFixedWidth(360)
 
         container = QWidget()
+        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QVBoxLayout()
 
         layout.setSpacing(0)
@@ -1047,6 +1048,7 @@ class FTTCWidget(BaseAnalysisWidget):
         layout.addWidget(self.action_panel)
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
+        layout.addItem(QSpacerItem(0, -20, QSizePolicy.Minimum, QSizePolicy.Fixed))
 
         container.setLayout(layout)
         scroll.setWidget(container)
