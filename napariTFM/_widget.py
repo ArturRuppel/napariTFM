@@ -153,7 +153,7 @@ class napariTFMWidget(QWidget):
         self.pixel_spin = QDoubleSpinBox()
         self.pixel_spin.setRange(0.001, 100.0)
         self.pixel_spin.setSingleStep(0.1)
-        self.pixel_spin.setDecimals(2)
+        self.pixel_spin.setDecimals(3)
         pixel_layout.addWidget(self.pixel_spin)
         spinbox_layout.addLayout(pixel_layout)
 

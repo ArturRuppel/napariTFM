@@ -4,6 +4,7 @@ from scipy.ndimage import gaussian_filter
 import logging
 
 logger = logging.getLogger(__name__)
+# TODO implement rolling ball background substraction
 
 class ImageProcessor:
     """Core image processing operations without business logic"""

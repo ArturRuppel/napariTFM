@@ -22,6 +22,8 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO review button disable/enable logic
 # TODO load displacement moves layers to the top but doesn't disable other layers
 # TODO preview and auto-gcv through errors when current layer is a vector layer
+# TODO putting theta to 1 throws error
+# TODO cancel operations disabled during operations (lol)
 
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""

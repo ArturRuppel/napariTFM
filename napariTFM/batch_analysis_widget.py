@@ -240,6 +240,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         pixel_row = QHBoxLayout()
         pixel_row.addWidget(QLabel("Pixel Size (µm):"))
         pixel_spin = self._create_spinbox(0.01, 10.0, 0.1, 2)
+        pixel_spin.setDecimals(3)
         pixel_spin.setToolTip("Physical size of each pixel in micrometers. Used for converting image measurements to physical units.")
         self.parameter_spins['pixel_size'] = pixel_spin
         pixel_row.addWidget(pixel_spin)
