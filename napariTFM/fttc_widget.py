@@ -8,7 +8,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (QFileDialog, QGroupBox, QDoubleSpinBox, QSpinBox, QCheckBox, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
-                            QSizePolicy, QProgressBar, QLabel, QFrame)
+                            QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
 
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.colorbar import ColorbarManager
@@ -48,15 +48,17 @@ class FTTCDataPanel(QWidget):
         # Displacement data row
         displacement_layout = QHBoxLayout()
         self.load_displacement_btn = QPushButton("Load Displacement Data")
+        self.load_displacement_btn.setFixedWidth(150)
         self.load_displacement_btn.setToolTip("Load displacement data from file")
         self.displacement_status = QLabel("Not loaded")
+        self.displacement_status.setWordWrap(True)
         displacement_layout.addWidget(self.load_displacement_btn)
         displacement_layout.addWidget(self.displacement_status)
         group_layout.addLayout(displacement_layout)
 
         # Add description label for required data
         info_label = QLabel(
-            "Required: Displacement field data from previous analysis step"
+            "Required: Displacement field data."
         )
         info_label.setWordWrap(True)
         group_layout.addWidget(info_label)
@@ -186,7 +188,7 @@ class FTTCParameterPanel(QWidget):
             ("young_modulus", "Young's Modulus (kPa):", 0.1, 1000.0, 0.1,
              "Elastic modulus of the gel substrate in kilopascals (kPa)"),
             ("poisson_ratio_substrate", "Poisson Ratio:", 0, 0.5, 0.01,
-             "Poisson's ratio of the gel substrate (typically 0.45-0.49 for hydrogels)"),
+             "Poisson's ratio of the gel substrate (typically 0.45-0.5 for hydrogels)"),
             ("gel_height", "Gel Height (μm):", 0, 1000, 10,
              "Thickness of the gel substrate in micrometers. Set to 0 for infinite thickness"),
             ("lanczos_exp", "Lanczos Exponent:", 0, 5, 1,
@@ -196,7 +198,6 @@ class FTTCParameterPanel(QWidget):
         for name, label_text, min_val, max_val, step, tooltip in params:
             row = QHBoxLayout()
             label = QLabel(label_text)
-            label.setFixedWidth(150)
             label.setToolTip(tooltip)
             row.addWidget(label)
 
@@ -230,7 +231,6 @@ class FTTCParameterPanel(QWidget):
         # Regularization value spinbox
         reg_layout = QHBoxLayout()
         reg_label = QLabel("Parameter (10^x):")
-        reg_label.setFixedWidth(150)
         reg_layout.addWidget(reg_label)
 
         reg_spin = QDoubleSpinBox()
@@ -254,7 +254,6 @@ class FTTCParameterPanel(QWidget):
             "Automatically optimize regularization parameter for each frame\n"
             "using Generalized Cross-Validation"
         )
-        self.auto_gcv_checkbox.setFixedWidth(150)
         gcv_layout.addWidget(self.auto_gcv_checkbox)
 
         self.gcv_button = QPushButton("Auto-select (GCV)")
@@ -287,7 +286,6 @@ class FTTCParameterPanel(QWidget):
         for name, label_text, min_val, max_val, step, tooltip in params:
             row = QHBoxLayout()
             label = QLabel(label_text)
-            label.setFixedWidth(150)
             label.setToolTip(tooltip)
             row.addWidget(label)
 
@@ -1001,9 +999,11 @@ class FTTCWidget(BaseAnalysisWidget):
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
-
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         # Left: Colorbar
         colorbar_container = self._create_colorbar_container()
+        colorbar_container.setFixedWidth(100)
         main_layout.addWidget(colorbar_container)
 
         # Right: Scrollable content
@@ -1015,7 +1015,6 @@ class FTTCWidget(BaseAnalysisWidget):
     def _create_colorbar_container(self) -> QWidget:
         """Create the colorbar container."""
         container = QWidget()
-        container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         layout = QVBoxLayout()
 
         colorbar_group = self.create_colorbar_widget(
@@ -1025,7 +1024,6 @@ class FTTCWidget(BaseAnalysisWidget):
             colorbar_manager=self.colorbar_manager
         )
         layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        layout.addStretch()
         container.setLayout(layout)
         return container
 
@@ -1037,15 +1035,18 @@ class FTTCWidget(BaseAnalysisWidget):
 
         container = QWidget()
         layout = QVBoxLayout()
+
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Add panels
         layout.addWidget(self.data_panel)
+        layout.addItem(QSpacerItem(0, -12, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.parameter_panel)
+        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.action_panel)
+        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
-        layout.addStretch()
 
         container.setLayout(layout)
         scroll.setWidget(container)

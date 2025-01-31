@@ -66,7 +66,7 @@ class DisplacementDataPanel(QWidget):
 
         # Add description label for required data
         info_label = QLabel(
-            "Required: Reference image and bead stack"
+            "Required: Reference image and bead stack."
         )
         info_label.setWordWrap(True)
         group_layout.addWidget(info_label)
@@ -938,10 +938,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     # region === UI Creation
     def _setup_ui(self):
+        """Set up the user interface."""
         main_layout = QHBoxLayout()
-
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         # Left: Colorbar
         colorbar_container = self._create_colorbar_container()
+        colorbar_container.setFixedWidth(100)
         main_layout.addWidget(colorbar_container)
 
         # Right: Scrollable content
@@ -953,7 +956,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     def _create_colorbar_container(self) -> QWidget:
         """Create the colorbar container."""
         container = QWidget()
-        container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         layout = QVBoxLayout()
 
         colorbar_group = self.create_colorbar_widget(
@@ -963,7 +965,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             colorbar_manager=self.colorbar_manager
         )
         layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        layout.addStretch()
         container.setLayout(layout)
         return container
 
@@ -971,7 +972,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         """Create the main content container."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(360)  # Fixed width for consistency
+        scroll.setFixedWidth(360)
 
         container = QWidget()
         layout = QVBoxLayout()

@@ -10,7 +10,7 @@ from qtpy.QtCore import QObject
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QRadioButton, QFileDialog, QFrame, QScrollArea, QCheckBox, QApplication,
-    QProgressBar, QMessageBox, QSizePolicy, QSpacerItem
+    QProgressBar, QMessageBox, QSizePolicy, QSpacerItem, QGridLayout
 )
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget,
@@ -75,6 +75,12 @@ class PreprocessingDataPanel(QWidget):
         cell_layout.addWidget(self.load_cells_btn)
         cell_layout.addWidget(self.cell_status)
         group_layout.addLayout(cell_layout)
+
+        info_label = QLabel(
+            "Required: Reference image and bead stack."
+        )
+        info_label.setWordWrap(True)
+        group_layout.addWidget(info_label)
 
         data_group.setLayout(group_layout)
         layout.addWidget(data_group)
@@ -1104,14 +1110,16 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
     # region === UI Creation
     def _setup_ui(self):
-        """Set up the main widget UI."""
+        """Set up the user interface."""
         main_layout = QHBoxLayout()
-
-        # Add colorbar container
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        # Left: Colorbar
         colorbar_container = self._create_colorbar_container()
+        colorbar_container.setFixedWidth(100)
         main_layout.addWidget(colorbar_container)
 
-        # Add main content
+        # Right: Scrollable content
         content_container = self._create_content_container()
         main_layout.addWidget(content_container)
 
@@ -1120,7 +1128,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
     def _create_colorbar_container(self) -> QWidget:
         """Create the colorbar container."""
         container = QWidget()
-        container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         layout = QVBoxLayout()
 
         colorbar_group = self.create_colorbar_widget(
@@ -1129,9 +1136,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             clim=(1, 0),
             colorbar_manager=self.colorbar_manager
         )
-        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        layout.addStretch()
 
         container.setLayout(layout)
         return container

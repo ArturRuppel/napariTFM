@@ -3,7 +3,7 @@ from typing import Optional, Tuple
 
 import napari
 from qtpy.QtCore import Signal
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTabWidget
+from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTabWidget, QSizePolicy, QSpacerItem
 
 from napariTFM.data_manager import DataManager
 from napariTFM.visualization_manager import VisualizationManager
@@ -75,7 +75,9 @@ class BaseAnalysisWidget(QWidget):
             A group box containing the colorbar widget
         """
         colorbar_group = QGroupBox()
-        colorbar_group.setFixedWidth(100)
+        colorbar_group.setContentsMargins(0, 0, 0, 0)
+
+        colorbar_group.setFixedWidth(90)
         colorbar_group.setFixedHeight(600)
 
         colorbar_layout = QVBoxLayout()
@@ -100,6 +102,7 @@ class BaseAnalysisWidget(QWidget):
 
         colorbar_layout.addWidget(colorbar_widget)
         colorbar_group.setLayout(colorbar_layout)
+
         return colorbar_group
 
     def register_control(self, control):

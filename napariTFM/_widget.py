@@ -50,7 +50,7 @@ class napariTFMWidget(QWidget):
         QTimer.singleShot(0, install_filter_on_inputs)
 
         # Set fixed width for entire widget
-        self.setFixedWidth(540)
+        self.setFixedWidth(500)
 
         # Create scroll area for widgets
         scroll = QScrollArea()
@@ -60,15 +60,13 @@ class napariTFMWidget(QWidget):
         # Create container widget for scroll area
         container = QWidget()
         container_layout = QVBoxLayout()
+        container_layout.setContentsMargins(0, 0, 0, 0)
         container.setLayout(container_layout)
 
         # Add title
         title = QLabel("napariTFM")
         title.setStyleSheet("font-weight: bold; font-size: 14px;")
         container_layout.addWidget(title)
-
-        # Set size policy for container
-        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
         # Initialize managers
         self.data_manager = DataManager()
