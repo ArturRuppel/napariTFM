@@ -170,7 +170,7 @@ class DisplacementParameterPanel(QWidget):
             ("lambda_", "Lambda:", 0.01, 1.0, 0.01,
              "Weight parameter for the data term. Smaller values produce smoother solutions."),
             ("theta", "Theta:", 0.01, 1.0, 0.01,
-             "Weight parameter that balances between matching image intensities (data term) and ensuring smooth transitions between neighboring flow vectors."),
+             "Weight parameter that balances between matching image intensities (data term) and ensuring smooth transitions between neighboring flow vectors. Lower values recommended."),
             ("nscales", "Pyramid Scales:", 1, 10, 1,
              "Number of image pyramid levels. More levels allow detection of larger displacements but increase computation time. Reduce if small displacements expected."),
             ("warps", "Warps:", 1, 10, 1,

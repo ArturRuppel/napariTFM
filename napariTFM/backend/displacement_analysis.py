@@ -22,7 +22,7 @@ class DisplacementAnalyzer:
             self.params.tau, self.params.lambda_, self.params.theta,
             self.params.nscales, self.params.warps, self.params.epsilon,
             self.params.inner_iterations, self.params.outer_iterations,
-            self.params.scale_step, self.params.gamma,
+            self.params.scale_step, 0.0,
             self.params.median_filtering, False
         )
 
