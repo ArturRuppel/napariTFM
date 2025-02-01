@@ -157,6 +157,7 @@ class DisplacementParameterPanel(QWidget):
     # endregion === Initialization
 
     # region === UI Creation
+
     def _create_flow_parameters(self) -> QGroupBox:
         """Create optical flow parameter group."""
         group = QGroupBox("Optical Flow Parameters")
@@ -164,26 +165,26 @@ class DisplacementParameterPanel(QWidget):
 
         # Define parameters with tooltips
         params = [
-            ("tau", "Tau:", 0.01, 10.0, 0.01,
-             "Time step for optical flow computation. Lower values give more accurate but slower results"),
-            ("lambda_", "Lambda:", 0.01, 10.0, 0.01,
-             "Regularization parameter. Higher values produce smoother flow fields"),
-            ("theta", "Theta:", 0.1, 1.0, 0.1,
-             "Weight parameter for the divergence term. Controls flow field smoothness"),
+            ("tau", "Tau:", 0.1, 1.0, 0.01,
+             "Time step of the numerical scheme. Smaller values may improve accuracy but increase computation time."),
+            ("lambda_", "Lambda:", 0.01, 1.0, 0.01,
+             "Weight parameter for the data term. Smaller values produce smoother solutions."),
+            ("theta", "Theta:", 0.01, 1.0, 0.01,
+             "Weight parameter that balances between matching image intensities (data term) and ensuring smooth transitions between neighboring flow vectors."),
             ("nscales", "Pyramid Scales:", 1, 10, 1,
-             "Number of pyramid levels. More levels handle larger displacements but increase computation time"),
+             "Number of image pyramid levels. More levels allow detection of larger displacements but increase computation time. Reduce if small displacements expected."),
             ("warps", "Warps:", 1, 10, 1,
-             "Number of warping steps per scale. More warps increase accuracy for large displacements"),
+             "Number of warpings per scale. More warps increase accuracy but increase computation time."),
             ("epsilon", "Epsilon:", 0.001, 0.1, 0.001,
-             "Stopping criterion threshold. Lower values give more precise results but longer computation times"),
+             "Stopping criterion threshold. Lower values give more precise results but increase computation time."),
             ("inner_iterations", "Inner Iterations:", 1, 50, 1,
-             "Maximum number of inner iterations. More iterations improve accuracy but increase computation time"),
+             "Inner iterations between outlier filtering. More iterations may improve accuracy but increase computation time."),
             ("outer_iterations", "Outer Iterations:", 1, 20, 1,
-             "Maximum number of outer iterations. More iterations improve accuracy but increase computation time"),
+             "Outer iterations (number of inner loops). More iterations may improve accuracy but increase computation time."),
             ("scale_step", "Scale Step:", 0.1, 0.99, 0.01,
-             "Scale factor between pyramid levels. Lower values create more pyramid levels"),
-            ("median_filtering", "Median Filter:", 1, 9, 2,
-             "Size of median filter for post-processing. Larger values remove more noise but may lose detail"),
+             "Scale factor between pyramid levels. For a 1000x1000 image with scale_step=0.5: 1000→500→250→125. With scale_step=0.8: 1000→800→640→512"),
+            ("median_filtering", "Median Filter:", 1, 5, 2,
+             "Median filter kernel size (1 = no filter) (3 or 5)"),
         ]
 
         for name, label, min_val, max_val, step, tooltip in params:

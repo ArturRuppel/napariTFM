@@ -20,17 +20,17 @@ class PreprocessingParameters:
 class DisplacementParameters:
     """Parameters for displacement analysis"""
     # TV-L1 optical flow parameters
-    tau: float = 0.25
-    lambda_: float = 0.4
-    theta: float = 0.3
-    nscales: int = 3
-    warps: int = 3
-    epsilon: float = 0.01
-    inner_iterations: int = 15
-    outer_iterations: int = 5
-    scale_step: float = 0.5
-    gamma: float = 0.0
-    median_filtering: int = 5
+    tau: float = 0.25  # Time step of the numerical scheme
+    lambda_: float = 0.15  # Weight parameter for the data term (smaller = smoother solutions)
+    theta: float = 0.3  # Weight parameter for (u - v)^2, tightness parameter
+    nscales: int = 5  # Number of scales in the pyramid
+    warps: int = 5  # Number of warpings per scale
+    epsilon: float = 0.01  # Stopping criterion threshold
+    inner_iterations: int = 30  # Inner iterations between outlier filtering
+    outer_iterations: int = 10  # Number of outer iterations
+    scale_step: float = 0.8  # Step between pyramid scales (<1)
+    gamma: float = 0.0  # Coefficient for additional illumination variation term
+    median_filtering: int = 5  # Median filter kernel size (1 = no filter, 3 or 5)
 
     # Analysis parameters
     downscale_factor: int = 1
