@@ -26,7 +26,6 @@ from napariTFM.services.preprocessing_service import PreprocessingService
 
 # TODO setting bead stack invalidates subsequent steps but setting reference doesn't
 # TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
-# TODO review button disable/enable logic
 # TODO preview should dynamically change when changing frames
 # TODO add background subtraction with rolling ball radius
 # TODO fix this bug
