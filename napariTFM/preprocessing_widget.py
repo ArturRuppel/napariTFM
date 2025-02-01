@@ -764,21 +764,16 @@ class PreprocessingController(QObject):
 
         for worker in self.active_workers:
             try:
-                worker.running = False
-                worker.quit()
-                worker.wait(500)
-                if worker.isRunning():
-                    worker.terminate()
-                worker.deleteLater()
+                worker.quit()  # This should be sufficient for napari workers
             except Exception as e:
-                print(f"Error cancelling worker: {str(e)}")
+                print(f"Warning: Could not quit worker cleanly: {str(e)}")
+
         self.active_workers.clear()
 
         # Update UI status and ensure responsiveness
         self.progress_updated.emit(0, "Operations cancelled")
         QApplication.processEvents()
         self.unfreeze_ui()
-
     # endregion === Processing Execution
 
     # region === Parameter Handling
