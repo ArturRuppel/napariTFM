@@ -192,25 +192,44 @@ class VisualizationManager(ErrorHandlingMixin):
     def handle_preview(self, frame: Optional[np.ndarray], enable: bool = True, layer_name: str = 'Preview') -> None:
         """Handle preview visualization"""
         try:
+            # First check if preview layer still exists in viewer
+            preview_exists = False
+            if self._preview_config.preview_layer is not None:
+                for layer in self.viewer.layers:
+                    if layer == self._preview_config.preview_layer:
+                        preview_exists = True
+                        break
+
+            # Clear invalid reference if layer doesn't exist
+            if not preview_exists:
+                self._preview_config.preview_layer = None
+
+            # Handle layer based on enable state
             if enable:
                 if self._preview_config.preview_layer is None:
+                    # Create new layer
                     self._preview_config.preview_layer = self.viewer.add_image(
                         frame,
                         name=layer_name,
                         visible=True
                     )
                 else:
+                    # Update existing layer
                     self._preview_config.preview_layer.data = frame
             else:
-                if self._preview_config.preview_layer is not None:
+                # Try to remove layer if it exists and is valid
+                if preview_exists:
                     self.viewer.layers.remove(self._preview_config.preview_layer)
-                    self._preview_config.preview_layer = None
+                self._preview_config.preview_layer = None
 
             # Update preview config state
             self._preview_config.enabled = enable
 
         except Exception as e:
             logger.error(f"Preview handling failed: {str(e)}")
+            # Make sure to clean up reference on error
+            self._preview_config.preview_layer = None
+            self._preview_config.enabled = False
             raise
 
     def _clear_layers(self, display_names: List[str]) -> None:
