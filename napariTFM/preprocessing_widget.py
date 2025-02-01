@@ -71,7 +71,6 @@ from napariTFM.services.preprocessing_service import PreprocessingService
 # AttributeError: 'PreprocessingParameterPanel' object has no attribute 'preview_check'
 
 
-
 class PreprocessingDataPanel(QWidget):
     """Panel for handling data loading and status display."""
 
@@ -758,6 +757,11 @@ class PreprocessingController(QObject):
 
     def cancel_all_operations(self):
         """Cancel all running background operations."""
+        if not self.active_workers:
+            # No active workers, just update status
+            self.progress_updated.emit(0, "No active operations to cancel")
+            return
+
         for worker in self.active_workers:
             try:
                 worker.running = False
@@ -1150,7 +1154,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self._connect_signals()
         self._update_ui_state()
 
-
     # endregion
 
     # region === UI Creation
@@ -1413,7 +1416,9 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Disable preview and process buttons during processing
         self.preview_check.setEnabled(not frozen)
         self.process_btn.setEnabled(not frozen and self._has_required_data())
-        self.cancel_btn.setEnabled(frozen)  # Enable cancel only when processing
+
+        # Cancel button is always enabled
+        self.cancel_btn.setEnabled(True)
 
         # Disable radio buttons during processing
         self.bead_radio.setEnabled(not frozen)
