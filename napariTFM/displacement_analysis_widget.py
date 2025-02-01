@@ -24,6 +24,9 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO preview and auto-gcv through errors when current layer is a vector layer
 # TODO putting theta to 1 throws error
 # TODO cancel operations disabled during operations (lol)
+# TODO review tooltips
+# TODO median filter above 5 throws error
+# TODO implement more sophisticated post processing (median filters, angle filters, correlation filters...)
 
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""
@@ -161,9 +164,9 @@ class DisplacementParameterPanel(QWidget):
 
         # Define parameters with tooltips
         params = [
-            ("tau", "Tau:", 0.01, 1.0, 0.01,
+            ("tau", "Tau:", 0.01, 10.0, 0.01,
              "Time step for optical flow computation. Lower values give more accurate but slower results"),
-            ("lambda_", "Lambda:", 0.01, 1.0, 0.01,
+            ("lambda_", "Lambda:", 0.01, 10.0, 0.01,
              "Regularization parameter. Higher values produce smoother flow fields"),
             ("theta", "Theta:", 0.1, 1.0, 0.1,
              "Weight parameter for the divergence term. Controls flow field smoothness"),

@@ -825,5 +825,5 @@ class BatchAnalysis:
 
 
 if __name__ == "__main__":
-    analyzer = BatchAnalysis.from_yaml("batch_config.yaml")
+    analyzer = BatchAnalysis.from_yaml("config.yaml")
     analyzer.process_all_folders()

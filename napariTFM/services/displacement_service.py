@@ -111,8 +111,8 @@ class DisplacementService:
         if params.lambda_ <= 0:
             return False, "lambda must be positive"
 
-        if not 0 < params.theta < 1:
-            return False, "theta must be between 0 and 1"
+        if not 0 < params.theta < 10:
+            return False, "theta must be between 0 and 10"
 
         if params.nscales < 1:
             return False, "nscales must be at least 1"

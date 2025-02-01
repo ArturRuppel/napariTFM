@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+import numpy as np
 import yaml
 from qtpy.QtCore import Qt, Signal, QSettings
 from qtpy.QtWidgets import (
@@ -120,6 +121,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                     def callback(value):
                         if name == 'young_modulus':
                             value = value * 1000  # Convert kPa to Pa
+                        elif name == 'regularization':
+                            value = 10 ** value
                         elif name == 'gel_height' and value == 0:
                             value = None
                         self.parameter_manager.set_parameter(name, value)
@@ -135,6 +138,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                         value = value / 1000  # Convert Pa to kPa for display
                     elif name == 'gel_height':
                         value = 0 if value is None else value
+                    elif name == 'regularization':
+                        value = np.log10(value)
                     self._safe_set_value(spin, value)
                 except KeyError:
                     print(f"Warning: Parameter {name} not found")
@@ -145,7 +150,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                     lambda text, name=name: self.parameter_manager.set_parameter(name, text)
                 )
                 if name == 'registration_mode':
-                   combo.currentTextChanged.connect(
+                    combo.currentTextChanged.connect(
                         lambda text: self.parameter_manager.set_parameter('registration_mode', text.lower())
                     )
                 try:
@@ -153,7 +158,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                     self._safe_set_combo_text(combo, value)
                 except KeyError:
                     print(f"Warning: Parameter {name} not found")
-
 
             # Connect all checkboxes
             for name, checkbox in self.parameter_checks.items():
@@ -739,7 +743,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 "poisson_ratio_substrate": self.parameter_spins['poisson_ratio_substrate'].value(),
                 "gel_height": None if self.parameter_spins['gel_height'].value() == 0 else self.parameter_spins['gel_height'].value(),
                 "lanczos_exp": self.parameter_spins['lanczos_exp'].value(),
-                "regularization": self.parameter_spins['regularization'].value(),
+                "regularization": 10 ** self.parameter_spins['regularization'].value(),
                 "auto_gcv": self.parameter_checks['auto_gcv'].isChecked(),
                 "force_vector_stride": self.parameter_spins['force_vector_stride'].value(),
                 "force_arrow_scale": self.parameter_spins['force_arrow_scale'].value(),
@@ -894,6 +898,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                             value = value / 1000  # Convert Pa to kPa for display
                         elif name == 'gel_height':
                             value = 0 if value is None else value
+                        elif name == 'regularization':
+                            value = np.log10(value)
                         elif name == 'registration_mode':
                             # Ensure first letter is capitalized for combo box
                             value = value.capitalize()
@@ -1019,10 +1025,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
     def _sync_widget_with_parameters(self):
         """Sync widget values with parameter manager values."""
-        if not hasattr(self, 'parameter_manager') or self.parameter_manager is None:
-            print("Warning: No parameter manager available for syncing")
-            return
-
         self._block_parameter_widgets(True)
         try:
             # Sync all parameters
@@ -1031,6 +1033,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                     value = self.parameter_manager.get_parameter(name)
                     if name == 'young_modulus':
                         value = value / 1000  # Convert Pa to kPa for display
+                    elif name == 'regularization':
+                        value = np.log10(value)  # Convert to log10 for display
                     elif name == 'gel_height' and value is None:
                         value = 0
                     if isinstance(spin, tuple):
@@ -1041,24 +1045,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                         self._safe_set_value(spin, value)
                 except Exception as e:
                     print(f"Error syncing parameter {name}: {str(e)}")
-
-            # Sync combo boxes
-            for name, combo in self.parameter_combos.items():
-                try:
-                    value = self.parameter_manager.get_parameter(name)
-                    if value:
-                        self._safe_set_combo_text(combo, str(value))
-                except Exception as e:
-                    print(f"Error syncing combo parameter {name}: {str(e)}")
-
-            # Sync checkboxes
-            for name, checkbox in self.parameter_checks.items():
-                try:
-                    value = self.parameter_manager.get_parameter(name)
-                    if value is not None:
-                        self._safe_set_checked(checkbox, bool(value))
-                except Exception as e:
-                    print(f"Error syncing checkbox parameter {name}: {str(e)}")
 
         finally:
             self._block_parameter_widgets(False)

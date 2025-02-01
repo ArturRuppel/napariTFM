@@ -27,6 +27,47 @@ from napariTFM.services.preprocessing_service import PreprocessingService
 # TODO setting bead stack invalidates subsequent steps but setting reference doesn't
 # TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
 # TODO review button disable/enable logic
+# TODO save transformation matrix for registration to .txt
+# TODO fix this bug
+# 2025-01-31 19:58:59,883 - napariTFM.visualization_manager - ERROR - Preview handling failed: <Image layer 'Preview' at 0x1e9972983d0> is not in list
+# Traceback (most recent call last):
+#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 801, in toggle_preview
+#     else:
+#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\visualization_manager.py", line 206, in handle_preview
+#     self.viewer.layers.remove(self._preview_config.preview_layer)
+#   File "C:\Users\aruppel\mambaforge\envs\napariTFM\lib\_collections_abc.py", line 1108, in remove
+#     del self[self.index(value)]
+#   File "C:\Users\aruppel\mambaforge\envs\napariTFM\lib\site-packages\napari\utils\events\containers\_typed.py", line 236, in index
+#     raise ValueError(
+# ValueError: <Image layer 'Preview' at 0x1e9972983d0> is not in list
+# During handling of the above exception, another exception occurred:
+# Traceback (most recent call last):
+#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 1280, in _on_preview_toggled
+#     """Handle preview toggle."""
+#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 810, in toggle_preview
+#     if self.parameter_panel:
+# AttributeError: 'PreprocessingParameterPanel' object has no attribute 'preview_check'
+# 2025-01-31 19:59:03,243 - napari.layers.base.base - DEBUG - Layer.refresh: Preview
+# 2025-01-31 19:59:03,243 - napari.layers.base.base - DEBUG - Layer._refresh_sync: Preview
+# 2025-01-31 19:59:04,060 - napariTFM.visualization_manager - ERROR - Preview handling failed: <Image layer 'Preview' at 0x1e9972983d0> is not in list
+# Traceback (most recent call last):
+#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 801, in toggle_preview
+#     else:
+#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\visualization_manager.py", line 206, in handle_preview
+#     self.viewer.layers.remove(self._preview_config.preview_layer)
+#   File "C:\Users\aruppel\mambaforge\envs\napariTFM\lib\_collections_abc.py", line 1108, in remove
+#     del self[self.index(value)]
+#   File "C:\Users\aruppel\mambaforge\envs\napariTFM\lib\site-packages\napari\utils\events\containers\_typed.py", line 236, in index
+#     raise ValueError(
+# ValueError: <Image layer 'Preview' at 0x1e9972983d0> is not in list
+# During handling of the above exception, another exception occurred:
+# Traceback (most recent call last):
+#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 1280, in _on_preview_toggled
+#     """Handle preview toggle."""
+#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 810, in toggle_preview
+#     if self.parameter_panel:
+# AttributeError: 'PreprocessingParameterPanel' object has no attribute 'preview_check'
+
 
 
 class PreprocessingDataPanel(QWidget):

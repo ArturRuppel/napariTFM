@@ -133,7 +133,8 @@ class FTTCParameterPanel(QWidget):
         if param_name in self.parameter_spins:
             if param_name == 'young_modulus':
                 value = value / 1000  # Convert Pa to kPa
-            # No need for regularization conversion here as parameter manager handles it
+            elif param_name == 'regularization':
+                value = np.log10(value)  # Convert to log10 for display
             self._safe_set_value(self.parameter_spins[param_name], value)
         elif param_name == 'auto_gcv':
             self.auto_gcv_checkbox.setChecked(bool(value))
@@ -141,9 +142,9 @@ class FTTCParameterPanel(QWidget):
     def _on_value_changed(self, param_name: str, value: object):
         """Handle parameter value changes."""
         if param_name == 'young_modulus':
-            # Convert kPa to Pa for the parameter manager
-            value = value * 1000
-        # No need for regularization conversion here as parameter manager will handle it
+            value = value * 1000  # Convert kPa to Pa
+        elif param_name == 'regularization':
+            value = 10 ** value  # Convert from log10 to actual value
 
         # Update parameter manager
         self.parameter_manager.set_parameter(param_name, value)
