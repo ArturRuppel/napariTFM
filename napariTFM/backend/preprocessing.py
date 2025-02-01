@@ -10,6 +10,44 @@ class ImageProcessor:
     """Core image processing operations without business logic"""
 
     @staticmethod
+    def apply_rolling_ball(image: np.ndarray, radius: float) -> np.ndarray:
+        """Apply rolling ball background subtraction if radius is non-zero"""
+        if radius <= 0:
+            return image.copy()
+
+        # Create properly sized kernel for rolling ball
+        kernel_size = int(2 * radius + 1)  # Ensure odd size
+        if kernel_size < 3:  # Minimum size of 3x3
+            kernel_size = 3
+
+        # Create structuring element
+        se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+        # Store original dtype for later
+        orig_dtype = image.dtype
+
+        # Estimate background using morphological opening
+        # OpenCV expects uint8/uint16 or float32, so we keep uint16/uint8 as is
+        # but convert other types to float32
+        if orig_dtype not in (np.uint8, np.uint16):
+            image = image.astype(np.float32)
+
+        bg = cv2.morphologyEx(image, cv2.MORPH_OPEN, se, iterations=1)
+        bg = cv2.GaussianBlur(bg, (kernel_size, kernel_size), 0)
+
+        # Subtract background - convert to float32 for subtraction to avoid underflow
+        corrected = image.astype(np.float32) - bg.astype(np.float32)
+
+        # Clip negative values
+        corrected = np.clip(corrected, 0, None)
+
+        # Convert back to original dtype
+        if orig_dtype in (np.uint8, np.uint16):
+            corrected = np.clip(corrected, 0, np.iinfo(orig_dtype).max).astype(orig_dtype)
+
+        return corrected
+
+    @staticmethod
     def apply_gaussian_filter(image: np.ndarray, sigma: float) -> np.ndarray:
         """Apply Gaussian filter if sigma is non-zero"""
         return gaussian_filter(image, sigma=sigma) if sigma > 0 else image.copy()

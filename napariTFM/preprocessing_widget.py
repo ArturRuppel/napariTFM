@@ -213,6 +213,24 @@ class PreprocessingParameterPanel(QWidget):
         group = QGroupBox("Bead/Reference Parameters")
         layout = QVBoxLayout()
 
+        # Add rolling ball radius control
+        radius_layout = QHBoxLayout()
+        radius_label = QLabel("Background")
+        radius_label.setFixedWidth(70)
+        radius_label.setToolTip("Rolling ball radius for background subtraction.\n0 disables background subtraction.")
+
+        radius_spin = self._create_spinbox(0, 50, 1)
+        radius_spin.setToolTip(
+            "Radius for rolling ball background subtraction.\n"
+            "Larger values remove broader background variations.\n"
+            "Set to 0 to disable background subtraction."
+        )
+        radius_spin.setFixedWidth(99)
+        self.parameter_spins['rolling_ball_radius'] = radius_spin
+        radius_layout.addWidget(radius_label)
+        radius_layout.addWidget(radius_spin)
+        layout.addLayout(radius_layout)
+
         # Create range slider
         intensity_slider = QRangeSlider(Qt.Horizontal)
         intensity_slider.setRange(0, 1000)  # 0-100.0 with 0.1 precision
@@ -387,6 +405,10 @@ class PreprocessingParameterPanel(QWidget):
     # region === Signal Handling
     def _connect_signals(self):
         """Connect all parameter control signals."""
+        # Connect rolling ball radius controls
+        radius_spin = self.parameter_spins['rolling_ball_radius']
+        radius_spin.valueChanged.connect(lambda v: self._update_radius_from_spinbox('rolling_ball_radius', v))
+
         # Connect intensity range controls
         intensity_slider = self.parameter_range_sliders['intensity']
         intensity_slider.valueChanged.connect(self._update_intensity_from_slider)
@@ -427,7 +449,17 @@ class PreprocessingParameterPanel(QWidget):
 
         # Connect reset button
         self.reset_btn.clicked.connect(self._reset_parameters)
+    def _update_radius_from_spinbox(self, param: str, value: float):
+        """Update rolling ball radius slider from spinbox."""
+        slider_value = int(value)  # Direct 1:1 mapping now
+        slider = self.parameter_sliders[param]
 
+        slider.blockSignals(True)
+        slider.setValue(slider_value)
+        slider.blockSignals(False)
+
+        self.parameter_manager.set_parameter(param, value)
+        self.parameter_changed.emit(param, value)
     def _update_intensity_from_slider(self, values):
         """Update intensity spinboxes from range slider."""
         min_val, max_val = values

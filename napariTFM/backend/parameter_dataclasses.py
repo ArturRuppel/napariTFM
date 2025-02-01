@@ -7,6 +7,7 @@ import numpy as np
 @dataclass
 class PreprocessingParameters:
     """Parameters for image preprocessing"""
+    rolling_ball_radius: float = 0.0
     min_intensity_percentile: float = 0.0
     max_intensity_percentile: float = 100
     gaussian_sigma: float = 0.0
@@ -111,6 +112,7 @@ class UnifiedParameters:
     frame_interval: float = 1.0  # min
 
     # Preprocessing parameters
+    rolling_ball_radius: float = 0.0
     min_intensity_percentile: float = 0.0
     max_intensity_percentile: float = 100.0
     gaussian_sigma: float = 0.0
@@ -159,6 +161,7 @@ class UnifiedParameters:
     def to_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create PreprocessingParameters from unified parameters"""
         return PreprocessingParameters(
+            rolling_ball_radius=self.rolling_ball_radius,  # Add new parameter
             min_intensity_percentile=self.min_intensity_percentile,
             max_intensity_percentile=self.max_intensity_percentile,
             gaussian_sigma=self.gaussian_sigma,

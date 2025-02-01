@@ -81,6 +81,9 @@ class PreprocessingService:
             'original_std': float(image.std())
         }
 
+        # Apply rolling ball background subtraction first
+        processed = self._processor.apply_rolling_ball(image, self.params.rolling_ball_radius)
+
         # Select appropriate parameters
         if is_cell:
             params = (self.params.cell_min_intensity_percentile,
@@ -91,8 +94,8 @@ class PreprocessingService:
                       self.params.max_intensity_percentile,
                       self.params.gaussian_sigma)
 
-        # Apply processing steps using domain layer
-        processed = self._processor.apply_gaussian_filter(image, params[2])
+        # Apply remaining processing steps
+        processed = self._processor.apply_gaussian_filter(processed, params[2])
         processed, intensity_range = self._processor.apply_intensity_scaling(processed, params[0], params[1])
 
         # Handle registration if needed
@@ -107,7 +110,8 @@ class PreprocessingService:
             'final_mean': float(processed.mean()),
             'final_std': float(processed.std()),
             'intensity_range': intensity_range,
-            'gaussian_sigma': params[2]
+            'gaussian_sigma': params[2],
+            'rolling_ball_radius': self.params.rolling_ball_radius
         })
 
         return PreprocessingIntermediateResult(
