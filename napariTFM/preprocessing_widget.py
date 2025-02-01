@@ -1141,9 +1141,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         self.controller.set_panels(self.parameter_panel, self.data_panel)
 
-        # Set controller in panels
-        self.data_panel.set_controller(self.controller)
-
         # Set up UI and connections
         self._setup_ui()
         self._connect_signals()
