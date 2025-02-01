@@ -690,10 +690,22 @@ class PreprocessingController(QObject):
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
         self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
 
+        # Connect to viewer events for frame changes
+        self.connect_viewer_events()
+
     def set_panels(self, parameter_panel, data_panel):
         """Set the parameter and data panels."""
         self.parameter_panel = parameter_panel
         self.data_panel = data_panel
+
+    def connect_viewer_events(self):
+        """Connect to viewer dimension events for frame changes."""
+        self.viewer.dims.events.current_step.connect(self._on_frame_changed)
+
+    def _on_frame_changed(self, event=None):
+        """Handle frame change events from the viewer."""
+        if self.preview_enabled:
+            self._update_preview()
 
     # endregion === Initialization
 
@@ -773,6 +785,7 @@ class PreprocessingController(QObject):
         self.progress_updated.emit(0, "Operations cancelled")
         QApplication.processEvents()
         self.unfreeze_ui()
+
     # endregion === Processing Execution
 
     # region === Parameter Handling
@@ -843,7 +856,6 @@ class PreprocessingController(QObject):
                     frame=None,
                     enable=False
                 )
-            self.preview_enabled = enabled
 
         except Exception as e:
             QMessageBox.warning(None, "Error", str(e))
@@ -870,6 +882,7 @@ class PreprocessingController(QObject):
 
             # Get current frame if data is a stack
             if data.ndim == 3:
+                # Get the current frame from viewer dimensions
                 current_step = min(self.viewer.dims.current_step[0], data.shape[0] - 1)
                 frame = data[current_step].copy()
             else:
@@ -892,10 +905,12 @@ class PreprocessingController(QObject):
                 layer_name='Preview'
             )
 
-            # Update status with frame information
+            # Update status with frame information and current frame number
             info = result.info
+            frame_info = f" (Frame {current_step + 1}/{data.shape[0]})" if data.ndim == 3 else ""
             status = (
-                f"Preview - Original range: ({info['original_range'][0]:.1f}, {info['original_range'][1]:.1f})\n"
+                f"Preview{frame_info}\n"
+                f"Original range: ({info['original_range'][0]:.1f}, {info['original_range'][1]:.1f})\n"
                 f"Applied range: {info['intensity_range']}\n"
                 f"Mean: {info['final_mean']:.1f}, Std: {info['final_std']:.1f}"
             )
