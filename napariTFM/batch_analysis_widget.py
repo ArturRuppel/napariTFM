@@ -9,8 +9,8 @@ import numpy as np
 import yaml
 from qtpy.QtCore import Qt, Signal, QSettings
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QGridLayout, QButtonGroup, QRadioButton,
-    QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QScrollArea,
+    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QGridLayout, QButtonGroup, QRadioButton, QListView,
+    QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QScrollArea, QAbstractItemView, QTreeView, QDialog,
     QProgressBar, QMessageBox, QListWidget, QCheckBox, QLineEdit,
     QFileDialog, QComboBox
 )
@@ -1119,48 +1119,79 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
     # region === Folder Management ===
     def _add_folder(self):
-        """Add folder to analysis queue."""
+        """Add multiple folders to analysis queue."""
         # Try to load last directory from QSettings
         settings = QSettings()
         last_dir = settings.value("BatchAnalysis/last_folder", os.path.expanduser("~"))
 
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "Select Data Folder",
-            last_dir
-        )
+        # Create file dialog
+        dialog = QFileDialog(self, "Select Data Folders", last_dir)
+        dialog.setFileMode(QFileDialog.DirectoryOnly)
+        dialog.setOption(QFileDialog.DontUseNativeDialog)
 
-        if folder:
-            # Save the selected directory
-            settings.setValue("BatchAnalysis/last_folder", os.path.dirname(folder))
+        # Enable multiple selection
+        tree_view = dialog.findChild(QTreeView)
+        if tree_view:
+            tree_view.setSelectionMode(QTreeView.MultiSelection)
 
-            try:
-                # Validate folder contents
-                missing_files = self._check_folder_contents(folder)
-                if not missing_files:
-                    if folder not in self.folder_list:  # Avoid duplicates
-                        self.folder_list.append(folder)
-                        self.folder_list_widget.addItem(folder)
-                        self._update_ui_state()
-                    else:
-                        QMessageBox.warning(
-                            self,
-                            "Duplicate Folder",
-                            f"The folder:\n{folder}\nis already in the list."
-                        )
-                else:
-                    QMessageBox.warning(
+        list_view = dialog.findChild(QListView, "listView")
+        if list_view:
+            list_view.setSelectionMode(QListView.MultiSelection)
+
+        # Show dialog and process results
+        if dialog.exec_() == QDialog.Accepted:
+            folders = dialog.selectedFiles()
+
+            if folders:
+                # Save the last selected directory
+                settings.setValue("BatchAnalysis/last_folder", os.path.dirname(folders[0]))
+
+                # Process each selected folder
+                invalid_folders = []
+                duplicate_folders = []
+                added_folders = []
+
+                for folder in folders:
+                    try:
+                        # Check if folder is already in the list
+                        if folder in self.folder_list:
+                            duplicate_folders.append(folder)
+                            continue
+
+                        # Validate folder contents
+                        missing_files = self._check_folder_contents(folder)
+                        if not missing_files:
+                            self.folder_list.append(folder)
+                            self.folder_list_widget.addItem(folder)
+                            added_folders.append(folder)
+                        else:
+                            invalid_folders.append((folder, missing_files))
+
+                    except Exception as e:
+                        invalid_folders.append((folder, str(e)))
+
+                # Show summary message if there are any issues
+                if duplicate_folders or invalid_folders:
+                    messages = []
+                    if added_folders:
+                        messages.append(f"Successfully added {len(added_folders)} folder(s)")
+                    if duplicate_folders:
+                        messages.append(f"Skipped {len(duplicate_folders)} duplicate folder(s)")
+                    if invalid_folders:
+                        messages.append("The following folders had errors:")
+                        for folder, error in invalid_folders:
+                            if isinstance(error, list):
+                                messages.append(f"- {os.path.basename(folder)}: Missing files: {', '.join(error)}")
+                            else:
+                                messages.append(f"- {os.path.basename(folder)}: {error}")
+
+                    QMessageBox.information(
                         self,
-                        "Missing Files",
-                        f"The following required files are missing:\n{', '.join(missing_files)}"
+                        "Folder Selection Results",
+                        "\n".join(messages)
                     )
-            except Exception as e:
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"Error adding folder {folder}:\n{str(e)}"
-                )
 
+                self._update_ui_state()
     def _clear_folders(self):
         """Clear folder list."""
         self.folder_list.clear()
