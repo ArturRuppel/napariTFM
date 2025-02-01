@@ -26,49 +26,7 @@ from napariTFM.services.preprocessing_service import PreprocessingService
 
 # TODO setting bead stack invalidates subsequent steps but setting reference doesn't
 # TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
-# TODO preview should dynamically change when changing frames
-# TODO add background subtraction with rolling ball radius
-# TODO fix this bug
-
-# 2025-01-31 19:58:59,883 - napariTFM.visualization_manager - ERROR - Preview handling failed: <Image layer 'Preview' at 0x1e9972983d0> is not in list
-# Traceback (most recent call last):
-#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 801, in toggle_preview
-#     else:
-#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\visualization_manager.py", line 206, in handle_preview
-#     self.viewer.layers.remove(self._preview_config.preview_layer)
-#   File "C:\Users\aruppel\mambaforge\envs\napariTFM\lib\_collections_abc.py", line 1108, in remove
-#     del self[self.index(value)]
-#   File "C:\Users\aruppel\mambaforge\envs\napariTFM\lib\site-packages\napari\utils\events\containers\_typed.py", line 236, in index
-#     raise ValueError(
-# ValueError: <Image layer 'Preview' at 0x1e9972983d0> is not in list
-# During handling of the above exception, another exception occurred:
-# Traceback (most recent call last):
-#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 1280, in _on_preview_toggled
-#     """Handle preview toggle."""
-#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 810, in toggle_preview
-#     if self.parameter_panel:
-# AttributeError: 'PreprocessingParameterPanel' object has no attribute 'preview_check'
-# 2025-01-31 19:59:03,243 - napari.layers.base.base - DEBUG - Layer.refresh: Preview
-# 2025-01-31 19:59:03,243 - napari.layers.base.base - DEBUG - Layer._refresh_sync: Preview
-# 2025-01-31 19:59:04,060 - napariTFM.visualization_manager - ERROR - Preview handling failed: <Image layer 'Preview' at 0x1e9972983d0> is not in list
-# Traceback (most recent call last):
-#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 801, in toggle_preview
-#     else:
-#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\visualization_manager.py", line 206, in handle_preview
-#     self.viewer.layers.remove(self._preview_config.preview_layer)
-#   File "C:\Users\aruppel\mambaforge\envs\napariTFM\lib\_collections_abc.py", line 1108, in remove
-#     del self[self.index(value)]
-#   File "C:\Users\aruppel\mambaforge\envs\napariTFM\lib\site-packages\napari\utils\events\containers\_typed.py", line 236, in index
-#     raise ValueError(
-# ValueError: <Image layer 'Preview' at 0x1e9972983d0> is not in list
-# During handling of the above exception, another exception occurred:
-# Traceback (most recent call last):
-#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 1280, in _on_preview_toggled
-#     """Handle preview toggle."""
-#   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 810, in toggle_preview
-#     if self.parameter_panel:
-# AttributeError: 'PreprocessingParameterPanel' object has no attribute 'preview_check'
-
+# TODO fix rolling ball UI
 
 class PreprocessingDataPanel(QWidget):
     """Panel for handling data loading and status display."""
@@ -215,9 +173,10 @@ class PreprocessingParameterPanel(QWidget):
 
         # Add rolling ball radius control
         radius_layout = QHBoxLayout()
-        radius_label = QLabel("Background")
-        radius_label.setFixedWidth(70)
-        radius_label.setToolTip("Rolling ball radius for background subtraction.\n0 disables background subtraction.")
+        radius_label = QLabel("Background Subtraction")
+        radius_label.setToolTip("Radius for rolling ball background subtraction in pixels. Set to 0 to disable background subtraction.")
+        radius_label.setFixedWidth(150)  # Increased width
+        radius_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         radius_spin = self._create_spinbox(0, 50, 1)
         radius_spin.setToolTip(
@@ -407,7 +366,7 @@ class PreprocessingParameterPanel(QWidget):
         """Connect all parameter control signals."""
         # Connect rolling ball radius controls
         radius_spin = self.parameter_spins['rolling_ball_radius']
-        radius_spin.valueChanged.connect(lambda v: self._update_radius_from_spinbox('rolling_ball_radius', v))
+        radius_spin.valueChanged.connect(lambda v: self._direct_parameter_update('rolling_ball_radius', v))
 
         # Connect intensity range controls
         intensity_slider = self.parameter_range_sliders['intensity']
@@ -449,17 +408,12 @@ class PreprocessingParameterPanel(QWidget):
 
         # Connect reset button
         self.reset_btn.clicked.connect(self._reset_parameters)
-    def _update_radius_from_spinbox(self, param: str, value: float):
-        """Update rolling ball radius slider from spinbox."""
-        slider_value = int(value)  # Direct 1:1 mapping now
-        slider = self.parameter_sliders[param]
 
-        slider.blockSignals(True)
-        slider.setValue(slider_value)
-        slider.blockSignals(False)
+    def _direct_parameter_update(self, param_name: str, value: float):
+        """Directly update parameter manager and emit change signal."""
+        self.parameter_manager.set_parameter(param_name, value)
+        self.parameter_changed.emit(param_name, value)
 
-        self.parameter_manager.set_parameter(param, value)
-        self.parameter_changed.emit(param, value)
     def _update_intensity_from_slider(self, values):
         """Update intensity spinboxes from range slider."""
         min_val, max_val = values

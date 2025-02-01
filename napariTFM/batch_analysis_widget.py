@@ -270,6 +270,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         # Bead/Reference parameters
         bead_params = [
+            ("rolling_ball_radius", "Rolling Ball Radius:", 0, 50, 1,
+             "Radius for rolling ball background subtraction in pixels. Set to 0 to disable background subtraction."),
             ("min_intensity_percentile", "Min Intensity (%)", 0, 100, 0.1,
              "Minimum intensity threshold percentile for bead detection. Lower values include dimmer beads."),
             ("max_intensity_percentile", "Max Intensity (%)", 0, 100, 0.1,
@@ -714,6 +716,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 "frame_interval": self.parameter_spins['frame_interval'].value(),
 
                 # Preprocessing parameters
+                "rolling_ball_radius": self.parameter_spins['rolling_ball_radius'].value(),
                 "min_intensity_percentile": self.parameter_spins['min_intensity_percentile'].value(),
                 "max_intensity_percentile": self.parameter_spins['max_intensity_percentile'].value(),
                 "gaussian_sigma": self.parameter_spins['gaussian_sigma'].value(),

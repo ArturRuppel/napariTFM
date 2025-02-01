@@ -524,6 +524,7 @@ class BatchAnalysis:
     def _create_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create preprocessing parameters from config."""
         return PreprocessingParameters(
+            rolling_ball_radius=self.config['parameters']['rolling_ball_radius'],
             min_intensity_percentile=self.config['parameters']['min_intensity_percentile'],
             max_intensity_percentile=self.config['parameters']['max_intensity_percentile'],
             gaussian_sigma=self.config['parameters']['gaussian_sigma'],
