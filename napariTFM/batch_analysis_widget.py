@@ -1013,13 +1013,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 except Exception as e:
                     print(f"Error syncing checkbox {name}: {str(e)}")
 
-            # Sync visualization checkboxes
-            for param_name, checkbox in self.visualization_checkboxes.items():
-                try:
-                    self.parameter_manager.set_parameter(param_name, checkbox.isChecked())
-                except Exception as e:
-                    print(f"Error syncing visualization {param_name}: {str(e)}")
-
         finally:
             self.blockSignals(False)
 
