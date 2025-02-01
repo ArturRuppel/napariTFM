@@ -27,8 +27,10 @@ from napariTFM.services.preprocessing_service import PreprocessingService
 # TODO setting bead stack invalidates subsequent steps but setting reference doesn't
 # TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
 # TODO review button disable/enable logic
-# TODO save transformation matrix for registration to .txt
+# TODO preview should dynamically change when changing frames
+# TODO add background subtraction with rolling ball radius
 # TODO fix this bug
+
 # 2025-01-31 19:58:59,883 - napariTFM.visualization_manager - ERROR - Preview handling failed: <Image layer 'Preview' at 0x1e9972983d0> is not in list
 # Traceback (most recent call last):
 #   File "C:\Users\aruppel\Documents\python_projects\napariTFM\napariTFM\preprocessing_widget.py", line 801, in toggle_preview
@@ -1146,6 +1148,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Set up UI and connections
         self._setup_ui()
         self._connect_signals()
+        self._update_ui_state()
+
 
     # endregion
 
@@ -1365,6 +1369,11 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
+    def _has_required_data(self) -> bool:
+        """Check if required data for processing is loaded."""
+        return (self.data_manager.bead_stack is not None and
+                self.data_manager.reference is not None)
+
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
         # Update data panel
@@ -1372,12 +1381,12 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.data_panel.update_data_status()
 
         # Update preview controls
-        has_data = (
+        has_any_data = (
                 self.data_manager.bead_stack is not None or
                 self.data_manager.reference is not None or
                 self.data_manager.cell_stack is not None
         )
-        self.preview_check.setEnabled(has_data)
+        self.preview_check.setEnabled(has_any_data)
 
         # Update radio button availability based on loaded data
         self.bead_radio.setEnabled(self.data_manager.bead_stack is not None)
@@ -1385,11 +1394,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.cell_radio.setEnabled(self.data_manager.cell_stack is not None)
 
         # Uncheck preview if no data
-        if not has_data and self.preview_check.isChecked():
+        if not has_any_data and self.preview_check.isChecked():
             self.preview_check.setChecked(False)
 
-        # Update action buttons
-        self.process_btn.setEnabled(has_data)
+        # Update action buttons - now uses _has_required_data()
+        self.process_btn.setEnabled(self._has_required_data())
+
+        # Update save button based on preprocessed data
         has_preprocessed = (
                 self.data_manager.preprocessed_bead_stack is not None or
                 self.data_manager.preprocessed_reference is not None or
@@ -1409,18 +1420,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.reference_radio.setEnabled(not frozen)
         self.cell_radio.setEnabled(not frozen)
 
-        # Update UI state when unfreezing to refresh element states
-        if not frozen:
-            self._update_ui_state()
-
         # Update save button based on preprocessed data availability
-        has_preprocessed = self._check_preprocessed_data()
+        has_preprocessed = (
+                self.data_manager.preprocessed_bead_stack is not None or
+                self.data_manager.preprocessed_reference is not None or
+                self.data_manager.preprocessed_cell_stack is not None
+        )
         self.save_btn.setEnabled(not frozen and has_preprocessed)
-
-    def _has_required_data(self) -> bool:
-        """Check if required data for processing is loaded."""
-        return (self.data_manager.bead_stack is not None and
-                self.data_manager.reference is not None)
 
     def _check_preprocessed_data(self) -> bool:
         """Check availability of preprocessed data."""
