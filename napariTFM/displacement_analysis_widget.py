@@ -1027,6 +1027,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         scroll.setFixedWidth(360)
 
         container = QWidget()
+        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
         layout = QVBoxLayout()
 
         layout.setSpacing(0)
