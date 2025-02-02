@@ -5,7 +5,7 @@ from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, Qt, QObject
 from qtpy.QtWidgets import (
-    QGroupBox, QLabel, QCheckBox, QSizePolicy, QFrame, QScrollArea, QApplication,
+    QGroupBox, QLabel, QCheckBox, QSizePolicy, QFrame, QScrollArea, QApplication, QSpacerItem,
     QSpinBox, QDoubleSpinBox, QPushButton, QComboBox, QProgressBar, QFileDialog
 )
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
@@ -25,7 +25,7 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO make preview current frame run in seperate thread
 # TODO layer visibility (only sigma_xx after calculations)
 # TODO verify parameter synching
-
+# TODO make boundary smoothing an integer
 class MSMParameterPanel(QWidget):
     """Panel for handling all MSM parameter inputs."""
 
@@ -1097,6 +1097,7 @@ class MSMWidget(BaseAnalysisWidget):
     ):
         super().__init__(viewer, data_manager, visualization_manager)
 
+        # Store managers and create service
         self.parameter_manager = parameter_manager
 
         # Get initial parameters from parameter manager
@@ -1104,12 +1105,13 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Initialize service with parameters
         self.service = MSMService(self.msm_params)
+        self.colorbar_manager = ColorbarManager()
 
         # Initialize panels
-        self.parameter_panel = MSMParameterPanel(parameter_manager)
         self.data_panel = MSMDataPanel(data_manager, viewer)
+        self.parameter_panel = MSMParameterPanel(parameter_manager)
 
-        # Initialize controller with data_panel
+        # Initialize controller
         self.controller = MSMController(
             viewer=viewer,
             service=self.service,
@@ -1119,108 +1121,98 @@ class MSMWidget(BaseAnalysisWidget):
             data_panel=self.data_panel
         )
 
-        # Initialize action panel
+        # Initialize action panel with controller
         self.action_panel = MSMActionPanel(self.controller)
 
         # Set panels in controller
         self.controller.set_panels(self.parameter_panel, self.action_panel)
-
         self.data_panel.set_controller(self.controller)
 
         # Setup UI and connect signals
         self._setup_ui()
         self._connect_signals()
 
-        # Add layer selection monitoring
-        self.viewer.layers.selection.events.active.connect(self._update_ui_state)
+        # Monitor frame changes
+        self.viewer.dims.events.current_step.connect(self._on_frame_changed)
 
         # Connect parameter manager to update service parameters when they change
         parameter_manager.parameters_reset.connect(self._update_service_parameters)
         parameter_manager.parameter_changed.connect(self._handle_parameter_change)
 
-    def _update_service_parameters(self, category: ParameterCategory):
-        """Update service parameters when parameters are reset"""
-        if category == ParameterCategory.STRESS:
-            self.msm_params = self.parameter_manager.get_msm_parameters()
-            self.service.update_parameters(self.msm_params)
-
-    def _handle_parameter_change(self, param_name: str, value: Any):
-        """Update service parameters when individual parameters change"""
-        # Only update if it's a stress-related parameter
-        stress_params = {'threshold', 'dilation', 'smoothing_sigma', 'density_factor',
-                         'mesh_algorithm', 'use_optimization', 'poisson_ratio_cells',
-                         'max_stress'}
-
-        if param_name in stress_params:
-            self.msm_params = self.parameter_manager.get_msm_parameters()
-            self.service.update_parameters(self.msm_params)
-
     def _setup_ui(self):
         """Set up the user interface."""
         main_layout = QHBoxLayout()
-
-        main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # Left side: Colorbar (from BaseAnalysisWidget)
-        colorbar_container = QWidget()
-        colorbar_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.colorbar_manager = ColorbarManager()
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='seismic',
-            label="Stress (mN/m)",
-            clim=(-1, 1),
-            colorbar_manager=self.colorbar_manager
-        )
-        colorbar_group.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-        colorbar_layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        colorbar_container.setLayout(colorbar_layout)
-
+        # Left: Colorbar
+        colorbar_container = self._create_colorbar_container()
+        colorbar_container.setFixedWidth(100)
         main_layout.addWidget(colorbar_container)
 
-        # Create a scroll area for the right side
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        scroll_area.setFixedWidth(360)
-
-        # Create a widget to hold all the content in the scroll area
-        scroll_content = QWidget()
-        scroll_content.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        scroll_layout = QVBoxLayout()
-        scroll_layout.setSpacing(0)
-        scroll_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Add panels to the scroll area
-        scroll_layout.addWidget(self.data_panel)
-        scroll_layout.addWidget(self.parameter_panel)
-        scroll_layout.addWidget(self.action_panel)
-
-        # Add status frame
-        status_frame = QFrame()
-        status_layout = QVBoxLayout()
-        self.progress_bar = QProgressBar()
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-        status_layout.addWidget(self.progress_bar)
-        status_layout.addWidget(self.status_label)
-        status_frame.setLayout(status_layout)
-        scroll_layout.addWidget(status_frame)
-
-        # Set the layout for the scroll content
-        scroll_content.setLayout(scroll_layout)
-        scroll_area.setWidget(scroll_content)
-
-        main_layout.addWidget(scroll_area)
+        # Right: Scrollable content
+        content_container = self._create_content_container()
+        main_layout.addWidget(content_container)
 
         self.setLayout(main_layout)
 
-        self._update_ui_state()
+    def _create_colorbar_container(self) -> QWidget:
+        """Create the colorbar container."""
+        container = QWidget()
+        layout = QVBoxLayout()
+
+        colorbar_group = self.create_colorbar_widget(
+            colormap_name='seismic',
+            label="Stress (mN/m)",
+            clim=(-self.parameter_manager.get_parameter('max_stress'),
+                  self.parameter_manager.get_parameter('max_stress')),
+            colorbar_manager=self.colorbar_manager
+        )
+        layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
+        container.setLayout(layout)
+        return container
+
+    def _create_content_container(self) -> QWidget:
+        """Create the main content container."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedWidth(360)
+
+        container = QWidget()
+        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        layout = QVBoxLayout()
+
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Add panels
+        layout.addWidget(self.data_panel)
+        layout.addItem(QSpacerItem(0, -12, QSizePolicy.Minimum, QSizePolicy.Fixed))
+        layout.addWidget(self.parameter_panel)
+        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
+        layout.addWidget(self.action_panel)
+        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
+        layout.addWidget(self._create_status_frame())
+        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
+
+        container.setLayout(layout)
+        scroll.setWidget(container)
+        return scroll
+
+    def _create_status_frame(self) -> QFrame:
+        """Create the status display frame."""
+        frame = QFrame()
+        layout = QVBoxLayout()
+
+        self.progress_bar = QProgressBar()
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.status_label)
+
+        frame.setLayout(layout)
+        return frame
 
     def _connect_signals(self):
         """Connect all widget signals."""
@@ -1245,77 +1237,48 @@ class MSMWidget(BaseAnalysisWidget):
 
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
 
-    def _handle_ui_freeze(self, frozen):
-        """Update UI state when unfreezing"""
-        if not frozen:
-            self._update_ui_state()
+        # Connect to layer selection changes
+        self.viewer.layers.selection.events.active.connect(self._update_ui_state)
 
     def _update_status(self, progress: int, message: str):
         """Update status display."""
         self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
-    def cleanup(self):
-        """Clean up resources."""
-        if self.colorbar_manager:
-            self.colorbar_manager.cleanup()
-        self.visualization_manager.cleanup()
-        super().cleanup()
+    def _on_frame_changed(self, event=None):
+        """Handle frame change events."""
+        if self.data_manager.stress_results is not None:
+            self.visualization_manager.update_stress_frame(
+                self.viewer.dims.current_step[0]
+            )
 
-    def _on_data_loaded(self, data_type: str):
-        self._update_ui_state()
+    def _update_service_parameters(self, category: ParameterCategory):
+        """Update service parameters when parameters are reset."""
+        if category == ParameterCategory.STRESS:
+            self.msm_params = self.parameter_manager.get_msm_parameters()
+            self.service.update_parameters(self.msm_params)
 
-    def _on_parameter_changed(self):
-        if hasattr(self, 'preview_active') and self.preview_active:
-            self.controller.preview_current_frame()
+    def _handle_parameter_change(self, param_name: str, value: Any):
+        """Update service parameters when individual parameters change."""
+        stress_params = {
+            'threshold', 'dilation', 'smoothing_sigma', 'density_factor',
+            'mesh_algorithm', 'use_optimization', 'poisson_ratio_cells',
+            'max_stress'
+        }
+        if param_name in stress_params:
+            self.msm_params = self.parameter_manager.get_msm_parameters()
+            self.service.update_parameters(self.msm_params)
 
-    def _on_analysis_started(self):
-        self._set_controls_enabled(False)
-
-    def _on_analysis_completed(self, results):
-        self._set_controls_enabled(True)
-        self.stress_calculated.emit(results)
-
-    def _on_analysis_failed(self, error_msg: str):
-        """Handle analysis failure."""
-        self._set_controls_enabled(True)
-        self._update_status(0, f"Analysis failed: {error_msg}")
-
-    def _on_mask_creation_completed(self):
-        """Handle successful mask creation."""
-        masks = self.data_manager.mask_stack
-        self.data_panel.update_mask_status(f"Loaded: {masks.shape}")
-
-        # Get downscale factor from force parameters
-        try:
-            downscale_factor = self.data_manager.force_results.parameters.downscale_factor
-        except:
-            downscale_factor = 1
-
-        # Visualize masks using the visualization manager
-        self.visualization_manager.visualize_masks(
-            masks=masks,
-            downscale_factor=downscale_factor
-        )
-
-    def _on_mask_creation_failed(self, error_msg: str):
-        """Handle mask creation failure."""
-        self.data_panel.update_mask_status("Mask creation failed")
-        QMessageBox.critical(self, "Error", error_msg)
-
-    def _update_ui_state(self):
-        """Update all button states based on current application state."""
-        # Check viewer state
+    def _update_ui_state(self, event=None):
+        """Update UI state based on current data and selection."""
         active_layer = self.viewer.layers.selection.active
         has_active_image = (active_layer is not None and
                             isinstance(active_layer.data, np.ndarray))
 
-        # Check data manager state using appropriate properties
         has_force = self.data_manager.force_results is not None
         has_mask = self.data_manager.mask_stack is not None
         has_stress = self.data_manager.stress_results is not None
 
-        # Update panels
         self.data_panel.update_button_states(has_active_image)
         self.data_panel.update_data_status()
         self.action_panel.update_button_states(
@@ -1324,3 +1287,62 @@ class MSMWidget(BaseAnalysisWidget):
             mask_data=has_mask,
             stress_data=has_stress
         )
+
+    def cleanup(self):
+        """Clean up resources."""
+        if self.colorbar_manager:
+            self.colorbar_manager.cleanup()
+        if hasattr(self, 'viewer') and self.viewer is not None:
+            self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
+        super().cleanup()
+
+    def _handle_ui_freeze(self, frozen: bool):
+        """Handle UI freeze/unfreeze events."""
+        if not frozen:
+            self._update_ui_state()
+
+    def _on_data_loaded(self, data_type: str):
+        """Handle data loading events."""
+        self._update_ui_state()
+
+    def _on_parameter_changed(self):
+        """Handle parameter change events."""
+        if hasattr(self, 'preview_active') and self.preview_active:
+            self.controller.preview_current_frame()
+
+    def _on_analysis_started(self):
+        """Handle analysis start event."""
+        self.progress_bar.setValue(0)
+        self.status_label.setText("Analysis started...")
+
+    def _on_analysis_completed(self, results):
+        """Handle analysis completion."""
+        self.stress_calculated.emit(results)
+        self._update_ui_state()
+
+    def _on_analysis_failed(self, error_msg: str):
+        """Handle analysis failure."""
+        self._update_status(0, f"Analysis failed: {error_msg}")
+        self._update_ui_state()
+
+    def _on_mask_creation_completed(self):
+        """Handle mask creation completion."""
+        masks = self.data_manager.mask_stack
+        if masks is not None:
+            self.data_panel.update_mask_status(f"Loaded: {masks.shape}")
+
+            downscale_factor = 1
+            if self.data_manager.force_results is not None:
+                downscale_factor = self.data_manager.force_results.parameters.downscale_factor
+
+            self.visualization_manager.visualize_masks(
+                masks=masks,
+                downscale_factor=downscale_factor
+            )
+        self._update_ui_state()
+
+    def _on_mask_creation_failed(self, error_msg: str):
+        """Handle mask creation failure."""
+        self.data_panel.update_mask_status("Mask creation failed")
+        QMessageBox.critical(self, "Error", error_msg)
+        self._update_ui_state()

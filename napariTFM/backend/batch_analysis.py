@@ -184,7 +184,7 @@ class BatchAnalysis:
             mask_data = self._handle_mask_creation(tfm_folder)
 
             # Handle stress analysis
-            stress_data = self._handle_stress_execution(tfm_folder, mask_data, force_data)
+            stress_data = self._handle_stress_execution(tfm_folder, force_data, mask_data)
             self._handle_visualization(tfm_folder, viz_saver, 'stress', stress_data)
 
             print("Folder processing completed successfully!")
@@ -576,7 +576,7 @@ class BatchAnalysis:
         """Create MSM parameters from config."""
         return MSMParameters(
             density_factor=self.config['parameters']['density_factor'],
-            algorithm=self.config['parameters']['mesh_algorithm'],
+            mesh_algorithm=self.config['parameters']['mesh_algorithm'],
             use_optimization=self.config['parameters']['use_optimization'],
             poisson_ratio_cells=self.config['parameters']['poisson_ratio_cells'],
             young_modulus=1.0,

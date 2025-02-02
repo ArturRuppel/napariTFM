@@ -19,7 +19,7 @@ from napariTFM.backend.batch_analysis import BatchAnalysis
 from napariTFM.base_widget import BaseAnalysisWidget
 from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 
-
+# TODO make text fields align on their left edge
 class BatchAnalysisWidget(BaseAnalysisWidget):
     """Widget for running batch analysis on multiple folders."""
 
