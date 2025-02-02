@@ -183,7 +183,7 @@ class MSMParameterPanel(QWidget):
 
     def _on_value_changed(self, param_name: str, value: Any):
         """Handle parameter value changes."""
-        self.parameter_manager.set_value(param_name, value)
+        self.parameter_manager.set_parameter(param_name, value)
         self.parameter_value_changed.emit(param_name, value)
         self.parameter_changed.emit()
 
@@ -589,7 +589,6 @@ class MSMController(QObject):
             return False
         return True
 
-
     def start_analysis(self):
         """Start the stress analysis by first generating meshes then calculating stresses."""
         try:
@@ -884,9 +883,6 @@ class MSMController(QObject):
     def preview_mesh(self):
         """Generate and display mesh preview for the current frame."""
         try:
-            if not self._validate_prerequisites():
-                return
-
             self._update_progress(0, "Generating mesh preview...")
 
             # Get current frame index
@@ -907,26 +903,23 @@ class MSMController(QObject):
 
             mask = masks[current_frame] if masks.ndim > 2 else masks
 
-            # Convert to single frame format if needed
-            mask_stack = mask[np.newaxis, ...] if mask.ndim == 2 else mask
-
-            # Process masks through service
-            processed_masks, warnings = self.service.process_mask_data(mask_stack)
-            if warnings:
-                for warning in warnings:
-                    print(f"Warning: {warning}")
-
             # Generate mesh using service
-            mesh_generator = self.service.generate_mesh_stack(processed_masks)
+            mesh_generator = self.service.generate_mesh_stack(mask)
 
             try:
                 # Get first mesh result
                 nodes, elements, quality_metrics, _, _ = next(mesh_generator)
 
+                try:
+                    downscale_factor = self.data_manager.force_results.parameters.downscale_factor
+                except:
+                    downscale_factor = 1
+
                 # Update visualization
                 self.visualization_manager.visualize_mesh(
                     nodes=nodes,
-                    elements=elements
+                    elements=elements,
+                    downscale_factor=downscale_factor
                 )
 
                 # Format quality metrics for status message
@@ -952,6 +945,7 @@ class MSMController(QObject):
             self._update_progress(0, error_msg)
             QMessageBox.critical(None, "Error", error_msg)
             return None
+
     def cancel_all_operations(self):
         """Cancel all running background operations"""
         for worker in self.active_workers:
