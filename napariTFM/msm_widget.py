@@ -26,6 +26,8 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO layer visibility (only sigma_xx after calculations)
 # TODO verify parameter synching
 # TODO make boundary smoothing an integer
+# TODO test in all widgets whether or not loading external data updates params
+
 class MSMParameterPanel(QWidget):
     """Panel for handling all MSM parameter inputs."""
 

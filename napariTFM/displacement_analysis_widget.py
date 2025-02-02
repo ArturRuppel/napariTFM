@@ -24,9 +24,11 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO preview and auto-gcv through errors when current layer is a vector layer
 # TODO putting theta to 1 throws error
 # TODO cancel operations disabled during operations (lol)
-# TODO review tooltips
+# TODO fold away parameters that are not that usefull
 # TODO median filter above 5 throws error
 # TODO implement more sophisticated post processing (median filters, angle filters, correlation filters...)
+# TODO test in all widgets whether or not loading external data updates params
+
 
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""

@@ -23,6 +23,7 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO review button disable/enable logic
 # TODO preview button should clear vector cache
 # TODO auto-gcv puts a 0 in the UI
+# TODO test in all widgets whether or not loading external data updates params
 
 class FTTCDataPanel(QWidget):
     """Panel for handling FTTC data loading and status display."""

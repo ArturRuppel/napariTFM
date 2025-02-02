@@ -24,7 +24,6 @@ from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.services.preprocessing_service import PreprocessingService
 
 
-# TODO setting bead stack invalidates subsequent steps but setting reference doesn't
 # TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
 # TODO fix rolling ball UI
 
@@ -169,13 +168,13 @@ class PreprocessingParameterPanel(QWidget):
     # region === UI Creation
     def _create_intensity_range_group(self):
         group = QGroupBox("Bead/Reference Parameters")
-        layout = QVBoxLayout()
+        layout = QGridLayout()  # Changed to GridLayout for better alignment
+        layout.setColumnStretch(2, 1)  # Make the third column (slider column) stretch
 
-        # Add rolling ball radius control
-        radius_layout = QHBoxLayout()
+        # Add rolling ball radius control - now properly aligned
         radius_label = QLabel("Background Subtraction")
         radius_label.setToolTip("Radius for rolling ball background subtraction in pixels. Set to 0 to disable background subtraction.")
-        radius_label.setFixedWidth(150)  # Increased width
+        radius_label.setFixedWidth(165)
         radius_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         radius_spin = self._create_spinbox(0, 50, 1)
@@ -184,13 +183,15 @@ class PreprocessingParameterPanel(QWidget):
             "Larger values remove broader background variations.\n"
             "Set to 0 to disable background subtraction."
         )
-        radius_spin.setFixedWidth(99)
+        radius_spin.setFixedWidth(135)
         self.parameter_spins['rolling_ball_radius'] = radius_spin
-        radius_layout.addWidget(radius_label)
-        radius_layout.addWidget(radius_spin)
-        layout.addLayout(radius_layout)
 
-        # Create range slider
+        # Add to grid - first row
+        layout.addWidget(radius_label, 0, 0)
+        layout.addWidget(radius_spin, 0, 1)
+        layout.addWidget(QWidget(), 0, 2)  # Empty widget for alignment
+
+        # Create range slider - second row
         intensity_slider = QRangeSlider(Qt.Horizontal)
         intensity_slider.setRange(0, 1000)  # 0-100.0 with 0.1 precision
         intensity_slider.setToolTip(
@@ -198,12 +199,12 @@ class PreprocessingParameterPanel(QWidget):
             "Adjust to include relevant beads while excluding noise and background."
         )
         self.parameter_range_sliders['intensity'] = intensity_slider
-        layout.addWidget(intensity_slider)
+        layout.addWidget(intensity_slider, 1, 0, 1, 3)  # Span all three columns
 
-        # Create spinboxes
-        spinbox_layout = QHBoxLayout()
+        # Create min/max spinboxes - third row
         min_label = QLabel("Min")
         min_label.setFixedWidth(40)
+        max_label = QLabel("Max")
 
         min_spin = self._create_spinbox(0, 100, 0.1)
         min_spin.setToolTip(
@@ -218,15 +219,18 @@ class PreprocessingParameterPanel(QWidget):
         self.parameter_spins['min_intensity_percentile'] = min_spin
         self.parameter_spins['max_intensity_percentile'] = max_spin
 
+        # Create a widget for min/max controls to maintain alignment
+        spinbox_container = QWidget()
+        spinbox_layout = QHBoxLayout(spinbox_container)
+        spinbox_layout.setContentsMargins(0, 0, 0, 0)
         spinbox_layout.addWidget(min_label)
         spinbox_layout.addWidget(min_spin)
         spinbox_layout.addStretch()
         spinbox_layout.addWidget(max_spin)
-        spinbox_layout.addWidget(QLabel("Max"))
-        layout.addLayout(spinbox_layout)
+        spinbox_layout.addWidget(max_label)
+        layout.addWidget(spinbox_container, 2, 0, 1, 3)  # Span all three columns
 
-        # Create Gaussian sigma controls
-        sigma_layout = QHBoxLayout()
+        # Create Gaussian sigma controls - fourth row
         blur_label = QLabel("Blur")
         blur_label.setFixedWidth(40)
 
@@ -235,17 +239,21 @@ class PreprocessingParameterPanel(QWidget):
             "Standard deviation for Gaussian smoothing of bead images.\n"
             "Higher values reduce noise but may blur bead features."
         )
-        sigma_spin.setFixedWidth(99)
+        sigma_spin.setFixedWidth(135)
         self.parameter_spins['gaussian_sigma'] = sigma_spin
 
         sigma_slider = QSlider(Qt.Horizontal)
         sigma_slider.setRange(0, 100)  # 0-10.0 with 0.1 precision
         self.parameter_sliders['gaussian_sigma'] = sigma_slider
 
-        sigma_layout.addWidget(blur_label)
-        sigma_layout.addWidget(sigma_spin)
-        sigma_layout.addWidget(sigma_slider)
-        layout.addLayout(sigma_layout)
+        # Create a widget for blur controls
+        blur_container = QWidget()
+        blur_layout = QHBoxLayout(blur_container)
+        blur_layout.setContentsMargins(0, 0, 0, 0)
+        blur_layout.addWidget(blur_label)
+        blur_layout.addWidget(sigma_spin)
+        blur_layout.addWidget(sigma_slider)
+        layout.addWidget(blur_container, 3, 0, 1, 3)  # Span all three columns
 
         group.setLayout(layout)
         return group
@@ -299,7 +307,7 @@ class PreprocessingParameterPanel(QWidget):
             "Standard deviation for Gaussian smoothing of cell images.\n"
             "Higher values reduce noise but may blur cell boundaries."
         )
-        sigma_spin.setFixedWidth(99)
+        sigma_spin.setFixedWidth(135)
         self.parameter_spins['cell_gaussian_sigma'] = sigma_spin
 
         sigma_slider = QSlider(Qt.Horizontal)
