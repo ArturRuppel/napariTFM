@@ -610,8 +610,8 @@ class VisualizationManager(ErrorHandlingMixin):
                 return component
 
             # Extract and upscale stress components
-            sigma_xx = upscale_component(stress_tensor[..., 0, 0]) * 1e3  # convert to mN/m
-            sigma_yy = upscale_component(stress_tensor[..., 1, 1]) * 1e3  # convert to mN/m
+            sigma_xx = upscale_component(np.squeeze(stress_tensor[..., 0, 0]))
+            sigma_yy = upscale_component(np.squeeze(stress_tensor[..., 1, 1]))
 
             # Calculate average normal stress after upscaling
             sigma_normal = (sigma_xx + sigma_yy) / 2
@@ -657,22 +657,28 @@ class VisualizationManager(ErrorHandlingMixin):
             self.handle_error(error)
             raise
 
-    def visualize_stress_results(
-            self,
-            stress_tensor: np.ndarray,
-            downscale_factor: Optional[int] = 1,
-            max_stress: Optional[float] = None
-
-    ) -> None:
-        """Visualize stress results for all frames."""
+    def visualize_stress_results(self) -> None:
+        """Visualize stress results for all frames using data from data manager."""
         try:
+            # Check if stress results exist
+            if self.data_manager.stress_results is None:
+                raise ValueError("No stress results available in data manager")
+
+            # Get results and parameters from data manager
+            results = self.data_manager.stress_results
+            stress_tensors = results.stress_tensor
+            params = results.parameters
+
+            # Get visualization parameters
+            max_stress = params.max_stress
+            downscale_factor = params.downscale_factor
+
             # Clear existing layers
             self._clear_layers([
                 'Normal Stress XX',
                 'Normal Stress YY',
                 'Average Normal Stress'
             ])
-
 
             def upscale_component(component):
                 if downscale_factor > 1:
@@ -696,8 +702,8 @@ class VisualizationManager(ErrorHandlingMixin):
                 return component
 
             # Extract and upscale stress components
-            sigma_xx = upscale_component(stress_tensor[..., 0, 0]) * 1e3  # convert to mN/m
-            sigma_yy = upscale_component(stress_tensor[..., 1, 1]) * 1e3  # convert to mN/m
+            sigma_xx = upscale_component(stress_tensors[..., 0, 0])
+            sigma_yy = upscale_component(stress_tensors[..., 1, 1])
 
             # Calculate average normal stress after upscaling
             sigma_normal = (sigma_xx + sigma_yy) / 2
