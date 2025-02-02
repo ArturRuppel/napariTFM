@@ -19,11 +19,7 @@ from napariTFM.services.displacement_service import DisplacementService, Displac
 from napariTFM.visualization_manager import VisualizationManager
 
 
-# TODO review button disable/enable logic
 # TODO load displacement moves layers to the top but doesn't disable other layers
-# TODO putting theta to 1 throws error
-# TODO cancel operations disabled during operations (lol)
-# TODO test in all widgets whether or not loading external data updates params
 
 
 class DisplacementDataPanel(QWidget):
@@ -433,7 +429,6 @@ class DisplacementActionPanel(QWidget):
         super().__init__()
         self.controller = controller
         self._setup_ui()
-        self._connect_signals()
 
     def _setup_ui(self):
         """Set up the user interface."""
@@ -450,6 +445,8 @@ class DisplacementActionPanel(QWidget):
         self.calculate_btn.setToolTip(
             "Calculate displacements for all frames in the dataset"
         )
+        self.preview_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.calculate_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         row1_layout.addWidget(self.preview_btn)
         row1_layout.addWidget(self.calculate_btn)
         layout.addLayout(row1_layout)
@@ -464,18 +461,25 @@ class DisplacementActionPanel(QWidget):
         self.load_btn.setToolTip(
             "Load previously saved displacement results"
         )
+        self.save_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.load_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         row2_layout.addWidget(self.save_btn)
         row2_layout.addWidget(self.load_btn)
         layout.addLayout(row2_layout)
 
-        # Cancel button in its own centered container
-        cancel_layout = QHBoxLayout()
+        # Cancel button (full width)
         self.cancel_btn = QPushButton("Cancel Operation")
         self.cancel_btn.setToolTip(
             "Cancel the current operation"
         )
-        cancel_layout.addWidget(self.cancel_btn)
-        layout.addLayout(cancel_layout)
+        layout.addWidget(self.cancel_btn)
+
+        # Connect signals
+        self.preview_btn.clicked.connect(self.controller.preview_displacement)
+        self.calculate_btn.clicked.connect(self.controller.calculate_all_frames)
+        self.save_btn.clicked.connect(self.controller.save_results)
+        self.load_btn.clicked.connect(self.controller.load_results)
+        self.cancel_btn.clicked.connect(self.controller.cancel_operation)
 
         self.setLayout(layout)
 
@@ -703,7 +707,6 @@ class DisplacementController(QObject):
         """Cancel all running operations."""
         for worker in self.active_workers:
             try:
-                worker.running = False
                 worker.quit()
                 worker.wait(500)
                 if worker.isRunning():
@@ -712,9 +715,16 @@ class DisplacementController(QObject):
             except Exception:
                 pass
         self.active_workers.clear()
+
+        # Clear any partial results when canceling
+        self.data_manager.set_displacement_results(None)
+
+        # Update UI
         self.progress_updated.emit(0, "Operations cancelled")
         self.unfreeze_ui()
 
+        # Force UI state update to reflect cleared results
+        self.data_updated.emit('displacement')
     # endregion === Processing Execution
 
     # region === Parameter Handling
@@ -833,6 +843,15 @@ class DisplacementController(QObject):
                 # Update data manager and visualization
                 self.data_manager.set_displacement_results(result)
                 self.visualization_manager.visualize_displacement_results()
+
+                # Manage layer visibility after loading
+                for layer in self.viewer.layers:
+                    if layer.name in ['Displacement Vectors', 'Displacement Magnitude']:
+                        layer.visible = True
+                        # Move displacement layers to top
+                        self.viewer.layers.move(self.viewer.layers.index(layer), -1)
+                    else:
+                        layer.visible = False
 
                 self.progress_updated.emit(100, f"Results and parameters loaded from {load_path}")
                 self.analysis_completed.emit(result)
@@ -988,6 +1007,11 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Monitor frame changes
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
 
+        # Initialize UI state
+        self._update_ui_state()
+
+
+
     # endregion
 
     # region === UI Creation
@@ -1142,35 +1166,52 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
-    def _handle_ui_freeze(self, frozen: bool):
-        """Handle UI freeze/unfreeze."""
-        if self.action_panel:
-            self.action_panel.freeze_ui(frozen)
-            self.action_panel.update_button_states(
-                has_reference=self.data_manager.preprocessed_reference is not None,
-                has_beads=self.data_manager.preprocessed_bead_stack is not None,
-                has_results=self.data_manager.displacement_results is not None
-            )
-
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
         # Update data panel
         self.data_panel.update_button_states()
         self.data_panel.update_data_status()
 
-        # Update action panel button states
-        if self.action_panel:
-            has_reference = self.data_manager.preprocessed_reference is not None
-            has_beads = self.data_manager.preprocessed_bead_stack is not None
-            has_results = self.data_manager.displacement_results is not None
-            self.action_panel.update_button_states(
-                has_reference=has_reference,
-                has_beads=has_beads,
-                has_results=has_results
-            )
+        # Get current data state
+        has_reference = self.data_manager.preprocessed_reference is not None
+        has_beads = self.data_manager.preprocessed_bead_stack is not None
+        has_results = self.data_manager.displacement_results is not None  # Full results, not preview
+
+        # Update action panel button states based on data availability
+        if hasattr(self, 'action_panel'):
+            # Analysis buttons require both reference and beads
+            can_analyze = has_reference and has_beads
+            self.action_panel.preview_btn.setEnabled(can_analyze)
+            self.action_panel.calculate_btn.setEnabled(can_analyze)
+
+            # Save requires full results (not just preview)
+            self.action_panel.save_btn.setEnabled(has_results)
+
+            # Load is always enabled as it's independent of current state
+            self.action_panel.load_btn.setEnabled(True)
+
+            # Cancel is always enabled
+            self.action_panel.cancel_btn.setEnabled(True)
+
+    def _handle_ui_freeze(self, frozen: bool):
+        """Handle UI freeze/unfreeze during processing."""
+        if hasattr(self, 'data_panel'):
+            self.data_panel.freeze_ui(frozen)
+
+        if hasattr(self, 'parameter_panel'):
+            self.parameter_panel.freeze_ui(frozen)
+
+        if hasattr(self, 'action_panel'):
+            # During processing, disable all buttons except cancel
+            self.action_panel.preview_btn.setEnabled(not frozen)
+            self.action_panel.calculate_btn.setEnabled(not frozen)
+            self.action_panel.save_btn.setEnabled(not frozen)
+            self.action_panel.load_btn.setEnabled(not frozen)
+            # Cancel button always enabled
+            self.action_panel.cancel_btn.setEnabled(True)
 
     def _has_required_data(self) -> bool:
-        """Check if required data is available."""
+        """Check if required data for processing is available."""
         return (
                 self.data_manager.preprocessed_reference is not None and
                 self.data_manager.preprocessed_bead_stack is not None
