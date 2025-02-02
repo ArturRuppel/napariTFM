@@ -72,7 +72,7 @@ class MeshParameters:
     """Parameters for mesh generation"""
     mask: np.ndarray
     density_factor: float = 0.01
-    algorithm: int = 2
+    mesh_algorithm: int = 2
     use_optimization: bool = True
 
 

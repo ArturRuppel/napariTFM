@@ -97,6 +97,9 @@ class MonolayerStressMicroscopy:
         self.E = young_modulus
         self.timing_stats = {}
         self._nested_calls = {}
+        self.density_factor = density_factor
+        self.mesh_algorithm = mesh_algorithm
+        self.use_optimization = use_optimization
         self.nodes = nodes
         self.elements = elements
 
@@ -602,7 +605,7 @@ class MonolayerStressMicroscopy:
                 mesh_params = MeshParameters(
                     mask=self.mask,
                     density_factor=self.density_factor,
-                    algorithm=self.algorithm,
+                    mesh_algorithm=self.mesh_algorithm,
                     use_optimization=self.use_optimization
                 )
                 self.mesh_generator = MeshGenerator(mesh_params)

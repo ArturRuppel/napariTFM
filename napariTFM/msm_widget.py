@@ -882,43 +882,70 @@ class MSMController(QObject):
         self._update_progress(progress, status)
 
     def preview_mesh(self):
-        """Generate and display mesh preview."""
+        """Generate and display mesh preview for the current frame."""
         try:
             if not self._validate_prerequisites():
                 return
 
             self._update_progress(0, "Generating mesh preview...")
+
+            # Get current frame index
             if len(self.viewer.dims.current_step) == 2:
                 current_frame = 0
                 self.progress_updated.emit(0, "No image stack found, previewing frame 0")
             else:
                 current_frame = self.viewer.dims.current_step[0]
-            params = self._get_current_parameters()
 
-            # Get mask from mask_stack
+            # Get current parameters and update service
+            params = self._get_current_parameters()
+            self.service.update_parameters(params)
+
+            # Get mask for current frame
             masks = self.data_manager.mask_stack
             if masks is None:
                 raise ValueError("No mask data available")
 
             mask = masks[current_frame] if masks.ndim > 2 else masks
 
-            # Check if resizing is needed based on force results
-            force_results = self.data_manager.force_results
-            if force_results is not None:
-                target_shape = force_results.force_field[current_frame, ..., 0].shape
-                mask = self.service.resize_mask_to_forces(mask, target_shape)
+            # Convert to single frame format if needed
+            mask_stack = mask[np.newaxis, ...] if mask.ndim == 2 else mask
 
-            # Generate mesh preview
-            preview_result = self.service.generate_mesh(mask, params)
+            # Process masks through service
+            processed_masks, warnings = self.service.process_mask_data(mask_stack)
+            if warnings:
+                for warning in warnings:
+                    print(f"Warning: {warning}")
 
-            # Update visualization
-            self.visualization_manager.visualize_mesh(
-                nodes=preview_result.nodes,
-                elements=preview_result.elements
-            )
+            # Generate mesh using service
+            mesh_generator = self.service.generate_mesh_stack(processed_masks)
 
-            self._update_progress(100, "Mesh preview generated successfully")
-            return preview_result
+            try:
+                # Get first mesh result
+                nodes, elements, quality_metrics, _, _ = next(mesh_generator)
+
+                # Update visualization
+                self.visualization_manager.visualize_mesh(
+                    nodes=nodes,
+                    elements=elements
+                )
+
+                # Format quality metrics for status message
+                quality_str = "\n".join([
+                    f"{key}: {value:.3f}"
+                    for key, value in quality_metrics.items()
+                ])
+
+                status_msg = (
+                    f"Mesh preview generated for frame {current_frame}\n"
+                    f"Mesh quality metrics:\n{quality_str}"
+                )
+
+                self._update_progress(100, status_msg)
+
+                return nodes, elements, quality_metrics
+
+            except StopIteration:
+                raise ValueError("Mesh generation failed to produce results")
 
         except Exception as e:
             error_msg = f"Failed to preview mesh: {str(e)}"

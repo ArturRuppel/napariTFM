@@ -24,7 +24,7 @@ class MeshGenerator:
             'target_size': target_size,
             'min_size': target_size * 0.5,
             'max_size': target_size * 2.0,
-            'algorithm': self.input_params.algorithm,
+            'mesh_algorithm': self.input_params.mesh_algorithm,
             'optimize_netgen': self.input_params.use_optimization,
             'optimize_steps': 10 if self.input_params.use_optimization else 0,
             'smoothing_steps': 5 if self.input_params.use_optimization else 0
@@ -60,7 +60,7 @@ class MeshGenerator:
         gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
 
         # Set mesh parameters
-        gmsh.option.setNumber("Mesh.Algorithm", self.mesh_params['algorithm'])
+        gmsh.option.setNumber("Mesh.Algorithm", self.mesh_params['mesh_algorithm'])
         gmsh.option.setNumber("Mesh.MeshSizeMin", self.mesh_params['min_size'])
         gmsh.option.setNumber("Mesh.MeshSizeMax", self.mesh_params['max_size'])
 

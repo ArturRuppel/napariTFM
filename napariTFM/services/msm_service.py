@@ -66,8 +66,7 @@ class MSMService:
             Parameters containing threshold, dilation, and smoothing settings
         target_shape : tuple, optional
             Shape to resize analysis masks to (height, width)
-        downscale_factor : int, optional
-            Factor to downscale masks by for visualization
+
 
         Yields
         ------
@@ -202,7 +201,7 @@ class MSMService:
         mesh_params = MeshParameters(
             mask=mask_stack[0],  # Use first frame for initial setup
             density_factor=self.params.density_factor,
-            algorithm=self._get_algorithm_code(self.params.algorithm),
+            mesh_algorithm=self._get_algorithm_code(self.params.mesh_algorithm),
             use_optimization=self.params.use_optimization
         )
         mesh_generator = MeshGenerator(mesh_params)
@@ -293,7 +292,7 @@ class MSMService:
                 mesh_params = MeshParameters(
                     mask=current_mask,
                     density_factor=self.params.density_factor,
-                    algorithm=self._get_algorithm_code(self.params.algorithm),
+                    mesh_algorithm=self._get_algorithm_code(self.params.mesh_algorithm),
                     use_optimization=self.params.use_optimization
                 )
                 mesh_generator = MeshGenerator(mesh_params)
