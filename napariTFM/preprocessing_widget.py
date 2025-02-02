@@ -9,7 +9,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import QObject
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
-    QRadioButton, QFileDialog, QFrame, QScrollArea, QCheckBox, QApplication,
+    QRadioButton, QFileDialog, QFrame, QScrollArea, QCheckBox, QApplication, QSpinBox,
     QProgressBar, QMessageBox, QSizePolicy, QSpacerItem, QGridLayout
 )
 from qtpy.QtWidgets import (
@@ -47,8 +47,11 @@ class PreprocessingDataPanel(QWidget):
         bead_layout = QHBoxLayout()
         self.load_beads_btn = QPushButton("Load Bead Stack")
         self.load_beads_btn.setFixedWidth(150)
-
+        self.load_beads_btn.setFixedHeight(25)
+        self.load_beads_btn.setToolTip("Load bead stack data from active layer")
         self.bead_status = QLabel("Not loaded")
+        self.bead_status.setWordWrap(True)
+
         bead_layout.addWidget(self.load_beads_btn)
         bead_layout.addWidget(self.bead_status)
         group_layout.addLayout(bead_layout)
@@ -57,7 +60,10 @@ class PreprocessingDataPanel(QWidget):
         ref_layout = QHBoxLayout()
         self.load_reference_btn = QPushButton("Load Reference Image")
         self.load_reference_btn.setFixedWidth(150)
+        self.load_reference_btn.setFixedHeight(25)
+        self.load_reference_btn.setToolTip("Load reference image from active layer")
         self.reference_status = QLabel("Not loaded")
+        self.reference_status.setWordWrap(True)
         ref_layout.addWidget(self.load_reference_btn)
         ref_layout.addWidget(self.reference_status)
         group_layout.addLayout(ref_layout)
@@ -66,11 +72,13 @@ class PreprocessingDataPanel(QWidget):
         cell_layout = QHBoxLayout()
         self.load_cells_btn = QPushButton("Load Cell Stack")
         self.load_cells_btn.setFixedWidth(150)
+        self.load_cells_btn.setFixedHeight(25)
         self.cell_status = QLabel("Not loaded")
         cell_layout.addWidget(self.load_cells_btn)
         cell_layout.addWidget(self.cell_status)
         group_layout.addLayout(cell_layout)
 
+        # Add description label for required data
         info_label = QLabel(
             "Required: Reference image and bead stack."
         )
@@ -203,12 +211,12 @@ class PreprocessingParameterPanel(QWidget):
         min_label.setFixedWidth(40)
         max_label = QLabel("Max")
 
-        min_spin = self._create_spinbox(0, 100, 0.1)
+        min_spin = self._create_double_spinbox(0, 100, 0.1)
         min_spin.setToolTip(
             "Minimum intensity threshold percentile for bead detection.\n"
             "Lower values include dimmer beads but may increase noise."
         )
-        max_spin = self._create_spinbox(0, 100, 0.1)
+        max_spin = self._create_double_spinbox(0, 100, 0.1)
         max_spin.setToolTip(
             "Maximum intensity threshold percentile for bead detection.\n"
             "Higher values include brighter beads but may exclude valid data."
@@ -231,7 +239,7 @@ class PreprocessingParameterPanel(QWidget):
         blur_label = QLabel("Blur")
         blur_label.setFixedWidth(40)
 
-        sigma_spin = self._create_spinbox(0, 10, 0.1)
+        sigma_spin = self._create_double_spinbox(0, 10, 0.1)
         sigma_spin.setToolTip(
             "Standard deviation for Gaussian smoothing of bead images.\n"
             "Higher values reduce noise but may blur bead features."
@@ -274,12 +282,12 @@ class PreprocessingParameterPanel(QWidget):
         min_label = QLabel("Min")
         min_label.setFixedWidth(40)
 
-        min_spin = self._create_spinbox(0, 100, 0.1)
+        min_spin = self._create_double_spinbox(0, 100, 0.1)
         min_spin.setToolTip(
             "Minimum intensity threshold percentile for cell detection.\n"
             "Lower values include dimmer cell regions but may increase noise."
         )
-        max_spin = self._create_spinbox(0, 100, 0.1)
+        max_spin = self._create_double_spinbox(0, 100, 0.1)
         max_spin.setToolTip(
             "Maximum intensity threshold percentile for cell detection.\n"
             "Higher values include brighter cell regions but may exclude valid data."
@@ -299,7 +307,7 @@ class PreprocessingParameterPanel(QWidget):
         blur_label = QLabel("Blur")
         blur_label.setFixedWidth(40)
 
-        sigma_spin = self._create_spinbox(0, 10, 0.1)
+        sigma_spin = self._create_double_spinbox(0, 10, 0.1)
         sigma_spin.setToolTip(
             "Standard deviation for Gaussian smoothing of cell images.\n"
             "Higher values reduce noise but may blur cell boundaries."
@@ -357,6 +365,13 @@ class PreprocessingParameterPanel(QWidget):
         return group
 
     def _create_spinbox(self, min_val: float, max_val: float, step: float, decimals: int = 1) -> QDoubleSpinBox:
+        """Create a spinbox with given parameters."""
+        spin = QSpinBox()
+        spin.setRange(min_val, max_val)
+        spin.setSingleStep(step)
+        return spin
+
+    def _create_double_spinbox(self, min_val: float, max_val: float, step: float, decimals: int = 1) -> QDoubleSpinBox:
         """Create a spinbox with given parameters."""
         spin = QDoubleSpinBox()
         spin.setRange(min_val, max_val)

@@ -23,7 +23,6 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO load displacement moves layers to the top but doesn't disable other layers
 # TODO putting theta to 1 throws error
 # TODO cancel operations disabled during operations (lol)
-# TODO fold away parameters that are not that usefull
 # TODO test in all widgets whether or not loading external data updates params
 
 
@@ -52,9 +51,11 @@ class DisplacementDataPanel(QWidget):
         bead_layout = QHBoxLayout()
         self.load_beads_btn = QPushButton("Load Bead Stack")
         self.load_beads_btn.setFixedWidth(150)
+        self.load_beads_btn.setFixedHeight(25)
         self.load_beads_btn.setToolTip("Load bead stack data from active layer")
         self.bead_status = QLabel("Not loaded")
         self.bead_status.setWordWrap(True)
+
         bead_layout.addWidget(self.load_beads_btn)
         bead_layout.addWidget(self.bead_status)
         group_layout.addLayout(bead_layout)
@@ -63,6 +64,7 @@ class DisplacementDataPanel(QWidget):
         ref_layout = QHBoxLayout()
         self.load_reference_btn = QPushButton("Load Reference Image")
         self.load_reference_btn.setFixedWidth(150)
+        self.load_reference_btn.setFixedHeight(25)
         self.load_reference_btn.setToolTip("Load reference image from active layer")
         self.reference_status = QLabel("Not loaded")
         self.reference_status.setWordWrap(True)

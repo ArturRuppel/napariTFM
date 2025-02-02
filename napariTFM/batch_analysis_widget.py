@@ -243,7 +243,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Pixel size
         pixel_row = QHBoxLayout()
         pixel_row.addWidget(QLabel("Pixel Size (µm):"))
-        pixel_spin = self._create_spinbox(0.01, 10.0, 0.1, 2)
+        pixel_spin = self._create_double_spinbox(0.01, 10.0, 0.1, 2)
         pixel_spin.setDecimals(3)
         pixel_spin.setToolTip("Physical size of each pixel in micrometers. Used for converting image measurements to physical units.")
         self.parameter_spins['pixel_size'] = pixel_spin
@@ -253,7 +253,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Frame interval
         frame_row = QHBoxLayout()
         frame_row.addWidget(QLabel("Frame Length (min):"))
-        frame_spin = self._create_spinbox(0.001, 1000.0, 0.1, 1)
+        frame_spin = self._create_double_spinbox(0.001, 1000.0, 0.1, 1)
         frame_spin.setToolTip("Time interval between consecutive image frames in minutes. Used for temporal analysis and rate calculations.")
         self.parameter_spins['frame_interval'] = frame_spin
         frame_row.addWidget(frame_spin)
@@ -283,7 +283,10 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         for name, label, min_val, max_val, step, tooltip in bead_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = self._create_spinbox(min_val, max_val, step)
+            if name == "rolling_ball_radius":
+                spin = self._create_spinbox(min_val, max_val, step)
+            else:
+                spin = self._create_double_spinbox(min_val, max_val, step)
             spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
@@ -302,7 +305,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         for name, label, min_val, max_val, step, tooltip in cell_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = self._create_spinbox(min_val, max_val, step)
+            spin = self._create_double_spinbox(min_val, max_val, step)
             spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
@@ -361,7 +364,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 spin.setRange(min_val, max_val)
                 spin.setSingleStep(step)
             else:
-                spin = self._create_spinbox(min_val, max_val, step)
+                spin = self._create_double_spinbox(min_val, max_val, step)
                 spin.setDecimals(2)
                 if name == "epsilon":
                     spin.setDecimals(3)
@@ -383,7 +386,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         for name, label, min_val, max_val, step, tooltip in vis_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = self._create_spinbox(min_val, max_val, step) if isinstance(step, float) else QSpinBox()
+            spin = self._create_double_spinbox(min_val, max_val, step) if isinstance(step, float) else QSpinBox()
             if isinstance(spin, QSpinBox):
                 spin.setRange(min_val, max_val)
                 spin.setSingleStep(step)
@@ -414,7 +417,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         for name, label, min_val, max_val, step, tooltip in material_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = self._create_spinbox(min_val, max_val, step)
+            spin = self._create_double_spinbox(min_val, max_val, step)
             if name == "gel_height":
                 spin.setSpecialValueText("∞")
             if name == "poisson_ratio_substrate":
@@ -437,7 +440,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Regularization parameter
         reg_row = QHBoxLayout()
         reg_row.addWidget(QLabel("Regularization (10^x):"))
-        reg_spin = self._create_spinbox(-21, 0, 0.5)
+        reg_spin = self._create_double_spinbox(-21, 0, 0.5)
         reg_spin.setToolTip("Regularization parameter for force calculation (10^x). Controls trade-off between solution smoothness and accuracy.")
         self.parameter_spins['regularization'] = reg_spin
         reg_row.addWidget(reg_spin)
@@ -468,7 +471,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         for name, label, min_val, max_val, step, tooltip in vis_params:
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
-            spin = self._create_spinbox(min_val, max_val, step) if isinstance(step, float) else QSpinBox()
+            spin = self._create_double_spinbox(min_val, max_val, step) if isinstance(step, float) else QSpinBox()
             if isinstance(spin, QSpinBox):
                 spin.setRange(min_val, max_val)
                 spin.setSingleStep(step)
@@ -503,7 +506,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             row.addWidget(label_widget)
 
             if isinstance(step, float):
-                spin = self._create_spinbox(min_val, max_val, step)
+                spin = self._create_double_spinbox(min_val, max_val, step)
             else:
                 spin = QSpinBox()
                 spin.setRange(min_val, max_val)
@@ -525,7 +528,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             label_widget.setToolTip(tooltip)
             row.addWidget(label_widget)
 
-            spin = self._create_spinbox(min_val, max_val, step, 3)  # 3 decimals for density factor
+            spin = self._create_double_spinbox(min_val, max_val, step, 3)  # 3 decimals for density factor
             spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
@@ -551,7 +554,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Add Poisson ratio and max stress parameters
         poisson_row = QHBoxLayout()
         poisson_row.addWidget(QLabel("Poisson's Ratio:"))
-        poisson_spin = self._create_spinbox(0, 1.0, 0.01, 2)
+        poisson_spin = self._create_double_spinbox(0, 1.0, 0.01, 2)
         poisson_spin.setToolTip("Poisson's ratio of the cell material. Describes how much the material expands perpendicular to applied stress (typically 0.3-0.5 for cells).")
         self.parameter_spins['poisson_ratio_cells'] = poisson_spin
         poisson_row.addWidget(poisson_spin)
@@ -559,7 +562,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         stress_row = QHBoxLayout()
         stress_row.addWidget(QLabel("Max Stress (mN/m):"))
-        max_stress_spin = self._create_spinbox(0.01, 1000.0, 0.1, 2)
+        max_stress_spin = self._create_double_spinbox(0.01, 1000.0, 0.1, 2)
         max_stress_spin.setToolTip("Maximum stress magnitude for color scaling and visualization. Stresses above this value will be capped.")
         self.parameter_spins['max_stress'] = max_stress_spin
         stress_row.addWidget(max_stress_spin)
@@ -680,6 +683,13 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         return frame
 
     def _create_spinbox(self, min_val: float, max_val: float, step: float, decimals: int = 1) -> QDoubleSpinBox:
+        """Helper method to create a spinbox without setting default value"""
+        spin = QSpinBox()
+        spin.setRange(min_val, max_val)
+        spin.setSingleStep(step)
+        return spin
+
+    def _create_double_spinbox(self, min_val: float, max_val: float, step: float, decimals: int = 1) -> QDoubleSpinBox:
         """Helper method to create a spinbox without setting default value"""
         spin = QDoubleSpinBox()
         spin.setRange(min_val, max_val)

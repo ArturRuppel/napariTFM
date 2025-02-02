@@ -7,7 +7,7 @@ import numpy as np
 @dataclass
 class PreprocessingParameters:
     """Parameters for image preprocessing"""
-    rolling_ball_radius: float = 0.0
+    rolling_ball_radius: int = 0
     min_intensity_percentile: float = 0.0
     max_intensity_percentile: float = 100
     gaussian_sigma: float = 0.0
@@ -22,7 +22,7 @@ class DisplacementParameters:
     """Parameters for displacement analysis"""
     # TV-L1 optical flow parameters
     tau: float = 0.25
-    lambda_: float = 0.4
+    lambda_: float = 0.1
     theta: float = 0.3
     nscales: int = 3
     warps: int = 3
@@ -112,7 +112,7 @@ class UnifiedParameters:
     frame_interval: float = 1.0  # min
 
     # Preprocessing parameters
-    rolling_ball_radius: float = 0.0
+    rolling_ball_radius: int = 0
     min_intensity_percentile: float = 0.0
     max_intensity_percentile: float = 100.0
     gaussian_sigma: float = 0.0
@@ -123,7 +123,7 @@ class UnifiedParameters:
 
     # Displacement parameters
     tau: float = 0.25
-    lambda_: float = 0.4
+    lambda_: float = 0.1
     theta: float = 0.3
     nscales: int = 3
     warps: int = 3
