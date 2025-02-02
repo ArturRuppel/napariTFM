@@ -17,9 +17,9 @@ from napariTFM.parameter_manager import ParameterCategory, ParameterManager
 from napariTFM.services.fttc_service import FTTCService, FTTCResult
 from napariTFM.visualization_manager import VisualizationManager
 
-# TODO preview and auto-gcv through errors when current layer is a vector layer
 # TODO layer visibility after calculations (preview and full)
 # TODO load displacement data should trigger visualization
+# TODO load displacment button disables when trying to load the wrong file
 # TODO review button disable/enable logic
 # TODO preview button should clear vector cache
 # TODO auto-gcv puts a 0 in the UI
