@@ -923,7 +923,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                                         self.parameter_manager.set_parameter(name, value * 1000)
                                     elif name == 'regularization':
                                         self.parameter_manager.set_parameter(name, 10 ** value)
-
                                     else:
                                         self.parameter_manager.set_parameter(name, value)
 
