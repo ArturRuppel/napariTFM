@@ -21,12 +21,9 @@ from napariTFM.visualization_manager import VisualizationManager
 
 # TODO review button disable/enable logic
 # TODO load displacement moves layers to the top but doesn't disable other layers
-# TODO preview and auto-gcv through errors when current layer is a vector layer
 # TODO putting theta to 1 throws error
 # TODO cancel operations disabled during operations (lol)
 # TODO fold away parameters that are not that usefull
-# TODO median filter above 5 throws error
-# TODO implement more sophisticated post processing (median filters, angle filters, correlation filters...)
 # TODO test in all widgets whether or not loading external data updates params
 
 
@@ -165,12 +162,55 @@ class DisplacementParameterPanel(QWidget):
         group = QGroupBox("Optical Flow Parameters")
         layout = QVBoxLayout()
 
-        # Define parameters with tooltips
+        # Basic parameter (lambda)
+        lambda_layout = QHBoxLayout()
+        lambda_layout.addWidget(QLabel("Lambda:"))
+        lambda_spin = QDoubleSpinBox()
+        lambda_spin.setFixedWidth(135)
+        lambda_spin.setRange(0.01, 1.0)
+        lambda_spin.setSingleStep(0.01)
+        lambda_spin.setDecimals(2)
+        lambda_spin.setToolTip("Weight parameter for the data term. Smaller values produce smoother solutions.")
+        self.parameter_spins['lambda_'] = lambda_spin
+        lambda_layout.addWidget(lambda_spin)
+        layout.addLayout(lambda_layout)
+
+        # Advanced parameters section
+        advanced_container = QWidget()
+        advanced_layout = QVBoxLayout()
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.setSpacing(5)
+
+        # Create a custom label-style toggle
+        toggle_container = QWidget()
+        toggle_layout = QHBoxLayout()
+        toggle_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.arrow_label = QLabel("▶")
+        self.text_label = QLabel("Advanced Parameters")
+
+        toggle_layout.addWidget(self.arrow_label)
+        toggle_layout.addWidget(self.text_label)
+        toggle_layout.addStretch()  # Push widgets to the left
+
+        toggle_container.setLayout(toggle_layout)
+        toggle_container.setCursor(Qt.PointingHandCursor)  # Show pointer cursor on hover
+
+        # Install event filter for click handling
+        toggle_container.mousePressEvent = self._toggle_advanced_parameters
+
+        layout.addWidget(toggle_container)
+
+        # Container for advanced parameters
+        self.advanced_widget = QWidget()
+        self.advanced_widget.setVisible(False)
+        advanced_params_layout = QVBoxLayout()
+        advanced_params_layout.setContentsMargins(10, 0, 0, 0)  # Add left indent
+
+        # Define advanced parameters with tooltips
         params = [
             ("tau", "Tau:", 0.1, 1.0, 0.01,
              "Time step of the numerical scheme. Smaller values may improve accuracy but increase computation time."),
-            ("lambda_", "Lambda:", 0.01, 1.0, 0.01,
-             "Weight parameter for the data term. Smaller values produce smoother solutions."),
             ("theta", "Theta:", 0.01, 1.0, 0.01,
              "Weight parameter that balances between matching image intensities (data term) and ensuring smooth transitions between neighboring flow vectors. Lower values recommended."),
             ("nscales", "Pyramid Scales:", 1, 10, 1,
@@ -201,7 +241,6 @@ class DisplacementParameterPanel(QWidget):
             else:
                 spin = QDoubleSpinBox()
                 spin.setFixedWidth(135)
-
                 spin.setRange(min_val, max_val)
                 spin.setSingleStep(step)
                 if name == "epsilon":
@@ -212,11 +251,20 @@ class DisplacementParameterPanel(QWidget):
             spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
-            layout.addLayout(row)
+            advanced_params_layout.addLayout(row)
+
+        self.advanced_widget.setLayout(advanced_params_layout)
+        advanced_layout.addWidget(self.advanced_widget)
+        advanced_container.setLayout(advanced_layout)
+        layout.addWidget(advanced_container)
 
         group.setLayout(layout)
         return group
 
+    def _toggle_advanced_parameters(self, event):
+        """Toggle visibility of advanced parameters."""
+        self.advanced_widget.setVisible(not self.advanced_widget.isVisible())
+        self.arrow_label.setText("▼" if self.advanced_widget.isVisible() else "▶")
     def _create_analysis_parameters(self) -> QGroupBox:
         """Create analysis parameter group."""
         group = QGroupBox("Analysis Parameters")
