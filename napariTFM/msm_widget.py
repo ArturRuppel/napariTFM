@@ -910,9 +910,10 @@ class MSMController(QObject):
                 # Get first mesh result
                 nodes, elements, quality_metrics, _, _ = next(mesh_generator)
 
-                try:
+                # Get downscale factor from force results if available
+                if self.data_manager.force_results is not None:
                     downscale_factor = self.data_manager.force_results.parameters.downscale_factor
-                except:
+                else:
                     downscale_factor = 1
 
                 # Update visualization
@@ -922,15 +923,13 @@ class MSMController(QObject):
                     downscale_factor=downscale_factor
                 )
 
-                # Format quality metrics for status message
-                quality_str = "\n".join([
-                    f"{key}: {value:.3f}"
-                    for key, value in quality_metrics.items()
-                ])
-
+                # Simplified quality metrics message
+                num_elements = len(elements)
+                mean_quality = quality_metrics.get('mean_quality', 0.0)
                 status_msg = (
                     f"Mesh preview generated for frame {current_frame}\n"
-                    f"Mesh quality metrics:\n{quality_str}"
+                    f"Elements: {num_elements}\n"
+                    f"Mean quality: {mean_quality:.3f}"
                 )
 
                 self._update_progress(100, status_msg)
@@ -945,7 +944,6 @@ class MSMController(QObject):
             self._update_progress(0, error_msg)
             QMessageBox.critical(None, "Error", error_msg)
             return None
-
     def cancel_all_operations(self):
         """Cancel all running background operations"""
         for worker in self.active_workers:
