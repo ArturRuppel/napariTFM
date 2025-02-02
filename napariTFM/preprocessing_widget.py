@@ -18,7 +18,7 @@ from qtpy.QtWidgets import (
 )
 from qtrangeslider import QRangeSlider
 
-from napariTFM.base_widget import BaseAnalysisWidget
+from napariTFM._base_widget import BaseAnalysisWidget
 from napariTFM.utilities.colorbar import ColorbarManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.services.preprocessing_service import PreprocessingService

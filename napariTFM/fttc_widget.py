@@ -10,7 +10,7 @@ from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (QFileDialog, QGroupBox, QDoubleSpinBox, QSpinBox, QCheckBox, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
                             QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
 
-from napariTFM.base_widget import BaseAnalysisWidget
+from napariTFM._base_widget import BaseAnalysisWidget
 from napariTFM.utilities.colorbar import ColorbarManager
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
