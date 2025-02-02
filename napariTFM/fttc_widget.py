@@ -11,11 +11,11 @@ from qtpy.QtWidgets import (QFileDialog, QGroupBox, QDoubleSpinBox, QSpinBox, QC
                             QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
 
 from napariTFM.base_widget import BaseAnalysisWidget
-from napariTFM.colorbar import ColorbarManager
-from napariTFM.data_manager import DataManager
-from napariTFM.parameter_manager import ParameterCategory, ParameterManager
+from napariTFM.utilities.colorbar import ColorbarManager
+from napariTFM.utilities.data_manager import DataManager
+from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
 from napariTFM.services.fttc_service import FTTCService, FTTCResult
-from napariTFM.visualization_manager import VisualizationManager
+from napariTFM.utilities.visualization_manager import VisualizationManager
 
 # TODO layer visibility after calculations (preview and full)
 # TODO load displacement data should trigger visualization

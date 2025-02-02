@@ -12,11 +12,11 @@ from qtpy.QtWidgets import (
 )
 
 from napariTFM.base_widget import BaseAnalysisWidget
-from napariTFM.colorbar import ColorbarManager
-from napariTFM.data_manager import DataManager
-from napariTFM.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.utilities.colorbar import ColorbarManager
+from napariTFM.utilities.data_manager import DataManager
+from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.services.displacement_service import DisplacementService, DisplacementResult
-from napariTFM.visualization_manager import VisualizationManager
+from napariTFM.utilities.visualization_manager import VisualizationManager
 
 
 # TODO load displacement moves layers to the top but doesn't disable other layers

@@ -12,11 +12,11 @@ from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
 
 from napariTFM.backend.parameter_dataclasses import MSMParameters
 from napariTFM.base_widget import BaseAnalysisWidget
-from napariTFM.colorbar import ColorbarManager
-from napariTFM.data_manager import DataManager
-from napariTFM.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.utilities.colorbar import ColorbarManager
+from napariTFM.utilities.data_manager import DataManager
+from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.services.msm_service import MSMService, MSMResult
-from napariTFM.visualization_manager import VisualizationManager
+from napariTFM.utilities.visualization_manager import VisualizationManager
 
 
 # TODO implement loading and saving
@@ -27,6 +27,8 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO verify parameter synching
 # TODO make boundary smoothing an integer
 # TODO test in all widgets whether or not loading external data updates params
+# TODO create masks from images should not be enabled on vector layers
+# TODO image layer should stay activated when creating several mask stacks in a row
 
 class MSMParameterPanel(QWidget):
     """Panel for handling all MSM parameter inputs."""

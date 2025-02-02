@@ -7,9 +7,9 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog
 )
 
-from napariTFM.parameter_manager import ParameterManager
-from napariTFM.data_manager import DataManager
-from napariTFM.visualization_manager import VisualizationManager
+from napariTFM.utilities.parameter_manager import ParameterManager
+from napariTFM.utilities.data_manager import DataManager
+from napariTFM.utilities.visualization_manager import VisualizationManager
 
 from napariTFM.preprocessing_widget import PreprocessingWidget
 from napariTFM.displacement_analysis_widget import DisplacementAnalysisWidget
