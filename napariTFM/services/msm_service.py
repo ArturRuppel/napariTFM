@@ -362,8 +362,6 @@ class MSMService:
             'time_interval_units': 'min',
         }
 
-
-
     def _get_algorithm_code(self, algorithm_name: str) -> int:
         """Convert algorithm name to corresponding code."""
         algorithm_map = {

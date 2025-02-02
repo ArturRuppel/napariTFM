@@ -581,14 +581,14 @@ class MSMController(QObject):
 
     def _validate_prerequisites(self) -> bool:
         """Check if required data is available."""
-        # Check if we have preprocessed cell stack (which contains masks)
-        if self.data_manager.preprocessed_cell_stack is None:
+        if self.data_manager.mask_stack is None:
             QMessageBox.warning(None, "Warning", "No mask loaded. Please load a mask first.")
             return False
         if self.data_manager.force_results is None:
             QMessageBox.warning(None, "Warning", "No force data available. Please calculate forces first.")
             return False
         return True
+
 
     def start_analysis(self):
         """Start the stress analysis by first generating meshes then calculating stresses."""
@@ -895,10 +895,10 @@ class MSMController(QObject):
                 current_frame = self.viewer.dims.current_step[0]
             params = self._get_current_parameters()
 
-            # Get mask from preprocessed data
-            masks = self.data_manager.preprocessed_cell_stack
+            # Get mask from mask_stack
+            masks = self.data_manager.mask_stack
             if masks is None:
-                raise ValueError("No preprocessed mask data available")
+                raise ValueError("No mask data available")
 
             mask = masks[current_frame] if masks.ndim > 2 else masks
 
@@ -911,8 +911,7 @@ class MSMController(QObject):
             # Generate mesh preview
             preview_result = self.service.generate_mesh(mask, params)
 
-            # Update visualization - no need to get downscale factor from force_params
-            # as it should be handled by the visualization manager
+            # Update visualization
             self.visualization_manager.visualize_mesh(
                 nodes=preview_result.nodes,
                 elements=preview_result.elements
@@ -926,7 +925,6 @@ class MSMController(QObject):
             self._update_progress(0, error_msg)
             QMessageBox.critical(None, "Error", error_msg)
             return None
-
     def cancel_all_operations(self):
         """Cancel all running background operations"""
         for worker in self.active_workers:
@@ -1168,7 +1166,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Check data manager state using appropriate properties
         has_force = self.data_manager.force_results is not None
-        has_mask = self.data_manager.preprocessed_cell_stack is not None
+        has_mask = self.data_manager.mask_stack is not None
         has_stress = self.data_manager.stress_results is not None
 
         # Update panels
