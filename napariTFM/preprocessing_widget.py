@@ -24,9 +24,6 @@ from napariTFM.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.services.preprocessing_service import PreprocessingService
 
 
-# TODO changing intensity in batch changes spinboxes in preprocessing but not sliders
-# TODO fix rolling ball UI
-
 class PreprocessingDataPanel(QWidget):
     """Panel for handling data loading and status display."""
 
@@ -172,7 +169,7 @@ class PreprocessingParameterPanel(QWidget):
         layout.setColumnStretch(2, 1)  # Make the third column (slider column) stretch
 
         # Add rolling ball radius control - now properly aligned
-        radius_label = QLabel("Background Subtraction")
+        radius_label = QLabel("Rolling Ball Radius")
         radius_label.setToolTip("Radius for rolling ball background subtraction in pixels. Set to 0 to disable background subtraction.")
         radius_label.setFixedWidth(165)
         radius_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -534,47 +531,85 @@ class PreprocessingParameterPanel(QWidget):
         self.parameter_changed.emit('cell_min_intensity_percentile', min_spin.value())
         self.parameter_changed.emit('cell_max_intensity_percentile', max_spin.value())
 
+    def _on_parameter_changed(self, param_name: str, value: Any):
+        """Handle parameter changes."""
+        # Emit signal to notify controller
+        self.parameter_changed.emit(param_name, value)
+
     # endregion === Signal Handling
 
     # region === Parameter Management
+    def _block_parameter_widgets(self, block: bool):
+        """Block or unblock signals for all parameter widgets."""
+        widgets = []
+
+        # Add all spinboxes
+        widgets.extend(self.parameter_spins.values())
+
+        # Add all sliders
+        widgets.extend(self.parameter_sliders.values())
+
+        # Add all range sliders
+        widgets.extend(self.parameter_range_sliders.values())
+
+        # Add all combo boxes
+        widgets.extend(self.parameter_combos.values())
+
+        # Block/unblock signals for each widget
+        for widget in widgets:
+            if isinstance(widget, tuple):
+                # Handle special cases if a parameter has multiple widgets
+                for w in widget:
+                    w.blockSignals(block)
+            else:
+                widget.blockSignals(block)
+
     def _sync_widget_with_parameters(self):
         """Sync widget values with parameter manager values."""
-        # Existing code for registration mode...
+        self._block_parameter_widgets(True)
+        try:
+            # Update spinboxes and their corresponding sliders
+            for name, spin in self.parameter_spins.items():
+                try:
+                    value = self.parameter_manager.get_parameter(name)
 
-        # Sync spin boxes
-        for name, spin in self.parameter_spins.items():
-            value = self.parameter_manager.get_parameter(name)
-            if name == 'young_modulus':
-                value = value / 1000  # Convert Pa to kPa for display
-            elif name == 'gel_height' and value is None:
-                value = 0
-            if isinstance(spin, tuple):
-                # Handle special cases
-                spin_widget, slider = spin
-                self._safe_set_value(spin_widget, value)
-                self._safe_set_value(slider, value)
-            else:
-                self._safe_set_value(spin, value)
+                    # Handle special conversions
+                    if name == 'young_modulus':
+                        value = value / 1000  # Convert Pa to kPa for display
+                    elif name == 'regularization':
+                        value = np.log10(value)
+                    elif name == 'gel_height' and value is None:
+                        value = 0
 
-        # Sync bead intensity range slider
-        min_intensity = self.parameter_manager.get_parameter('min_intensity_percentile')
-        max_intensity = self.parameter_manager.get_parameter('max_intensity_percentile')
-        min_slider_val = int(min_intensity * 10)  # Convert 0.0-100.0 → 0-1000
-        max_slider_val = int(max_intensity * 10)
-        self.parameter_range_sliders['intensity'].setValue((min_slider_val, max_slider_val))
+                    # Update spinbox
+                    self._safe_set_value(spin, value)
 
-        # Sync cell intensity range slider
-        cell_min = self.parameter_manager.get_parameter('cell_min_intensity_percentile')
-        cell_max = self.parameter_manager.get_parameter('cell_max_intensity_percentile')
-        cell_min_slider = int(cell_min * 10)
-        cell_max_slider = int(cell_max * 10)
-        self.parameter_range_sliders['cell_intensity'].setValue((cell_min_slider, cell_max_slider))
+                    # Update corresponding slider if it exists
+                    if name == 'gaussian_sigma':
+                        self.parameter_sliders[name].setValue(int(value * 10))
+                    elif name == 'cell_gaussian_sigma':
+                        self.parameter_sliders[name].setValue(int(value * 10))
 
-        # Sync Gaussian sigma sliders
-        sigma = self.parameter_manager.get_parameter('gaussian_sigma')
-        cell_sigma = self.parameter_manager.get_parameter('cell_gaussian_sigma')
-        self.parameter_sliders['gaussian_sigma'].setValue(int(sigma * 10))  # 0.0-10.0 → 0-100
-        self.parameter_sliders['cell_gaussian_sigma'].setValue(int(cell_sigma * 10))
+                except Exception as e:
+                    print(f"Error syncing parameter {name}: {str(e)}")
+
+            # Update range sliders
+            # Bead/reference intensity range
+            min_intensity = self.parameter_manager.get_parameter('min_intensity_percentile')
+            max_intensity = self.parameter_manager.get_parameter('max_intensity_percentile')
+            self.parameter_range_sliders['intensity'].setValue(
+                (int(min_intensity * 10), int(max_intensity * 10))
+            )
+
+            # Cell intensity range
+            cell_min = self.parameter_manager.get_parameter('cell_min_intensity_percentile')
+            cell_max = self.parameter_manager.get_parameter('cell_max_intensity_percentile')
+            self.parameter_range_sliders['cell_intensity'].setValue(
+                (int(cell_min * 10), int(cell_max * 10))
+            )
+
+        finally:
+            self._block_parameter_widgets(False)
 
     def _reset_parameters(self):
         """Reset all parameters to their default values."""
@@ -585,12 +620,38 @@ class PreprocessingParameterPanel(QWidget):
     def update_parameter(self, name: str, value: Any):
         """Update a single parameter value."""
         try:
-            if name in self.parameter_spins:
-                self._safe_set_value(self.parameter_spins[name], value)
-            elif name == 'registration_mode' and value is not None:
-                self._safe_set_combo_text(self.registration_mode_combo, str(value))
-            elif name in self.parameter_combos:
-                self._safe_set_combo_text(self.parameter_combos[name], str(value))
+            # Block signals during update
+            self._block_parameter_widgets(True)
+            try:
+                # Update spinbox if exists
+                if name in self.parameter_spins:
+                    self._safe_set_value(self.parameter_spins[name], value)
+
+                # Update corresponding slider if exists
+                if name in ['gaussian_sigma', 'cell_gaussian_sigma']:
+                    if name in self.parameter_sliders:
+                        self.parameter_sliders[name].setValue(int(value * 10))
+
+                # Update intensity range sliders
+                if name in ['min_intensity_percentile', 'max_intensity_percentile']:
+                    min_val = self.parameter_manager.get_parameter('min_intensity_percentile')
+                    max_val = self.parameter_manager.get_parameter('max_intensity_percentile')
+                    self.parameter_range_sliders['intensity'].setValue((int(min_val * 10), int(max_val * 10)))
+
+                if name in ['cell_min_intensity_percentile', 'cell_max_intensity_percentile']:
+                    min_val = self.parameter_manager.get_parameter('cell_min_intensity_percentile')
+                    max_val = self.parameter_manager.get_parameter('cell_max_intensity_percentile')
+                    self.parameter_range_sliders['cell_intensity'].setValue((int(min_val * 10), int(max_val * 10)))
+
+                # Update combo boxes
+                if name == 'registration_mode' and value is not None:
+                    self._safe_set_combo_text(self.registration_mode_combo, str(value))
+                elif name in self.parameter_combos:
+                    self._safe_set_combo_text(self.parameter_combos[name], str(value))
+
+            finally:
+                self._block_parameter_widgets(False)
+
         except Exception as e:
             print(f"Error updating parameter {name}: {str(e)}")
 
