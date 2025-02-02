@@ -921,6 +921,9 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                                     # Force an update through the parameter manager
                                     if name == 'young_modulus':
                                         self.parameter_manager.set_parameter(name, value * 1000)
+                                    elif name == 'regularization':
+                                        self.parameter_manager.set_parameter(name, 10 ** value)
+
                                     else:
                                         self.parameter_manager.set_parameter(name, value)
 
@@ -996,6 +999,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                     value = spin.value()
                     if name == 'young_modulus':
                         value = value * 1000  # Convert kPa to Pa
+                    elif name == 'regularization':
+                        value = 10 ** value
                     elif name == 'gel_height' and value == 0:
                         value = None
                     self.parameter_manager.set_parameter(name, value)
