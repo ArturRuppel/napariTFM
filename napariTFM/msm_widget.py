@@ -24,6 +24,7 @@ from napariTFM.visualization_manager import VisualizationManager
 # TODO reimplement mask preview
 # TODO make preview current frame run in seperate thread
 # TODO layer visibility (only sigma_xx after calculations)
+# TODO verify parameter synching
 
 class MSMParameterPanel(QWidget):
     """Panel for handling all MSM parameter inputs."""
@@ -1087,9 +1088,16 @@ class MSMWidget(BaseAnalysisWidget):
     """Widget for Monolayer Stress Microscopy analysis."""
     stress_calculated = Signal(object)  # Emits stress analysis results
 
-    def __init__(self, viewer: Viewer, data_manager: DataManager,
-                 parameter_manager: ParameterManager, visualization_manager: VisualizationManager):
+    def __init__(
+            self,
+            viewer: Viewer,
+            data_manager: DataManager,
+            parameter_manager: ParameterManager,
+            visualization_manager: VisualizationManager
+    ):
         super().__init__(viewer, data_manager, visualization_manager)
+
+        self.parameter_manager = parameter_manager
 
         # Get initial parameters from parameter manager
         self.msm_params = parameter_manager.get_msm_parameters()
