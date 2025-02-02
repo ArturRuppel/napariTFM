@@ -281,13 +281,14 @@ class MSMDataPanel(QWidget):
         else:
             self.force_status.setText("Not loaded")
 
-        # Update mask status
-        masks = self.data_manager.preprocessed_cell_stack
+        # Update mask status - check mask_stack only
+        masks = self.data_manager.mask_stack
         if masks is not None:
-            mask_shape = masks.shape
+            mask_shape = masks.shape if isinstance(masks, np.ndarray) else "unknown"
             self.mask_status.setText(f"Loaded: {mask_shape}")
         else:
             self.mask_status.setText("Not loaded")
+
     def update_mask_status(self, status_text: str):
         """Update the mask status label."""
         self.mask_status.setText(status_text)
@@ -342,11 +343,8 @@ class MSMDataPanel(QWidget):
             )
             if file_path:
                 force_data = np.load(file_path, allow_pickle=True).item()
-                self.data_manager.set_force_results(
-                    force_data["force_field"],
-                    force_data["parameters"]
-                )
-                self.force_status.setText(f"Loaded: {force_data['force_field'].shape}")
+                self.data_manager.set_force_results(force_data)
+                self.force_status.setText(f"Loaded: {force_data.force_field.shape}")
         except Exception as e:
             error_msg = f"Failed to load force data: {str(e)}"
             self.force_status.setText("Error loading")
@@ -370,8 +368,11 @@ class MSMDataPanel(QWidget):
                 if not isinstance(mask_data, np.ndarray):
                     raise ValueError("Provided mask data is not a numpy array")
 
-            # Check for force data presence - Use data_manager directly
-            force_field = self.data_manager.force_field
+            # Check for force data presence
+            force_results = self.data_manager.force_results
+            force_field = None
+            if force_results is not None:
+                force_field = force_results.force_field
             if force_field is None:
                 QMessageBox.warning(
                     self,
@@ -389,14 +390,21 @@ class MSMDataPanel(QWidget):
             for warning in warnings:
                 QMessageBox.warning(self, "Warning", warning)
 
-            # Update data manager and UI
-            self.data_manager.set_masks(processed_masks)
-            self.mask_status.setText(f"Loaded: {processed_masks.shape}")
+            # Update mask data in data manager
+            self.data_manager.set_mask_stack(processed_masks)
+
+            # Update status immediately
+            self.update_data_status()
+
+            # Emit signal that mask data was loaded
+            self.data_loaded.emit('mask')
+            self.mask_data_loaded.emit(processed_masks)
 
         except Exception as e:
             error_msg = f"Failed to load mask data: {str(e)}"
             self.mask_status.setText("Error loading")
             QMessageBox.critical(self, "Error", error_msg)
+            self.data_load_failed.emit(error_msg)
 
 
 class MSMActionPanel(QWidget):
@@ -887,23 +895,27 @@ class MSMController(QObject):
                 current_frame = self.viewer.dims.current_step[0]
             params = self._get_current_parameters()
 
-            # Get mask and resize if needed
-            mask = self.data_manager.masks[current_frame]
-            if self.data_manager.force_field is not None:
-                target_shape = self.data_manager.force_field[current_frame, ..., 0].shape
+            # Get mask from preprocessed data
+            masks = self.data_manager.preprocessed_cell_stack
+            if masks is None:
+                raise ValueError("No preprocessed mask data available")
+
+            mask = masks[current_frame] if masks.ndim > 2 else masks
+
+            # Check if resizing is needed based on force results
+            force_results = self.data_manager.force_results
+            if force_results is not None:
+                target_shape = force_results.force_field[current_frame, ..., 0].shape
                 mask = self.service.resize_mask_to_forces(mask, target_shape)
 
             # Generate mesh preview
             preview_result = self.service.generate_mesh(mask, params)
 
-            # Get visualization scale factor
-            downscale_factor = self.data_manager.force_params.get('downscale_factor', 1)
-
-            # Update visualization
+            # Update visualization - no need to get downscale factor from force_params
+            # as it should be handled by the visualization manager
             self.visualization_manager.visualize_mesh(
                 nodes=preview_result.nodes,
-                elements=preview_result.elements,
-                downscale_factor=downscale_factor
+                elements=preview_result.elements
             )
 
             self._update_progress(100, "Mesh preview generated successfully")
@@ -1127,12 +1139,12 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _on_mask_creation_completed(self):
         """Handle successful mask creation."""
-        masks = self.data_manager.masks
+        masks = self.data_manager.mask_stack
         self.data_panel.update_mask_status(f"Loaded: {masks.shape}")
 
         # Get downscale factor from force parameters
         try:
-            downscale_factor = self.data_manager.force_params['downscale_factor']
+            downscale_factor = self.parameter_manager.downscale_factor
         except:
             downscale_factor = 1
 

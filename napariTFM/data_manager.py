@@ -19,6 +19,8 @@ class DataManager:
         self._preprocessed_cell_stack: Optional[np.ndarray] = None
         self._preprocessed_reference: Optional[np.ndarray] = None
 
+        self._mask_stack: Optional[np.ndarray] = None
+
         # Analysis results as service Result objects
         self._displacement_results: Optional[DisplacementResult] = None
         self._force_results: Optional[FTTCResult] = None
@@ -28,13 +30,11 @@ class DataManager:
         """Set and validate input bead stack."""
         self._validate_input_stack(data, "bead stack")
         self._bead_stack = data
-        self._invalidate_from_preprocessing()
 
     def set_reference(self, data: np.ndarray) -> None:
         """Set and validate input reference image."""
         self._validate_reference_image(data)
         self._reference = data
-        self._invalidate_from_preprocessing()
 
     def set_cell_stack(self, data: np.ndarray) -> None:
         """Set and validate input cell stack."""
@@ -45,7 +45,6 @@ class DataManager:
         """Set and validate input bead stack."""
         self._validate_input_stack(data, "bead stack")
         self._preprocessed_bead_stack = data
-        self._invalidate_from_displacement()
     def set_preprocessed_cell_stack(self, data: np.ndarray) -> None:
         """Set and validate input cell stack."""
         self._validate_input_stack(data, "cell stack")
@@ -55,42 +54,23 @@ class DataManager:
         """Set and validate input reference image."""
         self._validate_reference_image(data)
         self._preprocessed_reference = data
-        self._invalidate_from_displacement()
 
+    def set_mask_stack(self, data: np.ndarray) -> None:
+        """Set and validate input bead stack."""
+        self._validate_input_stack(data, "mask stack")
+        self._mask_stack = data
 
     def set_displacement_results(self, results: DisplacementResult) -> None:
         """Store displacement results and invalidate dependent analyses."""
         self._displacement_results = results
-        self._invalidate_from_force()
 
     def set_force_results(self, results: FTTCResult) -> None:
         """Store force results and invalidate dependent analyses."""
         self._force_results = results
-        self._invalidate_stress()
 
     def set_stress_results(self, results: MSMResult) -> None:
         """Store stress results."""
         self._stress_results = results
-
-    def _invalidate_from_preprocessing(self):
-        """Invalidate all analysis steps from preprocessing onwards."""
-        self._preprocessed_bead_stack = None
-        self._preprocessed_reference = None
-        self._invalidate_from_displacement()
-
-    def _invalidate_from_displacement(self):
-        """Invalidate all analysis steps from displacement onwards."""
-        self._displacement_results = None
-        self._invalidate_from_force()
-
-    def _invalidate_from_force(self):
-        """Invalidate all analysis steps from force onwards."""
-        self._force_results = None
-        self._invalidate_stress()
-
-    def _invalidate_stress(self):
-        """Invalidate stress analysis."""
-        self._stress_results = None
 
     # Input data properties
     @property
@@ -117,6 +97,10 @@ class DataManager:
     @property
     def preprocessed_cell_stack(self) -> Optional[np.ndarray]:
         return self._preprocessed_cell_stack
+
+    @property
+    def mask_stack(self) -> Optional[np.ndarray]:
+        return self._mask_stack
 
     @property
     def displacement_results(self) -> Optional[DisplacementResult]:
