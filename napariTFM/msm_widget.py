@@ -1144,7 +1144,7 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Get downscale factor from force parameters
         try:
-            downscale_factor = self.parameter_manager.downscale_factor
+            downscale_factor = self.data_manager.force_results.parameters.downscale_factor
         except:
             downscale_factor = 1
 
