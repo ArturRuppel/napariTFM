@@ -19,9 +19,6 @@ from services.displacement_service import DisplacementService, DisplacementResul
 from utilities.visualization_manager import VisualizationManager
 
 
-# TODO load displacement moves layers to the top but doesn't disable other layers
-
-
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""
 
@@ -1068,7 +1065,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         layout.addWidget(self.action_panel)
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
-        layout.addItem(QSpacerItem(0, -15, QSizePolicy.Minimum, QSizePolicy.Fixed))
 
         container.setLayout(layout)
         scroll.setWidget(container)

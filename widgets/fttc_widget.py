@@ -10,12 +10,14 @@ from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (QFileDialog, QGroupBox, QDoubleSpinBox, QSpinBox, QCheckBox, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
                             QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
 
-from widgets._base_widget import BaseAnalysisWidget
 from utilities.colorbar import ColorbarManager
 from utilities.data_manager import DataManager
 from utilities.parameter_manager import ParameterCategory, ParameterManager
-from services.fttc_service import FTTCService, FTTCResult
 from utilities.visualization_manager import VisualizationManager
+
+from services.fttc_service import FTTCService, FTTCResult
+
+from widgets._base_widget import BaseAnalysisWidget
 
 # TODO layer visibility after calculations (preview and full)
 # TODO load displacement data should trigger visualization
@@ -1047,7 +1049,6 @@ class FTTCWidget(BaseAnalysisWidget):
         layout.addWidget(self.action_panel)
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
-        layout.addItem(QSpacerItem(0, -15, QSizePolicy.Minimum, QSizePolicy.Fixed))
 
         container.setLayout(layout)
         scroll.setWidget(container)

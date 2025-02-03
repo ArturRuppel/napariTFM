@@ -1288,7 +1288,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         layout.addWidget(self._create_action_frame())
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
-        layout.addStretch()
 
         container.setLayout(layout)
         scroll.setWidget(container)
