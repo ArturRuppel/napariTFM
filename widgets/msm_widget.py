@@ -21,6 +21,7 @@ from utilities.visualization_manager import VisualizationManager
 
 
 # TODO spinboxes should be initialized with default values from parameter manager
+# TODO loading stress tensor changes young's modulus in fttc widget
 # TODO reimplement mask preview
 # TODO make preview current frame run in seperate thread
 # TODO layer visibility (only sigma_xx after calculations)
@@ -382,15 +383,76 @@ class MSMDataPanel(QWidget):
             file_path, _ = QFileDialog.getOpenFileName(
                 self, "Select Force Data File", "", "NumPy Files (*.npy)"
             )
+
             if file_path:
+                # Load force data
                 force_data = np.load(file_path, allow_pickle=True).item()
+
+                # Update parameters if they exist in the loaded data
+                if hasattr(force_data, 'parameters'):
+                    # Block parameter change signals temporarily
+                    if self.controller.parameter_panel:
+                        self.controller.parameter_panel._block_widgets(True)
+                    try:
+                        # Update parameter manager with loaded parameters
+                        params = force_data.parameters
+                        for param_name, value in vars(params).items():
+                            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
+                                if param_name == 'gel_height':
+                                    # Handle infinity case
+                                    if value == 0:
+                                        value = float('inf')
+                                self.controller.parameter_manager.set_parameter(param_name, value)
+
+                        # Sync UI with new parameters
+                        if self.controller.parameter_panel:
+                            self.controller.parameter_panel._sync_widget_with_parameters()
+                    finally:
+                        if self.controller.parameter_panel:
+                            self.controller.parameter_panel._block_widgets(False)
+
+                # Update data manager
                 self.data_manager.set_force_results(force_data)
+
+                # Update visualization using visualization manager
+                self.controller.visualization_manager.visualize_force_results()
+
+                # Manage layer visibility
+                vector_layer = None
+                magnitude_layer = None
+
+                # First pass: find the force layers and disable all others
+                for layer in self.viewer.layers:
+                    if layer.name == 'Force Vectors':
+                        vector_layer = layer
+                        layer.visible = True
+                    elif layer.name == 'Force Magnitude':
+                        magnitude_layer = layer
+                        layer.visible = True
+                    else:
+                        layer.visible = False
+
+                # Move layers to desired positions if they exist
+                if magnitude_layer is not None:
+                    current_index = self.viewer.layers.index(magnitude_layer)
+                    # Move magnitude layer to second from top (-2)
+                    if current_index != -2:
+                        self.viewer.layers.move(current_index, -2)
+
+                if vector_layer is not None:
+                    current_index = self.viewer.layers.index(vector_layer)
+                    # Move vector layer to top (-1)
+                    if current_index != -1:
+                        self.viewer.layers.move(current_index, -1)
+
                 self.force_status.setText(f"Loaded: {force_data.force_field.shape}")
+                self.data_loaded.emit('force')
+                self.force_data_loaded.emit(force_data)
+
         except Exception as e:
             error_msg = f"Failed to load force data: {str(e)}"
             self.force_status.setText("Error loading")
             QMessageBox.critical(self, "Error", error_msg)
-
     def load_mask_data(self, mask_data):
         """Public method to load mask data directly."""
         self._load_mask_data(mask_data=mask_data)
