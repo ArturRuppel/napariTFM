@@ -42,19 +42,21 @@ class VisualizationManager(ErrorHandlingMixin):
             current_frame = self.viewer.dims.current_step[0]
 
             # Handle displacement vectors
-            if hasattr(self.data_manager, 'displacement_vector_cache'):
+            if (hasattr(self.data_manager, 'displacement_vector_cache') and
+                    self.data_manager.displacement_vector_cache is not None):
                 cache = self.data_manager.displacement_vector_cache
-                if (current_frame < len(cache['data']) and
+                if ('data' in cache and current_frame < len(cache['data']) and
                         'displacement_vectors' in self._layers and
                         self._layers['displacement_vectors'] is not None):
                     with self.viewer.events.blocker_all():
                         self._layers['displacement_vectors'].data = cache['data'][current_frame]
                         self._layers['displacement_vectors'].edge_color = cache['colors'][current_frame]
 
-            # Handle force vectors (existing code)
-            if hasattr(self.data_manager, 'force_vector_cache'):
+            # Handle force vectors
+            if (hasattr(self.data_manager, 'force_vector_cache') and
+                    self.data_manager.force_vector_cache is not None):
                 cache = self.data_manager.force_vector_cache
-                if (current_frame < len(cache['data']) and
+                if ('data' in cache and current_frame < len(cache['data']) and
                         'force_vectors' in self._layers and
                         self._layers['force_vectors'] is not None):
                     with self.viewer.events.blocker_all():
@@ -71,7 +73,6 @@ class VisualizationManager(ErrorHandlingMixin):
                 source="visualization"
             )
             self.handle_error(error)
-
     def _clear_displacement_callback(self):
         """Clear the existing displacement dims callback if it exists"""
         if self._displacement_dims_callback is not None:
@@ -788,11 +789,12 @@ class VisualizationManager(ErrorHandlingMixin):
             if not hasattr(self.data_manager, 'displacement_results'):
                 return
 
-            if not hasattr(self.data_manager, 'displacement_vector_cache'):
+            if (not hasattr(self.data_manager, 'displacement_vector_cache') or
+                    self.data_manager.displacement_vector_cache is None):
                 return
 
             cache = self.data_manager.displacement_vector_cache
-            if frame_index >= len(cache['data']):
+            if 'data' not in cache or frame_index >= len(cache['data']):
                 return
 
             # Update vectors using stored layer reference
@@ -819,11 +821,12 @@ class VisualizationManager(ErrorHandlingMixin):
             if not hasattr(self.data_manager, 'force_results'):
                 return
 
-            if not hasattr(self.data_manager, 'force_vector_cache'):
+            if (not hasattr(self.data_manager, 'force_vector_cache') or
+                    self.data_manager.force_vector_cache is None):
                 return
 
             cache = self.data_manager.force_vector_cache
-            if frame_index >= len(cache['data']):
+            if 'data' not in cache or frame_index >= len(cache['data']):
                 return
 
             # Update vectors using stored layer reference
