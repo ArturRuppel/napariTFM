@@ -12,7 +12,7 @@ from napari.layers import Layer
 from utilities.error_handling import ErrorHandlingMixin, ErrorSeverity
 
 logger = logging.getLogger(__name__)
-
+# TODO organize and clean this file
 
 @dataclass
 class PreviewConfig:
@@ -258,6 +258,11 @@ class VisualizationManager(ErrorHandlingMixin):
         if hasattr(self.data_manager, 'displacement_vector_cache'):
             self.data_manager.displacement_vector_cache = None
 
+    def clear_force_vector_cache(self) -> None:
+        """Clear force vector cache from data manager."""
+        if hasattr(self.data_manager, 'force_vector_cache'):
+            self.data_manager.force_vector_cache = None
+
     def visualize_displacement_preview(
             self,
             flow: np.ndarray,
@@ -432,6 +437,9 @@ class VisualizationManager(ErrorHandlingMixin):
     ) -> None:
         """Visualize force preview for a single frame."""
         try:
+            # Clear vector cache first
+            self.clear_force_vector_cache()
+
             # Clear existing layers
             self._clear_layers(['Force Magnitude', 'Force Vectors'])
             display_force = self._upscale_field(force_field, downscale_factor)
@@ -471,7 +479,6 @@ class VisualizationManager(ErrorHandlingMixin):
                         length=1
                     )
 
-
         except Exception as e:
             error = self.create_error(
                 message="Failed to visualize force preview",
@@ -483,7 +490,6 @@ class VisualizationManager(ErrorHandlingMixin):
             )
             self.handle_error(error)
             raise
-
     def visualize_force_results(self) -> None:
         """Visualize force results for all frames using data from data manager."""
         try:
@@ -749,28 +755,6 @@ class VisualizationManager(ErrorHandlingMixin):
             self.handle_error(error)
             raise
 
-    def get_force_statistics(self, results: Dict[str, Any]) -> Dict[str, float]:
-        """Calculate force statistics."""
-        try:
-            # Calculate magnitudes
-            tx = results['tx']
-            ty = results['ty']
-            magnitudes = np.sqrt(tx ** 2 + ty ** 2)
-
-            # Calculate statistics
-            stats = {
-                'mean_force': float(np.mean(magnitudes)),
-                'max_force': float(np.max(magnitudes)),
-                'median_force': float(np.median(magnitudes)),
-                'std_force': float(np.std(magnitudes))
-            }
-
-            return stats
-
-        except Exception as e:
-            self.handle_error(f"Failed to calculate force statistics: {str(e)}")
-            return {}
-
     def _on_layer_removed(self, event) -> None:
         """Handle layer removal events."""
         layer = event.value
@@ -1003,15 +987,6 @@ class VisualizationManager(ErrorHandlingMixin):
             opacity=0.7,
             name=node_layer_name
         )
-
-    def remove_mesh_visualization(self, layer_prefix: str = ''):
-        """Remove mesh visualization layers."""
-        edge_layer_name = f"{layer_prefix}Mesh Edges"
-        node_layer_name = f"{layer_prefix}Mesh Nodes"
-
-        for layer_name in [edge_layer_name, node_layer_name]:
-            if layer_name in self.viewer.layers:
-                self.viewer.layers.remove(layer_name)
 
     def visualize_masks(self, masks: np.ndarray, downscale_factor: int = 1, name: str = 'Masks', opacity: float = 0.5):
         """

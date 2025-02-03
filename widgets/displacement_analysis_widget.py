@@ -554,6 +554,15 @@ class DisplacementController(QObject):
     # endregion === Initialization
 
     # region === Processing Execution
+    def get_displacement_statistics(self, flow: np.ndarray) -> dict:
+        """Calculate displacement statistics."""
+        magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
+        return {
+            'max': magnitude.max(),
+            'mean': magnitude.mean(),
+            'std': magnitude.std(),
+            'median': np.median(magnitude)
+        }
     def preview_displacement(self):
         """Preview displacement calculation on current frame."""
         try:
@@ -634,7 +643,7 @@ class DisplacementController(QObject):
                     self.viewer.layers.move(current_index, -1)
 
             # Update status with statistics
-            stats = self.visualization_manager.get_displacement_statistics(final_result.displacement_field[0])
+            stats = self.get_displacement_statistics(final_result.displacement_field[0])
             self.progress_updated.emit(
                 100,
                 f"Maximum displacement: {stats['max']:.2f} µm\n"
