@@ -449,9 +449,6 @@ class FTTCActionPanel(QWidget):
         for btn in action_buttons:
             btn.setEnabled(not freeze)
 
-        # Cancel button is enabled only during processing
-        self.cancel_btn.setEnabled(freeze)
-
     def update_button_states(self,
                              has_displacement: bool = False,
                              has_results: bool = False):
@@ -460,14 +457,11 @@ class FTTCActionPanel(QWidget):
         self.preview_btn.setEnabled(has_displacement)
         self.calculate_btn.setEnabled(has_displacement)
 
-        # Save button needs results
+        # Save button needs force results
         self.save_btn.setEnabled(has_results)
 
         # Load button is always enabled
         self.load_btn.setEnabled(True)
-
-        # Cancel button is disabled by default (enabled during processing)
-        self.cancel_btn.setEnabled(False)
 
 
 class FTTCController(QObject):
@@ -499,11 +493,14 @@ class FTTCController(QObject):
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
         self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
 
+
     def set_panels(self, parameter_panel, action_panel):
         """Set the parameter and action panels."""
         self.parameter_panel = parameter_panel
         self.action_panel = action_panel
         self.parameter_panel.set_controller(self)
+        self._update_ui_state()
+
 
     def preview_force(self):
         """Preview force calculation for current frame."""
@@ -652,12 +649,12 @@ class FTTCController(QObject):
                         100,
                         f"Displacement data loaded: {displacement_data.displacement_field.shape}"
                     )
+                    self._update_ui_state()
                 else:
                     self.progress_updated.emit(0, "No displacement data loaded")
 
         except Exception as e:
             self._handle_error(f"Failed to load displacement data: {str(e)}")
-
     def save_results(self):
         """Save force calculation results."""
         try:
@@ -750,6 +747,23 @@ class FTTCController(QObject):
                 else:
                     self.parameter_manager.set_parameter(param_name, value)
 
+    def _update_ui_state(self, event=None):
+        """Update UI state based on current data and selection."""
+        # Update data panel
+        if self.data_panel:
+            self.data_panel.update_data_status()
+
+        # Get current data state
+        has_displacement = self.data_manager.displacement_results is not None
+        has_results = self.data_manager.force_results is not None
+
+        # Update action panel button states
+        if self.action_panel:
+            self.action_panel.update_button_states(
+                has_displacement=has_displacement,
+                has_results=has_results
+            )
+
     def cancel_operation(self):
         """Cancel any running operations."""
         for worker in self.active_workers:
@@ -762,6 +776,9 @@ class FTTCController(QObject):
         self.active_workers.clear()
         self.progress_updated.emit(0, "Operation cancelled")
         self.unfreeze_ui()
+        # Ensure cancel button stays enabled
+        if self.action_panel:
+            self.action_panel.cancel_btn.setEnabled(True)
 
     @thread_worker
     def _create_preview_worker(self, displacement_field, params):
@@ -907,6 +924,8 @@ class FTTCController(QObject):
 
             self.progress_updated.emit(100, "Analysis completed successfully")
             self.analysis_completed.emit(result)
+            self._update_ui_state()
+
 
         except Exception as e:
             self._handle_error(str(e))
