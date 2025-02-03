@@ -21,12 +21,10 @@ from utilities.visualization_manager import VisualizationManager
 
 
 # TODO spinboxes should be initialized with default values from parameter manager
-# TODO loading stress tensor changes young's modulus in fttc widget
 # TODO reimplement mask preview
 # TODO make preview current frame run in seperate thread
 # TODO layer visibility (only sigma_xx after calculations)
 # TODO verify parameter synching
-# TODO make boundary smoothing an integer
 # TODO test in all widgets whether or not loading external data updates params
 # TODO create masks from images should not be enabled on vector layers
 # TODO image layer should stay activated when creating several mask stacks in a row
@@ -453,6 +451,7 @@ class MSMDataPanel(QWidget):
             error_msg = f"Failed to load force data: {str(e)}"
             self.force_status.setText("Error loading")
             QMessageBox.critical(self, "Error", error_msg)
+
     def load_mask_data(self, mask_data):
         """Public method to load mask data directly."""
         self._load_mask_data(mask_data=mask_data)
@@ -1000,7 +999,7 @@ class MSMController(QObject):
                         # Update parameter manager with loaded parameters
                         params = results.parameters
                         for param_name, value in vars(params).items():
-                            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
+                            if param_name != '_sa_instance_state' and param_name != "young_modulus":  # Skip SQLAlchemy state
                                 self.parameter_manager.set_parameter(param_name, value)
 
                         # Sync UI with new parameters
@@ -1302,6 +1301,8 @@ class MSMWidget(BaseAnalysisWidget):
         # Connect parameter manager to update service parameters when they change
         parameter_manager.parameters_reset.connect(self._update_service_parameters)
         parameter_manager.parameter_changed.connect(self._handle_parameter_change)
+
+        self.controller.unfreeze_ui()
 
     def _setup_ui(self):
         """Set up the user interface."""
