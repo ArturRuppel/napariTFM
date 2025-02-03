@@ -850,6 +850,63 @@ class VisualizationManager(ErrorHandlingMixin):
             )
             self.handle_error(error)
 
+    def update_stress_frame(self, frame_index: int) -> None:
+        """Update stress tensor visualization for the current frame."""
+        try:
+            # Check if stress results exist
+            if not hasattr(self.data_manager, 'stress_results') or self.data_manager.stress_results is None:
+                return
+
+            stress_tensors = self.data_manager.stress_results.stress_tensor
+            if frame_index >= len(stress_tensors):
+                return
+
+            # Get current frame's tensor
+            tensor = stress_tensors[frame_index]
+
+            # Update stress layers if they exist
+            if 'stress_xx' in self._layers and self._layers['stress_xx'] is not None:
+                with self.viewer.events.blocker_all():
+                    if hasattr(self.data_manager.stress_results.parameters, 'downscale_factor'):
+                        downscale_factor = self.data_manager.stress_results.parameters.downscale_factor
+                        if downscale_factor > 1:
+                            # Resize individual components
+                            sigma_xx = cv2.resize(
+                                tensor[..., 0, 0],
+                                (tensor.shape[1] * downscale_factor,
+                                 tensor.shape[0] * downscale_factor),
+                                interpolation=cv2.INTER_LINEAR
+                            )
+                            sigma_yy = cv2.resize(
+                                tensor[..., 1, 1],
+                                (tensor.shape[1] * downscale_factor,
+                                 tensor.shape[0] * downscale_factor),
+                                interpolation=cv2.INTER_LINEAR
+                            )
+                        else:
+                            sigma_xx = tensor[..., 0, 0]
+                            sigma_yy = tensor[..., 1, 1]
+                    else:
+                        sigma_xx = tensor[..., 0, 0]
+                        sigma_yy = tensor[..., 1, 1]
+
+                    # Update normal stress components
+                    self._layers['stress_xx'].data = sigma_xx
+                    self._layers['stress_yy'].data = sigma_yy
+
+                    # Update average normal stress
+                    self._layers['stress_normal'].data = (sigma_xx + sigma_yy) / 2
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to update stress frame",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check stress results and layer consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
     def _create_vector_visualization(
             self,
             flow_scaled: np.ndarray,

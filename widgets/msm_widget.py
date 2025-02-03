@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -19,7 +20,6 @@ from services.msm_service import MSMService, MSMResult
 from utilities.visualization_manager import VisualizationManager
 
 
-# TODO implement loading and saving
 # TODO spinboxes should be initialized with default values from parameter manager
 # TODO reimplement mask preview
 # TODO make preview current frame run in seperate thread
@@ -210,6 +210,28 @@ class MSMParameterPanel(QWidget):
             elif isinstance(widget, QCheckBox):
                 widget.setChecked(value)
             widget.blockSignals(False)
+
+    def _block_widgets(self, block: bool):
+        """Block or unblock all widget signals."""
+        for widget in self.parameter_widgets.values():
+            widget.blockSignals(block)
+
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager."""
+        for name, widget in self.parameter_widgets.items():
+            value = self.parameter_manager.get_parameter(name)
+            if value is not None:
+                widget.blockSignals(True)
+                if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                    widget.setValue(value)
+                elif isinstance(widget, QComboBox):
+                    for display_name, internal_name in self.MESH_ALGORITHMS.items():
+                        if internal_name == value:
+                            widget.setCurrentText(display_name)
+                            break
+                elif isinstance(widget, QCheckBox):
+                    widget.setChecked(value)
+                widget.blockSignals(False)
 
 
 class MSMDataPanel(QWidget):
@@ -537,6 +559,7 @@ class MSMActionPanel(QWidget):
         self.preview_frame_btn.clicked.connect(self.controller.preview_current_frame)
         self.analyze_btn.clicked.connect(self._handle_analyze_click)
         self.save_btn.clicked.connect(self.controller.save_results)
+        self.load_stress_btn.clicked.connect(self.controller.load_results)
         self.create_mask_btn.clicked.connect(self.controller.create_masks_from_images)
         self.cancel_btn.clicked.connect(self.controller.cancel_all_operations)
 
@@ -731,6 +754,7 @@ class MSMController(QObject):
             self.analysis_failed.emit(error_msg)
             QMessageBox.critical(None, "Error", error_msg)
             return None
+
     def preview_current_frame(self):
         """Calculate and display stress field for current frame."""
         try:
@@ -890,6 +914,69 @@ class MSMController(QObject):
         except Exception as e:
             QMessageBox.critical(None, "Error", f"Failed to save results: {str(e)}")
         return False
+
+    def load_results(self):
+        """Load previously saved stress results."""
+        try:
+            load_path, _ = QFileDialog.getOpenFileName(
+                None,
+                "Load Stress Results",
+                str(Path.home()),
+                "NumPy Files (*.npy)"
+            )
+
+            if load_path:
+                # Load data
+                results = np.load(load_path, allow_pickle=True).item()
+
+                # Update parameters if they exist in the results
+                if hasattr(results, 'parameters'):
+                    # Block parameter change signals temporarily
+                    if self.parameter_panel:
+                        self.parameter_panel._block_widgets(True)
+                    try:
+                        # Update parameter manager with loaded parameters
+                        params = results.parameters
+                        for param_name, value in vars(params).items():
+                            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
+                                self.parameter_manager.set_parameter(param_name, value)
+
+                        # Sync UI with new parameters
+                        if self.parameter_panel:
+                            self.parameter_panel._sync_widget_with_parameters()
+                    finally:
+                        if self.parameter_panel:
+                            self.parameter_panel._block_widgets(False)
+
+                # Update data manager and visualization
+                self.data_manager.set_stress_results(results)
+                self.visualization_manager.visualize_stress_results()
+
+                # First pass: find the stress layer and disable all others
+                for layer in self.viewer.layers:
+                    if layer.name == 'Average Normal Stress':
+                        layer.visible = True
+                    else:
+                        layer.visible = False
+
+                # Move stress layers to top if they exist
+                for layer_name in ['Normal Stress XX', 'Normal Stress YY', 'Average Normal Stress']:
+                    layer = next((layer for layer in self.viewer.layers if layer.name == layer_name), None)
+                    if layer is not None:
+                        current_index = self.viewer.layers.index(layer)
+                        # Keep XX and YY below Average
+                        if layer_name == 'Average Normal Stress':
+                            self.viewer.layers.move(current_index, -1)
+                        else:
+                            self.viewer.layers.move(current_index, -2)
+
+                self.progress_updated.emit(100, f"Results and parameters loaded from {load_path}")
+                self.analysis_completed.emit(results)
+
+        except Exception as e:
+            error_msg = f"Failed to load results: {str(e)}"
+            self.progress_updated.emit(0, error_msg)
+            QMessageBox.critical(None, "Error", error_msg)
 
     def set_panels(self, parameter_panel: 'MSMParameterPanel', action_panel: 'MSMActionPanel'):
         """Set the parameter and action panels after initialization."""
