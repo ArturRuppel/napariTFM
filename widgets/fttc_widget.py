@@ -19,8 +19,8 @@ from services.fttc_service import FTTCService, FTTCResult
 
 from widgets._base_widget import BaseAnalysisWidget
 
+
 # TODO layer visibility after calculations (preview and full)
-# TODO load displacement data should trigger visualization
 # TODO load displacment button disables when trying to load the wrong file
 # TODO review button disable/enable logic
 # TODO preview button should clear vector cache
@@ -600,9 +600,8 @@ class FTTCController(QObject):
             self.unfreeze_ui()
 
     def load_displacement_data(self):
-        """Load displacement data from active layer or file."""
+        """Load displacement data from file."""
         try:
-            # If no data in manager, try to load from file
             file_path, _ = QFileDialog.getOpenFileName(
                 None,
                 "Load Displacement Data",
@@ -611,17 +610,50 @@ class FTTCController(QObject):
             )
 
             if file_path:
+                # Load displacement data
                 displacement_data = np.load(file_path, allow_pickle=True).item()
+
+                # Update parameters if they exist in the loaded data
+                if hasattr(displacement_data, 'parameters'):
+                    # Block parameter change signals temporarily
+                    if self.parameter_panel:
+                        self.parameter_panel._block_widgets(True)
+                    try:
+                        # Update parameter manager with loaded parameters
+                        params = displacement_data.parameters
+                        for param_name, value in vars(params).items():
+                            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
+                                self.parameter_manager.set_parameter(param_name, value)
+
+                        # Sync UI with new parameters
+                        if self.parameter_panel:
+                            self.parameter_panel._sync_widget_with_parameters()
+                    finally:
+                        if self.parameter_panel:
+                            self.parameter_panel._block_widgets(False)
+
+                # Update data manager
                 self.data_manager.set_displacement_results(displacement_data)
 
+                # Update visualization
                 if displacement_data is not None:
+                    # Manage layer visibility
+                    for layer in self.viewer.layers:
+                        if layer.name in ['Displacement Vectors', 'Displacement Magnitude']:
+                            layer.visible = True
+                            # Move displacement layers to top
+                            self.viewer.layers.move(self.viewer.layers.index(layer), -1)
+                        else:
+                            layer.visible = False
+
+                    self.visualization_manager.visualize_displacement_results()
                     self.data_updated.emit('displacement')
                     self.progress_updated.emit(
                         100,
                         f"Displacement data loaded: {displacement_data.displacement_field.shape}"
                     )
-            else:
-                self.progress_updated.emit(0, "No displacement data loaded")
+                else:
+                    self.progress_updated.emit(0, "No displacement data loaded")
 
         except Exception as e:
             self._handle_error(f"Failed to load displacement data: {str(e)}")
@@ -717,6 +749,7 @@ class FTTCController(QObject):
                     self.parameter_manager.set_parameter(param_name, value)
                 else:
                     self.parameter_manager.set_parameter(param_name, value)
+
     def cancel_operation(self):
         """Cancel any running operations."""
         for worker in self.active_workers:
