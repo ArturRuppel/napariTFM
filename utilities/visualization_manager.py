@@ -12,7 +12,9 @@ from napari.layers import Layer
 from utilities.error_handling import ErrorHandlingMixin, ErrorSeverity
 
 logger = logging.getLogger(__name__)
-# TODO organize and clean this file
+
+
+# TODO organize this file
 
 @dataclass
 class PreviewConfig:
@@ -73,6 +75,7 @@ class VisualizationManager(ErrorHandlingMixin):
                 source="visualization"
             )
             self.handle_error(error)
+
     def _clear_displacement_callback(self):
         """Clear the existing displacement dims callback if it exists"""
         if self._displacement_dims_callback is not None:
@@ -491,6 +494,7 @@ class VisualizationManager(ErrorHandlingMixin):
             )
             self.handle_error(error)
             raise
+
     def visualize_force_results(self) -> None:
         """Visualize force results for all frames using data from data manager."""
         try:
