@@ -1371,7 +1371,7 @@ parent_dir = str(Path(__file__).resolve().parent.parent)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from napariTFM.backend.batch_analysis import BatchAnalysis
+from backend.batch_analysis import BatchAnalysis
 
 # Create analyzer instance and process folders
 config_path = "{config_path_forward}"

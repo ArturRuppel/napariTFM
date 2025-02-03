@@ -81,18 +81,18 @@ class PreprocessingService:
             'original_std': float(image.std())
         }
 
-        # Apply rolling ball background subtraction first
-        processed = self._processor.apply_rolling_ball(image, self.params.rolling_ball_radius)
-
-        # Select appropriate parameters
+        # Select appropriate parameters based on image type
         if is_cell:
             params = (self.params.cell_min_intensity_percentile,
                       self.params.cell_max_intensity_percentile,
                       self.params.cell_gaussian_sigma)
+            processed = image  # No rolling ball for cell images
         else:
+            # Apply rolling ball only for bead/reference images
             params = (self.params.min_intensity_percentile,
                       self.params.max_intensity_percentile,
                       self.params.gaussian_sigma)
+            processed = self._processor.apply_rolling_ball(image, self.params.rolling_ball_radius)
 
         # Apply remaining processing steps
         processed = self._processor.apply_gaussian_filter(processed, params[2])
@@ -111,7 +111,7 @@ class PreprocessingService:
             'final_std': float(processed.std()),
             'intensity_range': intensity_range,
             'gaussian_sigma': params[2],
-            'rolling_ball_radius': self.params.rolling_ball_radius
+            'rolling_ball_radius': self.params.rolling_ball_radius if not is_cell else None
         })
 
         return PreprocessingIntermediateResult(

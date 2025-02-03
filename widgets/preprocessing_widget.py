@@ -23,7 +23,6 @@ from utilities.colorbar import ColorbarManager
 from utilities.parameter_manager import ParameterManager, ParameterCategory
 from services.preprocessing_service import PreprocessingService
 
-
 class PreprocessingDataPanel(QWidget):
     """Panel for handling data loading and status display."""
 

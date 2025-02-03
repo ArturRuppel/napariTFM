@@ -391,7 +391,6 @@ class BatchVisualizationSaver:
         fps : int, optional
             Frames per second for the GIF
         """
-        from napariTFM.backend.mesh_generator import MeshGenerator
 
         frames = []
         stress_shape = stress_results.stress_shape
