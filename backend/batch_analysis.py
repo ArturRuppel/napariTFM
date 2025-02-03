@@ -17,7 +17,7 @@ from services.fttc_service import FTTCService, FTTCResult
 from services.msm_service import MSMService
 from services.preprocessing_service import PreprocessingService
 
-
+# TODO show intermediate timing results in min
 class TeeLogger:
     """Custom logger that captures print statements and logging output to both console and file."""
 

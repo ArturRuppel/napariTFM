@@ -53,6 +53,7 @@ class FTTCDataPanel(QWidget):
         displacement_layout = QHBoxLayout()
         self.load_displacement_btn = QPushButton("Load Displacement Data")
         self.load_displacement_btn.setFixedWidth(150)
+        self.load_displacement_btn.setFixedHeight(25)
         self.load_displacement_btn.setToolTip("Load displacement data from file")
         self.displacement_status = QLabel("Not loaded")
         self.displacement_status.setWordWrap(True)
@@ -77,11 +78,6 @@ class FTTCDataPanel(QWidget):
             self.load_displacement_btn.clicked.connect(
                 lambda: self.controller.load_displacement_data()
             )
-
-    def update_button_states(self, active_layer_exists: bool = False):
-        """Update button states based on layer selection."""
-        active_layer = self.viewer.layers.selection.active
-        self.load_displacement_btn.setEnabled(active_layer is not None)
 
     def update_data_status(self):
         """Update status labels based on loaded data."""
@@ -1091,7 +1087,6 @@ class FTTCWidget(BaseAnalysisWidget):
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
         # Update data panel
-        self.data_panel.update_button_states()
         self.data_panel.update_data_status()
 
         # Update action panel
