@@ -17,7 +17,6 @@ from services.fttc_service import FTTCService, FTTCResult
 from services.msm_service import MSMService
 from services.preprocessing_service import PreprocessingService
 
-# TODO show intermediate timing results in min
 class TeeLogger:
     """Custom logger that captures print statements and logging output to both console and file."""
 
@@ -152,6 +151,12 @@ class BatchAnalysis:
     def __init__(self, config: dict):
         self.config = config
         self._tee_logger = None
+
+    def _format_duration(self, seconds: float) -> str:
+        """Format duration in appropriate units (seconds or minutes)."""
+        if seconds < 60:
+            return f"{seconds:.1f} seconds"
+        return f"{seconds/60:.1f} minutes"
 
     def process_all_folders(self) -> None:
         """Process all folders specified in configuration."""
@@ -361,7 +366,7 @@ class BatchAnalysis:
                 frame_interval
             )
 
-        print(f"Preprocessing completed in {time() - start_time:.1f} seconds")
+        print(f"Preprocessing completed in {self._format_duration(time() - start_time)}")
         return preprocessed
 
     def _execute_displacement_analysis(self, tfm_folder: Path, preprocessed_data: Optional[dict]) -> Optional[dict]:
@@ -388,7 +393,7 @@ class BatchAnalysis:
         # Save the displacement field
         np.save(str(tfm_folder / "displacements.npy"), displacement_result)
 
-        print(f"Displacement analysis completed in {time() - start_time:.1f} seconds")
+        print(f"Displacement analysis completed in {self._format_duration(time() - start_time)}")
         return displacement_result
 
     def _execute_force_analysis(self, tfm_folder: Path, displacement_data: DisplacementResult) -> Optional[dict]:
@@ -418,7 +423,7 @@ class BatchAnalysis:
 
         np.save(str(tfm_folder / "traction_forces.npy"), force_result)
 
-        print(f"Force analysis completed in {time() - start_time:.1f} seconds")
+        print(f"Force analysis completed in {self._format_duration(time() - start_time)}")
         return force_result
 
     def _execute_mask_creation(self, tfm_folder: Path, cell_images: np.ndarray) -> NDArray[int]:
@@ -440,7 +445,7 @@ class BatchAnalysis:
 
         tifffile.imwrite(str(tfm_folder / "masks.tif"), masks.astype("uint8"))
 
-        print(f"Mask creation completed in {time() - start_time:.1f} seconds")
+        print(f"Mask creation completed in {self._format_duration(time() - start_time)}")
         return masks
 
     def _execute_stress_analysis(self, tfm_folder: Path, mask_data: np.ndarray, force_data: FTTCResult) -> Optional[dict]:
@@ -514,7 +519,7 @@ class BatchAnalysis:
             # Save results
             np.save(str(tfm_folder / "stress_results.npy"), final_result)
 
-            print(f"Stress analysis completed in {time() - start_time:.1f} seconds")
+            print(f"Stress analysis completed in {self._format_duration(time() - start_time)}")
             return final_result
 
         except Exception as e:
