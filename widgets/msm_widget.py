@@ -243,6 +243,8 @@ class MSMDataPanel(QWidget):
         # Force data row
         force_layout = QHBoxLayout()
         self.load_force_btn = QPushButton("Load Forces")
+        self.load_force_btn.setFixedWidth(150)
+        self.load_force_btn.setFixedHeight(25)
         self.force_status = QLabel("Not loaded")
         force_layout.addWidget(self.load_force_btn)
         force_layout.addWidget(self.force_status)
@@ -251,12 +253,21 @@ class MSMDataPanel(QWidget):
         # Mask data row
         mask_layout = QHBoxLayout()
         self.load_mask_btn = QPushButton("Load Masks")
+        self.load_mask_btn.setFixedWidth(150)
+        self.load_mask_btn.setFixedHeight(25)
         self.mask_status = QLabel("Not loaded")
         mask_layout.addWidget(self.load_mask_btn)
         mask_layout.addWidget(self.mask_status)
         group_layout.addLayout(mask_layout)
 
         data_group.setLayout(group_layout)
+
+        # Add description label for required data
+        info_label = QLabel(
+            "Required: Force field data and tissue mask."
+        )
+        info_label.setWordWrap(True)
+        group_layout.addWidget(info_label)
 
         layout.addWidget(data_group)
         self.setLayout(layout)

@@ -17,9 +17,6 @@ from utilities.visualization_manager import VisualizationManager
 from widgets._base_widget import BaseAnalysisWidget
 
 
-# TODO preview button should clear vector cache
-# TODO test in all widgets whether or not loading external data updates params
-
 class FTTCDataPanel(QWidget):
     """Panel for handling FTTC data loading and status display."""
 
