@@ -22,9 +22,7 @@ from widgets._base_widget import BaseAnalysisWidget
 
 # TODO layer visibility after calculations (preview and full)
 # TODO load displacment button disables when trying to load the wrong file
-# TODO review button disable/enable logic
 # TODO preview button should clear vector cache
-# TODO auto-gcv puts a 0 in the UI
 # TODO test in all widgets whether or not loading external data updates params
 
 class FTTCDataPanel(QWidget):
@@ -452,15 +450,12 @@ class FTTCActionPanel(QWidget):
     def update_button_states(self,
                              has_displacement: bool = False,
                              has_results: bool = False):
-        """Update button states based on data availability."""
         # Analysis buttons need displacement data
         self.preview_btn.setEnabled(has_displacement)
         self.calculate_btn.setEnabled(has_displacement)
 
         # Save button needs force results
         self.save_btn.setEnabled(has_results)
-
-        # Load button is always enabled
         self.load_btn.setEnabled(True)
 
 
@@ -493,7 +488,6 @@ class FTTCController(QObject):
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
         self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
 
-
     def set_panels(self, parameter_panel, action_panel):
         """Set the parameter and action panels."""
         self.parameter_panel = parameter_panel
@@ -501,9 +495,9 @@ class FTTCController(QObject):
         self.parameter_panel.set_controller(self)
         self._update_ui_state()
 
-
     def preview_force(self):
         """Preview force calculation for current frame."""
+
         try:
             if not self._validate_prerequisites():
                 return
@@ -531,6 +525,7 @@ class FTTCController(QObject):
 
             self.active_workers.append(worker)
             worker.start()
+
 
         except Exception as e:
             self._handle_error(str(e))
@@ -655,6 +650,7 @@ class FTTCController(QObject):
 
         except Exception as e:
             self._handle_error(f"Failed to load displacement data: {str(e)}")
+
     def save_results(self):
         """Save force calculation results."""
         try:
@@ -871,7 +867,6 @@ class FTTCController(QObject):
 
             # Calculate and show statistics
             magnitude = np.sqrt(np.sum(result.force_field[0] ** 2, axis=-1))
-            self.analysis_completed.emit(result)
             self.progress_updated.emit(
                 100,
                 f"Preview statistics:\n"
@@ -991,7 +986,14 @@ class FTTCController(QObject):
         if self.parameter_panel:
             self.parameter_panel.freeze_ui(False)
         if self.action_panel:
-            self.action_panel.freeze_ui(False)
+            # Get current state
+            has_displacement = self.data_manager.displacement_results is not None
+            has_results = self.data_manager.force_results is not None
+            # Update button states instead of just unfreezing
+            self.action_panel.update_button_states(
+                has_displacement=has_displacement,
+                has_results=has_results
+            )
         self.ui_frozen.emit(False)
 
 

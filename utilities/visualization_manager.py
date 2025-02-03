@@ -434,7 +434,6 @@ class VisualizationManager(ErrorHandlingMixin):
         try:
             # Clear existing layers
             self._clear_layers(['Force Magnitude', 'Force Vectors'])
-
             display_force = self._upscale_field(force_field, downscale_factor)
 
             # Add visualization layers
@@ -471,6 +470,7 @@ class VisualizationManager(ErrorHandlingMixin):
                         blending='additive',
                         length=1
                     )
+
 
         except Exception as e:
             error = self.create_error(
