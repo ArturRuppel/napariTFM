@@ -26,8 +26,21 @@ from utilities.visualization_manager import VisualizationManager
 # TODO layer visibility (only sigma_xx after calculations)
 # TODO verify parameter synching
 # TODO test in all widgets whether or not loading external data updates params
-# TODO create masks from images should not be enabled on vector layers
 # TODO image layer should stay activated when creating several mask stacks in a row
+
+def _is_valid_image_layer(layer) -> bool:
+    """Check if layer is valid for mask creation/loading."""
+    # Check if layer exists and has data
+    if layer is None or not hasattr(layer, 'data'):
+        return False
+
+    # Check if it's a Vectors layer
+    if layer.__class__.__name__ == 'Vectors':
+        return False
+
+    # Must be a numpy array
+    return isinstance(layer.data, np.ndarray)
+
 
 class MSMParameterPanel(QWidget):
     """Panel for handling all MSM parameter inputs."""
@@ -298,12 +311,19 @@ class MSMDataPanel(QWidget):
         self.load_force_btn.clicked.connect(self._load_force_data)
         self.load_mask_btn.clicked.connect(self._handle_load_mask_button)
 
-    def update_button_states(self, has_active_image: bool):
+    def update_button_states(self, active_layer):
         """Update button states based on current conditions."""
         # Update Load Masks button
-        self.load_mask_btn.setEnabled(has_active_image)
-        if not has_active_image:
+        is_valid_layer = _is_valid_image_layer(active_layer)
+        self.load_mask_btn.setEnabled(is_valid_layer)
+
+        if active_layer is None:
             self.load_mask_btn.setToolTip("Select an image layer first")
+        elif not is_valid_layer:
+            if active_layer.__class__.__name__ == 'Vectors':
+                self.load_mask_btn.setToolTip("Cannot create masks from vector layers")
+            else:
+                self.load_mask_btn.setToolTip("Selected layer is not a valid image layer")
         else:
             self.load_mask_btn.setToolTip("Load masks from selected layer")
 
@@ -567,22 +587,27 @@ class MSMActionPanel(QWidget):
             btn.setEnabled(not freeze)
         self.cancel_btn.setEnabled(True)  # Always keep cancel enabled
 
-    def update_button_states(self, active_layer_exists: bool = False,
-                             force_data: bool = False, mask_data: bool = False,
-                             stress_data: bool = False):
+    def update_button_states(self, active_layer: bool = None, force_data: bool = False,
+                             mask_data: bool = False, stress_data: bool = False):
         """Update button states based on current data availability."""
         # Ensure all parameters are boolean, defaulting to False if None
-        active_layer_exists = bool(active_layer_exists)
         force_data = bool(force_data)
         mask_data = bool(mask_data)
         stress_data = bool(stress_data)
 
-        # Create Masks button
-        self.create_mask_btn.setEnabled(active_layer_exists)
-        self.create_mask_btn.setToolTip(
-            "Create masks from selected image" if active_layer_exists
-            else "Select an image layer first"
-        )
+        # Create Masks button - check if layer is valid for mask creation
+        is_valid_layer = _is_valid_image_layer(active_layer)
+        self.create_mask_btn.setEnabled(is_valid_layer)
+
+        if active_layer is None:
+            self.create_mask_btn.setToolTip("Select an image layer first")
+        elif not is_valid_layer:
+            if active_layer.__class__.__name__ == 'Vectors':
+                self.create_mask_btn.setToolTip("Cannot create masks from vector layers")
+            else:
+                self.create_mask_btn.setToolTip("Selected layer is not a valid image layer")
+        else:
+            self.create_mask_btn.setToolTip("Create masks from selected image")
 
         # Preview Mesh button
         self.preview_mesh_btn.setEnabled(mask_data)
@@ -1436,17 +1461,15 @@ class MSMWidget(BaseAnalysisWidget):
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
         active_layer = self.viewer.layers.selection.active
-        has_active_image = (active_layer is not None and
-                            isinstance(active_layer.data, np.ndarray))
 
         has_force = self.data_manager.force_results is not None
         has_mask = self.data_manager.mask_stack is not None
         has_stress = self.data_manager.stress_results is not None
 
-        self.data_panel.update_button_states(has_active_image)
+        self.data_panel.update_button_states(active_layer)
         self.data_panel.update_data_status()
         self.action_panel.update_button_states(
-            active_layer_exists=has_active_image,
+            active_layer=active_layer,
             force_data=has_force,
             mask_data=has_mask,
             stress_data=has_stress
