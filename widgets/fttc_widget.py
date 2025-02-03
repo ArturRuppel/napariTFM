@@ -3,25 +3,20 @@ from typing import Any
 
 import numpy as np
 from napari.qt.threading import thread_worker
-from napari.layers import Image
 from napari.viewer import Viewer
 from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (QFileDialog, QGroupBox, QDoubleSpinBox, QSpinBox, QCheckBox, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
                             QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
 
+from services.fttc_service import FTTCService, FTTCResult
 from utilities.colorbar import ColorbarManager
 from utilities.data_manager import DataManager
 from utilities.parameter_manager import ParameterCategory, ParameterManager
 from utilities.visualization_manager import VisualizationManager
-
-from services.fttc_service import FTTCService, FTTCResult
-
 from widgets._base_widget import BaseAnalysisWidget
 
 
-# TODO layer visibility after calculations (preview and full)
-# TODO load displacment button disables when trying to load the wrong file
 # TODO preview button should clear vector cache
 # TODO test in all widgets whether or not loading external data updates params
 
@@ -715,6 +710,35 @@ class FTTCController(QObject):
                 # Update data manager and visualization
                 self.data_manager.set_force_results(results)
                 self.visualization_manager.visualize_force_results()
+
+                # Manage layer visibility and order
+                vector_layer = None
+                magnitude_layer = None
+
+                # First pass: find the force layers and disable all others
+                for layer in self.viewer.layers:
+                    if layer.name == 'Force Vectors':
+                        vector_layer = layer
+                        layer.visible = True
+                    elif layer.name == 'Force Magnitude':
+                        magnitude_layer = layer
+                        layer.visible = True
+                    else:
+                        layer.visible = False
+
+                # Move layers to desired positions if they exist
+                if magnitude_layer is not None:
+                    current_index = self.viewer.layers.index(magnitude_layer)
+                    # Move magnitude layer to second from top (-2)
+                    if current_index != -2:
+                        self.viewer.layers.move(current_index, -2)
+
+                if vector_layer is not None:
+                    current_index = self.viewer.layers.index(vector_layer)
+                    # Move vector layer to top (-1)
+                    if current_index != -1:
+                        self.viewer.layers.move(current_index, -1)
+
                 self.progress_updated.emit(100, f"Results and parameters loaded from {load_path}")
                 self.analysis_completed.emit(results)
 
