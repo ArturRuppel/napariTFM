@@ -4,7 +4,33 @@ from numba import jit
 
 @jit(nopython=True)
 def numba_assembler_core(elements, mats, nodes, neq, assem_op):
-    """Numba-accelerated core assembly operations for triangular elements"""
+    """Numba-accelerated core assembly operations for triangular finite elements.
+
+    Efficiently assembles global stiffness and mass matrices for 2D linear triangular
+    elements using Numba for performance optimization.
+
+    Args:
+        elements (np.ndarray): Element connectivity array (N x 6)
+            columns: [element_id, element_type, material_id, node1, node2, node3]
+        mats (np.ndarray): Material properties array
+            columns: [Young's modulus, Poisson ratio]
+        nodes (np.ndarray): Node coordinates array (M x 5)
+            columns: [node_id, x, y, bc_flag_x, bc_flag_y]
+        neq (int): Number of equations (degrees of freedom)
+        assem_op (np.ndarray): Assembly operator array mapping local to global DOFs
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            - rows: Row indices for sparse matrix assembly
+            - cols: Column indices for sparse matrix assembly
+            - stiff_vals: Values for stiffness matrix
+            - mass_vals: Values for mass matrix
+
+    Notes:
+        This function is optimized for triangular elements with 6 DOFs per element
+        (2 DOFs per node × 3 nodes). The assembly process follows the standard FEM
+        procedure but uses pre-allocated arrays and direct indexing for efficiency.
+    """
     nels = elements.shape[0]
     ndof_per_el = 6  # Changed from 8 to 6 for triangles
 
@@ -40,8 +66,30 @@ def numba_assembler_core(elements, mats, nodes, neq, assem_op):
 
 @jit(nopython=True)
 def prepare_constraint_data_numba(nodes_xy, x_points, y_points, com, neq):
-    """
-    Numba-accelerated preparation of constraint data
+    """Prepare constraint data for FEM system with zero-displacement and torque constraints.
+
+    Efficiently constructs constraint equations for:
+    1. Zero mean displacement in x and y directions
+    2. Zero net torque around the center of mass
+
+    Args:
+        nodes_xy (np.ndarray): Node coordinates array (N x 2)
+        x_points (np.ndarray): Boolean mask for x DOFs
+        y_points (np.ndarray): Boolean mask for y DOFs
+        com (tuple): Center of mass coordinates (x, y)
+        neq (int): Number of equations (degrees of freedom)
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            - constraint_data: Values for constraint matrix
+            - constraint_rows: Row indices for sparse constraint matrix
+            - constraint_cols: Column indices for sparse constraint matrix
+
+    Notes:
+        The constraints ensure physical validity of the solution by enforcing:
+        - No rigid body translation (zero mean displacement)
+        - No rigid body rotation (zero net torque)
+        These constraints are essential for obtaining a unique solution in MSM.
     """
     # Calculate positions relative to center of mass
     r = np.zeros((neq, 2))
@@ -97,7 +145,33 @@ def prepare_constraint_data_numba(nodes_xy, x_points, y_points, com, neq):
 
 @jit(nopython=True)
 def calculate_element_stresses(el, elements, nodes, UC, mats):
-    """Calculate stresses for triangular element"""
+    """Calculate stress components for a triangular finite element.
+
+    Computes stresses at element nodes using linear shape functions and the
+    plane stress constitutive relationship.
+
+    Args:
+        el (int): Element index
+        elements (np.ndarray): Element connectivity array
+        nodes (np.ndarray): Node coordinates array
+        UC (np.ndarray): Nodal displacement solution array
+        mats (np.ndarray): Material properties array
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            - stresses: Stress tensor components [σxx, σyy, σxy] at nodes
+            - natural_coords: Natural coordinates of element nodes
+            - el_coords: Physical coordinates of element nodes
+
+    Notes:
+        For linear triangular elements, stress is constant within each element.
+        The stress tensor is computed using:
+        σ = D * B * u
+        where:
+        - D is the constitutive matrix (plane stress)
+        - B is the strain-displacement matrix
+        - u is the nodal displacement vector
+    """
     el_nodes = elements[el, 3:6]
     el_coords = nodes[el_nodes, 1:3].astype(np.float64)
     el_disps = UC[el_nodes]
@@ -138,7 +212,27 @@ def calculate_element_stresses(el, elements, nodes, UC, mats):
 
 @jit(nopython=True)
 def shape_tri_numba(r, s):
-    """Shape functions and derivatives for linear triangle element"""
+    """Calculate shape functions and derivatives for linear triangular element.
+
+    Computes the shape functions and their derivatives with respect to natural
+    coordinates (r,s) for a linear triangular element.
+
+    Args:
+        r (float): First natural coordinate (0 ≤ r ≤ 1)
+        s (float): Second natural coordinate (0 ≤ s ≤ 1, r + s ≤ 1)
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]:
+            - N: Shape functions [N1, N2, N3]
+            - dN: Shape function derivatives [∂N/∂r, ∂N/∂s]
+
+    Notes:
+        The shape functions for linear triangles are:
+        N1 = 1 - r - s
+        N2 = r
+        N3 = s
+        These provide linear interpolation within the element.
+    """
     N = np.array([
         1 - r - s,  # N1
         r,  # N2
@@ -155,7 +249,28 @@ def shape_tri_numba(r, s):
 
 @jit(nopython=True)
 def elast_diff_tri_numba(r, s, coord):
-    """Calculate B and H matrices for 2D elasticity with triangular elements"""
+    """Calculate matrices for 2D elasticity using linear triangular elements.
+
+    Computes the displacement interpolation (H) and strain-displacement (B)
+    matrices for a linear triangular element in 2D elasticity.
+
+    Args:
+        r (float): First natural coordinate
+        s (float): Second natural coordinate
+        coord (np.ndarray): Physical coordinates of element nodes (3 x 2)
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, float]:
+            - H: Displacement interpolation matrix
+            - B: Strain-displacement matrix
+            - det: Determinant of Jacobian matrix
+
+    Notes:
+        The matrices are computed at the point (r,s) in natural coordinates:
+        - H matrix relates nodal displacements to displacements at any point
+        - B matrix relates nodal displacements to strains at any point
+        - Jacobian determinant gives the element area scaling factor
+    """
     N, dN = shape_tri_numba(r, s)
 
     # Calculate Jacobian
@@ -195,7 +310,34 @@ def elast_diff_tri_numba(r, s, coord):
 
 @jit(nopython=True)
 def elast_tri_numba(coord, params):
-    """Elastic triangular element calculation"""
+    """Calculate stiffness and mass matrices for elastic triangular element.
+
+    Computes element matrices for 2D plane stress elasticity using linear
+    triangular elements.
+
+    Args:
+        coord (np.ndarray): Physical coordinates of element nodes (3 x 2)
+        params (np.ndarray): Material parameters
+            - params[0]: Young's modulus (E)
+            - params[1]: Poisson's ratio (ν)
+            - params[2]: Density (ρ) (optional, default=1.0)
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]:
+            - K: Element stiffness matrix (6 x 6)
+            - M: Element mass matrix (6 x 6)
+
+    Notes:
+        The stiffness matrix is computed using:
+        K = ∫ B^T D B dA = A * B^T D B
+        where:
+        - A is the element area
+        - B is the strain-displacement matrix
+        - D is the constitutive matrix for plane stress
+
+        For efficiency, the integral is evaluated using one-point quadrature
+        at the element centroid (r=1/3, s=1/3).
+    """
     E = float(params[0])  # Ensure float conversion
     nu = float(params[1])
     dens = 1.0 if len(params) <= 2 else float(params[2])

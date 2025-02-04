@@ -21,90 +21,59 @@ Numerical methods and constraint handling based on:
 PLoS ONE, 8(2), e55172.
 
 The implementation uses Numba-accelerated operations for performance optimization
-while maintaining the accuracy of the original MSM method. The solver employs an
-optimized LSQR implementation with careful constraint handling for solving the
-resulting system of equations.
+and triangular instead of quadratic meshing while maintaining the accuracy of the
+original MSM method. The solver employs an optimized LSQR implementation with careful
+constraint handling for solving the resulting system of equations.
+
+The implementation provides methods for:
+1. Creating binary masks from images
+2. Generating optimized FEM meshes
+3. Calculating stress fields from traction forces
+4. Handling boundary conditions and numerical stability
 """
 
-import time
 import warnings
-from functools import wraps
 
 import solidspy.assemutil as ass
 import solidspy.postprocesor as pos
+from scipy.ndimage import binary_fill_holes, generate_binary_structure, binary_dilation, label, gaussian_filter, sum as ndimage_sum
 from scipy.optimize import least_squares
 from scipy.sparse import csr_matrix, vstack, diags
 from scipy.sparse.linalg import lsqr
-from scipy.ndimage import binary_fill_holes, generate_binary_structure, binary_dilation, label, gaussian_filter, sum as ndimage_sum
-
 from skimage.measure import regionprops
 from skimage.transform import resize
 
-from backend.parameter_dataclasses import MeshParameters
 from backend.mesh_generator import MeshGenerator
 from backend.msm_numba_functions import *
-
-
-def timer_decorator(func):
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        # Get parent function if it exists
-        parent_func = getattr(self, '_current_func', None)
-
-        # Set current function
-        self._current_func = func.__name__
-
-        # Initialize timing stats dict if it doesn't exist
-        if not hasattr(self, 'timing_stats'):
-            self.timing_stats = {}
-
-        # Initialize nested calls dict if it doesn't exist
-        if not hasattr(self, '_nested_calls'):
-            self._nested_calls = {}
-
-        # Track nested call depth
-        func_name = func.__name__
-        self._nested_calls[func_name] = self._nested_calls.get(func_name, 0) + 1
-
-        start_time = time.time()
-        result = func(self, *args, **kwargs)
-        end_time = time.time()
-        execution_time = end_time - start_time
-
-        # Only store timing for the outermost call of each function
-        if self._nested_calls[func_name] == 1:
-            self.timing_stats[func_name] = self.timing_stats.get(func_name, 0) + execution_time
-            # print(f"{func_name} took {execution_time:.4f} seconds to execute")
-
-        # Decrement nested call count
-        self._nested_calls[func_name] -= 1
-
-        # Restore parent function
-        self._current_func = parent_func
-
-        return result
-
-    return wrapper
+from backend.parameter_dataclasses import MeshParameters
 
 
 class MonolayerStressMicroscopy:
     def __init__(self, params, mask=None, nodes=None, elements=None):
-        """
-        Initialize MonolayerStressMicroscopy with either parameters dataclass or individual parameters.
+        """Initialize MonolayerStressMicroscopy calculator with material properties and mesh parameters.
 
-        Parameters
-        ----------
-        mask : np.ndarray, optional
-            Binary mask defining the cell monolayer region
-        params : MSMParameters, optional
-            Parameters dataclass containing all settings
-        nodes : np.ndarray, optional
-            Pre-generated mesh nodes
-        elements : np.ndarray, optional
-            Pre-generated mesh elements
+        Args:
+            params (MSMParameters): Configuration object containing:
+                - young_modulus (float): Young's modulus of the cell monolayer in Pascals (Pa)
+                - poisson_ratio_cells (float): Poisson ratio of the cell monolayer
+                - density_factor (float): Controls mesh density (typical range: 0.005-0.05)
+                - mesh_algorithm (str): One of ['frontal-del', 'delaunay', 'meshadapt',
+                    'bamg', 'fd quads', 'para pack']
+                - use_optimization (bool): Whether to optimize mesh for better numerical stability
+            mask (np.ndarray, optional): Binary mask defining the cell monolayer region
+            nodes (np.ndarray, optional): Pre-generated mesh nodes if available
+            elements (np.ndarray, optional): Pre-generated mesh elements if available
+
+        Example:
+            >>> msm = MonolayerStressMicroscopy(MSMParameters(
+            ...     young_modulus=1000,  # 1 kPa
+            ...     poisson_ratio_cells=0.5,
+            ...     density_factor=0.02,
+            ...     mesh_algorithm='frontal-del',
+            ...     use_optimization=True
+            ... ))
         """
 
-        # Initialize from MSMParameters dataclass
         def _get_algorithm_code(algorithm_name: str) -> int:
             """Convert algorithm name to corresponding code."""
             algorithm_map = {
@@ -134,24 +103,33 @@ class MonolayerStressMicroscopy:
 
     @staticmethod
     def create_mask_from_image(image, threshold_percentile=0, dilation=10, smoothing_sigma=10.0):
-        """
-        Create a binary mask from an input image using thresholding, dilation, and smoothing.
+        """Create a binary mask from an input image using thresholding, dilation, and smoothing.
 
-        Parameters
-        ----------
-        image : np.ndarray
-            Input image
-        threshold_percentile : float
-            Percentile value for thresholding (0-100)
-        dilation : int
-            Number of pixels to dilate the mask
-        smoothing_sigma : float
-            Sigma value for Gaussian smoothing
+        This method processes raw microscopy images to create masks suitable for MSM analysis
+        by applying the following steps:
+        1. Thresholding based on intensity percentile
+        2. Hole filling
+        3. Gaussian smoothing
+        4. Edge dilation
+        5. Connected component analysis
 
-        Returns
-        -------
-        np.ndarray
-            Binary mask
+        Args:
+            image (np.ndarray): Input image
+            threshold_percentile (float): Percentile value for thresholding (0-100)
+            dilation (int): Number of pixels to dilate the mask
+            smoothing_sigma (float): Sigma value for Gaussian smoothing
+
+        Returns:
+            np.ndarray: Binary mask with True values indicating the monolayer region
+
+        Example:
+            >>> phase_image = load_microscopy_image()
+            >>> mask = MonolayerStressMicroscopy.create_mask_from_image(
+            ...     image=phase_image,
+            ...     threshold_percentile=5,
+            ...     dilation=10,
+            ...     smoothing_sigma=5.0
+            ... )
         """
         # Convert image to float for consistent processing
         image_float = image.astype(float)
@@ -279,6 +257,107 @@ class MonolayerStressMicroscopy:
             ) > 0.5
 
         return analysis_mask_stack, vis_mask_stack
+
+    def calculate_stress_field(self, traction_x, traction_y):
+        """Calculate stress field from traction force measurements using FEM.
+
+        This method implements the monolayer stress microscopy algorithm to compute
+        internal stresses within a cell monolayer from measured traction forces.
+        The calculation involves:
+        1. Force preparation and balance correction
+        2. Mesh generation (if not provided)
+        3. FEM system assembly
+        4. Constraint handling and numerical stabilization
+        5. Solution of the mechanical equilibrium equations
+
+        Args:
+            traction_x (np.ndarray): X-component of traction forces (shape: H x W)
+                Units: Pascals (Pa)
+            traction_y (np.ndarray): Y-component of traction forces (shape: H x W)
+                Units: Pascals (Pa)
+                The traction fields should represent forces exerted by the cells
+                on the substrate at each point.
+
+        Returns:
+            Tuple[np.ndarray, float, float]:
+                - stress_tensor (np.ndarray): Calculated stress tensor (shape: H x W x 2 x 2)
+                  Units: Pascals (Pa)
+                  Components are:
+                  - [..., 0, 0]: σxx (normal stress in x)
+                  - [..., 1, 1]: σyy (normal stress in y)
+                  - [..., 0, 1] and [..., 1, 0]: σxy (shear stress)
+                - condition_number (float): Condition number of the system matrix,
+                  indicating numerical stability
+                - residual (float): Residual norm of the solution, indicating
+                  solution accuracy
+
+        Notes:
+            The stress tensor is symmetric (σxy = σyx) and represents the internal
+            stresses within the cell monolayer. These stresses arise from the
+            mechanical equilibrium between cell-generated forces and measured
+            traction forces.
+
+        Example:
+            >>> msm = MonolayerStressMicroscopy(params)
+            >>> tx, ty = measure_traction_forces()  # Your measurement function
+            >>> stress_tensor, cond, res = msm.calculate_stress_field(tx, ty)
+            >>> # Access normal and shear stresses
+            >>> sigma_xx = stress_tensor[..., 0, 0]
+            >>> sigma_yy = stress_tensor[..., 1, 1]
+            >>> sigma_xy = stress_tensor[..., 0, 1]
+        """
+        try:
+            if self.nodes is None or self.elements is None:
+                # Validate density_factor before mesh generation
+                if self.density_factor < 0.005:
+                    warnings.warn(
+                        "Density factor is very low (< 0.005), which may lead to numerical instabilities and long runtimes.",
+                        UserWarning
+                    )
+
+                # Proceed with mesh generation
+                mesh_params = MeshParameters(
+                    mask=self.mask,
+                    density_factor=self.density_factor,
+                    mesh_algorithm=self.mesh_algorithm,
+                    use_optimization=self.use_optimization
+                )
+                self.mesh_generator = MeshGenerator(mesh_params)
+                self.nodes, self.elements = self.mesh_generator.generate_mesh(self.mask)
+
+            if np.all(np.isnan(traction_x)) or np.all(np.isnan(traction_y)):
+                raise ValueError("Input tractions are all NaN")
+
+            # Prepare forces
+            self.mask = self.mask.astype(bool)
+            f_x, f_y = self._prepare_forces(traction_x, traction_y, self.mask)
+
+            # Format mesh for FEM solver
+            nodes_formatted, elements_formatted, loads, mats = self._grid_setup(
+                nodes_xy=self.nodes,
+                elements=self.elements,
+                f_x=-f_x,
+                f_y=-f_y
+            )
+
+            # Calculate stress tensor and get metrics
+            stress_tensor, condition_number, residual = self._fem_simulation(
+                nodes_formatted, elements_formatted, loads, mats, self.mask
+            )
+
+            # Check if stress tensor is invalid (all zeros might indicate failure)
+            if np.all(stress_tensor == 0):
+                warnings.warn("Solver returned zero stress tensor. Check inputs and mesh.",
+                              RuntimeWarning)
+
+            return stress_tensor, condition_number, residual
+
+        except Exception as e:
+            warnings.warn(f"Error in stress calculation: {str(e)}. Returning zero stress tensor.",
+                          RuntimeWarning)
+            stress_shape = (*self.mask.shape, 2, 2)
+            zero_stress = np.zeros(stress_shape)
+            return zero_stress, np.inf, np.inf
 
     def _grid_setup(self, nodes_xy, elements, f_x, f_y):
         """Setup triangular mesh with linear force interpolation and proper scaling"""
@@ -618,58 +697,3 @@ class MonolayerStressMicroscopy:
         # print(f"Traction range y: [{np.nanmin(f_y):.2e}, {np.nanmax(f_y):.2e}] Pa")
 
         return f_x, f_y
-
-    def calculate_stress_field(self, traction_x, traction_y):
-        """Calculate stress field and return quality metrics"""
-        try:
-            if self.nodes is None or self.elements is None:
-                # Validate density_factor before mesh generation
-                if self.density_factor < 0.005:
-                    warnings.warn(
-                        "Density factor is very low (< 0.005), which may lead to numerical instabilities and long runtimes.",
-                        UserWarning
-                    )
-
-                # Proceed with mesh generation
-                mesh_params = MeshParameters(
-                    mask=self.mask,
-                    density_factor=self.density_factor,
-                    mesh_algorithm=self.mesh_algorithm,
-                    use_optimization=self.use_optimization
-                )
-                self.mesh_generator = MeshGenerator(mesh_params)
-                self.nodes, self.elements = self.mesh_generator.generate_mesh(self.mask)
-
-            if np.all(np.isnan(traction_x)) or np.all(np.isnan(traction_y)):
-                raise ValueError("Input tractions are all NaN")
-
-            # Prepare forces
-            self.mask = self.mask.astype(bool)
-            f_x, f_y = self._prepare_forces(traction_x, traction_y, self.mask)
-
-            # Format mesh for FEM solver
-            nodes_formatted, elements_formatted, loads, mats = self._grid_setup(
-                nodes_xy=self.nodes,
-                elements=self.elements,
-                f_x=-f_x,
-                f_y=-f_y
-            )
-
-            # Calculate stress tensor and get metrics
-            stress_tensor, condition_number, residual = self._fem_simulation(
-                nodes_formatted, elements_formatted, loads, mats, self.mask
-            )
-
-            # Check if stress tensor is invalid (all zeros might indicate failure)
-            if np.all(stress_tensor == 0):
-                warnings.warn("Solver returned zero stress tensor. Check inputs and mesh.",
-                              RuntimeWarning)
-
-            return stress_tensor, condition_number, residual
-
-        except Exception as e:
-            warnings.warn(f"Error in stress calculation: {str(e)}. Returning zero stress tensor.",
-                          RuntimeWarning)
-            stress_shape = (*self.mask.shape, 2, 2)
-            zero_stress = np.zeros(stress_shape)
-            return zero_stress, np.inf, np.inf
