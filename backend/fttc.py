@@ -32,20 +32,29 @@ from backend.parameter_dataclasses import FTTCParameters
 
 class FTTC:
     def __init__(self, params: FTTCParameters):
-        """
-        Initialize FTTC calculator.
+        """Initialize FTTC calculator with substrate properties and calculation parameters.
 
         Args:
-            params: FTTCParameters object containing:
-                - young_modulus: Young's modulus in Pa
-                - poisson_ratio_substrate: Poisson ratio
-                - lanczos_exp: Lanczos filter exponent
-                - gel_height: Gel height for correction (None for infinity)
+            params (FTTCParameters): Configuration object containing:
+                - young_modulus (float): Young's modulus of the substrate in Pascals (Pa)
+                - poisson_ratio_substrate (float): Poisson ratio of the substrate
+                - lanczos_exp (float): Lanczos filter exponent for noise reduction
+                - gel_height (float, optional): Gel height in micrometers for finite thickness
+                    correction. Use None for infinite thickness.
+
+        Example:
+            >>> fttc = FTTC(FTTCParameters(
+            ...     young_modulus=10000,  # 10 kPa
+            ...     poisson_ratio_substrate=0.5,
+            ...     lanczos_exp=2,
+            ...     gel_height=None  # infinite thickness
+            ... ))
         """
         self.E = params.young_modulus
         self.nu = params.poisson_ratio_substrate
         self.lanczos_exp = params.lanczos_exp
         self.gel_height = params.gel_height
+
     def calculate_traction(self, displacements: Tuple[np.ndarray, np.ndarray],
                            pixel_size: float,
                            downscale_factor: int = 1,
@@ -129,7 +138,6 @@ class FTTC:
         """
         d_x = displacements[..., 0]
         d_y = displacements[..., 1]
-
 
         # Create coordinate grid
         x = np.arange(d_x.shape[1])
@@ -224,7 +232,18 @@ class FTTC:
         return arr
 
     def _calculate_greens_function(self, kx: np.ndarray, ky: np.ndarray):
-        """Calculate Green's function in Fourier space with gel height correction"""
+        """Calculate Green's function in Fourier space with optional gel height correction.
+
+        Implements the Boussinesq solution modified for finite gel thickness when applicable.
+
+        Args:
+            kx (np.ndarray): x-component of wave vectors
+            ky (np.ndarray): y-component of wave vectors
+
+        Returns:
+            np.ndarray: Green's function tensor in Fourier space.
+                Shape: 2 × 2 × H × W complex array
+        """
         V = 2 * (1 + self.nu) / self.E
         kx_sq = kx ** 2
         ky_sq = ky ** 2
@@ -267,7 +286,6 @@ class FTTC:
 
         return GFt_std
 
-
     @staticmethod
     def _gcvfun(lmbda, s2, beta, delta0, mn):
         """Auxiliary routine for GCV calculation"""
@@ -300,15 +318,22 @@ class FTTC:
         return float(reg_min), float(minG), G, reg_param
 
     def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray, forcemap_pixel_size: float) -> float:
-        """Find optimal regularization parameter using GCV
+        """Find optimal regularization parameter using Generalized Cross-Validation (GCV).
+
+        Implements the method from Golub, Heath, & Wahba (2012) to automatically
+        determine the Tikhonov regularization parameter.
 
         Args:
-            pos0: Position array in pixel coordinates
-            vec0: Displacement vector array
-             forcemap_pixel_size: Pixel size in micrometers
+            pos0 (np.ndarray): Position array in pixel coordinates (2 × N)
+            vec0 (np.ndarray): Displacement vector array (2 × N)
+            forcemap_pixel_size (float): Pixel size in micrometers
 
         Returns:
-            float: Optimal regularization parameter
+            float: Optimal regularization parameter λ that minimizes the GCV function
+
+        Note:
+            The search range is centered around λ = 0.2/E with a span of ±5 orders
+            of magnitude, where E is Young's modulus.
         """
         lamguess = 0.2 / self.E
         lamlow = np.log10(lamguess) - 5.0
@@ -345,7 +370,30 @@ class FTTC:
 
     def _interp_vec2grid(self, pos: np.ndarray, vec: np.ndarray,
                          i_max: Optional[int] = None, j_max: Optional[int] = None):
-        """Highly optimized interpolation using KD-tree based approach"""
+        """Interpolate scattered displacement data to a regular grid using KD-tree.
+
+        Implements efficient nearest-neighbor interpolation with inverse distance
+        weighting for smooth results.
+
+        Args:
+            pos (np.ndarray): Position array in pixel coordinates (2 × N)
+            vec (np.ndarray): Vector values to interpolate (2 × N)
+            i_max (int, optional): Output grid x-dimension
+            j_max (int, optional): Output grid y-dimension
+
+        Returns:
+            Tuple containing:
+            - grid_mat (np.ndarray): Regular grid coordinates (2 × H × W)
+            - u (np.ndarray): Interpolated values on grid (2 × H × W)
+            - i_max (int): Actual x-dimension used
+            - j_max (int): Actual y-dimension used
+            - i_bound_size (int): Always 0 (kept for compatibility)
+            - j_bound_size (int): Always 0 (kept for compatibility)
+
+        Note:
+            If i_max/j_max not provided, determines dimensions from data extent.
+            Uses adaptive number of neighbors (up to 12) for interpolation.
+        """
         from scipy.spatial import cKDTree
 
         # Calculate grid dimensions
@@ -436,7 +484,6 @@ class FTTC:
         Ftfy = Ginv_xy * Ftux + Ginv_yy * Ftuy
         return Ftfx, Ftfy
 
-
     def _calculate_stress_field(self, Ftfx: np.ndarray, Ftfy: np.ndarray,
                                 lanczosx: np.ndarray, lanczosy: np.ndarray,
                                 grid_mat: np.ndarray, u: np.ndarray,
@@ -456,9 +503,4 @@ class FTTC:
 
         f = np.array([np.real(fx), np.real(fy)])
 
-
         return pos, vec, f
-
-
-
-

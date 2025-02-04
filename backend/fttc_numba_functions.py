@@ -1,8 +1,19 @@
 from numba import njit
 import numpy as np
+
+
 @njit(cache=False)
 def calculate_2x2_inv(U):
-    """Calculates inverse of 2x2 matrix"""
+    """Calculate inverse of a 2x2 complex matrix.
+
+    Optimized for 2x2 matrices used in FTTC calculations.
+
+    Args:
+        U: Complex 2x2 matrix to invert
+
+    Returns:
+        Complex 2x2 inverse matrix
+    """
     U_inv = np.empty((2, 2), dtype=np.complex128)
     detU = U[0, 0] * U[1, 1] - U[0, 1] * U[1, 0]
     invdetU = 1.0 / detU
@@ -12,9 +23,20 @@ def calculate_2x2_inv(U):
     U_inv[1, 1] = invdetU * U[0, 0]
     return U_inv
 
+
 @njit(cache=False)
 def blkmul_adj(mat: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """Calculate (mat.H) @ v"""
+    """Calculate adjoint multiplication (mat.H) @ v for block matrices.
+
+    Used in GCV calculations for regularization parameter optimization.
+
+    Args:
+        mat: Input matrix of shape (a, b, c)
+        v: Input vector of shape (a*b,)
+
+    Returns:
+        Result vector of shape (a*c,)
+    """
     a, b, c = mat.shape
     assert ((a * b,) == v.shape)
     assert (a >= 1)
@@ -27,9 +49,18 @@ def blkmul_adj(mat: np.ndarray, v: np.ndarray) -> np.ndarray:
         out[i * c:i * c + c] = MT @ v[i * b:i * b + b]
     return out
 
+
 @njit(cache=False)
 def calculate_traction_2d(FtGmn, L):
-    """Calculates Tikhonov regularized inverse of FTGmn"""
+    """Calculate Tikhonov regularized inverse of the Green's function in Fourier space.
+
+    Args:
+        FtGmn: Fourier transformed Green's function (2x2xMxN complex array)
+        L: Tikhonov regularization parameter (scalar)
+
+    Returns:
+        Regularized inverse (2x2xMxN complex array)
+    """
     M = len(FtGmn[0, 0])
     N = len(FtGmn[0, 0, 0])
 

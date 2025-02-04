@@ -9,27 +9,52 @@ from backend.parameter_dataclasses import FTTCParameters
 
 @dataclass
 class FTTCResult:
-    """Results from force calculation"""
+    """Results from FTTC force calculation.
+
+    Attributes:
+        force_field (np.ndarray): Calculated force field with shape (t, y, x, 2).
+            t is time points (1 for single frame), units in Pascals.
+        original_shape (tuple): Original displacement field shape (y, x)
+        force_shape (tuple): Force field shape (y, x)
+        parameters (FTTCParameters): Parameters used for calculation
+        physical_scale (dict): Physical scaling information including:
+            - pixel_size: Size of each pixel
+            - grid_spacing: Effective grid spacing after downsampling
+            - time_interval: Time between frames
+            - force_units: Force units (Pa)
+            - grid_spacing_units: Spatial units (μm)
+            - time_interval_units: Time units (min)
+    """
     force_field: np.ndarray  # Shape: (t, y, x, 2) for time series, units in Pa
     original_shape: tuple  # Original displacement field shape (y, x)
     force_shape: tuple  # Force field shape (y, x)
     parameters: FTTCParameters
     physical_scale: dict  # Dictionary containing physical scaling information
-    condition_number: float
-    residual: float
+
 
 
 class FTTCService:
-    """Service layer handling business logic for FTTC force calculations."""
+    """Service layer for handling FTTC force calculations.
+
+    This class provides a high-level interface for calculating traction forces from
+    displacement field measurements. It handles data validation, parameter management,
+    and both single-frame and time series calculations.
+
+    The service supports automatic regularization parameter selection using GCV and
+    provides progress updates during calculation of multi-frame datasets.
+    """
 
     def __init__(self, params: FTTCParameters):
-        """
-        Initialize the FTTC service with calculation parameters.
+        """Initialize FTTC service with calculation parameters.
 
-        Parameters
-        ----------
-        params : FTTCParameters
-            Parameters for the FTTC calculations
+        Args:
+            params (FTTCParameters): Configuration for FTTC calculations including:
+                - Material properties (Young's modulus, Poisson ratio)
+                - Calculation parameters (regularization, downscaling)
+                - Visualization settings
+
+        Raises:
+            ValueError: If any parameters are invalid
         """
         is_valid, error_msg = self.validate_parameters(params)
         if not is_valid:
@@ -42,21 +67,52 @@ class FTTCService:
             self,
             displacement_field: np.ndarray
     ) -> Generator[Tuple[np.ndarray, int, int], None, FTTCResult]:
-        """
-        Calculate forces from displacement field data.
-        Always returns force field with shape (t, y, x, 2) where t=1 for single frames.
-        Yields intermediate results during calculation.
+        """Calculate traction forces from displacement field data.
 
-        Parameters
-        ----------
-        displacement_field : np.ndarray
-            Displacement field data with shape (t, y, x, 2)
+        Handles both single frames and time series data. For time series, yields
+        intermediate results to allow progress tracking. The final result is returned
+        through the generator's return value (accessible via StopIteration.value).
 
-        Returns
-        -------
-        Generator[Tuple[np.ndarray, int, int], None, FTTCResult]
-            Generator yielding (intermediate_forces, frame_index, total_frames) during calculation
-            and returning final FTTCCalculationResult when exhausted
+        Args:
+            displacement_field (np.ndarray): Displacement measurements with shape:
+                - (y, x, 2) for single frame
+                - (t, y, x, 2) for time series
+                where final dimension contains (dx, dy) displacements in μm
+
+        Yields:
+            Tuple[np.ndarray, int, int]: Intermediate results containing:
+                - Current frame's force field with shape (y, x, 2)
+                - Frame index (1-based)
+                - Total number of frames
+
+        Returns:
+            FTTCResult: Complete calculation results including:
+                - Full force field array
+                - Physical scaling information
+                - Calculation parameters
+                Accessible via StopIteration.value when generator completes.
+
+        Raises:
+            ValueError: If displacement field has invalid shape or values
+
+        Example:
+            >>> service = FTTCService(params)
+            >>> # Get the generator
+            >>> force_generator = service.calculate_forces(displacements)
+            >>>
+            >>> # Process intermediate results
+            >>> try:
+            ...     while True:
+            ...         # Get next frame result
+            ...         force_field, frame, total = next(force_generator)
+            ...         print(f"Processed frame {frame}/{total}")
+            ... except StopIteration as e:
+            ...     # Get final result from generator's return value
+            ...     final_result = e.value
+            ...
+            >>> # Access results
+            >>> print(f"Final force field shape: {final_result.force_field.shape}")
+            >>> print(f"Max force: {np.max(final_result.force_field)} Pa")
         """
         # Ensure displacement field is 4D
         if displacement_field.ndim == 3:
@@ -98,26 +154,28 @@ class FTTCService:
             force_shape=force_stack.shape[1:3],
             parameters=self.params,
             physical_scale=physical_scale,
-            condition_number=getattr(self.calculator, 'last_condition_number', 0.0),
-            residual=getattr(self.calculator, 'last_residual', 0.0)
         )
 
     def find_optimal_regularization(
             self,
             displacement_field: np.ndarray
     ) -> float:
-        """
-        Find optimal regularization parameter using GCV.
+        """Find optimal regularization parameter using Generalized Cross-Validation.
 
-        Parameters
-        ----------
-        displacement_field : np.ndarray
-            2D array of displacement vectors (height, width, 2)
+        Uses the GCV method to automatically determine the Tikhonov regularization
+        parameter that best balances noise suppression and force resolution.
 
-        Returns
-        -------
-        float
-            Optimal regularization parameter
+        Args:
+            displacement_field (np.ndarray): Displacement field with shape (y, x, 2)
+                containing (dx, dy) displacements in μm
+
+        Returns:
+            float: Optimal regularization parameter λ
+
+        Note:
+            This is computationally intensive and should be used sparingly,
+            typically to determine a good parameter value for a dataset that
+            can then be reused for similar experimental conditions.
         """
         shape = displacement_field.shape[:-1]
         pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
@@ -126,18 +184,19 @@ class FTTCService:
 
     @staticmethod
     def validate_displacement_field(displacement_field: np.ndarray) -> Tuple[bool, str]:
-        """
-        Validate displacement field data.
+        """Validate displacement field data format and values.
 
-        Parameters
-        ----------
-        displacement_field : np.ndarray
-            Displacement field data to validate
+        Checks for:
+        - Correct array type and shape
+        - Presence of required displacement components
+        - Valid data values (not all NaN)
 
-        Returns
-        -------
-        Tuple[bool, str]
-            (is_valid, error_message)
+        Args:
+            displacement_field (np.ndarray): Displacement field to validate
+
+        Returns:
+            Tuple[bool, str]: (is_valid, error_message)
+                error_message is empty string if valid
         """
         if displacement_field is None:
             return False, "No displacement field data provided"
@@ -158,18 +217,19 @@ class FTTCService:
 
     @staticmethod
     def validate_parameters(params: FTTCParameters) -> Tuple[bool, str]:
-        """
-        Validate FTTC calculation parameters.
+        """Validate FTTC calculation parameters.
 
-        Parameters
-        ----------
-        params : FTTCParameters
-            Parameters to validate
+        Checks all parameters for physical validity including:
+        - Material properties (positive Young's modulus, valid Poisson ratio)
+        - Calculation parameters (positive regularization, valid downscaling)
+        - Visualization settings (valid scales and strides)
 
-        Returns
-        -------
-        Tuple[bool, str]
-            (is_valid, error_message)
+        Args:
+            params (FTTCParameters): Parameters to validate
+
+        Returns:
+            Tuple[bool, str]: (is_valid, error_message)
+                error_message is empty string if valid
         """
         if params.young_modulus <= 0:
             return False, "Young's modulus must be positive"
@@ -207,7 +267,17 @@ class FTTCService:
         return True, ""
 
     def update_parameters(self, parameters: FTTCParameters):
-        """Update FTTC parameters"""
+        """Update FTTC calculation parameters.
+
+        Creates a new calculator instance with the updated parameters after
+        validating them.
+
+        Args:
+            parameters (FTTCParameters): New parameters to use
+
+        Raises:
+            ValueError: If any parameters are invalid
+        """
         is_valid, error_msg = self.validate_parameters(parameters)
         if not is_valid:
             raise ValueError(error_msg)
