@@ -28,16 +28,19 @@ class BatchVisualizationSaver:
 
     def save_bead_overlay(self, bead_stack: np.ndarray, reference_image: np.ndarray, fps: int = 10) -> None:
         """
-        Create and save a GIF of bead-reference overlay.
+        Create a GIF showing an overlay of bead images with the reference image.
+
+        Each frame shows the reference image in magenta and current bead image in green.
+        Both images are normalized independently for better contrast.
 
         Parameters
         ----------
         bead_stack : np.ndarray
-            Stack of bead images
+            Stack of bead images (frames × height × width)
         reference_image : np.ndarray
-            Reference image
+            Single reference image (height × width)
         fps : int, optional
-            Frames per second for the GIF
+            Frames per second for output GIF, default 10
         """
         # Normalize reference image
         reference = reference_image.astype(float)
@@ -68,29 +71,22 @@ class BatchVisualizationSaver:
         output_path = self.viz_folder / 'bead_overlay.gif'
         imageio.mimsave(str(output_path), frames, fps=fps, loop=0)
 
-    def _create_colormap_legend(self, vmin: float, vmax: float, cmap: str,
-                                label: str) -> np.ndarray:
-        """Create a colormap legend image."""
-        fig, ax = plt.subplots(figsize=(6, 0.5))
-        cbar = plt.colorbar(
-            plt.cm.ScalarMappable(
-                norm=plt.Normalize(vmin=vmin, vmax=vmax),
-                cmap=cmap
-            ),
-            cax=ax,
-            orientation='horizontal',
-            label=label
-        )
 
-        # Render to numpy array
-        fig.canvas.draw()
-        legend_img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        legend_img = legend_img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        plt.close(fig)
-
-        return legend_img
 
     def save_displacement_visualization(self, displacement_results: DisplacementResult, fps: int = 10) -> None:
+        """
+        Create a GIF visualizing displacement fields with magnitude map and vectors.
+
+        Shows displacement magnitude as a color map with overlaid vectors indicating
+        direction and magnitude. Vector stride and scale are determined by parameters.
+
+        Parameters
+        ----------
+        displacement_results : DisplacementResult
+            Displacement field data and parameters
+        fps : int, optional
+            Frames per second for output GIF, default 10
+        """
         displacement_fields = displacement_results.displacement_field
         params = displacement_results.parameters
 
@@ -158,6 +154,19 @@ class BatchVisualizationSaver:
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, palettesize=256, loop=0)
 
     def save_force_visualization(self, force_results: FTTCResult, fps: int = 10) -> None:
+        """
+        Create a GIF visualizing traction force fields with magnitude map and vectors.
+
+        Shows force magnitude as a color map with overlaid vectors indicating
+        direction and magnitude. Vectors below 1% of max force are filtered out.
+
+        Parameters
+        ----------
+        force_results : FTTCResult
+            Force field data and parameters
+        fps : int, optional
+            Frames per second for output GIF, default 10
+        """
         tx = force_results.force_field[..., 0]
         ty = force_results.force_field[..., 1]
         params = force_results.parameters
@@ -222,6 +231,21 @@ class BatchVisualizationSaver:
         imageio.mimsave(str(output_path), frames, fps=fps, optimize=False, loop=0)
 
     def save_force_cell_overlay(self, force_results: FTTCResult, cell_images: np.ndarray, fps: int = 10) -> None:
+        """
+        Create a GIF overlaying force vectors on phase contrast cell images.
+
+        Shows cell images in grayscale with colored force vectors. Cell images
+        are resized to match force field dimensions.
+
+        Parameters
+        ----------
+        force_results : FTTCResult
+            Force field data and parameters
+        cell_images : np.ndarray
+            Stack of cell phase contrast images
+        fps : int, optional
+            Frames per second for output GIF, default 10
+        """
         tx = force_results.force_field[..., 0]
         ty = force_results.force_field[..., 1]
         params = force_results.parameters
@@ -295,20 +319,23 @@ class BatchVisualizationSaver:
                                   plot_sigma_yy: bool = True, plot_normal_stress: bool = True,
                                   fps: int = 10) -> None:
         """
-        Create and save GIFs of stress tensor components.
+        Create GIFs visualizing stress tensor components.
+
+        Generates separate GIFs for selected stress components using a diverging
+        colormap centered at zero.
 
         Parameters
         ----------
-        stress_results : dict
-            Dictionary containing stress tensor results and parameters
+        stress_results : MSMResult
+            Stress tensor data and parameters
         plot_sigma_xx : bool
-            Whether to plot sigma_xx component
+            Whether to generate XX normal stress visualization
         plot_sigma_yy : bool
-            Whether to plot sigma_yy component
+            Whether to generate YY normal stress visualization
         plot_normal_stress : bool
-            Whether to plot normal stress
+            Whether to generate average normal stress visualization
         fps : int, optional
-            Frames per second for the GIF
+            Frames per second for output GIFs, default 10
         """
         # Extract stress tensor and parameters
         stress_tensor = stress_results.stress_tensor
@@ -382,14 +409,17 @@ class BatchVisualizationSaver:
 
     def save_mesh_visualization(self, stress_results: MSMResult, fps: int = 10) -> None:
         """
-        Create and save a GIF of mesh visualizations for each frame using pre-calculated meshes.
+        Create a GIF showing the finite element mesh for each frame.
+
+        Visualizes mesh elements as blue lines and nodes as red points, maintaining
+        the correct aspect ratio of the original data.
 
         Parameters
         ----------
         stress_results : MSMResult
-            Results from stress calculations containing lists of nodes and elements for each frame
+            Mesh data including nodes and elements for each frame
         fps : int, optional
-            Frames per second for the GIF
+            Frames per second for output GIF, default 10
         """
 
         frames = []
@@ -457,3 +487,43 @@ class BatchVisualizationSaver:
             print(f"Saved mesh visualization to {output_path}")
         else:
             print("No frames were generated. Mesh visualization failed.")
+
+    def _create_colormap_legend(self, vmin: float, vmax: float, cmap: str,
+                                label: str) -> np.ndarray:
+        """
+        Create a horizontal colorbar legend as an image.
+
+        Parameters
+        ----------
+        vmin : float
+            Minimum value for colormap
+        vmax : float
+            Maximum value for colormap
+        cmap : str
+            Name of matplotlib colormap
+        label : str
+            Label for the colorbar
+
+        Returns
+        -------
+        np.ndarray
+            RGB image of the colorbar legend
+        """
+        fig, ax = plt.subplots(figsize=(6, 0.5))
+        cbar = plt.colorbar(
+            plt.cm.ScalarMappable(
+                norm=plt.Normalize(vmin=vmin, vmax=vmax),
+                cmap=cmap
+            ),
+            cax=ax,
+            orientation='horizontal',
+            label=label
+        )
+
+        # Render to numpy array
+        fig.canvas.draw()
+        legend_img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        legend_img = legend_img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        plt.close(fig)
+
+        return legend_img

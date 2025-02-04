@@ -1,21 +1,23 @@
-import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from time import time
-from typing import Optional, Tuple, List, Dict
-from skimage.transform import rescale
 from time import sleep
+from time import time
+from typing import Optional
+
 import numpy as np
 import tifffile
 import yaml
-from numpy._typing import NDArray
-from backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
+from skimage.transform import rescale
+
 from backend.batch_analysis_visualizations import BatchVisualizationSaver
+from backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
 from services.displacement_service import DisplacementService, DisplacementResult
 from services.fttc_service import FTTCService, FTTCResult
 from services.msm_service import MSMService
 from services.preprocessing_service import PreprocessingService
+
+
 # TODO black image when only one frame for cell-force overlay visualization
 class TeeLogger:
     """Custom logger that captures print statements and logging output to both console and file."""
@@ -159,12 +161,92 @@ class BatchAnalysis:
         return f"{seconds/60:.1f} minutes"
 
     def process_all_folders(self) -> None:
-        """Process all folders specified in configuration."""
+        """
+        Process all folders specified in the configuration for TFM analysis.
+
+        This is the main entry point for batch processing multiple experiment folders.
+        It iterates through each folder path specified in config['root_folders'] and
+        processes them sequentially.
+
+        The method handles:
+        - Preprocessing of bead and cell images
+        - Displacement field calculation
+        - Force analysis
+        - Mask creation
+        - Stress analysis
+        - Visualization generation
+
+        Each folder's results are saved in a 'TFM_data' subdirectory, with detailed
+        logs capturing the processing steps and any issues encountered.
+
+        Raises:
+            FileNotFoundError: If a specified folder doesn't exist
+            RuntimeError: If processing fails for any folder
+        """
         for folder in self.config['root_folders']:
             self.process_folder(folder)
 
     def process_folder(self, folder_path: str) -> None:
-        """Main processing pipeline for a folder."""
+        """
+        Process a single folder containing TFM experiment data.
+
+        This method executes the complete TFM analysis pipeline on a single experimental
+        dataset, creating a 'TFM_data' subdirectory for results.
+
+        Parameters
+        ----------
+        folder_path : str
+            Path to the folder containing the raw experimental data.
+            Must include the files specified in config['input_files'].
+
+        Processing Steps
+        ---------------
+        1. Preprocessing:
+            - Processes bead and cell images if available
+            - Applies background subtraction and filtering
+            - Saves preprocessed images as calibrated TIFFs
+
+        2. Displacement Analysis:
+            - Calculates displacement fields from bead images
+            - Saves displacement data as NumPy arrays
+
+        3. Force Analysis:
+            - Computes traction forces using FTTC
+            - Saves force fields and related metrics
+
+        4. Mask Creation:
+            - Generates binary masks from cell images
+            - Saves masks for stress analysis
+
+        5. Stress Analysis:
+            - Calculates internal stress fields
+            - Saves stress tensors and quality metrics
+
+        Each step is conditional on the corresponding flag in config['analysis_steps']
+        being True. Visualizations are generated based on config['visualizations'].
+
+        Results
+        -------
+        Creates a 'TFM_data' subdirectory containing:
+            - preprocessed_beads.tif: Processed bead images
+            - preprocessed_reference.tif: Processed reference image
+            - preprocessed_cells.tif: Processed cell images (if available)
+            - displacements.npy: Displacement field data
+            - traction_forces.npy: Force field data
+            - masks.tif: Binary masks for stress analysis
+            - stress_results.npy: Stress tensor data
+            - processing_log.txt: Detailed processing log
+            - Various visualization files based on configuration
+
+        Raises
+        ------
+        FileNotFoundError
+            If required input files are missing
+        RuntimeError
+            If any processing step fails
+        ValueError
+            If input data is invalid or corrupted
+        """
         folder = Path(folder_path)
         tfm_folder = self._initialize_folder(folder)
         viz_saver = BatchVisualizationSaver(folder)
@@ -298,7 +380,55 @@ class BatchAnalysis:
             return None
 
     def _execute_preprocessing(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
-        """Execute preprocessing step using PreprocessingService."""
+        """
+        Execute the preprocessing step of the TFM analysis pipeline.
+
+        This method handles the initial processing of raw microscopy images,
+        including both bead and cell images if available.
+
+        Parameters
+        ----------
+        folder : Path
+            Path to the input folder containing raw data files
+        tfm_folder : Path
+            Path to the output folder where processed files will be saved
+
+        Returns
+        -------
+        Optional[dict]
+            Dictionary containing:
+            - 'beads': Preprocessed bead image stack (np.ndarray)
+            - 'reference': Preprocessed reference image (np.ndarray)
+            - 'cells': Preprocessed cell image stack (np.ndarray, optional)
+            - 'parameters': Preprocessing parameters used
+            Returns None if preprocessing fails
+
+        Processing Steps
+        ---------------
+        1. Loads raw bead images and reference image
+        2. Optionally loads cell images if specified in config
+        3. Applies preprocessing pipeline:
+            - Background subtraction
+            - Gaussian filtering
+            - Intensity normalization
+            - Image registration (for bead images)
+        4. Saves results as calibrated TIFF files with metadata
+
+        The preprocessing parameters are taken from the config:
+            - rolling_ball_radius
+            - min_intensity_percentile
+            - max_intensity_percentile
+            - gaussian_sigma
+            - registration_mode
+            Plus additional parameters for cell image processing
+
+        Raises
+        ------
+        FileNotFoundError
+            If input files are not found
+        RuntimeError
+            If preprocessing operations fail
+        """
 
         print("Starting Preprocessing...")
         start_time = time()
@@ -369,7 +499,56 @@ class BatchAnalysis:
         print(f"Preprocessing completed in {self._format_duration(time() - start_time)}")
         return preprocessed
 
-    def _execute_displacement_analysis(self, tfm_folder: Path, preprocessed_data: Optional[dict]) -> Optional[dict]:
+    def _execute_preprocessing(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
+        """
+        Execute the preprocessing step of the TFM analysis pipeline.
+
+        This method handles the initial processing of raw microscopy images,
+        including both bead and cell images if available.
+
+        Parameters
+        ----------
+        folder : Path
+            Path to the input folder containing raw data files
+        tfm_folder : Path
+            Path to the output folder where processed files will be saved
+
+        Returns
+        -------
+        Optional[dict]
+            Dictionary containing:
+            - 'beads': Preprocessed bead image stack (np.ndarray)
+            - 'reference': Preprocessed reference image (np.ndarray)
+            - 'cells': Preprocessed cell image stack (np.ndarray, optional)
+            - 'parameters': Preprocessing parameters used
+            Returns None if preprocessing fails
+
+        Processing Steps
+        ---------------
+        1. Loads raw bead images and reference image
+        2. Optionally loads cell images if specified in config
+        3. Applies preprocessing pipeline:
+            - Background subtraction
+            - Gaussian filtering
+            - Intensity normalization
+            - Image registration (for bead images)
+        4. Saves results as calibrated TIFF files with metadata
+
+        The preprocessing parameters are taken from the config:
+            - rolling_ball_radius
+            - min_intensity_percentile
+            - max_intensity_percentile
+            - gaussian_sigma
+            - registration_mode
+            Plus additional parameters for cell image processing
+
+        Raises
+        ------
+        FileNotFoundError
+            If input files are not found
+        RuntimeError
+            If preprocessing operations fail
+        """
         print("Starting Displacement Analysis...")
         start_time = time()
         displacement_service = DisplacementService(self._create_displacement_parameters())
@@ -397,7 +576,60 @@ class BatchAnalysis:
         return displacement_result
 
     def _execute_force_analysis(self, tfm_folder: Path, displacement_data: DisplacementResult) -> Optional[dict]:
-        """Execute force analysis step using FTTCService."""
+        """
+        Execute the force analysis step of the TFM analysis pipeline.
+
+        This method implements Fourier Transform Traction Cytometry (FTTC) to
+        calculate traction forces from displacement fields.
+
+        Parameters
+        ----------
+        tfm_folder : Path
+            Path to the output folder where results will be saved
+        displacement_data : DisplacementResult
+            Object containing:
+            - displacement_field: Displacement vectors
+            - parameters: Displacement calculation parameters
+
+        Returns
+        -------
+        Optional[dict]
+            Dictionary containing:
+            - force_field: Calculated traction forces (np.ndarray)
+            - parameters: Force calculation parameters
+            Returns None if analysis fails
+
+        Processing Steps
+        ---------------
+        1. Prepares displacement data for FTTC
+        2. Performs force calculation:
+            - Fourier transform of displacement field
+            - Application of Green's function
+            - Regularization
+            - Inverse transform
+        3. Saves results as NumPy array
+
+        The force calculation parameters are taken from the config:
+            - young_modulus
+            - poisson_ratio_substrate
+            - gel_height
+            - regularization
+            And other FTTC parameters
+
+        Notes
+        -----
+        Progress updates are logged during processing, including:
+            - Frame-by-frame completion status
+            - Mean and max force values
+            - Processing time
+
+        Raises
+        ------
+        RuntimeError
+            If force calculation fails
+        ValueError
+            If input data is invalid or parameters are out of range
+        """
         print("Starting Force Analysis...")
         start_time = time()
 
@@ -426,8 +658,56 @@ class BatchAnalysis:
         print(f"Force analysis completed in {self._format_duration(time() - start_time)}")
         return force_result
 
-    def _execute_mask_creation(self, tfm_folder: Path, cell_images: np.ndarray) -> NDArray[int]:
-        """Execute mask creation step using MSMService."""
+    def _execute_mask_creation(self, tfm_folder: Path, cell_images: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Execute the mask creation step of the TFM analysis pipeline.
+
+        This method generates binary masks from cell images for use in
+        stress analysis.
+
+        Parameters
+        ----------
+        tfm_folder : Path
+            Path to the output folder where results will be saved
+        cell_images : np.ndarray
+            Stack of preprocessed cell images
+
+        Returns
+        -------
+        Optional[np.ndarray]
+            Binary masks for each frame
+            Returns None if mask creation fails
+
+        Processing Steps
+        ---------------
+        1. Processes each frame in the cell image stack
+        2. For each frame:
+            - Applies thresholding
+            - Performs morphological operations
+            - Identifies cell regions
+            - Creates binary mask
+        3. Saves results as TIFF stack
+
+        The mask creation parameters are taken from the config:
+            - threshold
+            - dilation
+            - smoothing_sigma
+            And other mask generation parameters
+
+        Notes
+        -----
+        Progress updates are logged during processing, including:
+            - Frame-by-frame completion status
+            - Mask metrics (area, centroid)
+            - Processing time
+
+        Raises
+        ------
+        RuntimeError
+            If mask creation fails
+        ValueError
+            If input images are invalid
+        """
         print("Starting Mask Creation...")
         start_time = time()
         params = self._create_msm_parameters()
@@ -450,21 +730,61 @@ class BatchAnalysis:
 
     def _execute_stress_analysis(self, tfm_folder: Path, mask_data: np.ndarray, force_data: FTTCResult) -> Optional[dict]:
         """
-        Execute stress analysis step using MSMService.
+        Execute the stress analysis step of the TFM analysis pipeline.
+
+        This method implements Monolayer Stress Microscopy (MSM) to calculate
+        internal stress fields within cell monolayers.
 
         Parameters
         ----------
         tfm_folder : Path
-            Path to the TFM data folder
+            Path to the output folder where results will be saved
         mask_data : np.ndarray
-            3D array of masks (frames, height, width)
-        force_data : Optional[dict]
-            Dictionary containing force field data and parameters. If None, will attempt to load from file.
+            Binary masks defining cell regions
+        force_data : FTTCResult
+            Object containing:
+            - force_field: Traction forces
+            - parameters: Force calculation parameters
 
         Returns
         -------
         Optional[dict]
-            Dictionary containing stress tensors and parameters, or None if analysis fails
+            Dictionary containing:
+            - stress_tensor: Calculated stress tensors (np.ndarray)
+            - mesh_quality: Mesh quality metrics
+            - parameters: Stress calculation parameters
+            Returns None if analysis fails
+
+        Processing Steps
+        ---------------
+        1. Generates finite element mesh for each frame
+        2. For each frame:
+            - Assembles system matrices
+            - Applies boundary conditions
+            - Solves equilibrium equations
+            - Calculates stress tensor field
+        3. Saves results as NumPy array
+
+        The stress analysis parameters are taken from the config:
+            - young_modulus
+            - poisson_ratio_cells
+            - density_factor
+            And other MSM parameters
+
+        Notes
+        -----
+        Progress updates are logged during processing, including:
+            - Frame-by-frame completion status
+            - Mesh quality metrics
+            - Mean and max stress values
+            - Processing time
+
+        Raises
+        ------
+        RuntimeError
+            If stress calculation fails
+        ValueError
+            If input data is invalid or mesh generation fails
         """
         print("Starting Stress Analysis...")
         start_time = time()
