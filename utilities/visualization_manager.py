@@ -1,7 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Dict, Any, Tuple, List
-from typing import Optional
+from typing import Dict, Any, Tuple, List, Optional
 
 import cv2
 import napari
@@ -9,7 +8,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from napari.layers import Layer
 
-from utilities.error_handling import ErrorHandlingMixin, ErrorSeverity
+from utilities.error_handling import ErrorSeverity, ErrorHandlingMixin
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +36,481 @@ class VisualizationManager(ErrorHandlingMixin):
         # Connect to viewer events
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
+
+    def _validate_frame_index(self, frame_index: int, num_frames: int) -> int:
+        """
+        Validate and adjust frame index to be within bounds.
+
+        Parameters
+        ----------
+        frame_index : int
+            Current frame index from viewer
+        num_frames : int
+            Total number of available frames
+
+        Returns
+        -------
+        int
+            Valid frame index within bounds
+        """
+        if num_frames == 0:
+            raise ValueError("No frames available in data")
+
+        # Ensure frame_index is within valid range
+        valid_frame = max(0, min(frame_index, num_frames - 1))
+
+        # Log warning if frame was adjusted
+        if valid_frame != frame_index:
+            logger.warning(
+                f"Frame index {frame_index} out of range for {num_frames} frames. "
+                f"Adjusted to frame {valid_frame}."
+            )
+
+        return valid_frame
+
+    def visualize_displacement_results(self) -> None:
+        """Visualize displacement results for all frames using data from data manager."""
+        try:
+            # Check if displacement results exist
+            if self.data_manager.displacement_results is None:
+                raise ValueError("No displacement results available in data manager")
+
+            # Get results from data manager
+            results = self.data_manager.displacement_results
+            flows = results.displacement_field
+            params = results.parameters
+
+            # Validate number of frames
+            num_frames = len(flows)
+            if num_frames == 0:
+                raise ValueError("Displacement field contains no frames")
+
+            downscale_factor = params.downscale_factor
+
+            # Clear existing layers
+            self._clear_layers(['Displacement Magnitude', 'Displacement Vectors'])
+
+            # Create visualization stacks
+            upscaled_shape = (
+                flows[0].shape[0] * downscale_factor,
+                flows[0].shape[1] * downscale_factor
+            )
+            magnitudes = np.zeros((num_frames, *upscaled_shape))
+
+            # Get visualization parameters
+            vis_params = {
+                'd_max': params.d_max,
+                'vector_stride': params.disp_vector_stride,
+                'arrow_scale': params.disp_arrow_scale
+            }
+
+            # Create vector cache
+            vector_cache = {
+                'data': [],
+                'colors': [],
+                'parameters': vis_params.copy(),
+                'original_resolution': flows[0].shape[:2],
+                'num_frames': num_frames  # Add frame count to cache
+            }
+
+            # Process each frame
+            for i in range(num_frames):
+                display_flow = self._upscale_field(flows[i], downscale_factor)
+
+                # Calculate magnitude
+                magnitude = np.sqrt(np.sum(display_flow ** 2, axis=-1))
+                magnitudes[i] = magnitude
+
+                # Calculate vector data
+                flow_scaled = display_flow * vis_params['arrow_scale'] / vis_params['d_max'] * 50
+                vectors, colors = self._create_vector_visualization(
+                    flow_scaled,
+                    display_flow,
+                    vis_params['vector_stride'],
+                    vis_params['d_max']
+                )
+                vector_cache['data'].append(vectors)
+                vector_cache['colors'].append(colors)
+
+            # Store vector cache in data manager
+            self.data_manager.displacement_vector_cache = vector_cache
+
+            # Add visualization layers
+            with self.viewer.events.blocker_all():
+                self._layers['displacement_magnitude'] = self.viewer.add_image(
+                    magnitudes,
+                    name='Displacement Magnitude',
+                    colormap='viridis',
+                    blending='additive',
+                    contrast_limits=(0, vis_params['d_max']),
+                    visible=True
+                )
+
+                # Get valid current frame index
+                current_frame = self._validate_frame_index(
+                    self.viewer.dims.current_step[0],
+                    num_frames
+                )
+
+                # Add initial vector layer
+                if len(vector_cache['data'][current_frame]) > 0:
+                    self._layers['displacement_vectors'] = self.viewer.add_vectors(
+                        vector_cache['data'][current_frame],
+                        name='Displacement Vectors',
+                        edge_color=vector_cache['colors'][current_frame],
+                        edge_width=2,
+                        vector_style='arrow',
+                        blending='additive',
+                        length=1
+                    )
+
+                # Update viewer dimensions to match data
+                self.viewer.dims.set_point(0, current_frame)
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to visualize displacement results",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Try adjusting visualization parameters or check data consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+            raise
+
+    def update_displacement_frame(self, frame_index: int) -> None:
+        """Update vector visualization for the current frame."""
+        try:
+            # Check if we have displacement results and vector cache
+            if not hasattr(self.data_manager, 'displacement_vector_cache'):
+                return
+
+            cache = self.data_manager.displacement_vector_cache
+            if cache is None or 'data' not in cache:
+                return
+
+            # Get number of frames from cache
+            num_frames = cache.get('num_frames', len(cache['data']))
+
+            # Validate frame index
+            valid_frame = self._validate_frame_index(frame_index, num_frames)
+
+            # Update vectors using stored layer reference
+            if 'displacement_vectors' in self._layers and self._layers['displacement_vectors'] is not None:
+                with self.viewer.events.blocker_all():
+                    self._layers['displacement_vectors'].data = cache['data'][valid_frame]
+                    self._layers['displacement_vectors'].edge_color = cache['colors'][valid_frame]
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to update displacement frame",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check displacement results and vector cache consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+
+    def visualize_force_results(self) -> None:
+        """Visualize force results for all frames using data from data manager."""
+        try:
+            # Check if force results exist
+            if self.data_manager.force_results is None:
+                raise ValueError("No force results available in data manager")
+
+            # Get results from data manager
+            results = self.data_manager.force_results
+            force_fields = results.force_field
+            params = results.parameters
+
+            # Validate number of frames
+            num_frames = len(force_fields)
+            if num_frames == 0:
+                raise ValueError("Force field contains no frames")
+
+            downscale_factor = params.downscale_factor
+
+            # Clear existing layers
+            self._clear_layers(['Force Magnitude', 'Force Vectors'])
+
+            # Create visualization stacks
+            upscaled_shape = (
+                force_fields[0].shape[0] * downscale_factor,
+                force_fields[0].shape[1] * downscale_factor
+            )
+            magnitudes = np.zeros((num_frames, *upscaled_shape))
+
+            # Get visualization parameters
+            vis_params = {
+                'f_max': params.f_max,
+                'vector_stride': params.force_vector_stride,
+                'arrow_scale': params.force_arrow_scale
+            }
+
+            # Create vector cache
+            vector_cache = {
+                'data': [],
+                'colors': [],
+                'parameters': vis_params.copy(),
+                'original_resolution': force_fields[0].shape[:2],
+                'num_frames': num_frames  # Add frame count to cache
+            }
+
+            # Process each frame
+            for i in range(num_frames):
+                display_force = self._upscale_field(force_fields[i], downscale_factor)
+
+                # Calculate magnitude
+                magnitude = np.sqrt(np.sum(display_force ** 2, axis=-1))
+                magnitudes[i] = magnitude
+
+                # Calculate vector data
+                force_scaled = display_force * vis_params['arrow_scale'] / vis_params['f_max'] * 50
+                vectors, colors = self._create_vector_visualization(
+                    force_scaled,
+                    display_force,
+                    vis_params['vector_stride'],
+                    vis_params['f_max'],
+                    colormap='inferno'
+                )
+                vector_cache['data'].append(vectors)
+                vector_cache['colors'].append(colors)
+
+            # Store vector cache in data manager
+            self.data_manager.force_vector_cache = vector_cache
+
+            # Add visualization layers
+            with self.viewer.events.blocker_all():
+                self._layers['force_magnitude'] = self.viewer.add_image(
+                    magnitudes,
+                    name='Force Magnitude',
+                    colormap='inferno',
+                    blending='additive',
+                    contrast_limits=(0, vis_params['f_max']),
+                    visible=True
+                )
+
+                # Get valid current frame index
+                current_frame = self._validate_frame_index(
+                    self.viewer.dims.current_step[0],
+                    num_frames
+                )
+
+                # Add initial vector layer
+                if len(vector_cache['data'][current_frame]) > 0:
+                    self._layers['force_vectors'] = self.viewer.add_vectors(
+                        vector_cache['data'][current_frame],
+                        name='Force Vectors',
+                        edge_color=vector_cache['colors'][current_frame],
+                        edge_width=2,
+                        vector_style='arrow',
+                        blending='additive',
+                        length=1
+                    )
+
+                # Update viewer dimensions to match data
+                self.viewer.dims.set_point(0, current_frame)
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to visualize force results",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Try adjusting visualization parameters or check data consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+            raise
+
+    def visualize_stress_results(self) -> None:
+        """Visualize stress results for all frames using data from data manager."""
+        try:
+            # Check if stress results exist
+            if self.data_manager.stress_results is None:
+                raise ValueError("No stress results available in data manager")
+
+            # Get results and parameters from data manager
+            results = self.data_manager.stress_results
+            stress_tensors = results.stress_tensor
+            params = results.parameters
+
+            # Validate number of frames
+            num_frames = len(stress_tensors)
+            if num_frames == 0:
+                raise ValueError("Stress tensor contains no frames")
+
+            # Get visualization parameters
+            max_stress = params.max_stress
+            downscale_factor = params.downscale_factor
+
+            # Clear existing layers
+            self._clear_layers([
+                'Normal Stress XX',
+                'Normal Stress YY',
+                'Average Normal Stress'
+            ])
+
+            def upscale_component(component):
+                if downscale_factor > 1:
+                    if component.ndim == 3:  # Multiple frames
+                        return np.stack([
+                            cv2.resize(
+                                frame,
+                                (frame.shape[1] * downscale_factor,
+                                 frame.shape[0] * downscale_factor),
+                                interpolation=cv2.INTER_LINEAR
+                            )
+                            for frame in component
+                        ])
+                    else:  # Single frame
+                        return cv2.resize(
+                            component,
+                            (component.shape[1] * downscale_factor,
+                             component.shape[0] * downscale_factor),
+                            interpolation=cv2.INTER_LINEAR
+                        )
+                return component
+
+            # Extract and upscale stress components
+            sigma_xx = upscale_component(stress_tensors[..., 0, 0])
+            sigma_yy = upscale_component(stress_tensors[..., 1, 1])
+
+            # Calculate average normal stress after upscaling
+            sigma_normal = (sigma_xx + sigma_yy) / 2
+
+            # Store stress data in manager for frame updates
+            self.data_manager.stress_components = {
+                'sigma_xx': sigma_xx,
+                'sigma_yy': sigma_yy,
+                'sigma_normal': sigma_normal,
+                'num_frames': num_frames,
+                'max_stress': max_stress
+            }
+
+            # Add visualization layers
+            with self.viewer.events.blocker_all():
+                # Get valid current frame index
+                current_frame = self._validate_frame_index(
+                    self.viewer.dims.current_step[0],
+                    num_frames
+                )
+
+                # Normal stress XX
+                self._layers['stress_xx'] = self.viewer.add_image(
+                    sigma_xx,
+                    name='Normal Stress XX',
+                    colormap='seismic',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)
+                )
+
+                # Normal stress YY
+                self._layers['stress_yy'] = self.viewer.add_image(
+                    sigma_yy,
+                    name='Normal Stress YY',
+                    colormap='seismic',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)
+                )
+
+                # Average normal stress
+                self._layers['stress_normal'] = self.viewer.add_image(
+                    sigma_normal,
+                    name='Average Normal Stress',
+                    colormap='seismic',
+                    blending='additive',
+                    contrast_limits=(-max_stress, max_stress)
+                )
+
+                # Update viewer dimensions to match data
+                self.viewer.dims.set_point(0, current_frame)
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to visualize stress results",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Try adjusting visualization parameters or check data consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+            raise
+
+    def update_stress_frame(self, frame_index: int) -> None:
+        """Update stress tensor visualization for the current frame."""
+        try:
+            # Check if stress components exist
+            if not hasattr(self.data_manager, 'stress_components'):
+                return
+
+            components = self.data_manager.stress_components
+            if components is None:
+                return
+
+            # Get number of frames and validate frame index
+            num_frames = components.get('num_frames', 0)
+            if num_frames == 0:
+                return
+
+            # Validate frame index
+            valid_frame = self._validate_frame_index(frame_index, num_frames)
+
+            # Update stress layers if they exist
+            if 'stress_xx' in self._layers and self._layers['stress_xx'] is not None:
+                with self.viewer.events.blocker_all():
+                    # Update normal stress components
+                    self._layers['stress_xx'].data = components['sigma_xx'][valid_frame]
+                    self._layers['stress_yy'].data = components['sigma_yy'][valid_frame]
+                    self._layers['stress_normal'].data = components['sigma_normal'][valid_frame]
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to update stress frame",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check stress results and layer consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
+
+    def update_force_frame(self, frame_index: int) -> None:
+        """Update force vector visualization for the current frame."""
+        try:
+            # Check if we have force results and vector cache
+            if not hasattr(self.data_manager, 'force_vector_cache'):
+                return
+
+            cache = self.data_manager.force_vector_cache
+            if cache is None or 'data' not in cache:
+                return
+
+            # Get number of frames from cache
+            num_frames = cache.get('num_frames', len(cache['data']))
+
+            # Validate frame index
+            valid_frame = self._validate_frame_index(frame_index, num_frames)
+
+            # Update vectors using stored layer reference
+            if 'force_vectors' in self._layers and self._layers['force_vectors'] is not None:
+                with self.viewer.events.blocker_all():
+                    self._layers['force_vectors'].data = cache['data'][valid_frame]
+                    self._layers['force_vectors'].edge_color = cache['colors'][valid_frame]
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to update force frame",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check force results and vector cache consistency",
+                original_error=e,
+                source="visualization"
+            )
+            self.handle_error(error)
 
     def _on_frame_changed(self, event=None) -> None:
         """Handle frame change events for both displacement and force visualizations."""
@@ -333,104 +807,6 @@ class VisualizationManager(ErrorHandlingMixin):
             self.handle_error(error)
             raise
 
-    def visualize_displacement_results(self) -> None:
-        """Visualize displacement results for all frames using data from data manager."""
-        try:
-            # Check if displacement results exist
-            if self.data_manager.displacement_results is None:
-                raise ValueError("No displacement results available in data manager")
-
-            # Get results from data manager
-            results = self.data_manager.displacement_results
-            flows = results.displacement_field
-            params = results.parameters
-
-            downscale_factor = params.downscale_factor
-
-            # Clear existing layers
-            self._clear_layers(['Displacement Magnitude', 'Displacement Vectors'])
-
-            # Create visualization stacks
-            num_frames = len(flows)
-            upscaled_shape = (
-                flows[0].shape[0] * downscale_factor,
-                flows[0].shape[1] * downscale_factor
-            )
-            magnitudes = np.zeros((num_frames, *upscaled_shape))
-
-            # Get visualization parameters
-            vis_params = {
-                'd_max': params.d_max,
-                'vector_stride': params.disp_vector_stride,
-                'arrow_scale': params.disp_arrow_scale
-            }
-
-            # Create vector cache
-            vector_cache = {
-                'data': [],
-                'colors': [],
-                'parameters': vis_params.copy(),
-                'original_resolution': flows[0].shape[:2]
-            }
-
-            # Process each frame
-            for i in range(num_frames):
-                display_flow = self._upscale_field(flows[i], downscale_factor)
-
-                # Calculate magnitude
-                magnitude = np.sqrt(np.sum(display_flow ** 2, axis=-1))
-                magnitudes[i] = magnitude
-
-                # Calculate vector data
-                flow_scaled = display_flow * vis_params['arrow_scale'] / vis_params['d_max'] * 50
-                vectors, colors = self._create_vector_visualization(
-                    flow_scaled,
-                    display_flow,
-                    vis_params['vector_stride'],
-                    vis_params['d_max']
-                )
-                vector_cache['data'].append(vectors)
-                vector_cache['colors'].append(colors)
-
-            # Store vector cache in data manager
-            self.data_manager.displacement_vector_cache = vector_cache
-
-            # Add visualization layers
-            with self.viewer.events.blocker_all():
-                self._layers['displacement_magnitude'] = self.viewer.add_image(
-                    magnitudes,
-                    name='Displacement Magnitude',
-                    colormap='viridis',
-                    blending='additive',
-                    contrast_limits=(0, vis_params['d_max']),
-                    visible=True
-                )
-
-                # Add initial vector layer
-                current_frame = self.viewer.dims.current_step[0]
-                if len(vector_cache['data'][current_frame]) > 0:
-                    self._layers['displacement_vectors'] = self.viewer.add_vectors(
-                        vector_cache['data'][current_frame],
-                        name='Displacement Vectors',
-                        edge_color=vector_cache['colors'][current_frame],
-                        edge_width=2,
-                        vector_style='arrow',
-                        blending='additive',
-                        length=1
-                    )
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to visualize displacement results",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Try adjusting visualization parameters or check data consistency",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
-            raise
-
     def visualize_force_preview(
             self,
             force_field: np.ndarray,
@@ -489,105 +865,6 @@ class VisualizationManager(ErrorHandlingMixin):
                 details=str(e),
                 severity=ErrorSeverity.ERROR,
                 recovery_hint="Try adjusting visualization parameters or check input data",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
-            raise
-
-    def visualize_force_results(self) -> None:
-        """Visualize force results for all frames using data from data manager."""
-        try:
-            # Check if force results exist
-            if self.data_manager.force_results is None:
-                raise ValueError("No force results available in data manager")
-
-            # Get results from data manager
-            results = self.data_manager.force_results
-            force_fields = results.force_field
-            params = results.parameters
-
-            downscale_factor = params.downscale_factor
-
-            # Clear existing layers
-            self._clear_layers(['Force Magnitude', 'Force Vectors'])
-
-            # Create visualization stacks
-            num_frames = len(force_fields)
-            upscaled_shape = (
-                force_fields[0].shape[0] * downscale_factor,
-                force_fields[0].shape[1] * downscale_factor
-            )
-            magnitudes = np.zeros((num_frames, *upscaled_shape))
-
-            # Get visualization parameters
-            vis_params = {
-                'f_max': params.f_max,
-                'vector_stride': params.force_vector_stride,
-                'arrow_scale': params.force_arrow_scale
-            }
-
-            # Create vector cache
-            vector_cache = {
-                'data': [],
-                'colors': [],
-                'parameters': vis_params.copy(),
-                'original_resolution': force_fields[0].shape[:2]
-            }
-
-            # Process each frame
-            for i in range(num_frames):
-                display_force = self._upscale_field(force_fields[i], downscale_factor)
-
-                # Calculate magnitude
-                magnitude = np.sqrt(np.sum(display_force ** 2, axis=-1))
-                magnitudes[i] = magnitude
-
-                # Calculate vector data
-                force_scaled = display_force * vis_params['arrow_scale'] / vis_params['f_max'] * 50
-                vectors, colors = self._create_vector_visualization(
-                    force_scaled,
-                    display_force,
-                    vis_params['vector_stride'],
-                    vis_params['f_max'],
-                    colormap='inferno'
-                )
-                vector_cache['data'].append(vectors)
-                vector_cache['colors'].append(colors)
-
-            # Store vector cache in data manager
-            self.data_manager.force_vector_cache = vector_cache
-
-            # Add visualization layers
-            with self.viewer.events.blocker_all():
-                self._layers['force_magnitude'] = self.viewer.add_image(
-                    magnitudes,
-                    name='Force Magnitude',
-                    colormap='inferno',
-                    blending='additive',
-                    contrast_limits=(0, vis_params['f_max']),
-                    visible=True
-                )
-
-                # Add initial vector layer
-                current_frame = self.viewer.dims.current_step[0]
-                if len(vector_cache['data'][current_frame]) > 0:
-                    self._layers['force_vectors'] = self.viewer.add_vectors(
-                        vector_cache['data'][current_frame],
-                        name='Force Vectors',
-                        edge_color=vector_cache['colors'][current_frame],
-                        edge_width=2,
-                        vector_style='arrow',
-                        blending='additive',
-                        length=1
-                    )
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to visualize force results",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Try adjusting visualization parameters or check data consistency",
                 original_error=e,
                 source="visualization"
             )
@@ -668,98 +945,6 @@ class VisualizationManager(ErrorHandlingMixin):
             self.handle_error(error)
             raise
 
-    def visualize_stress_results(self) -> None:
-        """Visualize stress results for all frames using data from data manager."""
-        try:
-            # Check if stress results exist
-            if self.data_manager.stress_results is None:
-                raise ValueError("No stress results available in data manager")
-
-            # Get results and parameters from data manager
-            results = self.data_manager.stress_results
-            stress_tensors = results.stress_tensor
-            params = results.parameters
-
-            # Get visualization parameters
-            max_stress = params.max_stress
-            downscale_factor = params.downscale_factor
-
-            # Clear existing layers
-            self._clear_layers([
-                'Normal Stress XX',
-                'Normal Stress YY',
-                'Average Normal Stress'
-            ])
-
-            def upscale_component(component):
-                if downscale_factor > 1:
-                    if component.ndim == 3:  # Multiple frames
-                        return np.stack([
-                            cv2.resize(
-                                frame,
-                                (frame.shape[1] * downscale_factor,
-                                 frame.shape[0] * downscale_factor),
-                                interpolation=cv2.INTER_LINEAR
-                            )
-                            for frame in component
-                        ])
-                    else:  # Single frame
-                        return cv2.resize(
-                            component,
-                            (component.shape[1] * downscale_factor,
-                             component.shape[0] * downscale_factor),
-                            interpolation=cv2.INTER_LINEAR
-                        )
-                return component
-
-            # Extract and upscale stress components
-            sigma_xx = upscale_component(stress_tensors[..., 0, 0])
-            sigma_yy = upscale_component(stress_tensors[..., 1, 1])
-
-            # Calculate average normal stress after upscaling
-            sigma_normal = (sigma_xx + sigma_yy) / 2
-
-            # Add visualization layers
-            with self.viewer.events.blocker_all():
-                # Normal stress XX
-                self._layers['stress_xx'] = self.viewer.add_image(
-                    sigma_xx,
-                    name='Normal Stress XX',
-                    colormap='seismic',
-                    blending='additive',
-                    contrast_limits=(-max_stress, max_stress)
-                )
-
-                # Normal stress YY
-                self._layers['stress_yy'] = self.viewer.add_image(
-                    sigma_yy,
-                    name='Normal Stress YY',
-                    colormap='seismic',
-                    blending='additive',
-                    contrast_limits=(-max_stress, max_stress)
-                )
-
-                # Average normal stress
-                self._layers['stress_normal'] = self.viewer.add_image(
-                    sigma_normal,
-                    name='Average Normal Stress',
-                    colormap='seismic',
-                    blending='additive',
-                    contrast_limits=(-max_stress, max_stress)
-                )
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to visualize stress results",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Try adjusting visualization parameters or check data consistency",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
-            raise
-
     def _on_layer_removed(self, event) -> None:
         """Handle layer removal events."""
         layer = event.value
@@ -786,127 +971,6 @@ class VisualizationManager(ErrorHandlingMixin):
         except Exception as e:
             self.handle_error(f"Failed to cleanup visualization manager: {str(e)}")
 
-    def update_displacement_frame(self, frame_index: int) -> None:
-        """Update vector visualization for the current frame."""
-        try:
-            # Check if we have displacement results and vector cache
-            if not hasattr(self.data_manager, 'displacement_results'):
-                return
-
-            if (not hasattr(self.data_manager, 'displacement_vector_cache') or
-                    self.data_manager.displacement_vector_cache is None):
-                return
-
-            cache = self.data_manager.displacement_vector_cache
-            if 'data' not in cache or frame_index >= len(cache['data']):
-                return
-
-            # Update vectors using stored layer reference
-            if 'displacement_vectors' in self._layers and self._layers['displacement_vectors'] is not None:
-                with self.viewer.events.blocker_all():
-                    self._layers['displacement_vectors'].data = cache['data'][frame_index]
-                    self._layers['displacement_vectors'].edge_color = cache['colors'][frame_index]
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to update displacement frame",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Check displacement results and vector cache consistency",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
-
-    def update_force_frame(self, frame_index: int) -> None:
-        """Update force vector visualization for the current frame."""
-        try:
-            # Check if we have force results and vector cache
-            if not hasattr(self.data_manager, 'force_results'):
-                return
-
-            if (not hasattr(self.data_manager, 'force_vector_cache') or
-                    self.data_manager.force_vector_cache is None):
-                return
-
-            cache = self.data_manager.force_vector_cache
-            if 'data' not in cache or frame_index >= len(cache['data']):
-                return
-
-            # Update vectors using stored layer reference
-            if 'force_vectors' in self._layers and self._layers['force_vectors'] is not None:
-                with self.viewer.events.blocker_all():
-                    self._layers['force_vectors'].data = cache['data'][frame_index]
-                    self._layers['force_vectors'].edge_color = cache['colors'][frame_index]
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to update force frame",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Check force results and vector cache consistency",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
-
-    def update_stress_frame(self, frame_index: int) -> None:
-        """Update stress tensor visualization for the current frame."""
-        try:
-            # Check if stress results exist
-            if not hasattr(self.data_manager, 'stress_results') or self.data_manager.stress_results is None:
-                return
-
-            stress_tensors = self.data_manager.stress_results.stress_tensor
-            if frame_index >= len(stress_tensors):
-                return
-
-            # Get current frame's tensor
-            tensor = stress_tensors[frame_index]
-
-            # Update stress layers if they exist
-            if 'stress_xx' in self._layers and self._layers['stress_xx'] is not None:
-                with self.viewer.events.blocker_all():
-                    if hasattr(self.data_manager.stress_results.parameters, 'downscale_factor'):
-                        downscale_factor = self.data_manager.stress_results.parameters.downscale_factor
-                        if downscale_factor > 1:
-                            # Resize individual components
-                            sigma_xx = cv2.resize(
-                                tensor[..., 0, 0],
-                                (tensor.shape[1] * downscale_factor,
-                                 tensor.shape[0] * downscale_factor),
-                                interpolation=cv2.INTER_LINEAR
-                            )
-                            sigma_yy = cv2.resize(
-                                tensor[..., 1, 1],
-                                (tensor.shape[1] * downscale_factor,
-                                 tensor.shape[0] * downscale_factor),
-                                interpolation=cv2.INTER_LINEAR
-                            )
-                        else:
-                            sigma_xx = tensor[..., 0, 0]
-                            sigma_yy = tensor[..., 1, 1]
-                    else:
-                        sigma_xx = tensor[..., 0, 0]
-                        sigma_yy = tensor[..., 1, 1]
-
-                    # Update normal stress components
-                    self._layers['stress_xx'].data = sigma_xx
-                    self._layers['stress_yy'].data = sigma_yy
-
-                    # Update average normal stress
-                    self._layers['stress_normal'].data = (sigma_xx + sigma_yy) / 2
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to update stress frame",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Check stress results and layer consistency",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
     def _create_vector_visualization(
             self,
             flow_scaled: np.ndarray,

@@ -521,7 +521,7 @@ class DisplacementController(QObject):
 
     progress_updated = Signal(int, str)  # (progress_value, status_message)
     analysis_started = Signal()
-    analysis_completed = Signal(DisplacementResult)  # Results object
+    analysis_completed = Signal(object)  # Results object
     analysis_failed = Signal(str)  # Error message
     data_updated = Signal(str)  # Data type that was updated
     ui_frozen = Signal(bool)

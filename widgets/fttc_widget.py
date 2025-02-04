@@ -456,7 +456,7 @@ class FTTCController(QObject):
 
     progress_updated = Signal(int, str)  # (progress_value, status_message)
     analysis_started = Signal()
-    analysis_completed = Signal(FTTCResult)
+    analysis_completed = Signal(object)
     analysis_failed = Signal(str)
     data_updated = Signal(str)  # Data type that was updated
     ui_frozen = Signal(bool)
