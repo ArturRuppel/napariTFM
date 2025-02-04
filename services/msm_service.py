@@ -49,6 +49,76 @@ class MSMService:
         )
         self.params = params
 
+    def create_preview_mask(
+            self,
+            image: np.ndarray,
+            threshold_percentile: float,
+            dilation: int,
+            smoothing_sigma: float,
+            target_shape: Optional[Tuple[int, int]] = None,
+            downscale_factor: int = 1
+    ) -> np.ndarray:
+        """
+        Create a preview mask from a single image frame.
+
+        Parameters
+        ----------
+        image : np.ndarray
+            2D input image
+        threshold_percentile : float
+            Threshold percentile for mask creation (0-100)
+        dilation : int
+            Number of pixels to dilate the mask
+        smoothing_sigma : float
+            Sigma value for Gaussian smoothing
+        target_shape : tuple, optional
+            Shape to resize analysis mask to (height, width)
+        downscale_factor : int, optional
+            Factor to upscale visualization mask by
+
+        Returns
+        -------
+        np.ndarray
+            Binary mask ready for visualization
+        """
+        # Create base mask using MSM class method
+        base_mask = MonolayerStressMicroscopy.create_mask_from_image(
+            image,
+            threshold_percentile=threshold_percentile,
+            dilation=dilation,
+            smoothing_sigma=smoothing_sigma
+        )
+
+        # Handle analysis mask resizing if target shape is provided
+        if target_shape is not None and base_mask.shape != target_shape:
+            analysis_mask = resize(
+                base_mask.astype(float),
+                target_shape,
+                order=0,
+                preserve_range=True,
+                anti_aliasing=False
+            ) > 0.5
+        else:
+            analysis_mask = base_mask
+
+        # Upscale for visualization if needed
+        if downscale_factor > 1:
+            vis_shape = (
+                analysis_mask.shape[0] * downscale_factor,
+                analysis_mask.shape[1] * downscale_factor
+            )
+            preview_mask = resize(
+                analysis_mask.astype(float),
+                vis_shape,
+                order=0,
+                preserve_range=True,
+                anti_aliasing=False
+            ) > 0.5
+        else:
+            preview_mask = analysis_mask
+
+        return preview_mask
+
     def create_mask_stack(
             self,
             image_stack: np.ndarray,

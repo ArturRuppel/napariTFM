@@ -20,11 +20,9 @@ from services.msm_service import MSMService, MSMResult
 from utilities.visualization_manager import VisualizationManager
 
 
-# TODO reimplement mask preview
 # TODO make preview current frame run in seperate thread
 # TODO layer visibility (only sigma_xx after calculations)
-# TODO test in all widgets whether or not loading external data updates params
-# TODO image layer should stay activated when creating several mask stacks in a row
+# TODO add tooltips
 
 def _is_valid_image_layer(layer) -> bool:
     """Check if layer is valid for mask creation/loading."""
@@ -232,6 +230,7 @@ class MSMParameterPanel(QWidget):
         group = QGroupBox("Mask Parameters")
         layout = QVBoxLayout()
 
+        # Add existing parameters
         params = [
             ("threshold", "Threshold Percentile (%):", 0, 100, 0.1, 0),
             ("dilation", "Mask Dilation (px):", 0, 50, 1, 10),
@@ -241,6 +240,14 @@ class MSMParameterPanel(QWidget):
         for name, label, min_val, max_val, step, default in params:
             widget = self._create_parameter_widget(name, label, min_val, max_val, step, default)
             layout.addLayout(widget)
+
+        # Add preview checkbox (not a parameter, just UI state)
+        preview_layout = QHBoxLayout()
+        preview_layout.addWidget(QLabel("Show Preview:"))
+        self.preview_checkbox = QCheckBox()
+        self.preview_checkbox.setChecked(False)
+        preview_layout.addWidget(self.preview_checkbox)
+        layout.addLayout(preview_layout)
 
         group.setLayout(layout)
         return group
@@ -541,7 +548,7 @@ class MSMDataPanel(QWidget):
                 QMessageBox.warning(
                     self,
                     "No Force Data",
-                    "No force data loaded. Masks may need resizing later."
+                    "No force data loaded. Mask shape will not match force field shape and will be resized during stress calculation. Mesh preview will therefore not correspond to meshes generated for stress calculations."
                 )
 
             # Process masks (resizing if needed)
@@ -749,6 +756,87 @@ class MSMController(QObject):
         self.data_panel = data_panel
         self.active_workers = []
 
+    def _update_mask_preview(self):
+        """Update the mask preview based on current parameters."""
+        try:
+            # Check if preview is enabled
+            if not self.parameter_panel.preview_checkbox.isChecked():
+                if 'Mask Preview' in self.viewer.layers:
+                    self.viewer.layers.remove('Mask Preview')
+                return
+
+            # Get active layer
+            active_layer = self.viewer.layers.selection.active
+            if active_layer is None or not hasattr(active_layer, 'data'):
+                return
+
+            # Get current frame data
+            current_frame = self.viewer.dims.current_step[0]
+            image = active_layer.data
+            if image.ndim == 3:
+                image = image[current_frame]
+            elif image.ndim != 2:
+                return
+
+            # Get current parameters
+            params = self._get_current_parameters()
+
+            # Get target shape and downscale factor if force data exists
+            target_shape = None
+            downscale_factor = 1
+            if self.data_manager.force_results is not None:
+                force_field = self.data_manager.force_results.force_field
+                target_shape = force_field[0].shape[:2]
+                downscale_factor = self.data_manager.force_results.parameters.downscale_factor
+
+            # Create preview mask using MSM service
+            preview_mask = self.service.create_preview_mask(
+                image,
+                threshold_percentile=params.threshold,
+                dilation=params.dilation,
+                smoothing_sigma=params.smoothing_sigma,
+                target_shape=target_shape,
+                downscale_factor=downscale_factor
+            )
+
+            # Update or create preview layer
+            if 'Mask Preview' in self.viewer.layers:
+                self.viewer.layers['Mask Preview'].data = preview_mask
+            else:
+                # Create layer first
+                preview_layer = self.viewer.add_labels(
+                    data=preview_mask.astype(np.uint8),
+                    name='Mask Preview',
+                    opacity=0.5
+                )
+                # Then set the color mapping
+                preview_layer.color = {
+                    0: 'transparent',
+                    1: [1, 1, 0, 0.5]  # Yellow with 0.5 opacity
+                }
+
+            self.progress_updated.emit(100, f"Preview updated (Frame {current_frame})")
+
+        except Exception as e:
+            self.progress_updated.emit(0, f"Preview error: {str(e)}")
+            # Remove preview layer if there's an error
+            if 'Mask Preview' in self.viewer.layers:
+                self.viewer.layers.remove('Mask Preview')
+    def _handle_preview_toggle(self, state):
+        """Handle preview checkbox state changes."""
+        # Store currently active layer
+        active_layer = self.viewer.layers.selection.active
+
+        if not state:  # If unchecked
+            if 'Mask Preview' in self.viewer.layers:
+                self.viewer.layers.remove('Mask Preview')
+        else:  # If checked
+            self._update_mask_preview()
+
+        # Restore the previously active layer
+        if active_layer is not None:
+            self.viewer.layers.selection.active = active_layer
+
     def _validate_prerequisites(self) -> bool:
         """Check if required data is available."""
         if self.data_manager.mask_stack is None:
@@ -804,7 +892,6 @@ class MSMController(QObject):
                     mesh_data = final_mesh_results
 
             # Update status for numba compilation
-            self._update_progress(45, "Compiling numerical methods (may take a moment on first run)...")
             QApplication.processEvents()
 
             # Now calculate stress using the pre-generated meshes
@@ -1470,6 +1557,22 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Connect to layer selection changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
+
+        # Connect parameter changes to preview update
+        for param_name in ['threshold', 'dilation', 'smoothing_sigma']:
+            self.parameter_panel.parameter_widgets[param_name].valueChanged.connect(
+                self.controller._update_mask_preview
+            )
+
+        # Connect preview checkbox
+        self.parameter_panel.preview_checkbox.stateChanged.connect(
+            self.controller._handle_preview_toggle
+        )
+
+        # Connect frame change event from viewer
+        self.viewer.dims.events.current_step.connect(
+            self.controller._update_mask_preview
+        )
 
     def _update_status(self, progress: int, message: str):
         """Update status display."""
