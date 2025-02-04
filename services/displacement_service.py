@@ -9,7 +9,23 @@ from backend.parameter_dataclasses import DisplacementParameters
 
 @dataclass
 class DisplacementResult:
-    """Results from displacement field calculation"""
+    """Results from displacement field calculation using optical flow.
+
+    Attributes:
+        displacement_field (np.ndarray): Calculated displacement field with shape (t, y, x, 2).
+            t is time points (1 for single frame), units in micrometers (μm).
+            Last dimension contains (dx, dy) displacement components.
+        original_shape (tuple): Original image shape (y, x)
+        displacement_field_shape (tuple): Shape of displacement field (y, x)
+        parameters (DisplacementParameters): Parameters used for calculation
+        physical_scale (dict): Physical scaling information including:
+            - pixel_size: Size of each pixel
+            - grid_spacing: Effective grid spacing after downsampling
+            - time_interval: Time between frames
+            - displacement_units: Displacement units (μm)
+            - grid_spacing_units: Spatial units (μm)
+            - time_interval_units: Time units (min)
+    """
     displacement_field: np.ndarray  # Shape (t, y, x, 2) for time series, units in µm
     original_shape: tuple  # Original image shape (y, x)
     displacement_field_shape: tuple  # Displacement_field field shape (y, x)
@@ -18,21 +34,35 @@ class DisplacementResult:
 
 
 class DisplacementService:
-    """Service layer handling business logic for displacement analysis."""
+    """Service layer handling business logic for displacement analysis using optical flow.
+
+    This class provides a high-level interface for calculating displacement fields
+    between microscopy images using the TV-L1 optical flow algorithm. It handles
+    parameter validation, unit conversion, and supports both single-frame and
+    time series analysis.
+    """
 
     def __init__(self, params: DisplacementParameters):
-        """
-        Initialize the displacement service with analysis parameters.
+        """Initialize displacement service with analysis parameters.
 
-        Parameters
-        ----------
-        params : DisplacementParameters
-            Parameters for the displacement analysis
+        Args:
+            params (DisplacementParameters): Configuration including:
+                - TV-L1 algorithm parameters (tau, lambda_, theta, etc.)
+                - Physical parameters (pixel size, frame interval)
+                - Processing options (downscaling factor)
+                - Visualization settings
 
-        Raises
-        ------
-        ValueError
-            If parameters are invalid
+        Raises:
+            ValueError: If any parameters are invalid
+
+        Example:
+            >>> params = DisplacementParameters(
+            ...     pixel_size=0.1,  # 0.1 μm per pixel
+            ...     downscale_factor=4,
+            ...     tau=0.1,
+            ...     lambda_=0.15
+            ... )
+            >>> service = DisplacementService(params)
         """
         is_valid, error_msg = self.validate_parameters(params)
         if not is_valid:
@@ -56,18 +86,16 @@ class DisplacementService:
         self.params = params
 
     def update_parameters(self, parameters: DisplacementParameters):
-        """
-        Update displacement analysis parameters.
+        """Update displacement analysis parameters.
 
-        Parameters
-        ----------
-        parameters : DisplacementParameters
-            New parameters to use
+        Creates a new analyzer instance with the updated parameters after
+        validating them.
 
-        Raises
-        ------
-        ValueError
-            If parameters are invalid
+        Args:
+            parameters (DisplacementParameters): New parameters to use
+
+        Raises:
+            ValueError: If any parameters are invalid
         """
         is_valid, error_msg = self.validate_parameters(parameters)
         if not is_valid:
@@ -92,18 +120,27 @@ class DisplacementService:
 
     @staticmethod
     def validate_parameters(params: DisplacementParameters) -> Tuple[bool, str]:
-        """
-        Validate displacement analysis parameters.
+        """Validate displacement analysis parameters.
 
-        Parameters
-        ----------
-        params : DisplacementParameters
-            Parameters to validate
+        Checks all parameters for physical and numerical validity including:
+        - Algorithm parameters (tau, lambda_, theta, etc.)
+        - Physical parameters (pixel size, frame interval)
+        - Processing options (downscaling factor)
+        - Visualization settings
 
-        Returns
-        -------
-        Tuple[bool, str]
-            (is_valid, error_message)
+        Args:
+            params (DisplacementParameters): Parameters to validate
+
+        Returns:
+            Tuple[bool, str]: (is_valid, error_message)
+                error_message is empty string if valid
+
+        Note:
+            Specific validation rules include:
+            - All time steps and iterations must be positive
+            - Scaling factors must be ≥ 1
+            - Physical parameters must be positive
+            - Theta must be between 0 and 10
         """
         if params.tau <= 0:
             return False, "tau must be positive"
@@ -157,18 +194,19 @@ class DisplacementService:
 
     @staticmethod
     def validate_image(image: np.ndarray) -> Tuple[bool, str]:
-        """
-        Validate input image data.
+        """Validate input image data for displacement analysis.
 
-        Parameters
-        ----------
-        image : np.ndarray
-            Image data to validate
+        Checks that image data is suitable for optical flow calculation:
+        - Correct data type (numpy array)
+        - Valid dimensions (2D or 3D for time series)
+        - Contains valid values (not all NaN)
 
-        Returns
-        -------
-        Tuple[bool, str]
-            (is_valid, error_message)
+        Args:
+            image (np.ndarray): Image data to validate
+
+        Returns:
+            Tuple[bool, str]: (is_valid, error_message)
+                error_message is empty string if valid
         """
         if image is None:
             return False, "No image data provided"
@@ -189,28 +227,47 @@ class DisplacementService:
             reference: np.ndarray,
             target: np.ndarray
     ) -> Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]:
-        """
-        Calculate optical flow between reference and target image(s).
-        Always returns displacement field with shape (t, y, x, 2) where t=1 for single frames.
-        Yields intermediate results during calculation.
+        """Calculate optical flow between reference and target image(s).
 
-        Parameters
-        ----------
-        reference : np.ndarray
-            Reference image (2D)
-        target : np.ndarray
-            Target image(s) - will be converted to 3D (t, y, x) if 2D
+        Computes displacement fields using TV-L1 optical flow, with optional
+        downscaling for efficiency. For time series, yields intermediate results
+        to allow progress tracking.
 
-        Returns
-        -------
-        Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]
-            Generator yielding (intermediate_displacement_field, frame_index, total_frames) during calculation
-            and returning final DisplacementCalculationResult when exhausted
+        Args:
+            reference (np.ndarray): Reference image (2D array)
+            target (np.ndarray): Target image(s)
+                - 2D array for single frame
+                - 3D array (t, y, x) for time series
 
-        Raises
-        ------
-        ValueError
-            If input images are invalid
+        Yields:
+            Tuple[np.ndarray, int, int]: Intermediate results containing:
+                - Current frame's displacement field (y, x, 2) in μm
+                - Frame index (1-based)
+                - Total number of frames
+
+        Returns:
+            DisplacementResult: Complete calculation results including:
+                - Full displacement field array
+                - Physical scaling information
+                - Calculation parameters
+                Accessible via StopIteration.value when generator completes.
+
+        Raises:
+            ValueError: If input images are invalid
+
+        Example:
+            >>> # Get the generator
+            >>> disp_generator = service.calculate_displacement_field(ref_img, target_imgs)
+            >>>
+            >>> # Process intermediate results
+            >>> try:
+            ...     while True:
+            ...         # Get next frame result
+            ...         disp_field, frame, total = next(disp_generator)
+            ...         print(f"Processed frame {frame}/{total}")
+            ... except StopIteration as e:
+            ...     # Get final result from generator's return value
+            ...     final_result = e.value
         """
         # Validate input images
         is_valid, error_msg = self.validate_image(reference)

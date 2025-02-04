@@ -105,7 +105,8 @@ The `physical_scale` dictionary contains:
 ## FTTC Class
 
 
-The `FTTC` (Fourier Transform Traction Cytometry) class implements force calculations for Traction Force Microscopy (TFM) using the FTTC method with Generalized Cross-Validation (GCV) for regularization parameter optimization.
+The `FTTC` (Fourier Transform Traction Cytometry) class implements force calculations for Traction Force Microscopy (TFM) using the FTTC method with Generalized Cross-Validation (GCV) for regularization parameter optimization. This class is typically used through the FTTCService, but can be used directly for more control over the analysis process.
+
 
 ## Class Constructor
 

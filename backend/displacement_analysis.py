@@ -8,14 +8,35 @@ from backend.parameter_dataclasses import DisplacementParameters
 
 
 class DisplacementAnalyzer:
-    """Analyzes displacements using TV-L1 optical flow."""
+    """Analyzes displacements using TV-L1 optical flow.
+
+    This class implements displacement analysis for bead tracking in microscopy
+    using the TV-L1 optical flow algorithm. It supports both full-resolution
+    and downscaled analysis, with methods for calculating, manipulating, and
+    applying flow fields.
+
+    The TV-L1 algorithm is particularly suitable for microscopy analysis as it:
+    - Preserves discontinuities in the displacement field
+    - Is robust to brightness changes
+    - Provides sub-pixel accuracy
+    """
 
     def __init__(self, params: Optional[DisplacementParameters] = None):
-        """
-        Initialize TV-L1 optical flow analyzer.
+        """Initialize TV-L1 optical flow analyzer.
 
         Args:
-            params: TVL1Parameters instance with algorithm parameters
+            params (DisplacementParameters, optional): Algorithm parameters including:
+                - tau: Time step for TV-L1 (default determined by params)
+                - lambda_: Weight parameter for data term
+                - theta: Weight parameter for gradient term
+                - nscales: Number of scales for pyramid
+                - warps: Number of warpings per scale
+                - epsilon: Stopping criterion threshold
+                - inner_iterations: Inner iteration count
+                - outer_iterations: Outer iteration count
+                - scale_step: Scale step for pyramid
+                - median_filtering: Whether to apply median filtering
+                If None, uses default parameters.
         """
         self.params = params or DisplacementParameters()
         self.flow_algorithm = cv2.optflow.DualTVL1OpticalFlow_create(
@@ -26,48 +47,37 @@ class DisplacementAnalyzer:
             self.params.median_filtering, False
         )
 
+        self.params = params or DisplacementParameters()
+        self.flow_algorithm = cv2.optflow.DualTVL1OpticalFlow_create(
+            self.params.tau, self.params.lambda_, self.params.theta,
+            self.params.nscales, self.params.warps, self.params.epsilon,
+            self.params.inner_iterations, self.params.outer_iterations,
+            self.params.scale_step, 0.0,
+            self.params.median_filtering, False
+        )
 
-    # deprecated
-    def analyze_displacement_generator(self, reference: np.ndarray, bead_stack: np.ndarray,
-                                       pixel_size: float, downscale_factor: int = 1,
-                                       visualization_params: Optional[Dict] = None) -> Generator:
-        """Generator version for external threading"""
-        total_frames = len(bead_stack)
-        flows = []
-
-        for i in range(total_frames):
-            yield {  # Progress updates
-                'progress': (i + 1) / total_frames * 100,
-                'message': f"Processing frame {i + 1}/{total_frames}...\nComputing optical flow..."
-            }
-
-            flow_pixels = self.calculate_flow(reference, bead_stack[i])
-
-            if downscale_factor > 1:
-                flow_pixels = self.downscale_flow(flow_pixels, downscale_factor)
-
-            flows.append(flow_pixels * pixel_size)
-
-        # Package final results
-        return {
-            'flows': flows,
-            'parameters': {
-                'tvl1_params': self.params.__dict__,
-                'downscale_factor': downscale_factor,
-                'pixel_size': pixel_size
-            },
-            'visualization_params': visualization_params or {
-                'd_max': 10.0,
-                'vector_stride': 20,
-                'arrow_scale': 1.0
-            },
-            'original_shape': reference.shape,
-            'displacement_field_shape': flows[0].shape[:2],
-            'units': 'micrometers'
-        }
 
     def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
-        """Calculate optical flow between reference and moving image at full resolution."""
+        """Calculate optical flow between reference and moving image at full resolution.
+
+        Computes the displacement field between two images using TV-L1 optical flow.
+        Images are automatically normalized before processing.
+
+        Args:
+            reference (np.ndarray): Reference (fixed) image
+            moving (np.ndarray): Moving (deformed) image
+                Both images should be 2D arrays of the same shape.
+
+        Returns:
+            np.ndarray: Optical flow field with shape (H, W, 2) where:
+                - H, W are the image dimensions
+                - Last dimension contains (dx, dy) displacements in pixels
+                Positive values indicate rightward/downward motion.
+
+        Note:
+            Images are normalized to [0, 1] range before processing to ensure
+            consistent results regardless of input intensity range.
+        """
         # Ensure images are float32 and normalized
         ref_float = (reference.astype(np.float32) - reference.min()) / (reference.max() - reference.min())
         mov_float = (moving.astype(np.float32) - moving.min()) / (moving.max() - moving.min())
@@ -75,7 +85,24 @@ class DisplacementAnalyzer:
         return self.flow_algorithm.calc(ref_float, mov_float, None)
 
     def downscale_flow(self, flow: np.ndarray, factor: int) -> np.ndarray:
-        """Downscale flow field using local averaging."""
+        """Downscale flow field using local averaging.
+
+        Reduces flow field resolution while preserving vector information by
+        averaging displacement vectors within local neighborhoods.
+
+        Args:
+            flow (np.ndarray): Input flow field of shape (H, W, 2)
+            factor (int): Downscaling factor
+                Output dimensions will be H/factor × W/factor
+
+        Returns:
+            np.ndarray: Downscaled flow field of shape (H/factor, W/factor, 2)
+                Vector magnitudes are preserved (not scaled)
+
+        Note:
+            Uses simple averaging of vectors within each block. For factor=1,
+            returns the input flow field unchanged.
+        """
         if factor <= 1:
             return flow
 
@@ -99,13 +126,7 @@ class DisplacementAnalyzer:
 
         return downscaled
 
-    def apply_flow(self, image: np.ndarray, flow: np.ndarray) -> np.ndarray:
-        """Apply flow field to an image using interpolation."""
-        h, w = image.shape
-        flow = flow.copy()
-        flow[..., 0] += np.arange(w)
-        flow[..., 1] += np.arange(h)[:, np.newaxis]
-        return cv2.remap(image, flow, None, cv2.INTER_LINEAR)
+
 
 
 
