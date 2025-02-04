@@ -4,14 +4,46 @@ from scipy.ndimage import gaussian_filter
 import logging
 
 logger = logging.getLogger(__name__)
-# TODO implement rolling ball background substraction
 
 class ImageProcessor:
-    """Core image processing operations without business logic"""
+    """Core image processing operations for microscopy image analysis.
+
+    This class implements fundamental image processing operations commonly used
+    in microscopy analysis, including background subtraction, filtering, intensity
+    scaling, and image registration. Each operation is implemented as a stateless
+    method, making the class suitable for both single-image and batch processing.
+
+    The processor is particularly optimized for microscopy data as it:
+    - Preserves original data types and ranges where appropriate
+    - Handles both 8-bit and 16-bit images correctly
+    - Implements robust background correction
+    - Provides accurate image registration
+    """
 
     @staticmethod
     def apply_rolling_ball(image: np.ndarray, radius: float) -> np.ndarray:
-        """Apply rolling ball background subtraction if radius is non-zero"""
+        """Apply rolling ball background subtraction to microscopy images.
+
+        Implements rolling ball background subtraction using morphological
+        operations. This method is particularly effective for removing uneven
+        background illumination in microscopy images while preserving local
+        intensity variations.
+
+        Args:
+            image (np.ndarray): Input image to process
+            radius (float): Radius of the rolling ball in pixels
+                If radius <= 0, returns a copy of the input image
+                Larger radius values remove larger-scale background variations
+
+        Returns:
+            np.ndarray: Background-corrected image in the same dtype as input
+                Negative values are clipped to 0
+
+        Note:
+            The implementation uses a combination of morphological opening and
+            Gaussian filtering to approximate the rolling ball algorithm. The
+            kernel size is automatically calculated from the radius.
+        """
         if radius <= 0:
             return image.copy()
 
@@ -49,12 +81,51 @@ class ImageProcessor:
 
     @staticmethod
     def apply_gaussian_filter(image: np.ndarray, sigma: float) -> np.ndarray:
-        """Apply Gaussian filter if sigma is non-zero"""
+        """Apply Gaussian smoothing filter to reduce noise.
+
+        Performs Gaussian filtering using scipy's implementation, which handles
+        edge effects appropriately. If sigma is 0, returns a copy of the input
+        image without filtering.
+
+        Args:
+            image (np.ndarray): Input image to filter
+            sigma (float): Standard deviation of Gaussian kernel
+                If sigma <= 0, returns a copy of the input image
+                Larger values produce stronger smoothing
+
+        Returns:
+            np.ndarray: Filtered image in same dtype as input
+
+        Note:
+            The filter size is automatically determined by scipy based on sigma.
+            The implementation preserves the image edges by appropriate padding.
+        """
         return gaussian_filter(image, sigma=sigma) if sigma > 0 else image.copy()
 
     @staticmethod
     def apply_intensity_scaling(image: np.ndarray, min_percentile: float, max_percentile: float) -> tuple[np.ndarray, tuple[float, float]]:
-        """Apply intensity scaling based on percentiles"""
+        """Scale image intensities using percentile-based normalization.
+
+        Normalizes image intensities to [0, 1] range based on specified
+        percentiles. This is particularly useful for standardizing microscopy
+        images with varying intensity ranges or outliers.
+
+        Args:
+            image (np.ndarray): Input image to normalize
+            min_percentile (float): Lower percentile for scaling (0-100)
+            max_percentile (float): Upper percentile for scaling (0-100)
+                Values should satisfy: 0 <= min_percentile < max_percentile <= 100
+
+        Returns:
+            tuple[np.ndarray, tuple[float, float]]: Tuple containing:
+                - Normalized image with values in [0, 1]
+                - Tuple of (min_val, max_val) used for scaling
+
+        Note:
+            Values below min_percentile or above max_percentile are clipped.
+            This is useful for removing intensity outliers while preserving
+            the relative intensities of the majority of pixels.
+        """
         min_val = np.percentile(image, min_percentile)
         max_val = np.percentile(image, max_percentile)
         processed = np.clip(image, min_val, max_val)
@@ -63,7 +134,30 @@ class ImageProcessor:
 
     @staticmethod
     def register_to_reference(moving_image: np.ndarray, reference_image: np.ndarray, mode: str) -> tuple[np.ndarray, np.ndarray]:
-        """Register moving image to reference image"""
+        """Register a moving image to a reference image using OpenCV.
+
+        Performs image registration using Enhanced Correlation Coefficient (ECC)
+        maximization. Supports both translation-only and rigid (translation +
+        rotation) registration modes.
+
+        Args:
+            moving_image (np.ndarray): Image to be registered
+            reference_image (np.ndarray): Reference image to register against
+            mode (str): Registration mode, one of:
+                - 'translation': Translation only (x, y shifts)
+                - 'rigid': Translation and rotation
+                Both images should be 2D arrays of the same shape
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: Tuple containing:
+                - Registered image in same dtype as input
+                - 2x3 transformation matrix
+
+        Note:
+            The implementation automatically handles intensity normalization
+            for registration. If registration fails, returns the original
+            image and an identity transformation matrix.
+        """
         # Convert images to 8-bit for registration
         moving_norm = ((moving_image - moving_image.min()) * 255 /
                        (moving_image.max() - moving_image.min())).astype(np.uint8)

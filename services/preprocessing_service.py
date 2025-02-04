@@ -9,17 +9,67 @@ from backend.preprocessing import ImageProcessor
 
 @dataclass
 class PreprocessingIntermediateResult:
-    """Results from preprocessing operations"""
+    """Results from preprocessing operations on microscopy images.
+
+    Attributes:
+        processed_image (np.ndarray): Preprocessed image data
+        transform_matrix (np.ndarray, optional): Registration transformation matrix
+            2x3 matrix describing the spatial transform if registration was performed
+        info (Dict[str, Any]): Processing metadata including:
+            - original_dtype: Original data type
+            - original_range: (min, max) of original data
+            - original_mean: Mean of original data
+            - original_std: Standard deviation of original data
+            - final_mean: Mean after processing
+            - final_std: Standard deviation after processing
+            - intensity_range: (min, max) used for scaling
+            - gaussian_sigma: Applied Gaussian smoothing sigma
+            - rolling_ball_radius: Applied background correction radius
+    """
     processed_image: np.ndarray
     transform_matrix: Optional[np.ndarray] = None
     info: Dict[str, Any] = None
 
 
 class PreprocessingService:
-    """Service layer for image preprocessing operations"""
+    """Service layer for microscopy image preprocessing operations.
+
+    This class provides a high-level interface for preprocessing microscopy
+    images, handling parameter validation, processing workflows, and result
+    tracking. It supports both single-frame and time series processing,
+    with separate parameters for cell and bead/reference images.
+
+    The service implements a complete preprocessing pipeline including:
+    - Background correction using rolling ball algorithm
+    - Gaussian smoothing for noise reduction
+    - Intensity normalization using percentile-based scaling
+    - Image registration to a reference frame
+    """
+
 
     def __init__(self, params: PreprocessingParameters):
-        """Initialize with required parameters"""
+        """Initialize preprocessing service with analysis parameters.
+
+        Args:
+            params (PreprocessingParameters): Configuration including:
+                - Intensity scaling parameters (percentiles)
+                - Gaussian smoothing parameters (sigma)
+                - Rolling ball background correction radius
+                - Registration mode and parameters
+                Separate parameters are maintained for cell vs. bead images
+
+        Raises:
+            ValueError: If any parameters are invalid
+
+        Example:
+            >>> params = PreprocessingParameters(
+            ...     min_intensity_percentile=1,
+            ...     max_intensity_percentile=99,
+            ...     gaussian_sigma=1.0,
+            ...     rolling_ball_radius=50
+            ... )
+            >>> service = PreprocessingService(params)
+        """
         is_valid, error_msg = self.validate_parameters(params)
         if not is_valid:
             raise ValueError(error_msg)
@@ -28,7 +78,17 @@ class PreprocessingService:
         self._processor = ImageProcessor()
 
     def update_parameters(self, parameters: PreprocessingParameters):
-        """Update preprocessing parameters"""
+        """Update preprocessing parameters.
+
+        Creates a new processor instance with the updated parameters after
+        validating them.
+
+        Args:
+            parameters (PreprocessingParameters): New parameters to use
+
+        Raises:
+            ValueError: If any parameters are invalid
+        """
         is_valid, error_msg = self.validate_parameters(parameters)
         if not is_valid:
             raise ValueError(error_msg)
@@ -36,7 +96,26 @@ class PreprocessingService:
 
     @staticmethod
     def validate_parameters(params: PreprocessingParameters) -> Tuple[bool, str]:
-        """Validate preprocessing parameters."""
+        """Validate preprocessing parameters.
+
+        Checks all parameters for physical and numerical validity including:
+        - Intensity scaling ranges
+        - Filter parameters
+        - Registration settings
+
+        Args:
+            params (PreprocessingParameters): Parameters to validate
+
+        Returns:
+            Tuple[bool, str]: (is_valid, error_message)
+                error_message is empty string if valid
+
+        Note:
+            Specific validation rules include:
+            - Percentiles must be in valid ranges
+            - Sigmas must be non-negative
+            - Registration mode must be supported
+        """
         if not 0 <= params.min_intensity_percentile < params.max_intensity_percentile <= 100:
             return False, "Invalid intensity percentile range"
 
@@ -56,7 +135,20 @@ class PreprocessingService:
 
     @staticmethod
     def validate_image(image: np.ndarray) -> Tuple[bool, str]:
-        """Validate input image data."""
+        """Validate input image data for preprocessing.
+
+        Checks that image data is suitable for preprocessing:
+        - Correct data type (numpy array)
+        - Valid dimensions (2D or 3D for time series)
+        - Contains valid values (not all NaN)
+
+        Args:
+            image (np.ndarray): Image data to validate
+
+        Returns:
+            Tuple[bool, str]: (is_valid, error_message)
+                error_message is empty string if valid
+        """
         if image is None:
             return False, "No image data provided"
 
@@ -73,7 +165,29 @@ class PreprocessingService:
 
     def preprocess_frame(self, image: np.ndarray, is_cell: bool = False,
                          reference_image: Optional[np.ndarray] = None) -> PreprocessingIntermediateResult:
-        """Preprocess a single image frame"""
+        """Preprocess a single microscopy image frame.
+
+        Applies the complete preprocessing pipeline to a single frame, with
+        different parameter sets for cell vs. bead/reference images.
+
+        Args:
+            image (np.ndarray): Input image to process
+            is_cell (bool): Whether the image contains cells (affects parameters)
+            reference_image (np.ndarray, optional): Reference for registration
+
+        Returns:
+            PreprocessingIntermediateResult: Complete processing results including:
+                - Processed image
+                - Registration transform (if applicable)
+                - Processing metadata
+
+        Note:
+            The processing pipeline includes:
+            1. Rolling ball background correction (except for cell images)
+            2. Gaussian smoothing
+            3. Intensity scaling
+            4. Registration (if reference provided)
+        """
         info = {
             'original_dtype': image.dtype,
             'original_range': (float(image.min()), float(image.max())),
@@ -126,7 +240,43 @@ class PreprocessingService:
             reference_image: Optional[np.ndarray] = None,
             is_cell: bool = False
     ) -> Generator[Tuple[PreprocessingIntermediateResult, int, int], None, List[PreprocessingIntermediateResult]]:
-        """Process an image stack, yielding progress updates"""
+        """Process an image stack with progress tracking.
+
+        Applies preprocessing pipeline to a stack of images (time series),
+        yielding intermediate results for progress monitoring. Supports both
+        cell and bead/reference image processing with appropriate parameters.
+
+        Args:
+            image_stack (np.ndarray, optional): Stack of images to process
+                Shape should be (t, y, x) for time series or (y, x) for single frame
+            reference_image (np.ndarray, optional): Reference for registration
+            is_cell (bool): Whether images contain cells (affects parameters)
+
+        Yields:
+            Tuple[PreprocessingIntermediateResult, int, int]: Tuple containing:
+                - Current frame's preprocessing results
+                - Frame index (1-based)
+                - Total number of frames
+            Yielded after each frame is processed
+
+        Returns:
+            List[PreprocessingIntermediateResult]: Complete results for all frames
+                Accessible via StopIteration.value when generator completes
+
+        Example:
+            >>> # Get the generator
+            >>> prep_generator = service.preprocess_stack(image_stack)
+            >>>
+            >>> # Process intermediate results
+            >>> try:
+            ...     while True:
+            ...         # Get next frame result
+            ...         result, frame, total = next(prep_generator)
+            ...         print(f"Processed frame {frame}/{total}")
+            ... except StopIteration as e:
+            ...     # Get final results from generator's return value
+            ...     final_results = e.value
+        """
         if image_stack is None:
             return []
 
