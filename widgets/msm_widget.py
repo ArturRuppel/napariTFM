@@ -20,11 +20,9 @@ from services.msm_service import MSMService, MSMResult
 from utilities.visualization_manager import VisualizationManager
 
 
-# TODO spinboxes should be initialized with default values from parameter manager
 # TODO reimplement mask preview
 # TODO make preview current frame run in seperate thread
 # TODO layer visibility (only sigma_xx after calculations)
-# TODO verify parameter synching
 # TODO test in all widgets whether or not loading external data updates params
 # TODO image layer should stay activated when creating several mask stacks in a row
 
@@ -128,7 +126,7 @@ class MSMParameterPanel(QWidget):
 
         # Algorithm selector
         algo_layout = QHBoxLayout()
-        algo_layout.addWidget(QLabel("Algorithm:"))
+        algo_layout.addWidget(QLabel("Mesh Algorithm:"))
         algo_combo = QComboBox()
         algo_combo.addItems(self.MESH_ALGORITHMS.keys())
         self.parameter_widgets["mesh_algorithm"] = algo_combo
@@ -137,7 +135,7 @@ class MSMParameterPanel(QWidget):
 
         # Optimization checkbox
         opt_layout = QHBoxLayout()
-        opt_check = QCheckBox("Use Optimization")
+        opt_check = QCheckBox("Mesh Optimization")
         opt_check.setChecked(True)
         self.parameter_widgets["use_optimization"] = opt_check
         opt_layout.addWidget(opt_check)
@@ -235,9 +233,9 @@ class MSMParameterPanel(QWidget):
         layout = QVBoxLayout()
 
         params = [
-            ("threshold", "Threshold:", 0, 100, 0.1, 0),
-            ("dilation", "Dilation (px):", 0, 50, 1, 10),
-            ("smoothing_sigma", "Smoothing:", 0, 40, 0.1, 10),
+            ("threshold", "Threshold Percentile (%):", 0, 100, 0.1, 0),
+            ("dilation", "Mask Dilation (px):", 0, 50, 1, 10),
+            ("smoothing_sigma", "Boundary Smoothing:", 0, 40, 0.1, 10),
         ]
 
         for name, label, min_val, max_val, step, default in params:
