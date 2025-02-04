@@ -16,7 +16,7 @@ from services.displacement_service import DisplacementService, DisplacementResul
 from services.fttc_service import FTTCService, FTTCResult
 from services.msm_service import MSMService
 from services.preprocessing_service import PreprocessingService
-
+# TODO black image when only one frame for cell-force overlay visualization
 class TeeLogger:
     """Custom logger that captures print statements and logging output to both console and file."""
 

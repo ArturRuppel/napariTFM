@@ -21,7 +21,6 @@ from utilities.visualization_manager import VisualizationManager
 
 
 # TODO make preview current frame run in seperate thread
-# TODO layer visibility (only sigma_xx after calculations)
 # TODO add tooltips
 
 def _is_valid_image_layer(layer) -> bool:
@@ -935,6 +934,41 @@ class MSMController(QObject):
                 # Update visualization with all frames
                 self.visualization_manager.visualize_stress_results()
 
+                # Manage layer visibility and ordering
+                xx_layer = None
+                yy_layer = None
+                avg_layer = None
+
+                # First pass: find the stress layers and disable all others
+                for layer in self.viewer.layers:
+                    if layer.name == 'Normal Stress XX':
+                        xx_layer = layer
+                        layer.visible = False
+                    elif layer.name == 'Normal Stress YY':
+                        yy_layer = layer
+                        layer.visible = False
+                    elif layer.name == 'Average Normal Stress':
+                        avg_layer = layer
+                        layer.visible = True
+                    else:
+                        layer.visible = False
+
+                # Second pass: reorder layers
+                if xx_layer is not None:
+                    current_index = self.viewer.layers.index(xx_layer)
+                    if current_index != len(self.viewer.layers) - 3:  # -3 position
+                        self.viewer.layers.move(current_index, -3)
+
+                if yy_layer is not None:
+                    current_index = self.viewer.layers.index(yy_layer)
+                    if current_index != len(self.viewer.layers) - 2:  # -2 position
+                        self.viewer.layers.move(current_index, -2)
+
+                if avg_layer is not None:
+                    current_index = self.viewer.layers.index(avg_layer)
+                    if current_index != len(self.viewer.layers) - 1:  # -1 position (top)
+                        self.viewer.layers.move(current_index, -1)
+
                 # Update status with final metrics
                 status_msg = (
                     f"Analysis completed successfully\n"
@@ -1018,6 +1052,41 @@ class MSMController(QObject):
                     max_stress=params.max_stress,
                     downscale_factor=force_results.parameters.downscale_factor
                 )
+
+                # Manage layer visibility and ordering
+                xx_layer = None
+                yy_layer = None
+                avg_layer = None
+
+                # First pass: find the stress layers and disable all others
+                for layer in self.viewer.layers:
+                    if layer.name == 'Normal Stress XX':
+                        xx_layer = layer
+                        layer.visible = False
+                    elif layer.name == 'Normal Stress YY':
+                        yy_layer = layer
+                        layer.visible = False
+                    elif layer.name == 'Average Normal Stress':
+                        avg_layer = layer
+                        layer.visible = True
+                    else:
+                        layer.visible = False
+
+                # Second pass: reorder layers
+                if xx_layer is not None:
+                    current_index = self.viewer.layers.index(xx_layer)
+                    if current_index != len(self.viewer.layers) - 3:  # -3 position
+                        self.viewer.layers.move(current_index, -3)
+
+                if yy_layer is not None:
+                    current_index = self.viewer.layers.index(yy_layer)
+                    if current_index != len(self.viewer.layers) - 2:  # -2 position
+                        self.viewer.layers.move(current_index, -2)
+
+                if avg_layer is not None:
+                    current_index = self.viewer.layers.index(avg_layer)
+                    if current_index != len(self.viewer.layers) - 1:  # -1 position (top)
+                        self.viewer.layers.move(current_index, -1)
 
                 # Create status message with key metrics
                 status_msg = (
@@ -1144,19 +1213,15 @@ class MSMController(QObject):
                 # Load data
                 results = np.load(load_path, allow_pickle=True).item()
 
-                # Update parameters if they exist in the results
+                # Update parameters if they exist in the loaded data
                 if hasattr(results, 'parameters'):
-                    # Block parameter change signals temporarily
                     if self.parameter_panel:
                         self.parameter_panel._block_widgets(True)
                     try:
-                        # Update parameter manager with loaded parameters
                         params = results.parameters
                         for param_name, value in vars(params).items():
-                            if param_name != '_sa_instance_state' and param_name != "young_modulus":  # Skip SQLAlchemy state
+                            if param_name != '_sa_instance_state':
                                 self.parameter_manager.set_parameter(param_name, value)
-
-                        # Sync UI with new parameters
                         if self.parameter_panel:
                             self.parameter_panel._sync_widget_with_parameters()
                     finally:
@@ -1167,23 +1232,40 @@ class MSMController(QObject):
                 self.data_manager.set_stress_results(results)
                 self.visualization_manager.visualize_stress_results()
 
-                # First pass: find the stress layer and disable all others
+                # Manage layer visibility and ordering
+                xx_layer = None
+                yy_layer = None
+                avg_layer = None
+
+                # First pass: find the stress layers and disable all others
                 for layer in self.viewer.layers:
-                    if layer.name == 'Average Normal Stress':
+                    if layer.name == 'Normal Stress XX':
+                        xx_layer = layer
+                        layer.visible = False
+                    elif layer.name == 'Normal Stress YY':
+                        yy_layer = layer
+                        layer.visible = False
+                    elif layer.name == 'Average Normal Stress':
+                        avg_layer = layer
                         layer.visible = True
                     else:
                         layer.visible = False
 
-                # Move stress layers to top if they exist
-                for layer_name in ['Normal Stress XX', 'Normal Stress YY', 'Average Normal Stress']:
-                    layer = next((layer for layer in self.viewer.layers if layer.name == layer_name), None)
-                    if layer is not None:
-                        current_index = self.viewer.layers.index(layer)
-                        # Keep XX and YY below Average
-                        if layer_name == 'Average Normal Stress':
-                            self.viewer.layers.move(current_index, -1)
-                        else:
-                            self.viewer.layers.move(current_index, -2)
+                # Second pass: reorder layers
+                if xx_layer is not None:
+                    current_index = self.viewer.layers.index(xx_layer)
+                    if current_index != len(self.viewer.layers) - 3:  # -3 position
+                        self.viewer.layers.move(current_index, -3)
+
+                if yy_layer is not None:
+                    current_index = self.viewer.layers.index(yy_layer)
+                    if current_index != len(self.viewer.layers) - 2:  # -2 position
+                        self.viewer.layers.move(current_index, -2)
+
+                if avg_layer is not None:
+                    current_index = self.viewer.layers.index(avg_layer)
+                    if current_index != len(self.viewer.layers) - 1:  # -1 position (top)
+                        self.viewer.layers.move(current_index, -1)
 
                 self.progress_updated.emit(100, f"Results and parameters loaded from {load_path}")
                 self.analysis_completed.emit(results)
