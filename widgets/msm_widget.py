@@ -49,12 +49,12 @@ class MSMParameterPanel(QWidget):
     parameter_value_changed = Signal(str, object)
 
     MESH_ALGORITHMS = {
-        "Frontal-Del.": "frontal-del",
-        "Delaunay": "delaunay",
-        "MeshAdapt": "meshadapt",
-        "BAMG": "bamg",
-        "FD Quads": "fd quads",
-        "Para. Pack": "para pack"
+        "Frontal-Del.": "Frontal-Del.",
+        "Delaunay": "Delaunay",
+        "MeshAdapt": "MeshAdapt",
+        "BAMG": "BAMG",
+        "FD Quads": "FD Quads",
+        "Para. Pack": "Para. Pack"
     }
 
     def __init__(self, parameter_manager):
@@ -74,7 +74,20 @@ class MSMParameterPanel(QWidget):
     def _sync_parameter(self, param_name: str, value: Any):
         """Sync a single parameter from parameter manager."""
         if param_name in self.parameter_widgets:
-            self._safe_set_value(self.parameter_widgets[param_name], value)
+            widget = self.parameter_widgets[param_name]
+            widget.blockSignals(True)
+            try:
+                if isinstance(widget, QComboBox) and param_name == 'mesh_algorithm':
+                    # Direct match since we've updated the algorithm values to match
+                    index = widget.findText(value)
+                    if index >= 0:
+                        widget.setCurrentIndex(index)
+                elif isinstance(widget, QCheckBox):
+                    widget.setChecked(bool(value))
+                else:  # SpinBox cases
+                    widget.setValue(value)
+            finally:
+                widget.blockSignals(False)
 
     def _safe_set_value(self, widget, value):
         """Safely set widget value."""
@@ -117,7 +130,6 @@ class MSMParameterPanel(QWidget):
         for widget in self.parameter_widgets.values():
             widget.blockSignals(block)
 
-
     def _setup_ui(self):
         layout = QVBoxLayout()
 
@@ -137,18 +149,17 @@ class MSMParameterPanel(QWidget):
     def _create_parameter_widget(self, name: str, label: str,
                                  min_val: float, max_val: float,
                                  step: float, default: float) -> QHBoxLayout:
-        """Create a parameter widget with label and input."""
         layout = QHBoxLayout()
         layout.addWidget(QLabel(label))
 
-        if isinstance(step, int):
+        if name == "dilation":  # Special case for integer parameter
             spin = QSpinBox()
         else:
             spin = QDoubleSpinBox()
             if name == "density_factor":
                 spin.setDecimals(3)
             else:
-                spin.setDecimals(2)
+                spin.setDecimals(1)  # Set to 1 decimal place for threshold and smoothing_sigma
 
         spin.setRange(min_val, max_val)
         spin.setSingleStep(step)
@@ -165,7 +176,7 @@ class MSMParameterPanel(QWidget):
         layout = QVBoxLayout()
 
         params = [
-            ("threshold", "Threshold:", 0, 100, 1, 0),
+            ("threshold", "Threshold:", 0, 100, 0.1, 0),
             ("dilation", "Dilation (px):", 0, 50, 1, 10),
             ("smoothing_sigma", "Smoothing:", 0, 40, 0.1, 10),
         ]

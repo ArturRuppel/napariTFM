@@ -491,11 +491,11 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         # Mask parameters
         mask_params = [
-            ("threshold", "Threshold Percentile (%):", 0, 100, 0.1,
+            ("threshold", "Threshold Percentile (%):", 0, 100, 0.1,  # Changed step to 0.1 to match float type
              "Intensity percentile threshold for cell mask generation. Higher values create more restrictive masks."),
-            ("dilation", "Mask Dilation (px):", 0, 50, 1,
+            ("dilation", "Mask Dilation (px):", 0, 50, 1,  # Keep as integer
              "Number of pixels to expand the cell mask. Helps include cell edges and compensate for thresholding."),
-            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1,
+            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1,  # Changed to match float type
              "Gaussian smoothing sigma for mask boundary. Higher values create smoother cell boundaries.")
         ]
 
