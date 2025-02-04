@@ -1,6 +1,6 @@
 from numba import njit
 import numpy as np
-@njit(cache=True)
+@njit(cache=False)
 def calculate_2x2_inv(U):
     """Calculates inverse of 2x2 matrix"""
     U_inv = np.empty((2, 2), dtype=np.complex128)
@@ -12,7 +12,7 @@ def calculate_2x2_inv(U):
     U_inv[1, 1] = invdetU * U[0, 0]
     return U_inv
 
-@njit(cache=True)
+@njit(cache=False)
 def blkmul_adj(mat: np.ndarray, v: np.ndarray) -> np.ndarray:
     """Calculate (mat.H) @ v"""
     a, b, c = mat.shape
@@ -27,7 +27,7 @@ def blkmul_adj(mat: np.ndarray, v: np.ndarray) -> np.ndarray:
         out[i * c:i * c + c] = MT @ v[i * b:i * b + b]
     return out
 
-@njit(cache=True)
+@njit(cache=False)
 def calculate_traction_2d(FtGmn, L):
     """Calculates Tikhonov regularized inverse of FTGmn"""
     M = len(FtGmn[0, 0])

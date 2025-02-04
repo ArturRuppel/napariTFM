@@ -64,6 +64,60 @@ class MSMParameterPanel(QWidget):
         self._setup_ui()
         self._connect_signals()
 
+        # Connect to parameter manager signals
+        self.parameter_manager.parameter_changed.connect(self._sync_parameter)
+        self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
+
+        # Initial sync with parameter manager
+        self._sync_widget_with_parameters()
+
+    def _sync_parameter(self, param_name: str, value: Any):
+        """Sync a single parameter from parameter manager."""
+        if param_name in self.parameter_widgets:
+            self._safe_set_value(self.parameter_widgets[param_name], value)
+
+    def _safe_set_value(self, widget, value):
+        """Safely set widget value."""
+        if value is not None and widget is not None:
+            widget.blockSignals(True)
+            try:
+                if isinstance(widget, QComboBox):
+                    # Handle mesh algorithm combo box
+                    for display_name, internal_name in self.MESH_ALGORITHMS.items():
+                        if internal_name == value:
+                            widget.setCurrentText(display_name)
+                            break
+                elif isinstance(widget, QCheckBox):
+                    widget.setChecked(bool(value))
+                else:  # SpinBox cases
+                    value = max(widget.minimum(), min(widget.maximum(), value))
+                    widget.setValue(value)
+            except Exception as e:
+                print(f"Error setting widget value: {str(e)}")
+            widget.blockSignals(False)
+
+    def _sync_widget_with_parameters(self):
+        """Sync widget values with parameter manager."""
+        self._block_widgets(True)
+        try:
+            for name, widget in self.parameter_widgets.items():
+                value = self.parameter_manager.get_parameter(name)
+                if value is not None:
+                    self._safe_set_value(widget, value)
+        finally:
+            self._block_widgets(False)
+
+    def _on_parameters_reset(self, category):
+        """Handle parameter reset events."""
+        if category == ParameterCategory.STRESS:
+            self._sync_widget_with_parameters()
+
+    def _block_widgets(self, block: bool):
+        """Block or unblock all widget signals."""
+        for widget in self.parameter_widgets.values():
+            widget.blockSignals(block)
+
+
     def _setup_ui(self):
         layout = QVBoxLayout()
 
@@ -222,28 +276,6 @@ class MSMParameterPanel(QWidget):
             elif isinstance(widget, QCheckBox):
                 widget.setChecked(value)
             widget.blockSignals(False)
-
-    def _block_widgets(self, block: bool):
-        """Block or unblock all widget signals."""
-        for widget in self.parameter_widgets.values():
-            widget.blockSignals(block)
-
-    def _sync_widget_with_parameters(self):
-        """Sync widget values with parameter manager."""
-        for name, widget in self.parameter_widgets.items():
-            value = self.parameter_manager.get_parameter(name)
-            if value is not None:
-                widget.blockSignals(True)
-                if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
-                    widget.setValue(value)
-                elif isinstance(widget, QComboBox):
-                    for display_name, internal_name in self.MESH_ALGORITHMS.items():
-                        if internal_name == value:
-                            widget.setCurrentText(display_name)
-                            break
-                elif isinstance(widget, QCheckBox):
-                    widget.setChecked(value)
-                widget.blockSignals(False)
 
 
 class MSMDataPanel(QWidget):
