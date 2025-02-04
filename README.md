@@ -14,15 +14,18 @@
 
 ## Introduction
 
-napariTFM is a comprehensive tool for Traction Force Microscopy (TFM) analysis, built as a plugin for the napari image viewer. It enables researchers to analyze cell-generated forces by processing microscopy images of cells on deformable substrates.
+napariTFM is a comprehensive tool for Traction Force Microscopy (TFM) analysis, built as a plugin for the napari image viewer. It provides a complete analysis pipeline for investigating cell-generated forces through displacement field measurements, traction force reconstruction, and Monolayer Stress Microscopy (MSM).
+
+The software combines established TFM algorithms with napari's visualization capabilities to enable systematic analysis of cell-substrate interactions. It supports both single-frame and time series analysis, making it suitable for studying various experimental setups from individual cells to cell monolayers.
 
 ### Key Features
 - Complete TFM analysis pipeline from preprocessing to stress calculation
+- Monolayer Stress Microscopy (MSM) for internal stress analysis
 - Interactive visualization of results
-- Support for both single experiments and batch processing
-- Integration with napari's powerful image viewing capabilities
+- Support for both single images and time series data
+- Integration with napari's image viewing capabilities
 - Customizable analysis parameters
-- Results export in standard formats
+- Results export for further analysis
 
 ## Installation
 
@@ -36,22 +39,23 @@ pip install napari-tfm
 
 ### Required Data
 To perform TFM analysis, you need:
-- Bead images (time series)
+- Bead images (single image or time series)
 - Reference image (relaxed state)
 - Cell images (optional, for stress analysis)
 
 ### Data Format
-- Images should be grayscale
+- Images should be grayscale TIFF format
 - Time series should be 3D stacks (time, height, width)
 - Single images should be 2D (height, width)
-- Supported formats: TIFF, TIF, PNG, JPG
+- Both single-frame and time series analysis are supported
+
 
 ## Module Overview
 
 napariTFM consists of four main analysis modules:
 
 1. **Preprocessing**: Image enhancement and registration
-2. **Displacement Analysis**: Bead tracking and displacement field calculation
+2. **Displacement Analysis**: Displacement field measurement
 3. **Force Calculation**: Traction force computation using FTTC
 4. **Stress Analysis**: Internal stress field calculation using MSM
 
@@ -90,33 +94,126 @@ Prepare raw microscopy images for analysis by:
 - Use preview to fine-tune settings
 - Save preprocessed data for later use
 
+[previous sections remain the same...]
+
 ## Displacement Analysis
 
 ### Purpose
-Calculate displacement fields from bead movements using optical flow algorithms.
+Calculate displacement fields from bead movements using optical flow algorithms. The analysis determines how fluorescent beads embedded in the substrate move between a reference state (relaxed) and subsequent images (deformed), providing a quantitative measure of substrate deformation.
 
-### Steps
-1. Load preprocessed data:
-   - Either continue from preprocessing or
-   - Load previously saved preprocessed data
+### Technical Background
+#### Optical Flow Algorithm
+napariTFM uses the TV-L1 optical flow algorithm, which is particularly well-suited for TFM analysis because it:
+- Handles steep gradients in displacement fields effectively
+- Handles large displacements through multi-scale analysis
+- Provides sub-pixel accuracy
+- Is robust to intensity variations
 
-2. Configure Parameters:
-   - Basic Parameters:
-     - Lambda: Smoothness weight (0.01-1.0)
-   - Advanced Parameters:
-     - Pyramid Scales: For large displacements
-     - Warps: Iteration count
-     - Other flow parameters
+The algorithm works by:
+1. Minimizing an energy functional that combines:
+   - Brightness constancy assumption (beads maintain intensity)
+   - Total variation regularization (smooth displacement fields)
+   - Additional constraints for numerical stability
 
-3. Analysis:
+2. Using a multi-scale pyramid approach:
+   - Images are analyzed at different resolution levels
+   - Large displacements are captured at coarse scales
+   - Fine details are refined at higher resolutions
+
+### Parameters
+
+#### Basic Parameters
+- **Lambda (λ)**: Controls the balance between data fitting and smoothness
+  - Lower values (0.01-0.1): More smoothing, good for noisy data and small displacements
+  - Higher values (0.1-1.0): Less smoothing, better for clear bead images and larger displacements
+  - Default: 0.1
+
+#### Advanced Parameters
+- **Pyramid Scales**
+  - Number of resolution levels
+  - More scales handle larger displacements
+  - Typical range: 3-5 for standard TFM data
+
+- **Warps**
+  - Number of iterative refinements per scale
+  - More warps increase accuracy for large displacements
+  - Typical range: 3-5
+
+- **Epsilon**
+  - Stopping criterion for optimization
+  - Smaller values give more precise results but increase computation time
+  - Default: 0.01
+
+- **Scale Step**
+  - Factor between pyramid levels (0.5-0.8)
+  - Smaller values create more intermediate scales
+  - Example: 0.5 means each level is half the size of the previous
+
+#### Visualization Parameters
+- **Vector Stride**: Display every nth vector
+- **Arrow Scale**: Adjust vector arrow size
+- **Maximum Displacement**: Color scale limit in μm
+
+### Analysis Steps
+
+1. **Preparation**
+   - Ensure preprocessed bead images are loaded
+   - Verify reference image is set
+
+2. **Parameter Adjustment**
+   - Start with default parameters
    - Use "Preview Current Frame" to test settings
-   - "Calculate All Frames" for full analysis
-   - Save results for force calculation
+   - Observe displacement field visualization
+   - Check displacement magnitude ranges
 
-### Tips
-- Start with preview to validate parameters
-- Increase scales for larger displacements
-- Monitor visualization quality
+3. **Quality Control**
+   - Verify displacement field smoothness
+   - Check for outliers or artifacts
+   - Ensure displacement magnitudes are physically reasonable
+   - Compare with raw bead movements visually
+
+4. **Full Analysis**
+   - Run "Calculate All Frames" for time series
+   - Monitor progress
+   - Review results frame by frame
+   - Save displacement data for force calculation
+
+### Tips for Optimal Results
+
+#### Image Quality
+- Good signal-to-noise ratio is crucial
+- Beads should be well-focused
+- Adequate bead density improves accuracy
+- Avoid saturated or very dim regions
+
+#### Parameter Selection
+1. Start with Default Parameters:
+   - Lambda = 0.1
+   - Pyramid scales = 4
+   - Warps = 3
+
+2. Adjust Based on Data:
+   - Increase scales for larger displacements
+   - Adjust lambda if result is too noisy or too smooth
+   - Fine-tune warps for accuracy
+
+3. Common Issues and Solutions:
+   - Noisy results: Decrease lambda, increase smoothing
+   - Missed displacements: Increase pyramid scales
+   - Artifacts: Check preprocessing, adjust parameters
+   - Slow processing: Reduce scales or warps
+
+#### Validation
+- Compare different parameter sets
+- Check consistency across frames
+- Verify displacement patterns match visual inspection
+- Consider using control regions for baseline noise
+
+### Data Export
+- Displacement fields saved as NumPy arrays
+- Units in micrometers
+- Format compatible with force calculation
+- Include metadata about analysis parameters
 
 ## Force Calculation
 
