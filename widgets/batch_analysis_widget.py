@@ -19,6 +19,7 @@ from backend.batch_analysis import BatchAnalysis
 from widgets._base_widget import BaseAnalysisWidget
 from utilities.parameter_manager import ParameterManager, ParameterCategory
 
+
 # TODO make text fields align on their left edge
 class BatchAnalysisWidget(BaseAnalysisWidget):
     """Widget for running batch analysis on multiple folders."""
@@ -114,13 +115,13 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             # Connect all spinboxes
             for name, spin in self.parameter_spins.items():
                 if isinstance(spin, tuple):
-                    continue  # Handle special cases separately if needed
+                    continue
 
                 # Create closure for the callback
                 def make_callback(name=name):
                     def callback(value):
                         if name == 'young_modulus':
-                            value = value * 1000  # Convert kPa to Pa
+                            value = value * 1000
                         elif name == 'regularization':
                             value = 10 ** value
                         elif name == 'gel_height' and value == 0:
@@ -131,33 +132,20 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
                 spin.valueChanged.connect(make_callback())
 
-                # Set initial value
-                try:
-                    value = self.parameter_manager.get_parameter(name)
-                    if name == 'young_modulus':
-                        value = value / 1000  # Convert Pa to kPa for display
-                    elif name == 'gel_height':
-                        value = 0 if value is None else value
-                    elif name == 'regularization':
-                        value = np.log10(value)
-                    self._safe_set_value(spin, value)
-                except KeyError:
-                    print(f"Warning: Parameter {name} not found")
-
             # Connect all comboboxes
             for name, combo in self.parameter_combos.items():
-                combo.currentTextChanged.connect(
-                    lambda text, name=name: self.parameter_manager.set_parameter(name, text)
-                )
-                if name == 'registration_mode':
+                if name == 'mesh_algorithm':
+                    combo.currentTextChanged.connect(
+                        lambda text: self.parameter_manager.set_parameter('mesh_algorithm', text)
+                    )
+                elif name == 'registration_mode':
                     combo.currentTextChanged.connect(
                         lambda text: self.parameter_manager.set_parameter('registration_mode', text.lower())
                     )
-                try:
-                    value = self.parameter_manager.get_parameter(name)
-                    self._safe_set_combo_text(combo, value)
-                except KeyError:
-                    print(f"Warning: Parameter {name} not found")
+                else:
+                    combo.currentTextChanged.connect(
+                        lambda text, name=name: self.parameter_manager.set_parameter(name, text)
+                    )
 
             # Connect all checkboxes
             for name, checkbox in self.parameter_checks.items():
@@ -166,11 +154,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                         name, state == Qt.Checked
                     )
                 )
-                try:
-                    value = self.parameter_manager.get_parameter(name)
-                    self._safe_set_checked(checkbox, value)
-                except KeyError:
-                    print(f"Warning: Parameter {name} not found")
 
         finally:
             self._block_parameter_widgets(False)
@@ -1037,7 +1020,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         """Sync widget values with parameter manager values."""
         self._block_parameter_widgets(True)
         try:
-            # Sync all parameters
+            # Sync spinboxes
             for name, spin in self.parameter_spins.items():
                 try:
                     value = self.parameter_manager.get_parameter(name)
@@ -1055,6 +1038,22 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                         self._safe_set_value(spin, value)
                 except Exception as e:
                     print(f"Error syncing parameter {name}: {str(e)}")
+
+            # Sync comboboxes
+            for name, combo in self.parameter_combos.items():
+                try:
+                    value = self.parameter_manager.get_parameter(name)
+                    self._safe_set_combo_text(combo, value)
+                except Exception as e:
+                    print(f"Error syncing combo {name}: {str(e)}")
+
+            # Sync checkboxes
+            for name, checkbox in self.parameter_checks.items():
+                try:
+                    value = self.parameter_manager.get_parameter(name)
+                    self._safe_set_checked(checkbox, value)
+                except Exception as e:
+                    print(f"Error syncing checkbox {name}: {str(e)}")
 
         finally:
             self._block_parameter_widgets(False)
@@ -1088,7 +1087,12 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
     def _on_parameter_changed(self, param_name: str, value: Any):
         """Handle parameter changes from parameter manager."""
         if not self.signalsBlocked():
-            self._sync_widget_with_parameters()
+            if param_name == 'mesh_algorithm':
+                combo = self.parameter_combos.get(param_name)
+                if combo is not None:
+                    self._safe_set_combo_text(combo, value)
+            else:
+                self._sync_widget_with_parameters()
 
     def _on_parameters_reset(self, category: ParameterCategory):
         """Handle parameter reset events."""
@@ -1108,15 +1112,12 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             widget.blockSignals(False)
 
     def _safe_set_combo_text(self, combo, text):
-        """Safely set combo box text with signal blocking and case-insensitive matching."""
+        """Safely set combo box text with signal blocking."""
         if combo is not None and text is not None:
             combo.blockSignals(True)
             try:
-                # Try exact match first
-                index = combo.findText(str(text), Qt.MatchFixedString)
-                if index < 0:
-                    # Try case-insensitive match
-                    index = combo.findText(str(text), Qt.MatchFixedString | Qt.MatchCaseInsensitive)
+                # For mesh_algorithm, use the text directly
+                index = combo.findText(text, Qt.MatchExactly)
                 if index >= 0:
                     combo.setCurrentIndex(index)
             finally:
@@ -1206,6 +1207,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                     )
 
                 self._update_ui_state()
+
     def _clear_folders(self):
         """Clear folder list."""
         self.folder_list.clear()

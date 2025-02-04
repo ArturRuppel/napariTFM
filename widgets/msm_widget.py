@@ -71,23 +71,80 @@ class MSMParameterPanel(QWidget):
         # Initial sync with parameter manager
         self._sync_widget_with_parameters()
 
+    def _connect_signals(self):
+        """Connect widget signals to parameter manager."""
+        for name, widget in self.parameter_widgets.items():
+            if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                widget.valueChanged.connect(
+                    lambda value, n=name: self._on_value_changed(n, value)
+                )
+            elif isinstance(widget, QComboBox):
+                # Direct connection for mesh algorithm
+                widget.currentTextChanged.connect(
+                    lambda text, n=name: self._on_value_changed(n, text)
+                )
+            elif isinstance(widget, QCheckBox):
+                widget.stateChanged.connect(
+                    lambda state, n=name: self._on_value_changed(n, bool(state))
+                )
+
+    def _on_value_changed(self, param_name: str, value: Any):
+        """Handle parameter value changes."""
+        self.parameter_manager.set_parameter(param_name, value)
+        self.parameter_value_changed.emit(param_name, value)
+        self.parameter_changed.emit()
+
     def _sync_parameter(self, param_name: str, value: Any):
         """Sync a single parameter from parameter manager."""
         if param_name in self.parameter_widgets:
             widget = self.parameter_widgets[param_name]
             widget.blockSignals(True)
             try:
-                if isinstance(widget, QComboBox) and param_name == 'mesh_algorithm':
-                    # Direct match since we've updated the algorithm values to match
+                if isinstance(widget, QComboBox):
+                    # Find and set the exact text value
                     index = widget.findText(value)
                     if index >= 0:
                         widget.setCurrentIndex(index)
                 elif isinstance(widget, QCheckBox):
                     widget.setChecked(bool(value))
                 else:  # SpinBox cases
+                    value = max(widget.minimum(), min(widget.maximum(), value))
                     widget.setValue(value)
+            except Exception as e:
+                print(f"Error setting widget value for {param_name}: {str(e)}")
             finally:
                 widget.blockSignals(False)
+
+    def _create_mesh_parameters(self) -> QGroupBox:
+        """Create mesh parameter group."""
+        group = QGroupBox("Mesh Parameters")
+        layout = QVBoxLayout()
+
+        # Density factor
+        density_layout = self._create_parameter_widget(
+            "density_factor", "Density Factor:", 0.005, 0.05, 0.001, 0.025
+        )
+        layout.addLayout(density_layout)
+
+        # Algorithm selector
+        algo_layout = QHBoxLayout()
+        algo_layout.addWidget(QLabel("Algorithm:"))
+        algo_combo = QComboBox()
+        algo_combo.addItems(self.MESH_ALGORITHMS.keys())
+        self.parameter_widgets["mesh_algorithm"] = algo_combo
+        algo_layout.addWidget(algo_combo)
+        layout.addLayout(algo_layout)
+
+        # Optimization checkbox
+        opt_layout = QHBoxLayout()
+        opt_check = QCheckBox("Use Optimization")
+        opt_check.setChecked(True)
+        self.parameter_widgets["use_optimization"] = opt_check
+        opt_layout.addWidget(opt_check)
+        layout.addLayout(opt_layout)
+
+        group.setLayout(layout)
+        return group
 
     def _safe_set_value(self, widget, value):
         """Safely set widget value."""
@@ -158,6 +215,8 @@ class MSMParameterPanel(QWidget):
             spin = QDoubleSpinBox()
             if name == "density_factor":
                 spin.setDecimals(3)
+            elif name == "poisson_ratio_cells":
+                spin.setDecimals(2)
             else:
                 spin.setDecimals(1)  # Set to 1 decimal place for threshold and smoothing_sigma
 
@@ -188,37 +247,6 @@ class MSMParameterPanel(QWidget):
         group.setLayout(layout)
         return group
 
-    def _create_mesh_parameters(self) -> QGroupBox:
-        """Create mesh parameter group."""
-        group = QGroupBox("Mesh Parameters")
-        layout = QVBoxLayout()
-
-        # Density factor
-        density_layout = self._create_parameter_widget(
-            "density_factor", "Density Factor:", 0.005, 0.05, 0.001, 0.025
-        )
-        layout.addLayout(density_layout)
-
-        # Algorithm selector
-        algo_layout = QHBoxLayout()
-        algo_layout.addWidget(QLabel("Algorithm:"))
-        algo_combo = QComboBox()
-        algo_combo.addItems(self.MESH_ALGORITHMS.keys())
-        self.parameter_widgets["mesh_algorithm"] = algo_combo
-        algo_layout.addWidget(algo_combo)
-        layout.addLayout(algo_layout)
-
-        # Optimization checkbox
-        opt_layout = QHBoxLayout()
-        opt_check = QCheckBox("Use Optimization")
-        opt_check.setChecked(True)
-        self.parameter_widgets["use_optimization"] = opt_check
-        opt_layout.addWidget(opt_check)
-        layout.addLayout(opt_layout)
-
-        group.setLayout(layout)
-        return group
-
     def _create_material_parameters(self) -> QGroupBox:
         """Create material parameter group."""
         group = QGroupBox("Material Parameters")
@@ -244,33 +272,6 @@ class MSMParameterPanel(QWidget):
 
         group.setLayout(layout)
         return group
-
-    def _connect_signals(self):
-        """Connect widget signals to parameter manager."""
-        for name, widget in self.parameter_widgets.items():
-            if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
-                widget.valueChanged.connect(
-                    lambda value, n=name: self._on_value_changed(n, value)
-                )
-            elif isinstance(widget, QComboBox):
-                widget.currentTextChanged.connect(
-                    lambda text, n=name: self._on_value_changed(
-                        n, self.MESH_ALGORITHMS[text]
-                    )
-                )
-            elif isinstance(widget, QCheckBox):
-                widget.stateChanged.connect(
-                    lambda state, n=name: self._on_value_changed(n, bool(state))
-                )
-
-        # Connect parameter manager changes back to widgets
-        self.parameter_manager.parameter_changed.connect(self._update_widget_value)
-
-    def _on_value_changed(self, param_name: str, value: Any):
-        """Handle parameter value changes."""
-        self.parameter_manager.set_parameter(param_name, value)
-        self.parameter_value_changed.emit(param_name, value)
-        self.parameter_changed.emit()
 
     def _update_widget_value(self, param_name: str, value: any):
         """Update widget when parameter changes externally."""
