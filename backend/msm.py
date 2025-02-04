@@ -45,7 +45,6 @@ from backend.mesh_generator import MeshGenerator
 from backend.msm_numba_functions import *
 
 
-
 def timer_decorator(func):
     @wraps(func)
     def wrapper(self, *args, **kwargs):
@@ -87,22 +86,51 @@ def timer_decorator(func):
 
     return wrapper
 
-# TODO make init accept MSMParameter dataclass
+
 class MonolayerStressMicroscopy:
-    def __init__(self, mask, density_factor=0.02, mesh_algorithm=2,
-                 use_optimization=False, poisson_ratio=0.5,
-                 young_modulus=1, nodes=None, elements=None):
-        """Initialize with optional pre-generated nodes/elements"""
+    def __init__(self, params, mask=None, nodes=None, elements=None):
+        """
+        Initialize MonolayerStressMicroscopy with either parameters dataclass or individual parameters.
+
+        Parameters
+        ----------
+        mask : np.ndarray, optional
+            Binary mask defining the cell monolayer region
+        params : MSMParameters, optional
+            Parameters dataclass containing all settings
+        nodes : np.ndarray, optional
+            Pre-generated mesh nodes
+        elements : np.ndarray, optional
+            Pre-generated mesh elements
+        """
+
+        # Initialize from MSMParameters dataclass
+        def _get_algorithm_code(algorithm_name: str) -> int:
+            """Convert algorithm name to corresponding code."""
+            algorithm_map = {
+                "frontal-del": 6,
+                "delaunay": 5,
+                "meshadapt": 1,
+                "bamg": 7,
+                "fd quads": 8,
+                "para pack": 9
+            }
+            normalized_name = algorithm_name.lower().replace(".", "").replace("-", " ")
+            return algorithm_map.get(normalized_name, 6)  # Default to Frontal-Delaunay
+
+        self.poisson_ratio = params.poisson_ratio_cells
+        self.E = params.young_modulus
+        self.density_factor = params.density_factor
+        self.mesh_algorithm = _get_algorithm_code(params.mesh_algorithm)
+        self.use_optimization = params.use_optimization
+
         self.mask = mask
-        self.poisson_ratio = poisson_ratio
-        self.E = young_modulus
-        self.timing_stats = {}
-        self._nested_calls = {}
-        self.density_factor = density_factor
-        self.mesh_algorithm = mesh_algorithm
-        self.use_optimization = use_optimization
         self.nodes = nodes
         self.elements = elements
+
+        # Initialize timing statistics
+        self.timing_stats = {}
+        self._nested_calls = {}
 
     @staticmethod
     def create_mask_from_image(image, threshold_percentile=0, dilation=10, smoothing_sigma=10.0):

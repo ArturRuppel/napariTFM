@@ -40,12 +40,8 @@ class MSMService:
             raise ValueError(error_msg)
 
         self.analyzer = MonolayerStressMicroscopy(
+            params,
             mask=None,  # Will be set during calculation
-            density_factor=params.density_factor,
-            mesh_algorithm=self._get_algorithm_code(params.mesh_algorithm),
-            use_optimization=params.use_optimization,
-            poisson_ratio=params.poisson_ratio_cells,
-            young_modulus=params.young_modulus
         )
         self.params = params
 
