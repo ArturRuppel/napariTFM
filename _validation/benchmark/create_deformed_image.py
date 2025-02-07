@@ -2,7 +2,7 @@ import tifffile
 import numpy as np
 from skimage.transform import warp
 
-pixelsize = 0.3
+pixelsize = 0.1
 
 reference = tifffile.imread("reference.tif")
 d_x = np.load("displacement_x.npy") / pixelsize

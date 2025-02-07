@@ -18,8 +18,6 @@ from utilities.parameter_manager import ParameterManager, ParameterCategory
 from services.displacement_service import DisplacementService, DisplacementResult
 from utilities.visualization_manager import VisualizationManager
 
-# TODO load displacement throws error
-
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""
 
