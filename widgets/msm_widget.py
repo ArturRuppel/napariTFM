@@ -20,9 +20,6 @@ from services.msm_service import MSMService, MSMResult
 from utilities.visualization_manager import VisualizationManager
 
 
-# TODO make preview current frame run in seperate thread
-# TODO add tooltips
-
 def _is_valid_image_layer(layer) -> bool:
     """Check if layer is valid for mask creation/loading."""
     # Check if layer exists and has data
@@ -65,6 +62,134 @@ class MSMParameterPanel(QWidget):
 
         # Initial sync with parameter manager
         self._sync_widget_with_parameters()
+
+    def _create_parameter_widget(self, name: str, label: str,
+                                 min_val: float, max_val: float,
+                                 step: float, default: float) -> QHBoxLayout:
+        layout = QHBoxLayout()
+        layout.addWidget(QLabel(label))
+
+        if name == "dilation":  # Special case for integer parameter
+            spin = QSpinBox()
+        else:
+            spin = QDoubleSpinBox()
+            if name == "density_factor":
+                spin.setDecimals(3)
+            elif name == "poisson_ratio_cells":
+                spin.setDecimals(2)
+            else:
+                spin.setDecimals(1)  # Set to 1 decimal place for threshold and smoothing_sigma
+
+        spin.setRange(min_val, max_val)
+        spin.setSingleStep(step)
+        spin.setValue(default)
+
+        # Add tooltips based on parameter name
+        tooltips = {
+            "threshold": "Percentile threshold for mask creation. Higher values create more restrictive masks, lower values include more area.",
+            "dilation": "Number of pixels to expand the mask boundary. Helps ensure coverage of force vectors near edges. Typical range: 5-15 pixels.",
+            "smoothing_sigma": "Gaussian smoothing factor for mask boundaries. Higher values create smoother boundaries.",
+            "density_factor": "Controls mesh density. Lower values create finer meshes with more elements and yield more accurate results at higher computational costs. Too fine meshes lead to numerical instabilities. Typical range: 0.005-0.03.",
+            "poisson_ratio_cells": "Poisson's ratio of the tissue. 0.5 represents an incompressible material. Range: 0-0.5.",
+            "max_stress": "Maximum stress value for color scale visualization. Adjust based on your expected stress range. Values above this will be saturated.",
+            "mesh_algorithm": "Method used for mesh generation. Frontal-Delaunay typically provides the best quality meshes for tissue stress calculations.",
+            "use_optimization": "When enabled, performs additional mesh optimization to improve element quality. Recommended for most analyses."
+        }
+
+        if name in tooltips:
+            spin.setToolTip(tooltips[name])
+
+        self.parameter_widgets[name] = spin
+        layout.addWidget(spin)
+
+        return layout
+
+    def _create_mesh_parameters(self) -> QGroupBox:
+        """Create mesh parameter group."""
+        group = QGroupBox("Mesh Parameters")
+        layout = QVBoxLayout()
+
+        # Density factor
+        density_layout = self._create_parameter_widget(
+            "density_factor", "Density Factor:", 0.005, 0.05, 0.001, 0.025
+        )
+        layout.addLayout(density_layout)
+
+        # Algorithm selector
+        algo_layout = QHBoxLayout()
+        algo_layout.addWidget(QLabel("Mesh Algorithm:"))
+        algo_combo = QComboBox()
+        algo_combo.addItems(self.MESH_ALGORITHMS.keys())
+        algo_combo.setToolTip("Method used for mesh generation. Frontal-Delaunay typically provides the best quality for tissue stress calculations.")
+        self.parameter_widgets["mesh_algorithm"] = algo_combo
+        algo_layout.addWidget(algo_combo)
+        layout.addLayout(algo_layout)
+
+        # Optimization checkbox
+        opt_layout = QHBoxLayout()
+        opt_check = QCheckBox("Mesh Optimization")
+        opt_check.setChecked(True)
+        opt_check.setToolTip("When enabled, performs additional mesh optimization to improve element quality. Recommended for most analyses.")
+        self.parameter_widgets["use_optimization"] = opt_check
+        opt_layout.addWidget(opt_check)
+        layout.addLayout(opt_layout)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_mask_parameters(self) -> QGroupBox:
+        """Create mask parameter group."""
+        group = QGroupBox("Mask Parameters")
+        layout = QVBoxLayout()
+
+        # Add existing parameters
+        params = [
+            ("threshold", "Threshold Percentile (%):", 0, 100, 0.1, 0),
+            ("dilation", "Mask Dilation (px):", 0, 50, 1, 10),
+            ("smoothing_sigma", "Boundary Smoothing:", 0, 40, 0.1, 10),
+        ]
+
+        for name, label, min_val, max_val, step, default in params:
+            widget = self._create_parameter_widget(name, label, min_val, max_val, step, default)
+            layout.addLayout(widget)
+
+        # Add preview checkbox with tooltip
+        preview_layout = QHBoxLayout()
+        preview_layout.addWidget(QLabel("Show Preview:"))
+        self.preview_checkbox = QCheckBox()
+        self.preview_checkbox.setChecked(False)
+        self.preview_checkbox.setToolTip("Enable live preview of mask creation with current parameters. Updates automatically when parameters change.")
+        preview_layout.addWidget(self.preview_checkbox)
+        layout.addLayout(preview_layout)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_material_parameters(self) -> QGroupBox:
+        """Create material parameter group."""
+        group = QGroupBox("Material Parameters")
+        layout = QVBoxLayout()
+
+        poisson_layout = self._create_parameter_widget(
+            "poisson_ratio_cells", "Poisson's Ratio:", 0, 0.5, 0.01, 0.5
+        )
+        layout.addLayout(poisson_layout)
+
+        group.setLayout(layout)
+        return group
+
+    def _create_visualization_parameters(self) -> QGroupBox:
+        """Create visualization parameter group."""
+        group = QGroupBox("Visualization Parameters")
+        layout = QVBoxLayout()
+
+        stress_layout = self._create_parameter_widget(
+            "max_stress", "Max Stress (mN/m):", 0.01, 1000, 0.1, 1.0
+        )
+        layout.addLayout(stress_layout)
+
+        group.setLayout(layout)
+        return group
 
     def _connect_signals(self):
         """Connect widget signals to parameter manager."""
@@ -109,37 +234,6 @@ class MSMParameterPanel(QWidget):
                 print(f"Error setting widget value for {param_name}: {str(e)}")
             finally:
                 widget.blockSignals(False)
-
-    def _create_mesh_parameters(self) -> QGroupBox:
-        """Create mesh parameter group."""
-        group = QGroupBox("Mesh Parameters")
-        layout = QVBoxLayout()
-
-        # Density factor
-        density_layout = self._create_parameter_widget(
-            "density_factor", "Density Factor:", 0.005, 0.05, 0.001, 0.025
-        )
-        layout.addLayout(density_layout)
-
-        # Algorithm selector
-        algo_layout = QHBoxLayout()
-        algo_layout.addWidget(QLabel("Mesh Algorithm:"))
-        algo_combo = QComboBox()
-        algo_combo.addItems(self.MESH_ALGORITHMS.keys())
-        self.parameter_widgets["mesh_algorithm"] = algo_combo
-        algo_layout.addWidget(algo_combo)
-        layout.addLayout(algo_layout)
-
-        # Optimization checkbox
-        opt_layout = QHBoxLayout()
-        opt_check = QCheckBox("Mesh Optimization")
-        opt_check.setChecked(True)
-        self.parameter_widgets["use_optimization"] = opt_check
-        opt_layout.addWidget(opt_check)
-        layout.addLayout(opt_layout)
-
-        group.setLayout(layout)
-        return group
 
     def _safe_set_value(self, widget, value):
         """Safely set widget value."""
@@ -197,85 +291,6 @@ class MSMParameterPanel(QWidget):
         """Disable/enable interactive elements in parameter panel"""
         for widget in self.parameter_widgets.values():
             widget.setEnabled(not freeze)
-
-    def _create_parameter_widget(self, name: str, label: str,
-                                 min_val: float, max_val: float,
-                                 step: float, default: float) -> QHBoxLayout:
-        layout = QHBoxLayout()
-        layout.addWidget(QLabel(label))
-
-        if name == "dilation":  # Special case for integer parameter
-            spin = QSpinBox()
-        else:
-            spin = QDoubleSpinBox()
-            if name == "density_factor":
-                spin.setDecimals(3)
-            elif name == "poisson_ratio_cells":
-                spin.setDecimals(2)
-            else:
-                spin.setDecimals(1)  # Set to 1 decimal place for threshold and smoothing_sigma
-
-        spin.setRange(min_val, max_val)
-        spin.setSingleStep(step)
-        spin.setValue(default)
-
-        self.parameter_widgets[name] = spin
-        layout.addWidget(spin)
-
-        return layout
-
-    def _create_mask_parameters(self) -> QGroupBox:
-        """Create mask parameter group."""
-        group = QGroupBox("Mask Parameters")
-        layout = QVBoxLayout()
-
-        # Add existing parameters
-        params = [
-            ("threshold", "Threshold Percentile (%):", 0, 100, 0.1, 0),
-            ("dilation", "Mask Dilation (px):", 0, 50, 1, 10),
-            ("smoothing_sigma", "Boundary Smoothing:", 0, 40, 0.1, 10),
-        ]
-
-        for name, label, min_val, max_val, step, default in params:
-            widget = self._create_parameter_widget(name, label, min_val, max_val, step, default)
-            layout.addLayout(widget)
-
-        # Add preview checkbox (not a parameter, just UI state)
-        preview_layout = QHBoxLayout()
-        preview_layout.addWidget(QLabel("Show Preview:"))
-        self.preview_checkbox = QCheckBox()
-        self.preview_checkbox.setChecked(False)
-        preview_layout.addWidget(self.preview_checkbox)
-        layout.addLayout(preview_layout)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_material_parameters(self) -> QGroupBox:
-        """Create material parameter group."""
-        group = QGroupBox("Material Parameters")
-        layout = QVBoxLayout()
-
-        poisson_layout = self._create_parameter_widget(
-            "poisson_ratio_cells", "Poisson's Ratio:", 0, 0.5, 0.01, 0.5
-        )
-        layout.addLayout(poisson_layout)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_visualization_parameters(self) -> QGroupBox:
-        """Create visualization parameter group."""
-        group = QGroupBox("Visualization Parameters")
-        layout = QVBoxLayout()
-
-        stress_layout = self._create_parameter_widget(
-            "max_stress", "Max Stress (mN/m):", 0.01, 1000, 0.1, 1.0
-        )
-        layout.addLayout(stress_layout)
-
-        group.setLayout(layout)
-        return group
 
     def _update_widget_value(self, param_name: str, value: any):
         """Update widget when parameter changes externally."""
@@ -821,6 +836,7 @@ class MSMController(QObject):
             # Remove preview layer if there's an error
             if 'Mask Preview' in self.viewer.layers:
                 self.viewer.layers.remove('Mask Preview')
+
     def _handle_preview_toggle(self, state):
         """Handle preview checkbox state changes."""
         # Store currently active layer
