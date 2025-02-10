@@ -11,12 +11,12 @@ from qtpy.QtWidgets import (
     QSizePolicy, QFrame, QProgressBar
 )
 
-from widgets._base_widget import BaseAnalysisWidget
-from utilities.colorbar import ColorbarManager
-from utilities.data_manager import DataManager
-from utilities.parameter_manager import ParameterManager, ParameterCategory
-from services.displacement_service import DisplacementService, DisplacementResult
-from utilities.visualization_manager import VisualizationManager
+from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.utilities.colorbar import ColorbarManager
+from napariTFM.utilities.data_manager import DataManager
+from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.services.displacement_service import DisplacementService, DisplacementResult
+from napariTFM.utilities.visualization_manager import VisualizationManager
 
 class DisplacementDataPanel(QWidget):
     """Panel for handling data loading and status display."""

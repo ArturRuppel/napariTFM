@@ -11,13 +11,13 @@ from qtpy.QtWidgets import (
 )
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
 
-from backend.parameter_dataclasses import MSMParameters
-from widgets._base_widget import BaseAnalysisWidget
-from utilities.colorbar import ColorbarManager
-from utilities.data_manager import DataManager
-from utilities.parameter_manager import ParameterManager, ParameterCategory
-from services.msm_service import MSMService, MSMResult
-from utilities.visualization_manager import VisualizationManager
+from napariTFM.backend.parameter_dataclasses import MSMParameters
+from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.utilities.colorbar import ColorbarManager
+from napariTFM.utilities.data_manager import DataManager
+from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.services.msm_service import MSMService, MSMResult
+from napariTFM.utilities.visualization_manager import VisualizationManager
 
 
 def _is_valid_image_layer(layer) -> bool:

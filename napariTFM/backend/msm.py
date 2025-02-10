@@ -43,9 +43,9 @@ from scipy.sparse.linalg import lsqr
 from skimage.measure import regionprops
 from skimage.transform import resize
 
-from backend.mesh_generator import MeshGenerator
-from backend.msm_numba_functions import *
-from backend.parameter_dataclasses import MeshParameters
+from napariTFM.backend.mesh_generator import MeshGenerator
+from napariTFM.backend.msm_numba_functions import *
+from napariTFM.backend.parameter_dataclasses import MeshParameters
 
 
 class MonolayerStressMicroscopy:

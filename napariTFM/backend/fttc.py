@@ -26,8 +26,8 @@ from typing import Tuple, Optional
 
 from scipy import optimize
 
-from backend.fttc_numba_functions import *
-from backend.parameter_dataclasses import FTTCParameters
+from napariTFM.backend.fttc_numba_functions import *
+from napariTFM.backend.parameter_dataclasses import FTTCParameters
 
 
 class FTTC:

@@ -1,3 +1,40 @@
+Metadata-Version: 2.2
+Name: napariTFM
+Version: 0.1.0
+Summary: A napari plugin for Traction Force Microscopy analysis
+Author-email: Your Name <your.email@example.com>
+License: MIT
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Science/Research
+Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Framework :: napari
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENCE
+Requires-Dist: napari[all]>=0.5.4
+Requires-Dist: PyQt5>=5.15.0
+Requires-Dist: solidspy>=1.1.0
+Requires-Dist: scipy>=1.9.3
+Requires-Dist: scikit-image>=0.24.0
+Requires-Dist: numpy>=1.25.2
+Requires-Dist: tifffile>=2024.6.18
+Requires-Dist: pyyaml>=6.0.2
+Requires-Dist: gmsh>=4.13.1
+Requires-Dist: numba>=0.60.0
+Requires-Dist: imageio>=2.36.1
+Requires-Dist: matplotlib>=3.9.4
+Requires-Dist: qtpy>=2.4.1
+Requires-Dist: qtrangeslider>=0.1.5
+Requires-Dist: vispy>=0.14.3
+Requires-Dist: pandas>=2.2.3
+Requires-Dist: tqdm>=4.66.5
+
 # napariTFM User Manual
 
 ## Table of Contents
@@ -29,39 +66,11 @@ The software combines established TFM algorithms with napari's visualization cap
 
 ## Installation
 
+napariTFM can be installed through pip:
 
-napariTFM requires specific system dependencies. Follow these steps to install:
-
-1. Install [mambaforge](https://github.com/conda-forge/miniforge#mambaforge) if you haven't already.
-2. Open a terminal (Anaconda Prompt on Windows) and navigate to the downloaded package directory:
 ```bash
-cd path/to/napariTFM_v0.3
+pip install napari-tfm
 ```
-Replace "path/to" with the actual path to where you downloaded the package.
-
-4. Create and activate a new environment:
-```bash
-mamba create -n napariTFM python=3.9
-mamba activate napariTFM
-```
-
-5. Install required dependencies:
-```bash
-mamba install -c conda-forge opencv=4.10.0 napari
-```
-
-6. Install napariTFM:
-```bash
-pip install .
-```
-
-7. Start napari:
-```bash
-python -m napari
-```
-You can also try the shorter command `napari`, but if that doesn't work, use `python -m napari`.
-
-The napariTFM plugin will be available in the Plugins menu.
 
 ## Getting Started
 
@@ -122,6 +131,7 @@ Prepare raw microscopy images for analysis by:
 - Use preview to fine-tune settings
 - Save preprocessed data for later use
 
+[previous sections remain the same...]
 
 ## Displacement Analysis
 

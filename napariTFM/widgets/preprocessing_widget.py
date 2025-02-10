@@ -18,10 +18,10 @@ from qtpy.QtWidgets import (
 )
 from qtrangeslider import QRangeSlider
 
-from widgets._base_widget import BaseAnalysisWidget
-from utilities.colorbar import ColorbarManager
-from utilities.parameter_manager import ParameterManager, ParameterCategory
-from services.preprocessing_service import PreprocessingService
+from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.utilities.colorbar import ColorbarManager
+from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.services.preprocessing_service import PreprocessingService
 
 class PreprocessingDataPanel(QWidget):
     """Panel for handling data loading and status display."""

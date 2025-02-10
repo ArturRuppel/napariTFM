@@ -6,7 +6,7 @@ from pathlib import Path
 import napari
 from qtpy.QtWidgets import QMessageBox
 
-from widgets._widget import napariTFMWidget
+from napariTFM.widgets._widget import napariTFMWidget
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 

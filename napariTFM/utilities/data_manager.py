@@ -1,8 +1,8 @@
 from typing import Optional
 import numpy as np
-from services.displacement_service import DisplacementResult
-from services.fttc_service import FTTCResult
-from services.msm_service import MSMResult
+from napariTFM.services.displacement_service import DisplacementResult
+from napariTFM.services.fttc_service import FTTCResult
+from napariTFM.services.msm_service import MSMResult
 
 
 class DataManager:

@@ -4,7 +4,7 @@ from typing import Optional, Dict, Generator
 import cv2
 import numpy as np
 
-from backend.parameter_dataclasses import DisplacementParameters
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 
 
 class DisplacementAnalyzer:

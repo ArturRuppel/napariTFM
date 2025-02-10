@@ -4,11 +4,11 @@ from enum import Enum, auto
 import yaml
 from pathlib import Path
 from qtpy.QtCore import QObject, Signal
-from backend.parameter_dataclasses import PreprocessingParameters, DisplacementParameters, FTTCParameters, MSMParameters, UnifiedParameters
-from services.displacement_service import DisplacementService
-from services.fttc_service import FTTCService
-from services.msm_service import MSMService
-from services.preprocessing_service import PreprocessingService
+from napariTFM.backend.parameter_dataclasses import PreprocessingParameters, DisplacementParameters, FTTCParameters, MSMParameters, UnifiedParameters
+from napariTFM.services.displacement_service import DisplacementService
+from napariTFM.services.fttc_service import FTTCService
+from napariTFM.services.msm_service import MSMService
+from napariTFM.services.preprocessing_service import PreprocessingService
 
 
 class ParameterCategory(Enum):

@@ -5,7 +5,7 @@ import gmsh
 import numpy as np
 from skimage import measure
 
-from backend.parameter_dataclasses import MeshParameters
+from napariTFM.backend.parameter_dataclasses import MeshParameters
 
 
 class MeshGenerator:

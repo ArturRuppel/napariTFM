@@ -1,0 +1,1 @@
+from napariTFM.widgets._widget import napariTFMWidget

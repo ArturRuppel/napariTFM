@@ -3,8 +3,8 @@ from typing import Tuple, Generator
 
 import numpy as np
 
-from backend.displacement_analysis import DisplacementAnalyzer
-from backend.parameter_dataclasses import DisplacementParameters
+from napariTFM.backend.displacement_analysis import DisplacementAnalyzer
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 
 
 @dataclass

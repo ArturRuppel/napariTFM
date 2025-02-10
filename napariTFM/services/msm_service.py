@@ -4,9 +4,9 @@ from typing import Optional, Tuple, Dict, List, Generator
 import numpy as np
 from skimage.transform import resize
 
-from backend.mesh_generator import MeshParameters, MeshGenerator
-from backend.msm import MonolayerStressMicroscopy
-from backend.parameter_dataclasses import MSMParameters
+from napariTFM.backend.mesh_generator import MeshParameters, MeshGenerator
+from napariTFM.backend.msm import MonolayerStressMicroscopy
+from napariTFM.backend.parameter_dataclasses import MSMParameters
 
 
 @dataclass

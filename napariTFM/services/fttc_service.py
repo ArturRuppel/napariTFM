@@ -3,8 +3,8 @@ from typing import Tuple, Generator
 
 import numpy as np
 
-from backend.fttc import FTTC
-from backend.parameter_dataclasses import FTTCParameters
+from napariTFM.backend.fttc import FTTC
+from napariTFM.backend.parameter_dataclasses import FTTCParameters
 
 
 @dataclass

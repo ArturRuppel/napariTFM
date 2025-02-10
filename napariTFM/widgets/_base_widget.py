@@ -5,8 +5,8 @@ import napari
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTabWidget, QSizePolicy, QSpacerItem
 
-from utilities.data_manager import DataManager
-from utilities.visualization_manager import VisualizationManager
+from napariTFM.utilities.data_manager import DataManager
+from napariTFM.utilities.visualization_manager import VisualizationManager
 
 logger = logging.getLogger(__name__)
 

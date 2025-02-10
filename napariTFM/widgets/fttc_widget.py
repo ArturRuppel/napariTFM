@@ -9,12 +9,12 @@ from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (QFileDialog, QGroupBox, QDoubleSpinBox, QSpinBox, QCheckBox, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
                             QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
 
-from services.fttc_service import FTTCService, FTTCResult
-from utilities.colorbar import ColorbarManager
-from utilities.data_manager import DataManager
-from utilities.parameter_manager import ParameterCategory, ParameterManager
-from utilities.visualization_manager import VisualizationManager
-from widgets._base_widget import BaseAnalysisWidget
+from napariTFM.services.fttc_service import FTTCService, FTTCResult
+from napariTFM.utilities.colorbar import ColorbarManager
+from napariTFM.utilities.data_manager import DataManager
+from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
+from napariTFM.utilities.visualization_manager import VisualizationManager
+from napariTFM.widgets._base_widget import BaseAnalysisWidget
 
 
 class FTTCDataPanel(QWidget):

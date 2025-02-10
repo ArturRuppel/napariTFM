@@ -1,0 +1,5 @@
+[console_scripts]
+napari = napari.__main__:main
+
+[napari.manifest]
+napariTFM = napariTFM:napari.yaml

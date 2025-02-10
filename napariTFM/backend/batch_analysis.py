@@ -10,12 +10,12 @@ import tifffile
 import yaml
 from skimage.transform import rescale
 
-from backend.batch_analysis_visualizations import BatchVisualizationSaver
-from backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
-from services.displacement_service import DisplacementService, DisplacementResult
-from services.fttc_service import FTTCService, FTTCResult
-from services.msm_service import MSMService
-from services.preprocessing_service import PreprocessingService
+from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
+from napariTFM.services.displacement_service import DisplacementService, DisplacementResult
+from napariTFM.services.fttc_service import FTTCService, FTTCResult
+from napariTFM.services.msm_service import MSMService
+from napariTFM.services.preprocessing_service import PreprocessingService
 
 
 # TODO black image when only one frame for cell-force overlay visualization

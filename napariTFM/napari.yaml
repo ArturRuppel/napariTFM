@@ -1,0 +1,10 @@
+name: napariTFM
+display_name: napariTFM
+contributions:
+  commands:
+    - id: napariTFM.make_widget
+      title: Make Widget
+      python_name: napariTFM:napariTFMWidget
+  widgets:
+    - command: napariTFM.make_widget
+      display_name: napariTFM

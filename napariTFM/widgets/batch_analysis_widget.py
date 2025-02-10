@@ -15,9 +15,9 @@ from qtpy.QtWidgets import (
     QFileDialog, QComboBox
 )
 
-from backend.batch_analysis import BatchAnalysis
-from widgets._base_widget import BaseAnalysisWidget
-from utilities.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.backend.batch_analysis import BatchAnalysis
+from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 
 
 class BatchAnalysisWidget(BaseAnalysisWidget):

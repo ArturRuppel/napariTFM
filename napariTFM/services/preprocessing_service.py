@@ -3,8 +3,8 @@ from typing import Optional, Tuple, Dict, Any, List, Generator
 
 import numpy as np
 
-from backend.parameter_dataclasses import PreprocessingParameters
-from backend.preprocessing import ImageProcessor
+from napariTFM.backend.parameter_dataclasses import PreprocessingParameters
+from napariTFM.backend.preprocessing import ImageProcessor
 
 
 @dataclass

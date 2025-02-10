@@ -1,4 +1,3 @@
-# TODO get rid of this file
 
 import enum
 import logging

@@ -7,15 +7,15 @@ from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog
 )
 
-from utilities.parameter_manager import ParameterManager
-from utilities.data_manager import DataManager
-from utilities.visualization_manager import VisualizationManager
+from napariTFM.utilities.parameter_manager import ParameterManager
+from napariTFM.utilities.data_manager import DataManager
+from napariTFM.utilities.visualization_manager import VisualizationManager
 
-from widgets.preprocessing_widget import PreprocessingWidget
-from widgets.displacement_analysis_widget import DisplacementAnalysisWidget
-from widgets.fttc_widget import FTTCWidget
-from widgets.msm_widget import MSMWidget
-from widgets.batch_analysis_widget import BatchAnalysisWidget
+from napariTFM.widgets.preprocessing_widget import PreprocessingWidget
+from napariTFM.widgets.displacement_analysis_widget import DisplacementAnalysisWidget
+from napariTFM.widgets.fttc_widget import FTTCWidget
+from napariTFM.widgets.msm_widget import MSMWidget
+from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
 
 logger = logging.getLogger(__name__)
 

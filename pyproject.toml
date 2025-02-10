@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "napariTFM"
+version = "0.1.0"
+description = "A napari plugin for Traction Force Microscopy analysis"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Framework :: napari",
+]
+dependencies = [
+    "napari[all]>=0.5.4",
+    "PyQt5>=5.15.0",
+    "solidspy>=1.1.0",
+    "scipy>=1.9.3",
+    "scikit-image>=0.24.0",
+    "numpy>=1.25.2",
+    "tifffile>=2024.6.18",
+    "pyyaml>=6.0.2",
+    "gmsh>=4.13.1",
+    "numba>=0.60.0",
+    "imageio>=2.36.1",
+    "matplotlib>=3.9.4",
+    "qtpy>=2.4.1",
+    "qtrangeslider>=0.1.5",
+    "vispy>=0.14.3",
+    "pandas>=2.2.3",
+    "tqdm>=4.66.5",
+]
+
+[project.entry-points."napari.manifest"]
+napariTFM = "napariTFM:napari.yaml"
+
+[project.entry-points."console_scripts"]
+napari = "napari.__main__:main"
+
+[tool.setuptools]
+packages = ["napariTFM"]
+
+[tool.setuptools.package-data]
+"napariTFM" = ["*.py", "*.yaml"]
