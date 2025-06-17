@@ -55,6 +55,7 @@ class FTTC:
         self.lanczos_exp = params.lanczos_exp
         self.gel_height = params.gel_height
 
+
     def calculate_traction(self, displacements: Tuple[np.ndarray, np.ndarray],
                            pixel_size: float,
                            downscale_factor: int = 1,
@@ -119,6 +120,9 @@ class FTTC:
         Boussinesq solution in Fourier space, modified by the Tikhonov
         regularization parameter to handle noise in the measurements.
 
+        The output force field will have exactly the same dimensions as the
+        input displacement field to ensure dimensional consistency.
+
         Examples
         --------
         >> fttc = FTTC(E=10000, nu=0.5)  # Initialize with gel properties
@@ -139,9 +143,12 @@ class FTTC:
         d_x = displacements[..., 0]
         d_y = displacements[..., 1]
 
-        # Create coordinate grid
-        x = np.arange(d_x.shape[1])
-        y = np.arange(d_x.shape[0])
+        # Preserve exact input dimensions throughout the calculation
+        input_height, input_width = d_x.shape
+
+        # Create coordinate grid matching input dimensions exactly
+        x = np.arange(input_width)
+        y = np.arange(input_height)
 
         # Create position array in pixel coordinates
         pos = np.array([np.ones(len(y))[:, None] * x,
@@ -153,36 +160,43 @@ class FTTC:
         # Convert pixel coordinates to physical units inside _perform_tfm
         forcemap_pixel_size = pixel_size * downscale_factor
 
-        # Calculate forces
+        # Calculate forces with exact input dimensions preserved
         if regularization is None:
-            regularization = self._find_regularization(pos, vec, forcemap_pixel_size)
+            regularization = self._find_regularization(pos, vec, forcemap_pixel_size,
+                                                       input_width, input_height)
 
-        return self._perform_tfm(pos, vec, forcemap_pixel_size, regularization)
+        return self._perform_tfm(pos, vec, forcemap_pixel_size, regularization,
+                                 i_max=input_width, j_max=input_height)
 
     def _perform_tfm(self, pos: np.ndarray, vec: np.ndarray,
                      pixelsize: float, regularization: float,
                      i_max: Optional[int] = None,
                      j_max: Optional[int] = None) -> Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]:
         """
-        Core TFM calculation.
+        Core TFM calculation with exact dimension preservation.
+
+        Performs the complete Fourier Transform Traction Cytometry calculation
+        while preserving the exact input dimensions throughout the pipeline.
 
         Args:
-            pos: Position array in pixel coordinates (2, N)
-            vec: Displacement vector array in physical units (2, N)
-            pixelsize: Effective pixel size in meters (including any downsampling)
-            regularization: Regularization parameter (lambda)
-            i_max, j_max: Optional output grid dimensions
+            pos (np.ndarray): Position array in pixel coordinates (2, N)
+            vec (np.ndarray): Displacement vector array in physical units (2, N)
+            pixelsize (float): Effective pixel size in meters (including any downsampling)
+            regularization (float): Regularization parameter (lambda)
+            i_max (int, optional): Exact output grid width dimension
+            j_max (int, optional): Exact output grid height dimension
 
         Returns:
             Tuple containing:
-            - (x, y) coordinate grids in physical units
-            - forces array in N/m²
+            - (x, y) coordinate grids in physical units, shape (j_max, i_max) each
+            - forces array in N/m², shape (2, j_max, i_max)
+
+        Note:
+            When i_max and j_max are specified, the output will have exactly
+            these dimensions, preserving the input displacement field size.
+            This prevents dimension mismatches in downstream processing.
         """
-
-        # Store original input dimensions
-        original_shape = (int(np.sqrt(vec.shape[1])), int(np.sqrt(vec.shape[1])))
-
-        # Interpolate to regular grid
+        # Interpolate to regular grid using exact input dimensions
         grid_mat, u, i_max, j_max, i_bound_size, j_bound_size = self._interp_vec2grid(
             pos, vec, i_max=i_max, j_max=j_max)
 
@@ -205,31 +219,13 @@ class FTTC:
         x = np.reshape(pos[0], (i_max, j_max)).T * pixelsize
         y = np.reshape(pos[1], (i_max, j_max)).T * pixelsize
 
-        # Pad outputs to match input dimensions if needed
-        f = self._pad_to_shape(f, original_shape)
-
-        # Create full coordinate grids to match dimensions
-        x_full = np.linspace(x[0, 0], x[-1, -1], original_shape[1])
-        y_full = np.linspace(y[0, 0], y[-1, -1], original_shape[0])
+        # Create coordinate grids that exactly match the input dimensions
+        # No padding or cropping - dimensions are preserved exactly
+        x_full = np.linspace(x[0, 0], x[-1, -1], i_max)
+        y_full = np.linspace(y[0, 0], y[-1, -1], j_max)
         x, y = np.meshgrid(x_full, y_full)
 
         return (x, y), f
-
-    @staticmethod
-    def _pad_to_shape(arr: np.ndarray, target_shape: Tuple[int, int]) -> np.ndarray:
-        """Pad array to match target shape."""
-        if isinstance(arr, np.ndarray):
-            current_shape = arr.shape
-            if len(current_shape) == 2:
-                pad_width = [(0, target_shape[0] - current_shape[0]),
-                             (0, target_shape[1] - current_shape[1])]
-                return np.pad(arr, pad_width, mode='constant', constant_values=0)
-            elif len(current_shape) == 3:
-                pad_width = [(0, 0),
-                             (0, target_shape[0] - current_shape[1]),
-                             (0, target_shape[1] - current_shape[2])]
-                return np.pad(arr, pad_width, mode='constant', constant_values=0)
-        return arr
 
     def _calculate_greens_function(self, kx: np.ndarray, ky: np.ndarray):
         """Calculate Green's function in Fourier space with optional gel height correction.
@@ -317,42 +313,67 @@ class FTTC:
 
         return float(reg_min), float(minG), G, reg_param
 
-    def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray, forcemap_pixel_size: float) -> float:
+    def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray,
+                             forcemap_pixel_size: float, input_width: int,
+                             input_height: int) -> float:
         """Find optimal regularization parameter using Generalized Cross-Validation (GCV).
 
         Implements the method from Golub, Heath, & Wahba (2012) to automatically
-        determine the Tikhonov regularization parameter.
+        determine the Tikhonov regularization parameter while preserving exact
+        input dimensions.
 
         Args:
             pos0 (np.ndarray): Position array in pixel coordinates (2 × N)
             vec0 (np.ndarray): Displacement vector array (2 × N)
             forcemap_pixel_size (float): Pixel size in micrometers
+            input_width (int): Exact width of input displacement field
+            input_height (int): Exact height of input displacement field
 
         Returns:
             float: Optimal regularization parameter λ that minimizes the GCV function
 
         Note:
             The search range is centered around λ = 0.2/E with a span of ±5 orders
-            of magnitude, where E is Young's modulus.
+            of magnitude, where E is Young's modulus. The calculation preserves
+            the exact input dimensions throughout the optimization process.
         """
         lamguess = 0.2 / self.E
         lamlow = np.log10(lamguess) - 5.0
         lamhigh = np.log10(lamguess) + 5.0
         lambdarange = np.logspace(lamlow, lamhigh, 50)
 
-        blockU, s, b = self._svd_block(pos0, vec0, forcemap_pixel_size)
+        blockU, s, b = self._svd_block(pos0, vec0, forcemap_pixel_size,
+                                       i_max=input_width, j_max=input_height)
         reg_min, _, _, _ = self._gcv_blockdiag(blockU, s, b, lambdarange, plot=False)
         return reg_min
 
-    def _svd_block(self, pos: np.ndarray, vec: np.ndarray, forcemap_pixel_size: float):
-        """Prepare SVD representation of the FTTC problem
+    def _svd_block(self, pos: np.ndarray, vec: np.ndarray, forcemap_pixel_size: float,
+                   i_max: int = None, j_max: int = None):
+        """Prepare SVD representation of the FTTC problem with exact dimensions.
+
+        Creates the singular value decomposition representation needed for
+        Generalized Cross-Validation regularization parameter optimization.
+        Preserves exact input dimensions throughout the calculation.
 
         Args:
-            pos: Position array
-            vec: Displacement vector array
-             forcemap_pixel_size: Pixel size in micrometers
+            pos (np.ndarray): Position array in pixel coordinates (2 × N)
+            vec (np.ndarray): Displacement vector array (2 × N)
+            forcemap_pixel_size (float): Pixel size in micrometers
+            i_max (int, optional): Exact width dimension to preserve
+            j_max (int, optional): Exact height dimension to preserve
+
+        Returns:
+            Tuple containing:
+            - U_h (np.ndarray): Block diagonal matrix of left singular vectors
+            - s_h (np.ndarray): Flattened array of singular values
+            - Ftu (np.ndarray): Flattened Fourier transform of displacement field
+
+        Note:
+            When i_max and j_max are provided, these exact dimensions are
+            preserved throughout the SVD calculation to ensure consistency
+            with the input displacement field dimensions.
         """
-        grid_mat, u, i_max, j_max, _, _ = self._interp_vec2grid(pos, vec)
+        grid_mat, u, i_max, j_max, _, _ = self._interp_vec2grid(pos, vec, i_max=i_max, j_max=j_max)
         kx, ky, _, _ = self._calculate_fourier_modes(i_max, j_max, forcemap_pixel_size)
         GFt = self._calculate_greens_function(kx, ky)
 
@@ -367,7 +388,6 @@ class FTTC:
                 U_h[idx, :], s_h[idx, :], _ = np.linalg.svd(GFt[:, :, i, j])
 
         return U_h, s_h.flatten(), Ftu.flatten()
-
     def _interp_vec2grid(self, pos: np.ndarray, vec: np.ndarray,
                          i_max: Optional[int] = None, j_max: Optional[int] = None):
         """Interpolate scattered displacement data to a regular grid using KD-tree.

@@ -57,6 +57,33 @@ class DisplacementAnalyzer:
         )
 
 
+    # def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
+    #     """Calculate optical flow between reference and moving image at full resolution.
+    #
+    #     Computes the displacement field between two images using TV-L1 optical flow.
+    #     Images are automatically normalized before processing.
+    #
+    #     Args:
+    #         reference (np.ndarray): Reference (fixed) image
+    #         moving (np.ndarray): Moving (deformed) image
+    #             Both images should be 2D arrays of the same shape.
+    #
+    #     Returns:
+    #         np.ndarray: Optical flow field with shape (H, W, 2) where:
+    #             - H, W are the image dimensions
+    #             - Last dimension contains (dx, dy) displacements in pixels
+    #             Positive values indicate rightward/downward motion.
+    #
+    #     Note:
+    #         Images are normalized to [0, 1] range before processing to ensure
+    #         consistent results regardless of input intensity range.
+    #     """
+    #     # Ensure images are float32 and normalized
+    #     ref_float = (reference.astype(np.float32) - reference.min()) / (reference.max() - reference.min())
+    #     mov_float = (moving.astype(np.float32) - moving.min()) / (moving.max() - moving.min())
+    #
+    #     return self.flow_algorithm.calc(ref_float, mov_float, None)
+
     def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
         """Calculate optical flow between reference and moving image at full resolution.
 
@@ -78,9 +105,18 @@ class DisplacementAnalyzer:
             Images are normalized to [0, 1] range before processing to ensure
             consistent results regardless of input intensity range.
         """
-        # Ensure images are float32 and normalized
-        ref_float = (reference.astype(np.float32) - reference.min()) / (reference.max() - reference.min())
-        mov_float = (moving.astype(np.float32) - moving.min()) / (moving.max() - moving.min())
+        # Ensure images are float32 and properly normalized
+        ref_float = reference.astype(np.float32)
+        mov_float = moving.astype(np.float32)
+
+        # Only normalize if the data isn't already in [0,1] range or has zero range
+        ref_range = ref_float.max() - ref_float.min()
+        if ref_range > 1e-8:  # Avoid division by very small numbers
+            ref_float = (ref_float - ref_float.min()) / ref_range
+
+        mov_range = mov_float.max() - mov_float.min()
+        if mov_range > 1e-8:  # Avoid division by very small numbers
+            mov_float = (mov_float - mov_float.min()) / mov_range
 
         return self.flow_algorithm.calc(ref_float, mov_float, None)
 
