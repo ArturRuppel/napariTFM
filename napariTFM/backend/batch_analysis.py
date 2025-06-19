@@ -3,15 +3,19 @@ from datetime import datetime
 from pathlib import Path
 from time import sleep
 from time import time
-from typing import Optional
+from typing import Optional, Dict, List, Any
 
 import numpy as np
 import tifffile
 import yaml
 from skimage.transform import rescale
+from scipy.ndimage import center_of_mass
+import pandas as pd
 
 from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
+from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy, \
+    calculate_moment_tensor, calculate_polarization
 from napariTFM.services.displacement_service import DisplacementService, DisplacementResult
 from napariTFM.services.fttc_service import FTTCService, FTTCResult
 from napariTFM.services.msm_service import MSMService
@@ -274,6 +278,10 @@ class BatchAnalysis:
             stress_data = self._handle_stress_execution(tfm_folder, force_data, mask_data)
             self._handle_visualization(tfm_folder, viz_saver, 'stress', stress_data)
 
+            # Handle metrics calculation
+            if self.config['analysis_steps'].get('calculate_metrics', False):
+                self._handle_metrics_execution(tfm_folder, displacement_data, force_data, mask_data)
+
             print("Folder processing completed successfully!")
             print("=" * 50)
 
@@ -378,6 +386,110 @@ class BatchAnalysis:
         except Exception as e:
             print(f"Stress analysis failed: {str(e)}")
             return None
+
+    def _handle_metrics_execution(self, tfm_folder: Path,
+                                  displacement_results: Optional[DisplacementResult],
+                                  force_results: Optional[FTTCResult],
+                                  mask_data: Optional[np.ndarray]) -> None:
+        """Handle metrics calculation (strain energy, polarization)."""
+        if not self.config['analysis_steps'].get('calculate_metrics', False):
+            print("Metrics calculation skipped.")
+            return
+
+        print("Starting Metrics Calculation...")
+        start_time = time()
+
+        try:
+            # Load displacement data if not provided
+            if displacement_results is None:
+                print("Loading displacement data from file for metrics...")
+                try:
+                    displacement_results = np.load(str(tfm_folder / "displacements.npy"), allow_pickle=True).item()
+                except Exception as e:
+                    print(f"Could not load displacement data for metrics: {str(e)}")
+                    return
+
+            # Load force data if not provided
+            if force_results is None:
+                print("Loading force data from file for metrics...")
+                try:
+                    force_results = np.load(str(tfm_folder / "traction_forces.npy"), allow_pickle=True).item()
+                except Exception as e:
+                    print(f"Could not load force data for metrics: {str(e)}")
+                    return
+
+            # Load mask data if not provided
+            if mask_data is None:
+                print("Loading mask data from file for metrics...")
+                try:
+                    mask_data = tifffile.imread(str(tfm_folder / "masks.tif"))
+                except Exception as e:
+                    print(f"Could not load mask data for metrics: {str(e)}")
+                    return
+
+            displacements_um = displacement_results.displacement_field  # (t, y, x, 2) in µm
+            forces_pa = force_results.force_field  # (t, y, x, 2) in Pa
+
+            if displacements_um.shape[0] != forces_pa.shape[0] or \
+               (mask_data.ndim == 3 and displacements_um.shape[0] != mask_data.shape[0]):
+                print("Mismatch in number of frames between displacements, forces, or masks. Skipping metrics.")
+                return
+
+            num_frames = displacements_um.shape[0]
+            h, w = displacements_um.shape[1:3]
+
+            pixel_size_config_um = self.config['parameters']['pixel_size']  # µm
+            downscale_factor = self.config['parameters']['downscale_factor']
+            pixel_size_at_calc_resolution_um = pixel_size_config_um * downscale_factor
+            pixel_size_at_calc_resolution_m = pixel_size_at_calc_resolution_um * 1e-6
+            pixel_area_m2 = pixel_size_at_calc_resolution_m ** 2
+
+            metrics_results_list: List[Dict[str, Any]] = []
+
+            for i in range(num_frames):
+                disp_frame_m = displacements_um[i] * 1e-6  # Convert µm to m
+                force_frame_pa = forces_pa[i]
+                mask_frame = mask_data[i] if mask_data.ndim == 3 else mask_data # Handle single mask
+
+                # 1. Strain Energy
+                sed_jm2 = calculate_strain_energy_density(disp_frame_m, force_frame_pa)
+                total_se_j = calculate_total_strain_energy(sed_jm2, mask_frame, pixel_area_m2)
+
+                # 2. Moment Tensor & Polarization
+                if np.any(mask_frame): # Calculate centroid if mask is not empty
+                    centroid_r, centroid_c = center_of_mass(mask_frame)
+                    if np.isnan(centroid_r) or np.isnan(centroid_c): # Fallback if center_of_mass fails
+                        centroid_r, centroid_c = (h - 1) / 2.0, (w - 1) / 2.0
+                else: # Mask is empty, use image center
+                    centroid_r, centroid_c = (h - 1) / 2.0, (w - 1) / 2.0
+
+                yy, xx = np.mgrid[0:h, 0:w]
+                pixel_positions_m_x = (xx - centroid_c) * pixel_size_at_calc_resolution_m
+                pixel_positions_m_y = (yy - centroid_r) * pixel_size_at_calc_resolution_m
+                pixel_positions_m = np.stack((pixel_positions_m_x, pixel_positions_m_y), axis=-1)
+
+                moment_t_nm = calculate_moment_tensor(force_frame_pa, mask_frame, pixel_positions_m, pixel_area_m2)
+                polar_idx, eig1_nm, eig2_nm = calculate_polarization(moment_t_nm)
+
+                metrics_results_list.append({
+                    'Frame': i,
+                    'Total Strain Energy (J)': total_se_j,
+                    'Polarization Index': polar_idx,
+                    'Eigenvalue1 (N.m)': eig1_nm,
+                    'Eigenvalue2 (N.m)': eig2_nm
+                })
+                print(f"Metrics frame {i+1}/{num_frames}: SE={total_se_j:.2e} J, Polar={polar_idx:.2f}")
+
+            # Save to CSV
+            df = pd.DataFrame(metrics_results_list)
+            csv_path = tfm_folder / "metrics_results.csv"
+            df.to_csv(csv_path, index=False)
+            print(f"Metrics results saved to {csv_path}")
+
+        except Exception as e:
+            print(f"Metrics calculation failed: {str(e)}")
+        finally:
+            print(f"Metrics calculation completed in {self._format_duration(time() - start_time)}")
 
     def _execute_preprocessing(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
         """
@@ -499,29 +611,29 @@ class BatchAnalysis:
         print(f"Preprocessing completed in {self._format_duration(time() - start_time)}")
         return preprocessed
 
-    def _execute_preprocessing(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
+    def _execute_displacement_analysis(self, tfm_folder: Path, preprocessed_data: dict) -> Optional[DisplacementResult]:
         """
-        Execute the preprocessing step of the TFM analysis pipeline.
+        Execute the displacement analysis step of the TFM analysis pipeline.
 
-        This method handles the initial processing of raw microscopy images,
-        including both bead and cell images if available.
+        This method calculates displacement fields from preprocessed bead images
+        using optical flow techniques.
 
         Parameters
         ----------
-        folder : Path
-            Path to the input folder containing raw data files
         tfm_folder : Path
             Path to the output folder where processed files will be saved
+        preprocessed_data : dict
+            Dictionary containing preprocessed images:
+            - 'beads': Preprocessed bead image stack (np.ndarray)
+            - 'reference': Preprocessed reference image (np.ndarray)
 
         Returns
         -------
-        Optional[dict]
-            Dictionary containing:
-            - 'beads': Preprocessed bead image stack (np.ndarray)
-            - 'reference': Preprocessed reference image (np.ndarray)
-            - 'cells': Preprocessed cell image stack (np.ndarray, optional)
-            - 'parameters': Preprocessing parameters used
-            Returns None if preprocessing fails
+        Optional[DisplacementResult]
+            Object containing:
+            - displacement_field: Calculated displacement vectors (np.ndarray)
+            - parameters: Displacement calculation parameters used
+            Returns None if displacement analysis fails
 
         Processing Steps
         ---------------
@@ -529,25 +641,21 @@ class BatchAnalysis:
         2. Optionally loads cell images if specified in config
         3. Applies preprocessing pipeline:
             - Background subtraction
-            - Gaussian filtering
-            - Intensity normalization
-            - Image registration (for bead images)
-        4. Saves results as calibrated TIFF files with metadata
+            - Optical flow calculation (e.g., TV-L1)
+            - Optional downscaling and filtering
+        4. Saves displacement field as NumPy array
 
-        The preprocessing parameters are taken from the config:
-            - rolling_ball_radius
-            - min_intensity_percentile
-            - max_intensity_percentile
-            - gaussian_sigma
-            - registration_mode
-            Plus additional parameters for cell image processing
+        The displacement parameters are taken from the config:
+            - tau, lambda_, theta (TV-L1 parameters)
+            - nscales, warps, epsilon (pyramidal optical flow parameters)
+            - downscale_factor, pixel_size
 
         Raises
         ------
         FileNotFoundError
             If input files are not found
         RuntimeError
-            If preprocessing operations fail
+            If displacement calculation fails
         """
         print("Starting Displacement Analysis...")
         start_time = time()

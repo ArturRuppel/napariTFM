@@ -10,7 +10,7 @@ import yaml
 from qtpy.QtCore import Qt, Signal, QSettings
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QGridLayout, QButtonGroup, QRadioButton, QListView,
-    QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QScrollArea, QAbstractItemView, QTreeView, QDialog,
+    QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QScrollArea, QAbstractItemView, QTreeView, QDialog, QFormLayout,
     QProgressBar, QMessageBox, QListWidget, QCheckBox, QLineEdit,
     QFileDialog, QComboBox
 )
@@ -563,7 +563,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             ("displacement", "Displacement"),
             ("force", "Force"),
             ("create_masks", "Create Masks"),
-            ("stress", "Stress")
+            ("stress", "Stress"),
+            ("calculate_metrics", "Calculate Metrics (Strain Energy & Polarization)")
         ]
 
         self.analysis_checkboxes = {}
@@ -683,92 +684,115 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
     # region === Configuration Interface ===
 
-    def generate_config(self) -> dict:
-        """
-        Generate configuration dictionary based on UI state.
-        Items are ordered to match widget layout.
-        """
+    def _generate_config(self) -> dict:
+        """Generate configuration dictionary from UI values"""
+        # Get folder paths
+        folders = []
+        for i in range(self.folder_list_widget.count()):
+            folders.append(self.folder_list_widget.item(i).text())
+
+        # Get file names
+        input_files = {
+            'beads': self.file_inputs['beads'].text(),
+            'reference': self.file_inputs['reference'].text()
+        }
+
+        if self.file_inputs['cells'].text():
+            input_files['cells'] = self.file_inputs['cells'].text()
+
+        # Analysis steps from checkboxes
+        analysis_steps = {
+            key: checkbox.isChecked()
+            for key, checkbox in self.analysis_checkboxes.items()
+        }
+
+        # Visualization options
+        visualizations = {
+            'bead_overlay': self.visualization_checkboxes['bead_overlay'].isChecked(),
+            'displacement_map': self.visualization_checkboxes['displacement_map'].isChecked(),
+            'force_map': self.visualization_checkboxes['force_map'].isChecked(),
+            'force_cell_overlay': self.visualization_checkboxes['force_cell_overlay'].isChecked(),
+            'sigma_xx': self.visualization_checkboxes['sigma_xx'].isChecked(),
+            'sigma_yy': self.visualization_checkboxes['sigma_yy'].isChecked(),
+            'normal_stress': self.visualization_checkboxes['normal_stress'].isChecked(),
+            'mesh': self.visualization_checkboxes['mesh'].isChecked()
+        }
+
+        # Parameters
+        parameters = {
+            # General
+            'pixel_size': self.parameter_spins['pixel_size'].value(),
+            'frame_interval': self.parameter_spins['frame_interval'].value(),
+
+            # Preprocessing
+            'rolling_ball_radius': self.parameter_spins['rolling_ball_radius'].value(),
+            'min_intensity_percentile': self.parameter_spins['min_intensity_percentile'].value(),
+            'max_intensity_percentile': self.parameter_spins['max_intensity_percentile'].value(),
+            'gaussian_sigma': self.parameter_spins['gaussian_sigma'].value(),
+            'cell_min_intensity_percentile': self.parameter_spins['cell_min_intensity_percentile'].value(),
+            'cell_max_intensity_percentile': self.parameter_spins['cell_max_intensity_percentile'].value(),
+            'cell_gaussian_sigma': self.parameter_spins['cell_gaussian_sigma'].value(),
+            'registration_mode': self.parameter_combos['registration_mode'].currentText().lower(),
+
+            # Displacement
+            'tau': self.parameter_spins['tau'].value(),
+            'lambda_': self.parameter_spins['lambda_'].value(),
+            'theta': self.parameter_spins['theta'].value(),
+            'nscales': self.parameter_spins['nscales'].value(),
+            'warps': self.parameter_spins['warps'].value(),
+            'epsilon': self.parameter_spins['epsilon'].value(),
+            'inner_iterations': self.parameter_spins['inner_iterations'].value(),
+            'outer_iterations': self.parameter_spins['outer_iterations'].value(),
+            'scale_step': self.parameter_spins['scale_step'].value(),
+            'median_filtering': self.parameter_spins['median_filtering'].value(),
+            'downscale_factor': self.parameter_spins['downscale_factor'].value(),
+            'd_max': self.parameter_spins['d_max'].value(),
+            'disp_vector_stride': self.parameter_spins['disp_vector_stride'].value(),
+            'disp_arrow_scale': self.parameter_spins['disp_arrow_scale'].value(),
+
+            # Force
+            'young_modulus': self.parameter_spins['young_modulus'].value() * 1000, # Convert kPa to Pa
+            'poisson_ratio_substrate': self.parameter_spins['poisson_ratio_substrate'].value(),
+            'gel_height': None if self.parameter_spins['gel_height'].value() == 0 else self.parameter_spins['gel_height'].value(),
+            'lanczos_exp': self.parameter_spins['lanczos_exp'].value(),
+            'regularization': 10**self.parameter_spins['regularization'].value(), # Convert from log10
+            'auto_gcv': self.parameter_checks['auto_gcv'].isChecked(),
+            'force_vector_stride': self.parameter_spins['force_vector_stride'].value(),
+            'force_arrow_scale': self.parameter_spins['force_arrow_scale'].value(),
+            'f_max': self.parameter_spins['f_max'].value(),
+
+            # Stress
+            'threshold': self.parameter_spins['threshold'].value(),
+            'dilation': self.parameter_spins['dilation'].value(),
+            'smoothing_sigma': self.parameter_spins['smoothing_sigma'].value(),
+            'density_factor': self.parameter_spins['density_factor'].value(),
+            'mesh_algorithm': self.parameter_combos['mesh_algorithm'].currentText(),
+            'use_optimization': self.parameter_checks['use_optimization'].isChecked(),
+            'poisson_ratio_cells': self.parameter_spins['poisson_ratio_cells'].value(),
+            'max_stress': self.parameter_spins['max_stress'].value()
+        }
+
+        # Add metrics parameters
+        # 'mask_source' is removed as per request, assuming mask is always required
+        # and its source is handled implicitly or by other means by the backend.
+        metrics_parameters = {}
+        if analysis_steps.get('calculate_metrics', False):
+            # Use default values as these detailed controls are not in the batch UI
+            metrics_parameters = {
+                'force_threshold_percentile': 10,  # Default
+                'mask_erosion': 0,  # Default
+                'mask_dilation': 0,  # Default
+                'calculate_strain_energy': True,  # Default
+                'calculate_polarization': True,  # Default
+                'export_eigenvalues': True  # Default
+            }
         config = {
-            # Input Files section (matches UI order)
-            "input_files": {
-                key: input.text()
-                for key, input in self.file_inputs.items()
-            },
-
-            # Metadata section (matches UI order)
-            "metadata": {
-                key: input.text()
-                for key, input in self.metadata_inputs.items()
-            },
-
-            # Parameters section - ordered by UI groups
-            "parameters": {
-                # General parameters
-                "pixel_size": self.parameter_spins['pixel_size'].value(),
-                "frame_interval": self.parameter_spins['frame_interval'].value(),
-
-                # Preprocessing parameters
-                "rolling_ball_radius": self.parameter_spins['rolling_ball_radius'].value(),
-                "min_intensity_percentile": self.parameter_spins['min_intensity_percentile'].value(),
-                "max_intensity_percentile": self.parameter_spins['max_intensity_percentile'].value(),
-                "gaussian_sigma": self.parameter_spins['gaussian_sigma'].value(),
-                "cell_min_intensity_percentile": self.parameter_spins['cell_min_intensity_percentile'].value(),
-                "cell_max_intensity_percentile": self.parameter_spins['cell_max_intensity_percentile'].value(),
-                "cell_gaussian_sigma": self.parameter_spins['cell_gaussian_sigma'].value(),
-                "registration_mode": self.parameter_combos['registration_mode'].currentText().lower(),
-
-                # Displacement parameters
-                "tau": self.parameter_spins['tau'].value(),
-                "lambda_": self.parameter_spins['lambda_'].value(),
-                "theta": self.parameter_spins['theta'].value(),
-                "nscales": self.parameter_spins['nscales'].value(),
-                "warps": self.parameter_spins['warps'].value(),
-                "epsilon": self.parameter_spins['epsilon'].value(),
-                "inner_iterations": self.parameter_spins['inner_iterations'].value(),
-                "outer_iterations": self.parameter_spins['outer_iterations'].value(),
-                "scale_step": self.parameter_spins['scale_step'].value(),
-                "median_filtering": self.parameter_spins['median_filtering'].value(),
-                "downscale_factor": self.parameter_spins['downscale_factor'].value(),
-                "disp_vector_stride": self.parameter_spins['disp_vector_stride'].value(),
-                "disp_arrow_scale": self.parameter_spins['disp_arrow_scale'].value(),
-                "d_max": self.parameter_spins['d_max'].value(),
-
-                # Force parameters
-                "young_modulus": self.parameter_spins['young_modulus'].value() * 1000,  # Convert to Pa
-                "poisson_ratio_substrate": self.parameter_spins['poisson_ratio_substrate'].value(),
-                "gel_height": None if self.parameter_spins['gel_height'].value() == 0 else self.parameter_spins['gel_height'].value(),
-                "lanczos_exp": self.parameter_spins['lanczos_exp'].value(),
-                "regularization": 10 ** self.parameter_spins['regularization'].value(),
-                "auto_gcv": self.parameter_checks['auto_gcv'].isChecked(),
-                "force_vector_stride": self.parameter_spins['force_vector_stride'].value(),
-                "force_arrow_scale": self.parameter_spins['force_arrow_scale'].value(),
-                "f_max": self.parameter_spins['f_max'].value(),
-
-                # Stress parameters
-                "threshold": self.parameter_spins['threshold'].value(),
-                "dilation": self.parameter_spins['dilation'].value(),
-                "smoothing_sigma": self.parameter_spins['smoothing_sigma'].value(),
-                "density_factor": self.parameter_spins['density_factor'].value(),
-                "mesh_algorithm": self.parameter_combos['mesh_algorithm'].currentText(),
-                "use_optimization": self.parameter_checks['use_optimization'].isChecked(),
-                "poisson_ratio_cells": self.parameter_spins['poisson_ratio_cells'].value(),
-                "max_stress": self.parameter_spins['max_stress'].value()
-            },
-
-            # Analysis steps section
-            "analysis_steps": {
-                key: checkbox.isChecked()
-                for key, checkbox in self.analysis_checkboxes.items()
-            },
-
-            # Visualizations section
-            "visualizations": {
-                key.replace('save_', ''): checkbox.isChecked()
-                for key, checkbox in self.visualization_checkboxes.items()
-            },
-
-            # Root folders should be last as they're at bottom of UI
-            "root_folders": self.folder_list
+            'root_folders': folders,
+            'input_files': input_files,
+            'analysis_steps': analysis_steps,
+            'visualizations': visualizations,
+            'parameters': parameters,
+            'metrics_parameters': metrics_parameters  # New section
         }
 
         return config
@@ -841,7 +865,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         try:
             # Generate configuration dictionary
-            config = self.generate_config()
+            config = self._generate_config()
 
             # Save to YAML file
             with open(filepath, 'w') as f:
@@ -1299,6 +1323,29 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self.run_analysis_btn.setEnabled(has_folders)
         self.clear_folders_btn.setEnabled(has_folders)
 
+    def _update_metrics_controls(self):
+        """Enable/disable metrics controls based on checkbox state"""
+        enabled = self.metrics_check.isChecked()
+        self.mask_source_combo.setEnabled(enabled)
+        self.force_threshold_spin.setEnabled(enabled)
+        self.mask_erosion_spin.setEnabled(enabled)
+        self.mask_dilation_spin.setEnabled(enabled)
+        self.calc_strain_energy_check.setEnabled(enabled)
+        self.calc_polarization_check.setEnabled(enabled)
+        self.export_eigenvalues_check.setEnabled(enabled)
+
+        # Update mask controls based on mask source
+        if enabled:
+            self._update_mask_controls()
+
+    def _update_mask_controls(self):
+        """Enable/disable mask controls based on mask source selection"""
+        # Only enable force threshold if that option is selected
+        is_force_threshold = self.mask_source_combo.currentText() == 'force_threshold'
+        self.force_threshold_spin.setEnabled(
+            is_force_threshold and self.metrics_check.isChecked()
+        )
+
     def _handle_error(self, error_message: str):
         """Handle error by showing message box."""
         QMessageBox.critical(self, "Error", error_message)
@@ -1319,7 +1366,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         try:
             # Generate configuration dictionary
-            config = self.generate_config()
+            config = self._generate_config()
 
             # Create temporary YAML file to store configuration
             with NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_yaml:
