@@ -1408,16 +1408,19 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
     def _run_in_new_console(self, config_path: str):
         """Run analysis in a new console window."""
+        # Determine the correct directory to add to sys.path in the new console.
+        # This should be the 'napariTFM' package directory that contains 'backend', 'widgets', etc.
+        # Path(__file__) in this context refers to batch_analysis_widget.py
+        # .parent is 'widgets', .parent.parent is the 'napariTFM' package directory.
+        napariTFM_package_dir = Path(__file__).resolve().parent.parent
         config_path_forward = str(Path(config_path)).replace('\\', '/')
 
         script_content = f'''
 import sys
 from pathlib import Path
-
-# Add parent directory to Python path to find napariTFM package
-parent_dir = str(Path(__file__).resolve().parent.parent)
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+package_dir_to_add = r"{str(napariTFM_package_dir)}"
+if package_dir_to_add not in sys.path:
+    sys.path.insert(0, package_dir_to_add)
 
 from backend.batch_analysis import BatchAnalysis
 
