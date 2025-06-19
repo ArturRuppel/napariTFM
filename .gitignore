@@ -3,6 +3,11 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+backend/__pycache__/
+services/__pycache__/
+widget/__pycache__/
+utilities/__pycache__/
+
 
 # C extensions
 *.so
