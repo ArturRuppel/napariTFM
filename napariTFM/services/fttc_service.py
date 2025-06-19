@@ -180,7 +180,8 @@ class FTTCService:
         shape = displacement_field.shape[:-1]
         pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
         vec = np.array([displacement_field[..., 0], displacement_field[..., 1]])
-        return self.calculator._find_regularization(pos, vec, self.params.pixel_size * self.params.downscale_factor)
+        return self.calculator._find_regularization(
+            pos, vec, self.params.pixel_size * self.params.downscale_factor, shape[1], shape[0])
 
     @staticmethod
     def validate_displacement_field(displacement_field: np.ndarray) -> Tuple[bool, str]:
