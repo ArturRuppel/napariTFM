@@ -29,31 +29,64 @@ The software combines established TFM algorithms with napari's visualization cap
 
 ## Installation
 
+napariTFM requires specific system dependencies. Choose the appropriate installation method for your operating system:
 
-napariTFM requires specific system dependencies. Follow these steps to install:
+### Windows Installation
 
 1. Install [mambaforge](https://github.com/conda-forge/miniforge#mambaforge) if you haven't already.
-2. Open a terminal (Anaconda Prompt on Windows) and navigate to the downloaded package directory:
+2. Open Anaconda Prompt and navigate to the downloaded package directory:
 ```bash
-cd path/to/napariTFM_v0.3
+cd path/to/napariTFM
 ```
 Replace "path/to" with the actual path to where you downloaded the package.
 
-4. Create and activate a new environment:
+3. Create and activate a new environment:
 ```bash
 mamba create -n napariTFM python=3.9
 mamba activate napariTFM
 ```
 
-5. Install required dependencies:
+4. Install required dependencies:
 ```bash
 mamba install -c conda-forge opencv=4.10.0 napari
 ```
 
-6. Install napariTFM:
+5. Install napariTFM:
 ```bash
 pip install .
 ```
+
+### Linux Installation
+
+1. Install [mambaforge](https://github.com/conda-forge/miniforge#mambaforge) if you haven't already.
+2. Open a terminal and navigate to the downloaded package directory:
+```bash
+cd path/to/napariTFM
+```
+Replace "path/to" with the actual path to where you downloaded the package.
+
+3. Create and activate a new environment:
+```bash
+mamba create -n napariTFM python=3.9
+mamba activate napariTFM
+```
+
+4. Install napari (without OpenCV to avoid conflicts):
+```bash
+mamba install -c conda-forge napari
+```
+
+5. Install napariTFM:
+```bash
+pip install .
+```
+
+6. **Important for Linux**: Install OpenCV with contrib modules to avoid symbol conflicts:
+```bash
+pip install opencv-contrib-python==4.10.0.84 --force-reinstall
+```
+
+### Starting napari
 
 7. Start napari:
 ```bash

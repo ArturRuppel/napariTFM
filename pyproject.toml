@@ -51,7 +51,7 @@ napariTFM = "napariTFM:napari.yaml"
 napari = "napari.__main__:main"
 
 [tool.setuptools]
-packages = ["napariTFM"]
+packages = {find = {}}
 
 [tool.setuptools.package-data]
 "napariTFM" = ["*.py", "*.yaml"]
