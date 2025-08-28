@@ -70,3 +70,4 @@ venv.bak/
 .Trashes
 ehthumbs.db
 Thumbs.db
+gitignore/architecture_diagram.md
