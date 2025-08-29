@@ -113,9 +113,9 @@ def generate_fields_from_toml(toml_file='dipole_config.toml', output_dir='output
         np.save(output_path / 'traction_x.npy', fx)
         np.save(output_path / 'traction_y.npy', fy)
         
-        # Generate plots
-        print(f"Saving plots to {output_path}/")
-        generate_plots(X, Y, ux, uy, fx, fy, output_path)
+        # # Generate plots
+        # print(f"Saving plots to {output_path}/")
+        # generate_plots(X, Y, ux, uy, fx, fy, output_path)
         
         # Calculate and print dipole moments for validation
         print("\nDipole analysis:")
