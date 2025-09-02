@@ -114,13 +114,17 @@ def plot_combined_displacement_comparison(all_results):
         calc_magnitude = np.sqrt(calculated_flow[:,:,0]**2 + calculated_flow[:,:,1]**2)
         gt_magnitude = np.sqrt(ground_truth[:,:,0]**2 + ground_truth[:,:,1]**2)
         
+        # Determine common colorbar scale (use max of both fields)
+        vmax = max(np.max(calc_magnitude), np.max(gt_magnitude))
+        vmin = 0  # Magnitude is always >= 0
+        
         # Create coordinate grids for vector plotting (subsample for visibility)
         h, w = calculated_flow.shape[:2]
         step = max(h//20, w//20, 10)  # Adjust step size based on image size
         y, x = np.mgrid[0:h:step, 0:w:step]
         
         # Top row: Calculated displacement fields
-        im_calc = axes[0, i].imshow(calc_magnitude, cmap='viridis')
+        im_calc = axes[0, i].imshow(calc_magnitude, cmap='viridis', vmin=vmin, vmax=vmax)
         axes[0, i].quiver(x, y, calculated_flow[::step, ::step, 0], 
                          calculated_flow[::step, ::step, 1], 
                          color='white', scale_units='xy', scale=0.5, alpha=0.8)
@@ -134,7 +138,7 @@ def plot_combined_displacement_comparison(all_results):
         cbar_calc = plt.colorbar(im_calc, cax=cax_calc, label='Magnitude (pixels)')
         
         # Bottom row: Ground truth displacement fields
-        im_gt = axes[1, i].imshow(gt_magnitude, cmap='viridis')
+        im_gt = axes[1, i].imshow(gt_magnitude, cmap='viridis', vmin=vmin, vmax=vmax)
         axes[1, i].quiver(x, y, ground_truth[::step, ::step, 0], 
                          ground_truth[::step, ::step, 1], 
                          color='white', scale_units='xy', scale=0.5, alpha=0.8)
@@ -142,7 +146,7 @@ def plot_combined_displacement_comparison(all_results):
         axes[1, i].set_xlabel('X (pixels)')
         axes[1, i].set_ylabel('Y (pixels)')
         
-        # Create colorbar with same height as plot
+        # Create colorbar with same height as plot (same scale as calculated)
         divider_gt = make_axes_locatable(axes[1, i])
         cax_gt = divider_gt.append_axes("right", size="5%", pad=0.05)
         cbar_gt = plt.colorbar(im_gt, cax=cax_gt, label='Magnitude (pixels)')
