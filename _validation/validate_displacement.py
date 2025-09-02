@@ -22,11 +22,28 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from napariTFM.backend.displacement_analysis import DisplacementAnalyzer
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
+from napariTFM.backend.preprocessing import ImageProcessor
 
 
 def load_tif_image(filepath):
     """Load a TIF image as numpy array."""
     return np.array(Image.open(filepath))
+
+
+def preprocess_image(image):
+    """Apply preprocessing steps to the image."""
+    processor = ImageProcessor()
+    
+    # Apply intensity scaling with thresholds 85 and 99.9
+    processed, _ = processor.apply_intensity_scaling(image, 80, 99.9)
+    
+    # Apply Gaussian blur with sigma = 1
+    processed = processor.apply_gaussian_filter(processed, sigma=1)
+    
+    # Apply rolling ball background subtraction with radius = 0 (effectively no-op)
+    processed = processor.apply_rolling_ball(processed, radius=0)
+    
+    return processed
 
 
 def load_ground_truth_displacement(folder_path, pixel_size_um=0.1):
@@ -49,34 +66,34 @@ def get_scenario_parameters(scenario_name):
     # Scenario-specific parameter modifications
     scenario_configs = {
         'low': {
-            'tau': 0.25,
+            'tau': 0.15,
             'lambda_': 0.1,
-            'theta': 0.3,
-            'nscales': 3,
-            'warps': 3,
+            'theta': 0.1,
+            'nscales': 10,
+            'warps': 10,
             'epsilon': 0.01,
-            'inner_iterations': 15,
-            'outer_iterations': 5
+            'inner_iterations': 20,
+            'outer_iterations': 10
         },
         'mid': {
-            'tau': 0.2,
-            'lambda_': 0.08,
-            'theta': 0.25,
-            'nscales': 4,
-            'warps': 4,
-            'epsilon': 0.008,
-            'inner_iterations': 18,
-            'outer_iterations': 6
+            'tau': 0.15,
+            'lambda_': 0.1,
+            'theta': 0.1,
+            'nscales': 10,
+            'warps': 10,
+            'epsilon': 0.01,
+            'inner_iterations': 20,
+            'outer_iterations': 10
         },
         'high': {
             'tau': 0.15,
-            'lambda_': 0.06,
-            'theta': 0.2,
-            'nscales': 5,
-            'warps': 5,
-            'epsilon': 0.005,
+            'lambda_': 0.1,
+            'theta': 0.1,
+            'nscales': 10,
+            'warps': 10,
+            'epsilon': 0.01,
             'inner_iterations': 20,
-            'outer_iterations': 8
+            'outer_iterations': 10
         }
     }
     
@@ -98,10 +115,11 @@ def calculate_displacement_field(reference_img, deformed_img, params=None):
 
 def plot_combined_displacement_comparison(all_results):
     """Plot all scenarios in one figure with magnitude+vector plots only."""
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('Displacement Field Validation: Calculated vs Ground Truth', fontsize=16)
+    fig, axes = plt.subplots(2, 3, figsize=(8, 5))
+    fig.suptitle('Displacement Field Validation: Calculated vs Ground Truth', fontsize=11, color='black')
     
     scenarios = ['low', 'mid', 'high']
+    column_titles = ['Low Displacement', 'Medium Displacement', 'High Displacement']
     
     for i, scenario in enumerate(scenarios):
         if scenario not in all_results:
@@ -120,36 +138,53 @@ def plot_combined_displacement_comparison(all_results):
         
         # Create coordinate grids for vector plotting (subsample for visibility)
         h, w = calculated_flow.shape[:2]
-        step = max(h//20, w//20, 10)  # Adjust step size based on image size
+        step = max(h//30, w//30, 10)  # Adjust step size based on image size
         y, x = np.mgrid[0:h:step, 0:w:step]
         
         # Top row: Calculated displacement fields
         im_calc = axes[0, i].imshow(calc_magnitude, cmap='viridis', vmin=vmin, vmax=vmax)
         axes[0, i].quiver(x, y, calculated_flow[::step, ::step, 0], 
-                         calculated_flow[::step, ::step, 1], 
-                         color='white', scale_units='xy', scale=0.5, alpha=0.8)
-        axes[0, i].set_title(f'Calculated: {scenario.upper()}')
-        axes[0, i].set_xlabel('X (pixels)')
-        axes[0, i].set_ylabel('Y (pixels)')
+                         -calculated_flow[::step, ::step, 1], 
+                         color='white', scale_units='xy', scale=0.01*vmax, alpha=0.4)
+        axes[0, i].set_xticks([])
+        axes[0, i].set_yticks([])
         
         # Create colorbar with same height as plot
         divider_calc = make_axes_locatable(axes[0, i])
         cax_calc = divider_calc.append_axes("right", size="5%", pad=0.05)
-        cbar_calc = plt.colorbar(im_calc, cax=cax_calc, label='Magnitude (pixels)')
+        cbar_calc = plt.colorbar(im_calc, cax=cax_calc)
+        cbar_calc.set_label('Magnitude (pixels)', fontsize=8, color='black')
+        cbar_calc.ax.tick_params(labelsize=6, colors='black')
         
         # Bottom row: Ground truth displacement fields
         im_gt = axes[1, i].imshow(gt_magnitude, cmap='viridis', vmin=vmin, vmax=vmax)
         axes[1, i].quiver(x, y, ground_truth[::step, ::step, 0], 
-                         ground_truth[::step, ::step, 1], 
-                         color='white', scale_units='xy', scale=0.5, alpha=0.8)
-        axes[1, i].set_title(f'Ground Truth: {scenario.upper()}')
-        axes[1, i].set_xlabel('X (pixels)')
-        axes[1, i].set_ylabel('Y (pixels)')
+                         -ground_truth[::step, ::step, 1], 
+                         color='white', scale_units='xy', scale=0.01*vmax, alpha=0.4)
+        axes[1, i].set_xticks([])
+        axes[1, i].set_yticks([])
         
         # Create colorbar with same height as plot (same scale as calculated)
         divider_gt = make_axes_locatable(axes[1, i])
         cax_gt = divider_gt.append_axes("right", size="5%", pad=0.05)
-        cbar_gt = plt.colorbar(im_gt, cax=cax_gt, label='Magnitude (pixels)')
+        cbar_gt = plt.colorbar(im_gt, cax=cax_gt)
+        cbar_gt.set_label('Magnitude (pixels)', fontsize=8, color='black')
+        cbar_gt.ax.tick_params(labelsize=6, colors='black')
+        
+        # Add column title to top row
+        if i < len(column_titles):
+            axes[0, i].set_title(column_titles[i], fontsize=10, color='black', pad=20)
+    
+    # Add row titles
+    axes[0, 0].text(-0.1, 0.5, 'Calculated', transform=axes[0, 0].transAxes, 
+                    fontsize=10, color='black', rotation=90, va='center', ha='right')
+    axes[1, 0].text(-0.1, 0.5, 'Ground Truth', transform=axes[1, 0].transAxes, 
+                    fontsize=10, color='black', rotation=90, va='center', ha='right')
+    
+    # Set tick label properties for all axes
+    for ax_row in axes:
+        for ax in ax_row:
+            ax.tick_params(labelsize=6, colors='black')
     
     plt.tight_layout()
     return fig
@@ -182,25 +217,25 @@ def plot_error_comparison(all_results):
     # Extract normalized error metrics
     normalized_errors = [all_results[s]['errors']['normalized_rmse'] for s in scenarios]
     
-    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+    fig, ax = plt.subplots(1, 1, figsize=(3, 2))
     
-    # Create bar plot
-    colors = ['blue', 'orange', 'green']
+    # Create bar plot with tab10 colors
+    colors = plt.cm.tab10.colors[:3]  # First three colors of tab10
     bars = ax.bar(scenarios, normalized_errors, color=colors, alpha=0.7)
     
     # Add value labels on bars
     for i, (bar, error) in enumerate(zip(bars, normalized_errors)):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
-               f'{error:.3f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+               f'{error:.3f}', ha='center', va='bottom', fontsize=6, color='black')
     
-    ax.set_xlabel('Scenario', fontsize=12)
-    ax.set_ylabel('Normalized RMSE (fraction of max GT displacement)', fontsize=12)
-    ax.set_title('Normalized Displacement Error Across Scenarios', fontsize=14)
+    ax.set_xlabel('Scenario', fontsize=8, color='black')
+    ax.set_ylabel('Normalized RMSE', fontsize=8, color='black')
+    ax.set_title('Normalized Displacement Error Across Scenarios', fontsize=10, color='black')
     ax.grid(True, alpha=0.3, axis='y')
     ax.set_ylim(0, max(normalized_errors) * 1.2)
     
-    # Convert scenario names to uppercase for labels
-    ax.set_xticklabels([s.upper() for s in scenarios])
+    # Set tick label properties
+    ax.tick_params(labelsize=6, colors='black')
     
     plt.tight_layout()
     return fig
@@ -222,6 +257,10 @@ def validate_scenario(scenario_folder):
     
     reference_img = load_tif_image(reference_path)
     deformed_img = load_tif_image(deformed_path)
+    
+    # Apply preprocessing
+    reference_img = preprocess_image(reference_img)
+    deformed_img = preprocess_image(deformed_img)
     
     print(f"  Reference image shape: {reference_img.shape}")
     print(f"  Deformed image shape: {deformed_img.shape}")
@@ -270,7 +309,7 @@ def main():
         print("\nCreating combined displacement comparison plot...")
         combined_fig = plot_combined_displacement_comparison(all_results)
         combined_output_path = Path(__file__).parent / "displacement_validation_combined.png"
-        combined_fig.savefig(combined_output_path, dpi=150, bbox_inches='tight')
+        combined_fig.savefig(combined_output_path, dpi=300, bbox_inches='tight')
         print(f"  Saved combined plot: {combined_output_path}")
         plt.close(combined_fig)
         
@@ -278,7 +317,7 @@ def main():
         print("Creating error comparison plot...")
         error_fig = plot_error_comparison(all_results)
         error_output_path = Path(__file__).parent / "error_comparison.png"
-        error_fig.savefig(error_output_path, dpi=150, bbox_inches='tight')
+        error_fig.savefig(error_output_path, dpi=300, bbox_inches='tight')
         print(f"  Saved error plot: {error_output_path}")
         plt.close(error_fig)
     
