@@ -21,6 +21,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from napariTFM.backend.displacement_analysis import DisplacementAnalyzer
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 
 
 def load_tif_image(filepath):
@@ -40,9 +41,57 @@ def load_ground_truth_displacement(folder_path, pixel_size_um=0.1):
     return np.stack([disp_x_pixels, disp_y_pixels], axis=-1)
 
 
-def calculate_displacement_field(reference_img, deformed_img):
-    """Calculate displacement field using DisplacementAnalyzer."""
-    analyzer = DisplacementAnalyzer()
+def get_scenario_parameters(scenario_name):
+    """Get displacement analysis parameters for each scenario."""
+    # Default parameters
+    base_params = DisplacementParameters()
+    
+    # Scenario-specific parameter modifications
+    scenario_configs = {
+        'low': {
+            'tau': 0.25,
+            'lambda_': 0.1,
+            'theta': 0.3,
+            'nscales': 3,
+            'warps': 3,
+            'epsilon': 0.01,
+            'inner_iterations': 15,
+            'outer_iterations': 5
+        },
+        'mid': {
+            'tau': 0.2,
+            'lambda_': 0.08,
+            'theta': 0.25,
+            'nscales': 4,
+            'warps': 4,
+            'epsilon': 0.008,
+            'inner_iterations': 18,
+            'outer_iterations': 6
+        },
+        'high': {
+            'tau': 0.15,
+            'lambda_': 0.06,
+            'theta': 0.2,
+            'nscales': 5,
+            'warps': 5,
+            'epsilon': 0.005,
+            'inner_iterations': 20,
+            'outer_iterations': 8
+        }
+    }
+    
+    # Update parameters for the specific scenario
+    if scenario_name in scenario_configs:
+        config = scenario_configs[scenario_name]
+        for param, value in config.items():
+            setattr(base_params, param, value)
+    
+    return base_params
+
+
+def calculate_displacement_field(reference_img, deformed_img, params=None):
+    """Calculate displacement field using DisplacementAnalyzer with custom parameters."""
+    analyzer = DisplacementAnalyzer(params)
     flow = analyzer.calculate_flow(reference_img, deformed_img)
     return flow
 
@@ -158,6 +207,11 @@ def validate_scenario(scenario_folder):
     scenario_name = os.path.basename(scenario_folder)
     print(f"\nValidating scenario: {scenario_name}")
     
+    # Get scenario-specific parameters
+    params = get_scenario_parameters(scenario_name)
+    print(f"  Using parameters: tau={params.tau}, lambda_={params.lambda_}, "
+          f"nscales={params.nscales}, warps={params.warps}")
+    
     # Load images
     reference_path = os.path.join(scenario_folder, 'reference.tif')
     deformed_path = os.path.join(scenario_folder, 'deformed.tif')
@@ -168,8 +222,8 @@ def validate_scenario(scenario_folder):
     print(f"  Reference image shape: {reference_img.shape}")
     print(f"  Deformed image shape: {deformed_img.shape}")
     
-    # Calculate displacement field
-    calculated_flow = calculate_displacement_field(reference_img, deformed_img)
+    # Calculate displacement field with custom parameters
+    calculated_flow = calculate_displacement_field(reference_img, deformed_img, params)
     print(f"  Calculated flow shape: {calculated_flow.shape}")
     
     # Load ground truth
