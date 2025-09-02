@@ -11,12 +11,12 @@ spacing_xy = 0.1  # µm
 spacing_z = 1  # µm
 
 [simulation]
-n_points_xy = 1000
+n_points_xy = 800
 n_points_z = 1
 
 [adheasion.dipole_1]
 type = "dipole"
-F = 0.1   # µN - Total tangential force per adhesion site (1e-9 N)
+F = 0.004   # µN - Total tangential force per adhesion site (1e-9 N)
 Fz = 0.0    # µN - Normal force
 F_unit = "µN"
 d = 50.0     # µm - Distance between counteracting adhesion sites
@@ -26,7 +26,7 @@ pos = [0, 0] # µm - Position of dipole center
 
 [adheasion.dipole_2]
 type = "dipole"
-F = 0.1    # µN - Total tangential force per adhesion site (1e-9 N)
+F = 0.004    # µN - Total tangential force per adhesion site (1e-9 N)
 Fz = 0.0    # µN - Normal force
 F_unit = "µN"
 d = 50.0     # µm - Distance between counteracting adhesion sites

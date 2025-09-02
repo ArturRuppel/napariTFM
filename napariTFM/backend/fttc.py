@@ -25,7 +25,9 @@ Paper references:
 from typing import Tuple, Optional
 
 from scipy import optimize
+import numpy as np
 
+from napariTFM.backend.fttc_numba_functions import calculate_traction_2d, blkmul_adj
 from napariTFM.backend.fttc_numba_functions import *
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 

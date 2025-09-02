@@ -1,0 +1,71 @@
+analysis_steps:
+  calculate_metrics: true
+  create_masks: true
+  displacement: true
+  force: true
+  preprocessing: true
+  stress: false
+input_files:
+  beads: beads.tif
+  cells: cells.tif
+  reference: reference.tif
+metrics_parameters:
+  calculate_polarization: true
+  calculate_strain_energy: true
+  export_eigenvalues: true
+  force_threshold_percentile: 10
+  mask_dilation: 0
+  mask_erosion: 0
+parameters:
+  auto_gcv: false
+  cell_gaussian_sigma: 1.0
+  cell_max_intensity_percentile: 99.9
+  cell_min_intensity_percentile: 85.0
+  d_max: 1.0
+  density_factor: 0.01
+  dilation: 10
+  disp_arrow_scale: 1.0
+  disp_vector_stride: 20
+  downscale_factor: 4
+  epsilon: 0.01
+  f_max: 2000.0
+  force_arrow_scale: 1.0
+  force_vector_stride: 20
+  frame_interval: 1.0
+  gaussian_sigma: 1.0
+  gel_height: null
+  inner_iterations: 20
+  lambda_: 0.1
+  lanczos_exp: 5
+  max_intensity_percentile: 99.9
+  max_stress: 1.0
+  median_filtering: 1
+  mesh_algorithm: Frontal-Del.
+  min_intensity_percentile: 90.0
+  nscales: 10
+  outer_iterations: 10
+  pixel_size: 0.1
+  poisson_ratio_cells: 0.5
+  poisson_ratio_substrate: 0.5
+  registration_mode: translation
+  regularization: 0.0001
+  rolling_ball_radius: 5
+  scale_step: 0.8
+  smoothing_sigma: 10.0
+  tau: 0.15
+  theta: 0.3
+  threshold: 0.0
+  use_optimization: true
+  warps: 10
+  young_modulus: 20000.0
+root_folders:
+- C:/Users/aruppel/Desktop/doublets_test
+visualizations:
+  bead_overlay: true
+  displacement_map: true
+  force_cell_overlay: true
+  force_map: true
+  mesh: false
+  normal_stress: false
+  sigma_xx: false
+  sigma_yy: false
