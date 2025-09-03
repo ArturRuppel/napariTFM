@@ -11,7 +11,7 @@ spacing_xy = 0.1  # µm
 spacing_z = 1  # µm
 
 [simulation]
-n_points_xy = 800
+n_points_xy = 700
 n_points_z = 1
 
 [adheasion.dipole_1]

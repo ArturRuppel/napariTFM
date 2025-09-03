@@ -179,8 +179,8 @@ def main():
     
     # Default paths - can be modified as needed
     base_folder = "/home/artur/napariTFM/_validation/benchmark_displacements_forces/"
-    toml_file = base_folder + "high/dipole_config.toml"
-    reference_image = base_folder + "high/reference.tif"
+    toml_file = base_folder + "low/dipole_config.toml"
+    reference_image = base_folder + "low/reference.tif"
     
     # Check if TOML config exists
     if not Path(toml_file).exists():
