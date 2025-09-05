@@ -14,6 +14,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend to avoid Qt issues
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from PIL import Image
 
@@ -241,8 +242,31 @@ def calculate_strain_energy_metrics(displacement_data, calculated_traction, grou
 
 def plot_displacement(displacement_results):
     scenarios = ['low', 'mid', 'high']
-    fig, axes = plt.subplots(2, 4, figsize=(7.5, 4))  # DIN A4 compatible width
-    fig.suptitle('Displacement Field Validation', fontsize=10, y=0.95)
+    fig = plt.figure(figsize=(9.5, 5))  # DIN A4 compatible width
+    
+    # Use 5 rows to create vertical padding for correlation plot, 5 cols for spacing
+    gs = gridspec.GridSpec(5, 5, figure=fig, 
+                          width_ratios=[0.25, 0.25, 0.25, 0.11, 0.14],
+                          height_ratios=[0.1, 0.4, 0.1, 0.4, 0.1],
+                          wspace=0.0, hspace=0.1)
+    
+    fig.suptitle('Displacement Field Validation', fontsize=12, y=0.9)
+    
+    # Create axes using gridspec - maps use rows 1 and 3, cols 0-2
+    axes = []
+    # Top row (row 1)
+    top_axes = []
+    for j in range(3):  # Only first 3 columns for maps
+        ax = fig.add_subplot(gs[1, j])
+        top_axes.append(ax)
+    axes.append(top_axes)
+    
+    # Bottom row (row 3) 
+    bottom_axes = []
+    for j in range(3):  # Only first 3 columns for maps
+        ax = fig.add_subplot(gs[3, j])
+        bottom_axes.append(ax)
+    axes.append(bottom_axes)
     
     # Plot displacement fields for each scenario
     for i, scenario in enumerate(scenarios):
@@ -261,75 +285,93 @@ def plot_displacement(displacement_results):
             y, x = np.mgrid[0:h:step, 0:w:step]
             
             # Ground truth (top row)
-            im1 = axes[0, i].imshow(gt_magnitude, cmap='viridis', vmin=0, vmax=vmax)
-            axes[0, i].quiver(x, y, ground_truth[::step, ::step, 0], 
+            im1 = axes[0][i].imshow(gt_magnitude, cmap='viridis', vmin=0, vmax=vmax)
+            axes[0][i].quiver(x, y, ground_truth[::step, ::step, 0], 
                              -ground_truth[::step, ::step, 1], 
                              color='white', scale_units='xy', scale=0.01*vmax, alpha=0.6)
-            axes[0, i].set_title(f'{scenario.upper()}\nGround Truth', fontsize=8)
-            axes[0, i].set_xticks([])
-            axes[0, i].set_yticks([])
-            axes[0, i].tick_params(labelsize=6)
-            divider1 = make_axes_locatable(axes[0, i])
+            # Set more verbose titles for scenarios
+            scenario_title = f'{scenario.capitalize()} Displacement'
+            axes[0][i].set_title(scenario_title, fontsize=9)
+            axes[0][i].set_xticks([])
+            axes[0][i].set_yticks([])
+            divider1 = make_axes_locatable(axes[0][i])
             cax1 = divider1.append_axes("right", size="5%", pad=0.05)
             cbar1 = plt.colorbar(im1, cax=cax1)
+            if i == 2:  # Only add label to rightmost column
+                cbar1.set_label('Magnitude (pixels)', fontsize=7)
             cbar1.ax.tick_params(labelsize=6)
             
             # Calculated (bottom row)
-            im2 = axes[1, i].imshow(calc_magnitude, cmap='viridis', vmin=0, vmax=vmax)
-            axes[1, i].quiver(x, y, calculated[::step, ::step, 0], 
+            im2 = axes[1][i].imshow(calc_magnitude, cmap='viridis', vmin=0, vmax=vmax)
+            axes[1][i].quiver(x, y, calculated[::step, ::step, 0], 
                              -calculated[::step, ::step, 1], 
                              color='white', scale_units='xy', scale=0.01*vmax, alpha=0.6)
-            axes[1, i].set_title('Calculated', fontsize=8)
-            axes[1, i].set_xticks([])
-            axes[1, i].set_yticks([])
-            axes[1, i].tick_params(labelsize=6)
-            divider2 = make_axes_locatable(axes[1, i])
+            axes[1][i].set_title('', fontsize=8)  # Remove individual title
+            axes[1][i].set_xticks([])
+            axes[1][i].set_yticks([])
+            divider2 = make_axes_locatable(axes[1][i])
             cax2 = divider2.append_axes("right", size="5%", pad=0.05)
             cbar2 = plt.colorbar(im2, cax=cax2)
+            if i == 2:  # Only add label to rightmost column
+                cbar2.set_label('Magnitude (pixels)', fontsize=7)
             cbar2.ax.tick_params(labelsize=6)
     
-    # Create a single subplot spanning both rows for correlation
-    gs = axes[0, 3].get_gridspec()
-    # Remove the individual subplots
-    axes[0, 3].remove()
-    axes[1, 3].remove()
-    # Create a subplot spanning both rows
-    ax_corr = fig.add_subplot(gs[:, 3])
+    # Create correlation subplot spanning middle 80% vertical space (rows 1-3), column 4
+    ax_corr = fig.add_subplot(gs[1:4, 4])
     
     correlations = [displacement_results[s]['displacement_correlation'] if s in displacement_results else 0 for s in scenarios]
     bars = ax_corr.bar(scenarios, correlations, color=['#1f77b4', '#ff7f0e', '#2ca02c'], alpha=0.7)
-    ax_corr.set_title('Correlation between\nCalculated and\nGround Truth Data', fontsize=8, pad=15)
+    ax_corr.set_title('Correlation between\nCalculated and\nGround Truth Data', fontsize=9)
     ax_corr.set_ylabel('Correlation Coefficient', fontsize=8)
     ax_corr.set_ylim(0, 1.1)
     ax_corr.grid(True, alpha=0.3)
-    ax_corr.tick_params(labelsize=6)
+    ax_corr.tick_params(labelsize=7)
     
     # Add correlation values on bars
     for bar, corr in zip(bars, correlations):
         ax_corr.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
-                     f'{corr:.3f}', ha='center', va='bottom', fontsize=6)
+                     f'{corr:.3f}', ha='center', va='bottom', fontsize=7)
     
-    # Adjust the correlation subplot to be more compact vertically
-    pos = ax_corr.get_position()
-    # Make it smaller vertically and center it better
-    new_height = pos.height * 0.6
-    new_y = pos.y0 + (pos.height - new_height) * 0.5
-    ax_corr.set_position([pos.x0, new_y, pos.width, new_height])
+    # Add row labels on the left side
+    fig.text(0.135, 0.675, 'Ground Truth', rotation=90, va='center', ha='center', fontsize=9)
+    fig.text(0.135, 0.32, 'Calculated', rotation=90, va='center', ha='center', fontsize=9)
     
-    plt.tight_layout()
     return fig
 
 
 def plot_traction(fttc_results):
     scenarios = ['low', 'mid', 'high']
-    fig, axes = plt.subplots(2, 4, figsize=(7.5, 4))  # DIN A4 compatible width
-    fig.suptitle('Traction Force Validation', fontsize=10, y=0.95)
+    fig = plt.figure(figsize=(9.5, 5))  # DIN A4 compatible width
+    
+    # Use 5 rows to create vertical padding for correlation plot, 5 cols for spacing
+    gs = gridspec.GridSpec(5, 5, figure=fig, 
+                          width_ratios=[0.25, 0.25, 0.25, 0.11, 0.14],
+                          height_ratios=[0.1, 0.4, 0.1, 0.4, 0.1],
+                          wspace=0.0, hspace=0.1)
+    
+    fig.suptitle('Traction Force Validation', fontsize=12, y=0.9)
+    
+    # Create axes using gridspec - maps use rows 1 and 3, cols 0-2
+    axes = []
+    # Top row (row 1)
+    top_axes = []
+    for j in range(3):  # Only first 3 columns for maps
+        ax = fig.add_subplot(gs[1, j])
+        top_axes.append(ax)
+    axes.append(top_axes)
+    
+    # Bottom row (row 3) 
+    bottom_axes = []
+    for j in range(3):  # Only first 3 columns for maps
+        ax = fig.add_subplot(gs[3, j])
+        bottom_axes.append(ax)
+    axes.append(bottom_axes)
     
     # Plot traction fields for each scenario
     for i, scenario in enumerate(scenarios):
         if scenario in fttc_results:
-            calculated = fttc_results[scenario]['calculated']
-            ground_truth = fttc_results[scenario]['ground_truth']
+            calculated = fttc_results[scenario]['calculated'] * 1e-3 # convert to kPa
+            ground_truth = fttc_results[scenario]['ground_truth'] * 1e-3 
             
             # Calculate magnitudes
             if calculated is not None:
@@ -345,63 +387,58 @@ def plot_traction(fttc_results):
             y, x = np.mgrid[0:h:step, 0:w:step]
             
             # Ground truth (top row)
-            im1 = axes[0, i].imshow(gt_magnitude, cmap='inferno', vmin=0, vmax=vmax)
-            axes[0, i].quiver(x, y, ground_truth[::step, ::step, 0], 
+            im1 = axes[0][i].imshow(gt_magnitude, cmap='inferno', vmin=0, vmax=vmax)
+            axes[0][i].quiver(x, y, ground_truth[::step, ::step, 0], 
                              -ground_truth[::step, ::step, 1], 
                              color='white', scale_units='xy', scale=0.01*vmax, alpha=0.6)
-            axes[0, i].set_title(f'{scenario.upper()}\nGround Truth', fontsize=8)
-            axes[0, i].set_xticks([])
-            axes[0, i].set_yticks([])
-            axes[0, i].tick_params(labelsize=6)
-            divider1 = make_axes_locatable(axes[0, i])
+            # Set more verbose titles for scenarios
+            scenario_title = f'{scenario.capitalize()} Traction'
+            axes[0][i].set_title(scenario_title, fontsize=9)
+            axes[0][i].set_xticks([])
+            axes[0][i].set_yticks([])
+            divider1 = make_axes_locatable(axes[0][i])
             cax1 = divider1.append_axes("right", size="5%", pad=0.05)
             cbar1 = plt.colorbar(im1, cax=cax1)
+            if i == 2:  # Only add label to rightmost column
+                cbar1.set_label('Magnitude (kPa)', fontsize=7)
             cbar1.ax.tick_params(labelsize=6)
             
             # Calculated (bottom row)
-            im2 = axes[1, i].imshow(calc_magnitude, cmap='inferno', vmin=0, vmax=vmax)
+            im2 = axes[1][i].imshow(calc_magnitude, cmap='inferno', vmin=0, vmax=vmax)
             if calculated is not None:
-                axes[1, i].quiver(x, y, calculated[::step, ::step, 0], 
+                axes[1][i].quiver(x, y, calculated[::step, ::step, 0], 
                                  -calculated[::step, ::step, 1], 
                                  color='white', scale_units='xy', scale=0.01*vmax, alpha=0.6)
-            axes[1, i].set_title('Calculated', fontsize=8)
-            axes[1, i].set_xticks([])
-            axes[1, i].set_yticks([])
-            axes[1, i].tick_params(labelsize=6)
-            divider2 = make_axes_locatable(axes[1, i])
+            axes[1][i].set_title('', fontsize=8)  # Remove individual title
+            axes[1][i].set_xticks([])
+            axes[1][i].set_yticks([])
+            divider2 = make_axes_locatable(axes[1][i])
             cax2 = divider2.append_axes("right", size="5%", pad=0.05)
             cbar2 = plt.colorbar(im2, cax=cax2)
+            if i == 2:  # Only add label to rightmost column
+                cbar2.set_label('Magnitude (kPa)', fontsize=7)
             cbar2.ax.tick_params(labelsize=6)
     
-    # Create a single subplot spanning both rows for correlation
-    gs = axes[0, 3].get_gridspec()
-    # Remove the individual subplots
-    axes[0, 3].remove()
-    axes[1, 3].remove()
-    # Create a subplot spanning both rows
-    ax_corr = fig.add_subplot(gs[:, 3])
+    # Create correlation subplot spanning middle 80% vertical space (rows 1-3), column 4
+    ax_corr = fig.add_subplot(gs[1:4, 4])
     
     correlations = [fttc_results[s]['traction_correlation'] if s in fttc_results else 0 for s in scenarios]
     bars = ax_corr.bar(scenarios, correlations, color=['#1f77b4', '#ff7f0e', '#2ca02c'], alpha=0.7)
-    ax_corr.set_title('Correlation between\nCalculated and\nGround Truth Data', fontsize=8, pad=15)
+    ax_corr.set_title('Correlation between\nCalculated and\nGround Truth Data', fontsize=9)
     ax_corr.set_ylabel('Correlation Coefficient', fontsize=8)
     ax_corr.set_ylim(0, 1.1)
     ax_corr.grid(True, alpha=0.3)
-    ax_corr.tick_params(labelsize=6)
+    ax_corr.tick_params(labelsize=7)
     
     # Add correlation values on bars
     for bar, corr in zip(bars, correlations):
         ax_corr.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
-                     f'{corr:.3f}', ha='center', va='bottom', fontsize=6)
+                     f'{corr:.3f}', ha='center', va='bottom', fontsize=7)
     
-    # Adjust the correlation subplot to be more compact vertically
-    pos = ax_corr.get_position()
-    # Make it smaller vertically and center it better
-    new_height = pos.height * 0.6
-    new_y = pos.y0 + (pos.height - new_height) * 0.5
-    ax_corr.set_position([pos.x0, new_y, pos.width, new_height])
+    # Add row labels on the left side
+    fig.text(0.135, 0.675, 'Ground Truth', rotation=90, va='center', ha='center', fontsize=9)
+    fig.text(0.135, 0.32, 'Calculated', rotation=90, va='center', ha='center', fontsize=9)
     
-    plt.tight_layout()
     return fig
 
 
@@ -643,18 +680,18 @@ def main():
     if displacement_results:
         print("\n--- Creating validation plots ---")
         
-        # Create consolidated displacement plot
+        # Create displacement plot
         disp_fig = plot_displacement(displacement_results)
         disp_path = Path(__file__).parent / "displacement.png"
         disp_fig.savefig(disp_path, dpi=300, bbox_inches='tight')
-        print(f"  Saved consolidated displacement plot: {disp_path}")
+        print(f"  Saved displacement plot: {disp_path}")
         plt.close(disp_fig)
         
-        # Create consolidated traction plot
+        # Create traction plot
         trac_fig = plot_traction(fttc_results)
         trac_path = Path(__file__).parent / "traction.png"
         trac_fig.savefig(trac_path, dpi=300, bbox_inches='tight')
-        print(f"  Saved consolidated traction plot: {trac_path}")
+        print(f"  Saved traction plot: {trac_path}")
         plt.close(trac_fig)
         
         # Create strain energy comparison plot
