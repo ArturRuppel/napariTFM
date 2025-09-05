@@ -25,6 +25,7 @@ from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 from napariTFM.backend.preprocessing import ImageProcessor
 from napariTFM.backend.fttc import FTTC
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
+from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy
 
 
 def load_tif_image(filepath):
@@ -41,10 +42,7 @@ def preprocess_image(image):
     
     # Apply Gaussian blur with sigma = 1
     processed = processor.apply_gaussian_filter(processed, sigma=1)
-    
-    # Apply rolling ball background subtraction with radius = 0 (effectively no-op)
-    processed = processor.apply_rolling_ball(processed, radius=0)
-    
+     
     return processed
 
 
@@ -132,7 +130,9 @@ def get_fttc_parameters(scenario_name):
             'young_modulus': 20000,  # Pa
             'poisson_ratio_substrate': 0.5,
             'lanczos_exp': 1,
-            'auto_gcv': True,
+            # 'auto_gcv': True,
+            'auto_gcv': False,
+            'regularization': 1e-17,
             'pixel_size': 0.1,  # µm
             'downscale_factor': 1
         },
@@ -140,7 +140,9 @@ def get_fttc_parameters(scenario_name):
             'young_modulus': 20000,  # Pa
             'poisson_ratio_substrate': 0.5,
             'lanczos_exp': 1,
-            'auto_gcv': True,
+            # 'auto_gcv': True,
+            'auto_gcv': False,
+            'regularization': 1e-17,
             'pixel_size': 0.1,  # µm
             'downscale_factor': 1
         },
@@ -148,7 +150,9 @@ def get_fttc_parameters(scenario_name):
             'young_modulus': 20000,  # Pa
             'poisson_ratio_substrate': 0.5,
             'lanczos_exp': 1,
-            'auto_gcv': True,
+            # 'auto_gcv': True,
+            'auto_gcv': False,
+            'regularization': 1e-17,
             'pixel_size': 0.1,  # µm
             'downscale_factor': 1
         }
@@ -189,240 +193,302 @@ def calculate_traction_field(disp_x, disp_y, params):
     return traction_coords, traction_values
 
 
-def plot_combined_comparison(all_results, analysis_type="displacement"):
-    """Plot all scenarios in one figure with magnitude+vector plots only."""
-    if analysis_type == "displacement":
-        fig, axes = plt.subplots(2, 3, figsize=(7, 4))
-        fig.suptitle('Displacement Field Validation: Calculated vs Ground Truth', fontsize=11, color='black', y=0.875)
-        column_titles = ['Low Displacement', 'Medium Displacement', 'High Displacement']
-        unit_label = 'Magnitude (pixels)'
-        colormap = 'viridis'
-        row_titles = ['Calculated', 'Ground Truth']
+def calculate_correlation_metrics(calculated_data, ground_truth_data):
+    """Calculate correlation between calculated and ground truth fields."""
+    # Flatten the data and remove invalid values
+    calc_flat = calculated_data.flatten()
+    gt_flat = ground_truth_data.flatten()
+    
+    # Create mask for valid (non-NaN, non-zero) values
+    valid_mask = ~np.isnan(calc_flat) & ~np.isnan(gt_flat) & (calc_flat != 0) & (gt_flat != 0)
+    
+    if np.sum(valid_mask) > 1:
+        correlation = np.corrcoef(calc_flat[valid_mask], gt_flat[valid_mask])[0, 1]
     else:
-        fig, axes = plt.subplots(3, 3, figsize=(7, 6))
-        fig.suptitle('Traction Force Validation: 3-Way Comparison', fontsize=11, color='black', y=0.875)
-        column_titles = ['Low Force', 'Medium Force', 'High Force']
-        unit_label = 'Magnitude (Pa)'
-        colormap = 'inferno'
-        row_titles = ['From Ground Truth Disp.', 'From Calculated Disp.', 'Ground Truth Traction']
+        correlation = 0
     
-    scenarios = ['low', 'mid', 'high']
-    
-    for i, scenario in enumerate(scenarios):
-        if scenario not in all_results:
-            continue
-            
-        calculated_data = all_results[scenario]['calculated']
-        ground_truth = all_results[scenario]['ground_truth']
-        
-        if analysis_type == "traction" and 'pipeline' in all_results[scenario]:
-            pipeline_data = all_results[scenario]['pipeline']
-            
-            # Calculate magnitudes for all three
-            calc_magnitude = np.sqrt(calculated_data[:,:,0]**2 + calculated_data[:,:,1]**2)
-            pipeline_magnitude = np.sqrt(pipeline_data[:,:,0]**2 + pipeline_data[:,:,1]**2)
-            gt_magnitude = np.sqrt(ground_truth[:,:,0]**2 + ground_truth[:,:,1]**2)
-            
-            # Determine common colorbar scale
-            vmax = max(np.max(calc_magnitude), np.max(pipeline_magnitude), np.max(gt_magnitude))
-            vmin = 0
-            
-            # Create coordinate grids for vector plotting
-            h, w = calculated_data.shape[:2]
-            step = max(h//30, w//30, 10)
-            y, x = np.mgrid[0:h:step, 0:w:step]
-            
-            # Row 0: Traction from ground truth displacement
-            im_calc = axes[0, i].imshow(calc_magnitude, cmap=colormap, vmin=vmin, vmax=vmax)
-            axes[0, i].quiver(x, y, calculated_data[::step, ::step, 0], 
-                             -calculated_data[::step, ::step, 1], 
-                             color='white', scale_units='xy', scale=0.01*vmax, alpha=0.4)
-            axes[0, i].set_xticks([])
-            axes[0, i].set_yticks([])
-            
-            divider_calc = make_axes_locatable(axes[0, i])
-            cax_calc = divider_calc.append_axes("right", size="5%", pad=0.05)
-            cbar_calc = plt.colorbar(im_calc, cax=cax_calc)
-            cbar_calc.set_label(unit_label, fontsize=8, color='black')
-            cbar_calc.ax.tick_params(labelsize=6, colors='black')
-            
-            # Row 1: Traction from calculated displacement (pipeline)
-            im_pipeline = axes[1, i].imshow(pipeline_magnitude, cmap=colormap, vmin=vmin, vmax=vmax)
-            axes[1, i].quiver(x, y, pipeline_data[::step, ::step, 0], 
-                             -pipeline_data[::step, ::step, 1], 
-                             color='white', scale_units='xy', scale=0.01*vmax, alpha=0.4)
-            axes[1, i].set_xticks([])
-            axes[1, i].set_yticks([])
-            
-            divider_pipeline = make_axes_locatable(axes[1, i])
-            cax_pipeline = divider_pipeline.append_axes("right", size="5%", pad=0.05)
-            cbar_pipeline = plt.colorbar(im_pipeline, cax=cax_pipeline)
-            cbar_pipeline.set_label(unit_label, fontsize=8, color='black')
-            cbar_pipeline.ax.tick_params(labelsize=6, colors='black')
-            
-            # Row 2: Ground truth traction
-            im_gt = axes[2, i].imshow(gt_magnitude, cmap=colormap, vmin=vmin, vmax=vmax)
-            axes[2, i].quiver(x, y, ground_truth[::step, ::step, 0], 
-                             -ground_truth[::step, ::step, 1], 
-                             color='white', scale_units='xy', scale=0.01*vmax, alpha=0.4)
-            axes[2, i].set_xticks([])
-            axes[2, i].set_yticks([])
-            
-            divider_gt = make_axes_locatable(axes[2, i])
-            cax_gt = divider_gt.append_axes("right", size="5%", pad=0.05)
-            cbar_gt = plt.colorbar(im_gt, cax=cax_gt)
-            cbar_gt.set_label(unit_label, fontsize=8, color='black')
-            cbar_gt.ax.tick_params(labelsize=6, colors='black')
-            
-        else:
-            # Original 2-row layout for displacement or if no pipeline data
-            calc_magnitude = np.sqrt(calculated_data[:,:,0]**2 + calculated_data[:,:,1]**2)
-            gt_magnitude = np.sqrt(ground_truth[:,:,0]**2 + ground_truth[:,:,1]**2)
-            
-            vmax = max(np.max(calc_magnitude), np.max(gt_magnitude))
-            vmin = 0
-            
-            h, w = calculated_data.shape[:2]
-            step = max(h//30, w//30, 10)
-            y, x = np.mgrid[0:h:step, 0:w:step]
-            
-            # Top row: Calculated fields
-            im_calc = axes[0, i].imshow(calc_magnitude, cmap=colormap, vmin=vmin, vmax=vmax)
-            axes[0, i].quiver(x, y, calculated_data[::step, ::step, 0], 
-                             -calculated_data[::step, ::step, 1], 
-                             color='white', scale_units='xy', scale=0.01*vmax, alpha=0.4)
-            axes[0, i].set_xticks([])
-            axes[0, i].set_yticks([])
-            
-            divider_calc = make_axes_locatable(axes[0, i])
-            cax_calc = divider_calc.append_axes("right", size="5%", pad=0.05)
-            cbar_calc = plt.colorbar(im_calc, cax=cax_calc)
-            cbar_calc.set_label(unit_label, fontsize=8, color='black')
-            cbar_calc.ax.tick_params(labelsize=6, colors='black')
-            
-            # Bottom row: Ground truth fields
-            im_gt = axes[1, i].imshow(gt_magnitude, cmap=colormap, vmin=vmin, vmax=vmax)
-            axes[1, i].quiver(x, y, ground_truth[::step, ::step, 0], 
-                             -ground_truth[::step, ::step, 1], 
-                             color='white', scale_units='xy', scale=0.01*vmax, alpha=0.4)
-            axes[1, i].set_xticks([])
-            axes[1, i].set_yticks([])
-            
-            divider_gt = make_axes_locatable(axes[1, i])
-            cax_gt = divider_gt.append_axes("right", size="5%", pad=0.05)
-            cbar_gt = plt.colorbar(im_gt, cax=cax_gt)
-            cbar_gt.set_label(unit_label, fontsize=8, color='black')
-            cbar_gt.ax.tick_params(labelsize=6, colors='black')
-        
-        # Add column title to top row
-        if i < len(column_titles):
-            axes[0, i].set_title(column_titles[i], fontsize=10, color='black', pad=5)
-    
-    # Add row titles
-    for j, title in enumerate(row_titles):
-        axes[j, 0].text(-0.1, 0.5, title, transform=axes[j, 0].transAxes, 
-                        fontsize=9, color='black', rotation=90, va='center', ha='right')
-    
-    # Set tick label properties for all axes
-    for ax_row in axes:
-        for ax in ax_row:
-            ax.tick_params(labelsize=6, colors='black')
-    
-    plt.tight_layout(rect=[0, 0, 1, 0.92])  # Leave space for suptitle
-    return fig
+    return correlation
 
 
-def calculate_error_metrics(calculated_data, ground_truth, analysis_type="displacement"):
-    """Calculate normalized error metrics between calculated and ground truth fields."""
-    # Calculate differences
-    diff_x = calculated_data[:,:,0] - ground_truth[:,:,0]
-    diff_y = calculated_data[:,:,1] - ground_truth[:,:,1]
+def calculate_strain_energy_metrics(displacement_data, calculated_traction, ground_truth_traction, pixel_size_um=0.1):
+    """Calculate strain energy metrics for TFM validation."""
+    # Convert displacement from pixels to meters
+    displacement_m = displacement_data * (pixel_size_um * 1e-6)
     
-    # Calculate maximum magnitude in ground truth for normalization
-    gt_magnitude = np.sqrt(ground_truth[:,:,0]**2 + ground_truth[:,:,1]**2)
-    max_gt_magnitude = np.max(gt_magnitude)
+    # Create a simple mask (non-zero regions)
+    mask = np.logical_and(
+        np.sqrt(calculated_traction[:,:,0]**2 + calculated_traction[:,:,1]**2) > 0,
+        np.sqrt(ground_truth_traction[:,:,0]**2 + ground_truth_traction[:,:,1]**2) > 0
+    )
     
-    # Root mean square error (normalized)
-    rmse_total = np.sqrt(np.mean(diff_x**2 + diff_y**2))
-    normalized_rmse = rmse_total / max_gt_magnitude if max_gt_magnitude > 0 else 0
+    # Calculate pixel area in m²
+    pixel_area_m2 = (pixel_size_um * 1e-6) ** 2
+    
+    # Calculate strain energy density for both calculated and ground truth
+    sed_calculated = calculate_strain_energy_density(displacement_m, calculated_traction)
+    sed_gt = calculate_strain_energy_density(displacement_m, ground_truth_traction)
+    
+    # Calculate total strain energies
+    total_se_calculated = calculate_total_strain_energy(sed_calculated, mask, pixel_area_m2)
+    total_se_gt = calculate_total_strain_energy(sed_gt, mask, pixel_area_m2)
     
     return {
-        'normalized_rmse': normalized_rmse,
-        'max_gt_magnitude': max_gt_magnitude
+        'total_se_calculated': total_se_calculated,
+        'total_se_gt': total_se_gt,
+        'mask_coverage': np.sum(mask) / mask.size
     }
 
 
-def plot_error_comparison(all_results, analysis_type="displacement"):
-    """Create bar plot comparing normalized error metrics across scenarios."""
-    scenarios = list(all_results.keys())
+def plot_displacement(displacement_results):
+    scenarios = ['low', 'mid', 'high']
+    fig, axes = plt.subplots(2, 4, figsize=(7.5, 4))  # DIN A4 compatible width
+    fig.suptitle('Displacement Field Validation', fontsize=10, y=0.95)
     
-    if analysis_type == "traction" and any('pipeline_errors' in all_results[s] for s in scenarios):
-        # Create grouped bar plot for FTTC with pipeline comparison
-        gt_errors = [all_results[s]['errors']['normalized_rmse'] * 100 for s in scenarios]
-        pipeline_errors = [all_results[s]['pipeline_errors']['normalized_rmse'] * 100 
-                         if 'pipeline_errors' in all_results[s] and all_results[s]['pipeline_errors'] 
-                         else 0 for s in scenarios]
-        
-        fig, ax = plt.subplots(1, 1, figsize=(3, 3))
-        
-        x = np.arange(len(scenarios))
-        width = 0.35
-        
-        bars1 = ax.bar(x - width/2, gt_errors, width, label='From Ground Truth Displacement', 
-                      color=plt.cm.tab10.colors[0], alpha=0.7)
-        bars2 = ax.bar(x + width/2, pipeline_errors, width, label='From Calculated Displacement', 
-                      color=plt.cm.tab10.colors[1], alpha=0.7)
-        
-        # Add value labels on bars
-        for bar, error in zip(bars1, gt_errors):
-            if error > 0:
-                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
-                       f'{error:.1f}%', ha='center', va='bottom', fontsize=6, color='black')
-        
-        for bar, error in zip(bars2, pipeline_errors):
-            if error > 0:
-                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
-                       f'{error:.1f}%', ha='center', va='bottom', fontsize=6, color='black')
-        
-        ax.set_xlabel('Scenario', fontsize=8, color='black')
-        ax.set_ylabel('Normalized RMSE (%)', fontsize=8, color='black')
-        ax.set_title('FTTC Error Comparison', fontsize=9, color='black')
-        ax.set_xticks(x)
-        ax.set_xticklabels(scenarios)
-        ax.legend(fontsize=6)
-        ax.grid(True, alpha=0.3, axis='y')
-        
-        max_error = max(max(gt_errors), max(pipeline_errors)) if pipeline_errors else max(gt_errors)
-        ax.set_ylim(0, max_error * 1.2)
-        
-    else:
-        # Original single bar plot for displacement or simple FTTC
-        normalized_errors = [all_results[s]['errors']['normalized_rmse'] * 100 for s in scenarios]
-        
-        fig, ax = plt.subplots(1, 1, figsize=(3, 3))
-        
-        colors = plt.cm.tab10.colors[:3]
-        bars = ax.bar(scenarios, normalized_errors, color=colors, alpha=0.7)
-        
-        # Add value labels on bars
-        for i, (bar, error) in enumerate(zip(bars, normalized_errors)):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
-                   f'{error:.1f}%', ha='center', va='bottom', fontsize=6, color='black')
-        
-        ax.set_xlabel('Scenario', fontsize=8, color='black')
-        ax.set_ylabel('Normalized RMSE (%)', fontsize=8, color='black')
-        
-        if analysis_type == "displacement":
-            title = 'Normalized Displacement Error'
+    # Plot displacement fields for each scenario
+    for i, scenario in enumerate(scenarios):
+        if scenario in displacement_results:
+            calculated = displacement_results[scenario]['calculated']
+            ground_truth = displacement_results[scenario]['ground_truth']
+            
+            # Calculate magnitudes
+            calc_magnitude = np.sqrt(calculated[:,:,0]**2 + calculated[:,:,1]**2)
+            gt_magnitude = np.sqrt(ground_truth[:,:,0]**2 + ground_truth[:,:,1]**2)
+            vmax = max(np.max(calc_magnitude), np.max(gt_magnitude))
+            
+            # Create coordinate grids for vector plotting
+            h, w = calculated.shape[:2]
+            step = max(h//20, w//20, 8)  # Adjust step size for better visibility
+            y, x = np.mgrid[0:h:step, 0:w:step]
+            
+            # Ground truth (top row)
+            im1 = axes[0, i].imshow(gt_magnitude, cmap='viridis', vmin=0, vmax=vmax)
+            axes[0, i].quiver(x, y, ground_truth[::step, ::step, 0], 
+                             -ground_truth[::step, ::step, 1], 
+                             color='white', scale_units='xy', scale=0.01*vmax, alpha=0.6)
+            axes[0, i].set_title(f'{scenario.upper()}\nGround Truth', fontsize=8)
+            axes[0, i].set_xticks([])
+            axes[0, i].set_yticks([])
+            axes[0, i].tick_params(labelsize=6)
+            divider1 = make_axes_locatable(axes[0, i])
+            cax1 = divider1.append_axes("right", size="5%", pad=0.05)
+            cbar1 = plt.colorbar(im1, cax=cax1)
+            cbar1.ax.tick_params(labelsize=6)
+            
+            # Calculated (bottom row)
+            im2 = axes[1, i].imshow(calc_magnitude, cmap='viridis', vmin=0, vmax=vmax)
+            axes[1, i].quiver(x, y, calculated[::step, ::step, 0], 
+                             -calculated[::step, ::step, 1], 
+                             color='white', scale_units='xy', scale=0.01*vmax, alpha=0.6)
+            axes[1, i].set_title('Calculated', fontsize=8)
+            axes[1, i].set_xticks([])
+            axes[1, i].set_yticks([])
+            axes[1, i].tick_params(labelsize=6)
+            divider2 = make_axes_locatable(axes[1, i])
+            cax2 = divider2.append_axes("right", size="5%", pad=0.05)
+            cbar2 = plt.colorbar(im2, cax=cax2)
+            cbar2.ax.tick_params(labelsize=6)
+    
+    # Create a single subplot spanning both rows for correlation
+    gs = axes[0, 3].get_gridspec()
+    # Remove the individual subplots
+    axes[0, 3].remove()
+    axes[1, 3].remove()
+    # Create a subplot spanning both rows
+    ax_corr = fig.add_subplot(gs[:, 3])
+    
+    correlations = [displacement_results[s]['displacement_correlation'] if s in displacement_results else 0 for s in scenarios]
+    bars = ax_corr.bar(scenarios, correlations, color=['#1f77b4', '#ff7f0e', '#2ca02c'], alpha=0.7)
+    ax_corr.set_title('Correlation between\nCalculated and\nGround Truth Data', fontsize=8, pad=15)
+    ax_corr.set_ylabel('Correlation Coefficient', fontsize=8)
+    ax_corr.set_ylim(0, 1.1)
+    ax_corr.grid(True, alpha=0.3)
+    ax_corr.tick_params(labelsize=6)
+    
+    # Add correlation values on bars
+    for bar, corr in zip(bars, correlations):
+        ax_corr.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                     f'{corr:.3f}', ha='center', va='bottom', fontsize=6)
+    
+    # Adjust the correlation subplot to be more compact vertically
+    pos = ax_corr.get_position()
+    # Make it smaller vertically and center it better
+    new_height = pos.height * 0.6
+    new_y = pos.y0 + (pos.height - new_height) * 0.5
+    ax_corr.set_position([pos.x0, new_y, pos.width, new_height])
+    
+    plt.tight_layout()
+    return fig
+
+
+def plot_traction(fttc_results):
+    scenarios = ['low', 'mid', 'high']
+    fig, axes = plt.subplots(2, 4, figsize=(7.5, 4))  # DIN A4 compatible width
+    fig.suptitle('Traction Force Validation', fontsize=10, y=0.95)
+    
+    # Plot traction fields for each scenario
+    for i, scenario in enumerate(scenarios):
+        if scenario in fttc_results:
+            calculated = fttc_results[scenario]['calculated']
+            ground_truth = fttc_results[scenario]['ground_truth']
+            
+            # Calculate magnitudes
+            if calculated is not None:
+                calc_magnitude = np.sqrt(calculated[:,:,0]**2 + calculated[:,:,1]**2)
+            else:
+                calc_magnitude = np.zeros_like(ground_truth[:,:,0])
+            gt_magnitude = np.sqrt(ground_truth[:,:,0]**2 + ground_truth[:,:,1]**2)
+            vmax = max(np.max(calc_magnitude), np.max(gt_magnitude)) if np.max(calc_magnitude) > 0 else np.max(gt_magnitude)
+            
+            # Create coordinate grids for vector plotting
+            h, w = ground_truth.shape[:2]
+            step = max(h//20, w//20, 8)  # Adjust step size for better visibility
+            y, x = np.mgrid[0:h:step, 0:w:step]
+            
+            # Ground truth (top row)
+            im1 = axes[0, i].imshow(gt_magnitude, cmap='inferno', vmin=0, vmax=vmax)
+            axes[0, i].quiver(x, y, ground_truth[::step, ::step, 0], 
+                             -ground_truth[::step, ::step, 1], 
+                             color='white', scale_units='xy', scale=0.01*vmax, alpha=0.6)
+            axes[0, i].set_title(f'{scenario.upper()}\nGround Truth', fontsize=8)
+            axes[0, i].set_xticks([])
+            axes[0, i].set_yticks([])
+            axes[0, i].tick_params(labelsize=6)
+            divider1 = make_axes_locatable(axes[0, i])
+            cax1 = divider1.append_axes("right", size="5%", pad=0.05)
+            cbar1 = plt.colorbar(im1, cax=cax1)
+            cbar1.ax.tick_params(labelsize=6)
+            
+            # Calculated (bottom row)
+            im2 = axes[1, i].imshow(calc_magnitude, cmap='inferno', vmin=0, vmax=vmax)
+            if calculated is not None:
+                axes[1, i].quiver(x, y, calculated[::step, ::step, 0], 
+                                 -calculated[::step, ::step, 1], 
+                                 color='white', scale_units='xy', scale=0.01*vmax, alpha=0.6)
+            axes[1, i].set_title('Calculated', fontsize=8)
+            axes[1, i].set_xticks([])
+            axes[1, i].set_yticks([])
+            axes[1, i].tick_params(labelsize=6)
+            divider2 = make_axes_locatable(axes[1, i])
+            cax2 = divider2.append_axes("right", size="5%", pad=0.05)
+            cbar2 = plt.colorbar(im2, cax=cax2)
+            cbar2.ax.tick_params(labelsize=6)
+    
+    # Create a single subplot spanning both rows for correlation
+    gs = axes[0, 3].get_gridspec()
+    # Remove the individual subplots
+    axes[0, 3].remove()
+    axes[1, 3].remove()
+    # Create a subplot spanning both rows
+    ax_corr = fig.add_subplot(gs[:, 3])
+    
+    correlations = [fttc_results[s]['traction_correlation'] if s in fttc_results else 0 for s in scenarios]
+    bars = ax_corr.bar(scenarios, correlations, color=['#1f77b4', '#ff7f0e', '#2ca02c'], alpha=0.7)
+    ax_corr.set_title('Correlation between\nCalculated and\nGround Truth Data', fontsize=8, pad=15)
+    ax_corr.set_ylabel('Correlation Coefficient', fontsize=8)
+    ax_corr.set_ylim(0, 1.1)
+    ax_corr.grid(True, alpha=0.3)
+    ax_corr.tick_params(labelsize=6)
+    
+    # Add correlation values on bars
+    for bar, corr in zip(bars, correlations):
+        ax_corr.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                     f'{corr:.3f}', ha='center', va='bottom', fontsize=6)
+    
+    # Adjust the correlation subplot to be more compact vertically
+    pos = ax_corr.get_position()
+    # Make it smaller vertically and center it better
+    new_height = pos.height * 0.6
+    new_y = pos.y0 + (pos.height - new_height) * 0.5
+    ax_corr.set_position([pos.x0, new_y, pos.width, new_height])
+    
+    plt.tight_layout()
+    return fig
+
+
+def plot_strain_energy_comparison(fttc_results):
+    """Create strain energy comparison figure: GT vs calculated."""
+    scenarios = ['low', 'mid', 'high']
+    
+    # Extract strain energy values
+    se_gt_values = [fttc_results[s]['strain_energy_gt'] if s in fttc_results and fttc_results[s]['strain_energy_gt'] > 0 else 1e-20 for s in scenarios]
+    se_calc_values = [fttc_results[s]['strain_energy_calc'] if s in fttc_results and fttc_results[s]['strain_energy_calc'] > 0 else 1e-20 for s in scenarios]
+    
+    fig, ax = plt.subplots(1, 1, figsize=(7, 4))  # DIN A4 compatible
+    
+    x = np.arange(len(scenarios))
+    width = 0.35
+    
+    bars1 = ax.bar(x - width/2, se_gt_values, width, label='Ground Truth', 
+                  color='#1f77b4', alpha=0.7)
+    bars2 = ax.bar(x + width/2, se_calc_values, width, label='Calculated', 
+                  color='#ff7f0e', alpha=0.7)
+    
+    # Add value labels on bars (in scientific notation)
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            height = bar.get_height()
+            if height > 1e-19:
+                ax.text(bar.get_x() + bar.get_width()/2, height * 1.2,
+                       f'{height:.1e}', ha='center', va='bottom', fontsize=6, rotation=45)
+    
+    ax.set_xlabel('Scenario', fontsize=8)
+    ax.set_ylabel('Strain Energy (J)', fontsize=8)
+    ax.set_title('Strain Energy Comparison: Ground Truth vs Calculated', fontsize=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels([s.upper() for s in scenarios])
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.set_yscale('log')
+    ax.tick_params(labelsize=6)
+    
+    plt.tight_layout()
+    return fig
+
+
+def plot_normalized_strain_energy(fttc_results):
+    """Create normalized strain energy plot: calculated/ground_truth ratio."""
+    scenarios = ['low', 'mid', 'high']
+    
+    # Calculate normalized strain energies (calculated/ground_truth)
+    normalized_values = []
+    for scenario in scenarios:
+        if scenario in fttc_results:
+            se_gt = fttc_results[scenario]['strain_energy_gt']
+            se_calc = fttc_results[scenario]['strain_energy_calc']
+            if se_gt > 0:
+                normalized_values.append(se_calc / se_gt)
+            else:
+                normalized_values.append(0)
         else:
-            title = 'Normalized Traction Error'
-        ax.set_title(title, fontsize=10, color='black')
-        
-        ax.grid(True, alpha=0.3, axis='y')
-        ax.set_ylim(0, max(normalized_errors) * 1.2)
+            normalized_values.append(0)
     
-    # Set tick label properties
-    ax.tick_params(labelsize=6, colors='black')
+    fig, ax = plt.subplots(1, 1, figsize=(7, 4))  # DIN A4 compatible
+    
+    # Create bar plot
+    bars = ax.bar(scenarios, normalized_values, 
+                  color=['#2ca02c', '#ff7f0e', '#d62728'], alpha=0.7)
+    
+    # Add value labels on bars
+    for bar, value in zip(bars, normalized_values):
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2, height + 0.02,
+               f'{value:.3f}', ha='center', va='bottom', fontsize=6, fontweight='bold')
+    
+    # Add horizontal reference line at y=1 (perfect match)
+    ax.axhline(y=1.0, color='red', linestyle='--', alpha=0.8, linewidth=2, 
+               label='Perfect Match (Calc/GT = 1.0)')
+    
+    ax.set_xlabel('Scenario', fontsize=8)
+    ax.set_ylabel('Normalized Strain Energy\n(Calculated / Ground Truth)', fontsize=8)
+    ax.set_title('Normalized Strain Energy: Calculated vs Ground Truth', fontsize=10)
+    ax.set_xticklabels([s.upper() for s in scenarios])
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.legend(fontsize=8)
+    ax.tick_params(labelsize=6)
+    
+    # Set y-axis limits to show values clearly
+    y_max = max(normalized_values) if normalized_values else 1
+    ax.set_ylim(0, max(1.2, y_max * 1.1))
     
     plt.tight_layout()
     return fig
@@ -460,14 +526,13 @@ def validate_displacement_scenario(scenario_folder):
     ground_truth = load_ground_truth_displacement(scenario_folder)
     print(f"  Ground truth shape: {ground_truth.shape}")
     
-    # Calculate error metrics
-    errors = calculate_error_metrics(calculated_flow, ground_truth, "displacement")
+    # Calculate displacement correlation
+    displacement_correlation = calculate_correlation_metrics(calculated_flow, ground_truth)
     
-    print("  Displacement Error Metrics:")
-    print(f"    Normalized RMSE: {errors['normalized_rmse']*100:.2f}% "
-          f"(fraction of max GT displacement: {errors['max_gt_magnitude']:.3f})")
+    print("  Displacement Metrics:")
+    print(f"    Displacement Correlation: {displacement_correlation:.3f}")
     
-    return calculated_flow, ground_truth, errors
+    return calculated_flow, ground_truth, displacement_correlation
 
 
 def validate_fttc_scenario(scenario_folder, displacement_flow=None):
@@ -481,52 +546,61 @@ def validate_fttc_scenario(scenario_folder, displacement_flow=None):
     print(f"  Using parameters: E={params.young_modulus} Pa, nu={params.poisson_ratio_substrate}, "
           f"regularization={regularization_info}, pixel_size={params.pixel_size} µm")
     
-    # Load displacement data (input for FTTC from ground truth)
-    disp_x, disp_y = load_displacement_data(scenario_folder)
-    print(f"  Ground truth displacement field shapes: x={disp_x.shape}, y={disp_y.shape}")
-    
-    # Calculate traction field using FTTC from ground truth displacement
-    _, calculated_trac = calculate_traction_field(disp_x, disp_y, params)
-    print(f"  Calculated traction field shape: {calculated_trac.shape}")
-    
-    # Transpose to match ground truth format (H, W, 2)
-    if calculated_trac.shape[0] == 2:
-        calculated_trac = np.transpose(calculated_trac, (1, 2, 0))
-        print(f"  Transposed traction field shape: {calculated_trac.shape}")
-    
-    # Calculate pipeline traction (from calculated displacement if provided)
-    pipeline_trac = None
-    if displacement_flow is not None:
-        print(f"  Calculating pipeline traction from displacement analysis results...")
-        # Convert displacement flow from pixels to microns for FTTC input
-        disp_x_pipeline = displacement_flow[:,:,0] * params.pixel_size
-        disp_y_pipeline = displacement_flow[:,:,1] * params.pixel_size
-        
-        _, pipeline_trac = calculate_traction_field(disp_x_pipeline, disp_y_pipeline, params)
-        if pipeline_trac.shape[0] == 2:
-            pipeline_trac = np.transpose(pipeline_trac, (1, 2, 0))
-        print(f"  Pipeline traction field shape: {pipeline_trac.shape}")
-    
     # Load ground truth traction
     gt_trac_x, gt_trac_y = load_ground_truth_traction(scenario_folder)
     ground_truth = np.stack([gt_trac_x, gt_trac_y], axis=-1)
     print(f"  Ground truth traction shape: {ground_truth.shape}")
     
-    # Calculate error metrics
-    errors = calculate_error_metrics(calculated_trac, ground_truth, "traction")
+    # Calculate traction from calculated displacement only
+    calculated_trac = None
+    traction_correlation = 0
+    strain_energy_gt = 0
+    strain_energy_calc = 0
     
-    # Calculate pipeline error metrics if available
-    pipeline_errors = None
-    if pipeline_trac is not None:
-        pipeline_errors = calculate_error_metrics(pipeline_trac, ground_truth, "traction")
-        print("  Pipeline FTTC Error Metrics (from calculated displacement):")
-        print(f"    Normalized RMSE: {pipeline_errors['normalized_rmse']*100:.2f}%")
+    if displacement_flow is not None:
+        print("  Calculating traction from calculated displacement...")
+        # Convert displacement flow from pixels to microns for FTTC input
+        disp_x_pipeline = displacement_flow[:,:,0] * params.pixel_size
+        disp_y_pipeline = displacement_flow[:,:,1] * params.pixel_size
+        
+        _, calculated_trac = calculate_traction_field(disp_x_pipeline, disp_y_pipeline, params)
+        if calculated_trac.shape[0] == 2:
+            calculated_trac = np.transpose(calculated_trac, (1, 2, 0))
+        print(f"  Calculated traction field shape: {calculated_trac.shape}")
+        
+        # Calculate correlation
+        traction_correlation = calculate_correlation_metrics(calculated_trac, ground_truth)
+        
+        # Calculate strain energies
+        # Load ground truth displacement for strain energy calculation
+        gt_disp_x, gt_disp_y = load_displacement_data(scenario_folder)
+        gt_displacement = np.stack([gt_disp_x, gt_disp_y], axis=-1)
+        
+        # GT strain energy
+        se_metrics_gt = calculate_strain_energy_metrics(
+            gt_displacement, ground_truth, ground_truth, params.pixel_size
+        )
+        strain_energy_gt = se_metrics_gt['total_se_calculated']
+        
+        # Calculated strain energy
+        disp_for_se = displacement_flow * params.pixel_size
+        se_metrics_calc = calculate_strain_energy_metrics(
+            disp_for_se, calculated_trac, ground_truth, params.pixel_size
+        )
+        strain_energy_calc = se_metrics_calc['total_se_calculated']
+        
+        print("  FTTC Metrics:")
+        print(f"    Traction Correlation: {traction_correlation:.3f}")
+        print(f"    Strain Energy - GT: {strain_energy_gt:.2e} J")
+        print(f"    Strain Energy - Calc: {strain_energy_calc:.2e} J")
     
-    print("  FTTC Error Metrics (from ground truth displacement):")
-    print(f"    Normalized RMSE: {errors['normalized_rmse']*100:.2f}% "
-          f"(fraction of max GT traction: {errors['max_gt_magnitude']:.3f} Pa)")
-    
-    return calculated_trac, ground_truth, errors, pipeline_trac, pipeline_errors
+    return {
+        'calculated_trac': calculated_trac,
+        'ground_truth_trac': ground_truth,
+        'traction_correlation': traction_correlation,
+        'strain_energy_gt': strain_energy_gt,
+        'strain_energy_calc': strain_energy_calc
+    }
 
 
 def main():
@@ -545,80 +619,94 @@ def main():
         scenario_path = base_dir / scenario
         if scenario_path.exists():
             # Validate displacement analysis
-            displacement_flow, disp_ground_truth, disp_errors = validate_displacement_scenario(str(scenario_path))
+            displacement_flow, disp_ground_truth, displacement_correlation = validate_displacement_scenario(str(scenario_path))
             displacement_results[scenario] = {
                 'calculated': displacement_flow,
                 'ground_truth': disp_ground_truth,
-                'errors': disp_errors
+                'displacement_correlation': displacement_correlation
             }
             
-            # Validate FTTC analysis (pass displacement flow for pipeline validation)
-            trac_from_gt, trac_ground_truth, trac_errors, pipeline_trac, pipeline_errors = validate_fttc_scenario(str(scenario_path), displacement_flow)
+            # Validate FTTC analysis (pass displacement flow for traction calculation)
+            trac_results = validate_fttc_scenario(str(scenario_path), displacement_flow)
             
             fttc_results[scenario] = {
-                'calculated': trac_from_gt,
-                'ground_truth': trac_ground_truth,
-                'errors': trac_errors
+                'calculated': trac_results['calculated_trac'],
+                'ground_truth': trac_results['ground_truth_trac'],
+                'traction_correlation': trac_results['traction_correlation'],
+                'strain_energy_gt': trac_results['strain_energy_gt'],
+                'strain_energy_calc': trac_results['strain_energy_calc']
             }
-            
-            # Add pipeline results if available
-            if pipeline_trac is not None:
-                fttc_results[scenario]['pipeline'] = pipeline_trac
-                fttc_results[scenario]['pipeline_errors'] = pipeline_errors
         else:
             print(f"Warning: Scenario folder {scenario_path} not found")
     
     # Create and save displacement plots
     if displacement_results:
-        print("\n--- Creating displacement validation plots ---")
-        combined_fig = plot_combined_comparison(displacement_results, "displacement")
-        combined_output_path = Path(__file__).parent / "displacement_validation_combined.png"
-        combined_fig.savefig(combined_output_path, dpi=300, bbox_inches='tight')
-        print(f"  Saved combined displacement plot: {combined_output_path}")
-        plt.close(combined_fig)
+        print("\n--- Creating validation plots ---")
         
-        error_fig = plot_error_comparison(displacement_results, "displacement")
-        error_output_path = Path(__file__).parent / "displacement_error_comparison.png"
-        error_fig.savefig(error_output_path, dpi=300, bbox_inches='tight')
-        print(f"  Saved displacement error plot: {error_output_path}")
-        plt.close(error_fig)
-    
-    # Create and save FTTC plots
-    if fttc_results:
-        print("\n--- Creating FTTC validation plots ---")
-        combined_fig = plot_combined_comparison(fttc_results, "traction")
-        combined_output_path = Path(__file__).parent / "fttc_validation_combined.png"
-        combined_fig.savefig(combined_output_path, dpi=300, bbox_inches='tight')
-        print(f"  Saved combined FTTC plot: {combined_output_path}")
-        plt.close(combined_fig)
+        # Create consolidated displacement plot
+        disp_fig = plot_displacement(displacement_results)
+        disp_path = Path(__file__).parent / "displacement.png"
+        disp_fig.savefig(disp_path, dpi=300, bbox_inches='tight')
+        print(f"  Saved consolidated displacement plot: {disp_path}")
+        plt.close(disp_fig)
         
-        error_fig = plot_error_comparison(fttc_results, "traction")
-        error_output_path = Path(__file__).parent / "fttc_error_comparison.png"
-        error_fig.savefig(error_output_path, dpi=300, bbox_inches='tight')
-        print(f"  Saved FTTC error plot: {error_output_path}")
-        plt.close(error_fig)
+        # Create consolidated traction plot
+        trac_fig = plot_traction(fttc_results)
+        trac_path = Path(__file__).parent / "traction.png"
+        trac_fig.savefig(trac_path, dpi=300, bbox_inches='tight')
+        print(f"  Saved consolidated traction plot: {trac_path}")
+        plt.close(trac_fig)
+        
+        # Create strain energy comparison plot
+        strain_energy_fig = plot_strain_energy_comparison(fttc_results)
+        strain_energy_path = Path(__file__).parent / "strain_energy_comparison.png"
+        strain_energy_fig.savefig(strain_energy_path, dpi=300, bbox_inches='tight')
+        print(f"  Saved strain energy comparison plot: {strain_energy_path}")
+        plt.close(strain_energy_fig)
+        
+        # Create normalized strain energy plot
+        normalized_se_fig = plot_normalized_strain_energy(fttc_results)
+        normalized_se_path = Path(__file__).parent / "normalized_strain_energy.png"
+        normalized_se_fig.savefig(normalized_se_path, dpi=300, bbox_inches='tight')
+        print(f"  Saved normalized strain energy plot: {normalized_se_path}")
+        plt.close(normalized_se_fig)
     
     # Summary
     print("\n" + "="*60)
     print("VALIDATION SUMMARY")
     print("="*60)
     
+    # Add normalized strain energy summary
+    print("\nNORMALIZED STRAIN ENERGY RATIOS (Calculated/Ground Truth):")
+    for scenario in displacement_results.keys():
+        if scenario in fttc_results:
+            trac_results = fttc_results[scenario]
+            if trac_results['strain_energy_gt'] > 0:
+                normalized_se = trac_results['strain_energy_calc'] / trac_results['strain_energy_gt']
+                print(f"  {scenario.upper()}: {normalized_se:.3f}")
+            else:
+                print(f"  {scenario.upper()}: N/A (GT = 0)")
+    print("  (Values close to 1.0 indicate good agreement)\n")
+    
     print("\nDISPLACEMENT ANALYSIS:")
     for scenario, results in displacement_results.items():
-        errors = results['errors']
-        print(f"  {scenario.upper()} scenario:")
-        print(f"    Normalized RMSE: {errors['normalized_rmse']*100:.2f}%")
-        print(f"    Max GT displacement: {errors['max_gt_magnitude']:.3f} pixels")
+        print(f"  {scenario.upper()} scenario: Correlation = {results['displacement_correlation']:.3f}")
     
-    print("\nFTTC ANALYSIS:")
-    for scenario, results in fttc_results.items():
-        errors = results['errors']
+    print("\nTFM ANALYSIS SUMMARY:")
+    for scenario, results in displacement_results.items():
         print(f"  {scenario.upper()} scenario:")
-        print(f"    From ground truth displacement - RMSE: {errors['normalized_rmse']*100:.2f}%")
-        if 'pipeline_errors' in results and results['pipeline_errors']:
-            pipeline_errors = results['pipeline_errors']
-            print(f"    From calc. displacement - RMSE: {pipeline_errors['normalized_rmse']*100:.2f}%")
-        print(f"    Max GT traction: {errors['max_gt_magnitude']:.3f} Pa")
+        print(f"    Displacement Correlation: {results['displacement_correlation']:.3f}")
+        if scenario in fttc_results:
+            trac_results = fttc_results[scenario]
+            print(f"    Traction Correlation: {trac_results['traction_correlation']:.3f}")
+            print(f"    Strain Energy - GT: {trac_results['strain_energy_gt']:.2e} J")
+            print(f"    Strain Energy - Calc: {trac_results['strain_energy_calc']:.2e} J")
+            # Calculate and display normalized strain energy
+            if trac_results['strain_energy_gt'] > 0:
+                normalized_se = trac_results['strain_energy_calc'] / trac_results['strain_energy_gt']
+                print(f"    Normalized Strain Energy (Calc/GT): {normalized_se:.3f}")
+            else:
+                print(f"    Normalized Strain Energy (Calc/GT): N/A (GT = 0)")
 
 
 if __name__ == "__main__":
