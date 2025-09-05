@@ -531,7 +531,7 @@ def validate_fttc_scenario(scenario_folder, displacement_flow=None):
 
 def main():
     """Main validation function."""
-    base_dir = Path(__file__).parent / 'benchmark_displacements_forces'
+    base_dir = Path(__file__).parent
     scenarios = ['low', 'mid', 'high']
     
     displacement_results = {}

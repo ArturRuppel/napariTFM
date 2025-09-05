@@ -178,7 +178,7 @@ def main():
     print("Generating complete benchmark dataset using DirectMethod framework...")
     
     # Default paths - can be modified as needed
-    base_folder = "/home/artur/napariTFM/_validation/benchmark_displacements_forces/"
+    base_folder = "/home/artur/napariTFM/_validation/benchmark_TFM/"
     toml_file = base_folder + "low/dipole_config.toml"
     reference_image = base_folder + "low/reference.tif"
     
