@@ -23,6 +23,66 @@ from napariTFM.services.msm_service import MSMService
 from napariTFM.backend.parameter_dataclasses import MSMParameters
 
 
+def create_square_plate_problem(size=100, edge_traction=4000, buffer=5):
+    """
+    Create a square plate problem with uniform edge tractions and buffer zone
+
+    Args:
+        size: Size of the square plate in pixels
+        edge_traction: Magnitude of edge traction in Pa
+        buffer: Size of buffer zone around the domain in pixels
+
+    Returns:
+        tx, ty: Traction field components
+        mask: Boolean mask defining the plate
+        traction_scale: Scaling factor for analytical solution
+    """
+    # Create domain with buffer
+    total_size = size + 2 * buffer
+    mask = np.zeros((total_size, total_size), dtype=bool)
+    mask[buffer:-buffer, buffer:-buffer] = True  # Active domain
+
+    # Initialize traction fields
+    tx = np.zeros((total_size, total_size))
+    ty = np.zeros((total_size, total_size))
+
+    # Apply tractions in a balanced way
+    # For x-direction: equal and opposite forces on left and right edges
+    tx[buffer:-buffer, buffer:buffer + 1] = edge_traction  # Left edge
+    tx[buffer:-buffer, -(buffer + 1):-buffer] = -edge_traction  # Right edge
+
+    # For y-direction: equal and opposite forces on top and bottom edges
+    ty[buffer:buffer + 1, buffer:-buffer] = edge_traction  # Top edge
+    ty[-(buffer + 1):-buffer, buffer:-buffer] = -edge_traction  # Bottom edge
+
+    # Store original traction magnitudes for scaling
+    tx_max = np.max(np.abs(tx))
+    ty_max = np.max(np.abs(ty))
+    traction_scale = max(tx_max, ty_max)
+
+    return tx, ty, mask, traction_scale
+
+
+def calculate_square_plate_analytical_stress(traction_scale, mask, params):
+    """Calculate analytical stress solution for square plate."""
+    # Create analytical solution in mN/m (to match MSM output units)
+    # MSM outputs: stress [mN/m] = stress [Pa] × downscale_factor × pixel_size [µm] × 1e-3
+    analytical_stress_mNm = traction_scale * params.downscale_factor * params.pixel_size * 1e-3
+    
+    # For a square plate under balanced edge loading, stress is uniform
+    stress_xx = np.zeros_like(mask, dtype=float)
+    stress_yy = np.zeros_like(mask, dtype=float)
+    
+    # Apply uniform stress inside the domain
+    stress_xx[mask] = analytical_stress_mNm
+    stress_yy[mask] = analytical_stress_mNm
+    
+    # Calculate normal stress
+    stress_normal = (stress_xx + stress_yy) / 2
+    
+    return stress_xx, stress_yy, stress_normal
+
+
 def load_ground_truth_stress(folder_path):
     """Load ground truth stress components from .npy files."""
     stress_xx = np.load(os.path.join(folder_path, 'stress_xx.npy'))
@@ -165,7 +225,7 @@ def calculate_correlation_metrics(calculated, ground_truth, mask=None):
 
 def plot_stress_validation_comparison(gt_stress_xx, gt_stress_yy, gt_stress_normal,
                                     calc_stress_xx, calc_stress_yy, calc_stress_normal, 
-                                    xx_errors, yy_errors, normal_errors):
+                                    xx_errors, yy_errors, normal_errors, vmax=5.1):
     """Plot 2x4 stress validation: Ground Truth vs Calculated for σ_xx, σ_yy, σ_normal with correlation bar plot."""
     fig = plt.figure(figsize=(9.5, 5))  # DIN A4 compatible width
     
@@ -201,8 +261,7 @@ def plot_stress_validation_comparison(gt_stress_xx, gt_stress_yy, gt_stress_norm
     
     # Plot stress fields for each component
     for i in range(3):
-        # Determine common colorbar scales for each stress type
-        vmax = 5.1
+        # Use the passed vmax parameter for colorbar scales
         vmin = -vmax
         
         # Ground truth (top row)
@@ -268,7 +327,7 @@ def calculate_average_stress(stress_xx, stress_yy, mask=None):
 
 
 def plot_average_stress_comparison(gt_stress_xx, gt_stress_yy, gt_stress_normal,
-                                 calc_stress_xx, calc_stress_yy, calc_stress_normal, mask):
+                                 calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=2.5):
     """Create average stress comparison figure: GT vs calculated for stress components."""
     stress_components = ['σ_xx', 'σ_yy', 'σ_normal']
     
@@ -315,12 +374,15 @@ def plot_average_stress_comparison(gt_stress_xx, gt_stress_yy, gt_stress_normal,
     ax.grid(True, alpha=0.3, axis='y')
     ax.tick_params(labelsize=6)
     
+    # Set y-axis limits
+    ax.set_ylim(-0.1, y_max)
+    
     plt.tight_layout()
     return fig
 
 
 def plot_normalized_average_stress(gt_stress_xx, gt_stress_yy, gt_stress_normal,
-                                 calc_stress_xx, calc_stress_yy, calc_stress_normal, mask):
+                                 calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=1.5):
     """Create normalized average stress plot: calculated/ground_truth ratio for stress components."""
     stress_components = ['σ_xx', 'σ_yy', 'σ_normal']
     
@@ -363,26 +425,24 @@ def plot_normalized_average_stress(gt_stress_xx, gt_stress_yy, gt_stress_normal,
     ax.legend(fontsize=8)
     ax.tick_params(labelsize=6)
     
-    # Set y-axis limits to show values clearly
-    y_max = max(normalized_values) if normalized_values else 1
-    y_min = min(normalized_values) if normalized_values else 0
-    ax.set_ylim(min(0, y_min * 1.1), max(1.2, y_max * 1.1))
+    # Set y-axis limits using the passed parameter
+    ax.set_ylim(0, y_max)
     
     plt.tight_layout()
     return fig
 
 
-def main():
-    """Main MSM validation function."""
+def validate_file_based_msm():
+    """Validate MSM using file-based ground truth data."""
     benchmark_dir = Path(__file__).parent
     
-    print("="*60)
-    print("MSM STRESS FIELD VALIDATION")
+    print("\n" + "="*60)
+    print("FILE-BASED MSM VALIDATION")
     print("="*60)
     
     if not benchmark_dir.exists():
         print(f"Error: Benchmark directory {benchmark_dir} not found!")
-        return
+        return None
     
     # Load ground truth data
     print(f"\nLoading data from: {benchmark_dir}")
@@ -396,7 +456,7 @@ def main():
         
     except FileNotFoundError as e:
         print(f"Error loading data files: {e}")
-        return
+        return None
     
     # Convert ground truth from N/m to mN/m for consistency with MSM service output
     gt_stress_xx = gt_stress_xx * 1000  # Convert N/m to mN/m
@@ -510,6 +570,243 @@ def main():
                 print(f"  {name}: GT={gt_avg:.3f}, Calc={calc_avg:.3f}, Normalized=N/A")
         else:
             print(f"  {name}: No valid data")
+    
+    return {
+        'gt_stress_xx': gt_stress_xx,
+        'gt_stress_yy': gt_stress_yy, 
+        'gt_stress_normal': gt_stress_normal,
+        'calc_stress_xx': calc_stress_xx,
+        'calc_stress_yy': calc_stress_yy,
+        'calc_stress_normal': calc_stress_normal,
+        'gt_mask': gt_mask,
+        'xx_metrics': xx_metrics,
+        'yy_metrics': yy_metrics,
+        'normal_metrics': normal_metrics
+    }
+
+
+def validate_square_plate_msm():
+    """Validate MSM using square plate analytical solution."""
+    print("\n" + "="*60)
+    print("SQUARE PLATE MSM VALIDATION")
+    print("="*60)
+    
+    # Square plate parameters
+    size = 50  # pixels
+    edge_traction = 1000  # Pa
+    pixelsize = 1e-6  # meters (1 µm)
+    buffer = 5  # pixels
+    
+    print(f"\nSquare plate parameters:")
+    print(f"  Size: {size} pixels")
+    print(f"  Edge traction: {edge_traction} Pa")
+    print(f"  Pixel size: {pixelsize*1e6} µm")
+    print(f"  Buffer: {buffer} pixels")
+    
+    # Create the test problem
+    trac_x, trac_y, mask, traction_scale = create_square_plate_problem(
+        size=size,
+        edge_traction=edge_traction,
+        buffer=buffer
+    )
+    print(f"✓ Created square plate problem: {trac_x.shape}")
+    print(f"  Traction scale: {traction_scale} Pa")
+    
+    # Get MSM parameters for square plate
+    params = MSMParameters(
+        # Mesh parameters
+        density_factor=0.01,
+        mesh_algorithm='Frontal-Del.',
+        use_optimization=False,
+        
+        # Material parameters  
+        poisson_ratio_cells=0.5,
+        young_modulus=1000.0,  # Pa
+        
+        # Scaling parameters
+        pixel_size=pixelsize * 1e6,  # Convert to microns
+        downscale_factor=1
+    )
+    
+    print(f"\nMSM Parameters:")
+    print(f"  Young's modulus: {params.young_modulus} Pa")
+    print(f"  Poisson ratio: {params.poisson_ratio_cells}")
+    print(f"  Density factor: {params.density_factor}")
+    print(f"  Pixel size: {params.pixel_size} µm")
+    
+    # Run MSM calculation using the working approach from original square plate file
+    print(f"\nRunning MSM calculation...")
+    try:
+        service = MSMService(params)
+        
+        # Use the working MSM calculation approach
+        # Prepare force field in the format expected by MSMService (H, W, 2)
+        force_field = np.stack([trac_x, trac_y], axis=-1)
+        
+        # Prepare masks (add time dimension as service expects 3D: T, H, W)
+        masks = mask[np.newaxis, ...]  # Shape: (1, H, W)
+        
+        # Calculate stresses using the service - this returns a generator
+        stress_generator = service.calculate_stresses(force_field, masks)
+        
+        # Get the final result from the generator
+        try:
+            # Process through the generator to get final result
+            result = None
+            for intermediate_result, frame, total_frames in stress_generator:
+                result = intermediate_result
+                print(f"    Processing frame {frame}/{total_frames}")
+        except StopIteration as e:
+            # The final result is returned via StopIteration.value
+            result = e.value
+        
+        if result is None:
+            raise ValueError("MSM calculation did not return a valid result")
+        
+        # Extract stress tensor from MSMResult
+        # result.stress_tensor has shape (1, H, W, 2, 2) for single frame
+        stress_tensor = result.stress_tensor[0]  # Remove time dimension: (H, W, 2, 2)
+        
+        calc_stress_xx = stress_tensor[:, :, 0, 0]
+        calc_stress_yy = stress_tensor[:, :, 1, 1]
+        calc_stress_normal = (calc_stress_xx + calc_stress_yy) / 2
+        
+        print(f"✓ MSM calculation completed successfully")
+        print(f"  Condition number: {result.condition_number:.2e}")
+        print(f"  Residual norm: {result.residual:.2e}")
+        
+    except Exception as e:
+        print(f"Error during MSM calculation: {e}")
+        return None
+    
+    # Calculate analytical solution
+    print(f"\nCalculating analytical solution...")
+    gt_stress_xx, gt_stress_yy, gt_stress_normal = calculate_square_plate_analytical_stress(traction_scale, mask, params)
+    print(f"✓ Analytical solution calculated")
+    
+    # Calculate error metrics for each stress component
+    print(f"\nCalculating error metrics...")
+    # For square plate, calculate correlation over full domain (including borders)
+    # to capture the transition from 0 outside to uniform stress inside
+    xx_metrics = calculate_correlation_metrics(calc_stress_xx, gt_stress_xx, mask=None)
+    yy_metrics = calculate_correlation_metrics(calc_stress_yy, gt_stress_yy, mask=None)
+    normal_metrics = calculate_correlation_metrics(calc_stress_normal, gt_stress_normal, mask=None)
+    
+    print(f"✓ Correlation metrics calculated")
+    
+    # Print correlation summary
+    print(f"\nCORRELATION METRICS SUMMARY:")
+    print(f"  σ_xx - Correlation: {xx_metrics['correlation']:.3f}")
+    print(f"  σ_yy - Correlation: {yy_metrics['correlation']:.3f}")
+    print(f"  σ_normal - Correlation: {normal_metrics['correlation']:.3f}")
+    
+    # Create visualizations with prefix for square plate
+    print(f"\nCreating validation plots...")
+    
+    # Main validation plot (2x4 grid)
+    validation_fig = plot_stress_validation_comparison(
+        gt_stress_xx, gt_stress_yy, gt_stress_normal,
+        calc_stress_xx, calc_stress_yy, calc_stress_normal,
+        xx_metrics, yy_metrics, normal_metrics, vmax=1.1
+    )
+    validation_output_path = Path(__file__).parent / "square_plate_validation_comparison.png"
+    validation_fig.savefig(validation_output_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved validation comparison: {validation_output_path}")
+    plt.close(validation_fig)
+    
+    # Average stress comparison plot
+    avg_stress_fig = plot_average_stress_comparison(
+        gt_stress_xx, gt_stress_yy, gt_stress_normal,
+        calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=1.5
+    )
+    avg_stress_path = Path(__file__).parent / "square_plate_average_stress_comparison.png"
+    avg_stress_fig.savefig(avg_stress_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved average stress comparison plot: {avg_stress_path}")
+    plt.close(avg_stress_fig)
+    
+    # Normalized average stress plot
+    normalized_avg_stress_fig = plot_normalized_average_stress(
+        gt_stress_xx, gt_stress_yy, gt_stress_normal,
+        calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=1.5
+    )
+    normalized_avg_stress_path = Path(__file__).parent / "square_plate_normalized_average_stress.png"
+    normalized_avg_stress_fig.savefig(normalized_avg_stress_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved normalized average stress plot: {normalized_avg_stress_path}")
+    plt.close(normalized_avg_stress_fig)
+    
+    print(f"\nGenerated files:")
+    print(f"  - {validation_output_path}")
+    print(f"  - {avg_stress_path}")
+    print(f"  - {normalized_avg_stress_path}")
+    
+    # Data statistics summary
+    print(f"\nDATA STATISTICS:")
+    print(f"  Analytical stress range: σ_xx [{gt_stress_xx.min():.3f}, {gt_stress_xx.max():.3f}] mN/m")
+    print(f"  Calculated stress range: σ_xx [{calc_stress_xx.min():.3f}, {calc_stress_xx.max():.3f}] mN/m")
+    print(f"  Traction magnitude max: {np.sqrt(trac_x**2 + trac_y**2).max():.3f} Pa")
+    print(f"  Mask coverage: {np.sum(mask)}/{mask.size} pixels ({100*np.sum(mask)/mask.size:.1f}%)")
+    
+    # Calculate and display average stress values for each component
+    print(f"\nAVERAGE STRESS VALUES:")
+    for name, gt_data, calc_data in [('σ_xx', gt_stress_xx, calc_stress_xx), 
+                                     ('σ_yy', gt_stress_yy, calc_stress_yy), 
+                                     ('σ_normal', gt_stress_normal, calc_stress_normal)]:
+        if np.any(mask):
+            gt_avg = np.mean(gt_data[mask])
+            calc_avg = np.mean(calc_data[mask])
+            if abs(gt_avg) > 1e-6:
+                normalized = calc_avg / gt_avg
+                print(f"  {name}: GT={gt_avg:.3f}, Calc={calc_avg:.3f}, Normalized={normalized:.3f}")
+            else:
+                print(f"  {name}: GT={gt_avg:.3f}, Calc={calc_avg:.3f}, Normalized=N/A")
+        else:
+            print(f"  {name}: No valid data")
+    
+    return {
+        'gt_stress_xx': gt_stress_xx,
+        'gt_stress_yy': gt_stress_yy, 
+        'gt_stress_normal': gt_stress_normal,
+        'calc_stress_xx': calc_stress_xx,
+        'calc_stress_yy': calc_stress_yy,
+        'calc_stress_normal': calc_stress_normal,
+        'mask': mask,
+        'xx_metrics': xx_metrics,
+        'yy_metrics': yy_metrics,
+        'normal_metrics': normal_metrics
+    }
+
+
+def main():
+    """Main MSM validation function - runs both file-based and square plate validations."""
+    print("="*60)
+    print("MSM STRESS FIELD VALIDATION SUITE")
+    print("="*60)
+    
+    # Run file-based validation
+    file_results = validate_file_based_msm()
+    
+    # Run square plate validation
+    square_results = validate_square_plate_msm()
+    
+    print("\n" + "="*60)
+    print("ALL VALIDATIONS COMPLETE")
+    print("="*60)
+    
+    if file_results:
+        print("\n✓ File-based validation completed successfully")
+        print(f"  File-based correlations: σ_xx={file_results['xx_metrics']['correlation']:.3f}, "
+              f"σ_yy={file_results['yy_metrics']['correlation']:.3f}, "
+              f"σ_normal={file_results['normal_metrics']['correlation']:.3f}")
+    else:
+        print("\n✗ File-based validation failed (files not found)")
+    
+    if square_results:
+        print("✓ Square plate validation completed successfully")
+        print(f"  Square plate correlations: σ_xx={square_results['xx_metrics']['correlation']:.3f}, "
+              f"σ_yy={square_results['yy_metrics']['correlation']:.3f}, "
+              f"σ_normal={square_results['normal_metrics']['correlation']:.3f}")
+    else:
+        print("✗ Square plate validation failed")
 
 
 if __name__ == "__main__":
