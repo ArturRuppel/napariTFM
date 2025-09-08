@@ -13,6 +13,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend to avoid Qt issues
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 # Add the parent directory to path to import napariTFM modules
@@ -40,9 +41,9 @@ def get_msm_parameters():
     """Get MSM parameters for validation."""
     return MSMParameters(
         # Mesh parameters
-        density_factor=0.01,  # Good balance between accuracy and computation time
+        density_factor=0.01, 
         mesh_algorithm='Frontal-Del.',
-        use_optimization=True,
+        use_optimization=False,
         
         # Material parameters  
         poisson_ratio_cells=0.5,
@@ -166,11 +167,31 @@ def plot_stress_validation_comparison(gt_stress_xx, gt_stress_yy, gt_stress_norm
                                     calc_stress_xx, calc_stress_yy, calc_stress_normal, 
                                     xx_errors, yy_errors, normal_errors):
     """Plot 2x4 stress validation: Ground Truth vs Calculated for σ_xx, σ_yy, σ_normal with correlation bar plot."""
-    fig, axes = plt.subplots(2, 4, figsize=(7.5, 4))  # DIN A4 compatible width
-    fig.suptitle('MSM Stress Field Validation', fontsize=10, y=0.95)
+    fig = plt.figure(figsize=(9.5, 5))  # DIN A4 compatible width
     
-    # Reduce spacing between subplots - account for colorbars
-    plt.subplots_adjust(wspace=-0.05, hspace=0.25)
+    # Use 5 rows to create vertical padding for correlation plot, 5 cols for spacing
+    gs = gridspec.GridSpec(5, 5, figure=fig, 
+                          width_ratios=[0.25, 0.25, 0.25, 0.11, 0.14],
+                          height_ratios=[0.1, 0.4, 0.1, 0.4, 0.1],
+                          wspace=0.0, hspace=0.1)
+    
+    fig.suptitle('MSM Stress Field Validation', fontsize=12, y=0.9)
+    
+    # Create axes using gridspec - maps use rows 1 and 3, cols 0-2
+    axes = []
+    # Top row (row 1)
+    top_axes = []
+    for j in range(3):  # Only first 3 columns for maps
+        ax = fig.add_subplot(gs[1, j])
+        top_axes.append(ax)
+    axes.append(top_axes)
+    
+    # Bottom row (row 3) 
+    bottom_axes = []
+    for j in range(3):  # Only first 3 columns for maps
+        ax = fig.add_subplot(gs[3, j])
+        bottom_axes.append(ax)
+    axes.append(bottom_axes)
     
     # Data arrays and titles
     gt_data = [gt_stress_xx, gt_stress_yy, gt_stress_normal]
@@ -181,67 +202,51 @@ def plot_stress_validation_comparison(gt_stress_xx, gt_stress_yy, gt_stress_norm
     # Plot stress fields for each component
     for i in range(3):
         # Determine common colorbar scales for each stress type
-        vmax = max(np.max(np.abs(gt_data[i])), np.max(np.abs(calc_data[i])))
+        vmax = 5.1
         vmin = -vmax
         
         # Ground truth (top row)
-        im_gt = axes[0, i].imshow(gt_data[i], cmap='RdBu_r', vmin=vmin, vmax=vmax)
-        axes[0, i].set_title(f'{titles[i]} Stress', fontsize=8)
-        axes[0, i].set_xticks([])
-        axes[0, i].set_yticks([])
-        axes[0, i].tick_params(labelsize=6)
-        divider_gt = make_axes_locatable(axes[0, i])
-        cax_gt = divider_gt.append_axes("right", size="3%", pad=0.01)
+        im_gt = axes[0][i].imshow(gt_data[i], cmap='RdBu_r', vmin=vmin, vmax=vmax)
+        axes[0][i].set_title(f'{titles[i]} Stress', fontsize=9)
+        axes[0][i].axis('off')
+        divider_gt = make_axes_locatable(axes[0][i])
+        cax_gt = divider_gt.append_axes("right", size="5%", pad=0.05)
         cbar_gt = plt.colorbar(im_gt, cax=cax_gt)
-        cbar_gt.set_label('Stress (mN/m)', fontsize=6)
+        if i == 2:  # Only add label to rightmost column
+            cbar_gt.set_label('Stress (mN/m)', fontsize=7)
         cbar_gt.ax.tick_params(labelsize=6)
         
         # Calculated (bottom row)
-        im_calc = axes[1, i].imshow(calc_data[i], cmap='RdBu_r', vmin=vmin, vmax=vmax)
-        axes[1, i].set_title('', fontsize=8)  # Remove individual title
-        axes[1, i].set_xticks([])
-        axes[1, i].set_yticks([])
-        axes[1, i].tick_params(labelsize=6)
-        divider_calc = make_axes_locatable(axes[1, i])
-        cax_calc = divider_calc.append_axes("right", size="3%", pad=0.01)
+        im_calc = axes[1][i].imshow(calc_data[i], cmap='RdBu_r', vmin=vmin, vmax=vmax)
+        axes[1][i].set_title('', fontsize=8)  # Remove individual title
+        axes[1][i].axis('off')
+        divider_calc = make_axes_locatable(axes[1][i])
+        cax_calc = divider_calc.append_axes("right", size="5%", pad=0.05)
         cbar_calc = plt.colorbar(im_calc, cax=cax_calc)
-        cbar_calc.set_label('Stress (mN/m)', fontsize=6)
+        if i == 2:  # Only add label to rightmost column
+            cbar_calc.set_label('Stress (mN/m)', fontsize=7)
         cbar_calc.ax.tick_params(labelsize=6)
     
-    # Create a single subplot spanning both rows for correlation
-    gs = axes[0, 3].get_gridspec()
-    # Remove the individual subplots
-    axes[0, 3].remove()
-    axes[1, 3].remove()
-    # Create a subplot spanning both rows
-    ax_corr = fig.add_subplot(gs[:, 3])
+    # Create correlation subplot spanning middle 80% vertical space (rows 1-3), column 4
+    ax_corr = fig.add_subplot(gs[1:4, 4])
     
     stress_types = ['σ_xx', 'σ_yy', 'σ_normal']
     correlations = [xx_errors['correlation'], yy_errors['correlation'], normal_errors['correlation']]
     bars = ax_corr.bar(stress_types, correlations, color=['#1f77b4', '#ff7f0e', '#2ca02c'], alpha=0.7)
-    ax_corr.set_title('Correlation between\nCalculated and\nGround Truth Data', fontsize=8, pad=15)
+    ax_corr.set_title('Correlation between\nCalculated and\nGround Truth Data', fontsize=9)
     ax_corr.set_ylabel('Correlation Coefficient', fontsize=8)
     ax_corr.set_ylim(0, 1.1)
     ax_corr.grid(True, alpha=0.3)
-    ax_corr.tick_params(labelsize=6)
+    ax_corr.tick_params(labelsize=7)
     
     # Add correlation values on bars
     for bar, corr in zip(bars, correlations):
         ax_corr.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
-                     f'{corr:.3f}', ha='center', va='bottom', fontsize=6)
+                     f'{corr:.3f}', ha='center', va='bottom', fontsize=7)
     
-    # Add row labels on the left side, properly centered with subplot rows
-    fig.text(0.01, 0.61, 'Ground Truth', rotation=90, va='center', ha='center', fontsize=8)
-    fig.text(0.01, 0.21, 'Calculated', rotation=90, va='center', ha='center', fontsize=8)
-    
-    # Adjust the correlation subplot to be more compact vertically
-    pos = ax_corr.get_position()
-    # Make it smaller vertically and center it better
-    new_height = pos.height * 0.6
-    new_y = pos.y0 + (pos.height - new_height) * 0.5
-    ax_corr.set_position([pos.x0, new_y, pos.width, new_height])
-    
-    plt.tight_layout(rect=[0, 0, 1, 0.92])  # Leave space for suptitle
+    # Add row labels on the left side
+    fig.text(0.135, 0.675, 'Ground Truth', rotation=90, va='center', ha='center', fontsize=9)
+    fig.text(0.135, 0.32, 'Calculated', rotation=90, va='center', ha='center', fontsize=9)
     return fig
 
 
