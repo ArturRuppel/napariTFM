@@ -19,8 +19,8 @@ def calculate_strain_energy_density(displacement_frame_m: np.ndarray, force_fram
         raise ValueError("Displacement frame must be of shape (y, x, 2).")
 
     # Strain Energy Density (SED) = 0.5 * (u_x * T_x + u_y * T_y)
-    # u (m), T (N/m^2) -> u*T (N/m = J/m^2)
-    sed = 0.5 * np.sum(displacement_frame_m * force_frame_pa, axis=-1)
+    sed = 0.5 * (displacement_frame_m[:,:,0] * force_frame_pa[:,:,0] + displacement_frame_m[:,:,1] * force_frame_pa[:,:,1])
+
     return sed
 
 
@@ -43,7 +43,8 @@ def calculate_total_strain_energy(strain_energy_density_frame_jm2: np.ndarray,
     if not np.isscalar(pixel_area_m2) or pixel_area_m2 <= 0:
         raise ValueError("pixel_area_m2 must be a positive scalar.")
 
-    total_se = np.sum(strain_energy_density_frame_jm2[mask_frame] * pixel_area_m2)
+    total_se = np.sum(strain_energy_density_frame_jm2 * mask_frame * pixel_area_m2)
+
     return float(total_se)
 
 
