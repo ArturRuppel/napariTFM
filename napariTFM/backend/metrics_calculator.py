@@ -71,22 +71,29 @@ def calculate_moment_tensor(force_frame_pa: np.ndarray,
 
     moment_tensor = np.zeros((2, 2))
 
+
     # Consider only pixels within the mask
-    masked_forces = force_frame_pa[mask_frame]  # Shape: (N_masked_pixels, 2)
-    masked_positions = pixel_positions_m[mask_frame]  # Shape: (N_masked_pixels, 2)
+    masked_forces = np.zeros_like(force_frame_pa)
+    masked_forces[:,:,0] = force_frame_pa[:,:,0] * mask_frame
+    masked_forces[:,:,1] = force_frame_pa[:,:,1] * mask_frame
 
-    if masked_forces.size == 0: # Handle empty mask
-        return moment_tensor
+    masked_positions = np.zeros_like(pixel_positions_m)
+    masked_positions[:,:,0] = pixel_positions_m[:,:,0] * mask_frame
+    masked_positions[:,:,1] = pixel_positions_m[:,:,1] * mask_frame
 
-    # M_ij = sum(r_i * T_j * dA)
-    # r_i is position component, T_j is force component
-    # masked_positions[:, 0] is x_pos, masked_positions[:, 1] is y_pos
-    # masked_forces[:, 0] is Fx, masked_forces[:, 1] is Fy
+    
+    
+    # Calculate each component
+    m00_terms = masked_positions[:,:,0] * masked_forces[:,:,0]  # x * Fx
+    m01_terms = masked_positions[:,:,0] * masked_forces[:,:,1]  # x * Fy
+    m10_terms = masked_positions[:,:,1] * masked_forces[:,:,0]  # y * Fx
+    m11_terms = masked_positions[:,:,1] * masked_forces[:,:,1]  # y * Fy
+    
 
-    moment_tensor[0, 0] = np.sum(masked_positions[:, 0] * masked_forces[:, 0])  # x * Fx
-    moment_tensor[0, 1] = np.sum(masked_positions[:, 0] * masked_forces[:, 1])  # x * Fy
-    moment_tensor[1, 0] = np.sum(masked_positions[:, 1] * masked_forces[:, 0])  # y * Fx
-    moment_tensor[1, 1] = np.sum(masked_positions[:, 1] * masked_forces[:, 1])  # y * Fy
+    moment_tensor[0, 0] = np.sum(m00_terms)
+    moment_tensor[0, 1] = np.sum(m01_terms) 
+    moment_tensor[1, 0] = np.sum(m10_terms)
+    moment_tensor[1, 1] = np.sum(m11_terms)
 
     return moment_tensor * pixel_area_m2
 
@@ -105,6 +112,14 @@ def calculate_polarization(moment_tensor: np.ndarray) -> tuple[float, float, flo
     lambda1 = np.max(eigenvalues)  # Principal eigenvalue (more positive or less negative)
     lambda2 = np.min(eigenvalues)  # Secondary eigenvalue
 
-    polarization_index = np.abs((lambda1 - lambda2)) / (lambda1 + lambda2)
+    # Handle edge cases where sum is close to zero
+    denominator = lambda1 + lambda2
+    if np.abs(denominator) < 1e-15:  # Near zero sum
+        polarization_index = 0.0
+    else:
+        polarization_index = np.abs((lambda1 - lambda2)) / np.abs(denominator)
+    
+    # Clamp to valid range [-1, 1] for safety
+    polarization_index = np.clip(polarization_index, -1.0, 1.0)
 
     return float(polarization_index), float(lambda1), float(lambda2)

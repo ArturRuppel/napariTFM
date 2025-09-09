@@ -429,6 +429,7 @@ class BatchAnalysis:
 
             displacements_um = displacement_results.displacement_field  # (t, y, x, 2) in µm
             forces_pa = force_results.force_field  # (t, y, x, 2) in Pa
+            
 
             if displacements_um.shape[0] != forces_pa.shape[0] or \
                (mask_data.ndim == 3 and displacements_um.shape[0] != mask_data.shape[0]):
@@ -478,7 +479,7 @@ class BatchAnalysis:
                     'Eigenvalue1 (N.m)': eig1_nm,
                     'Eigenvalue2 (N.m)': eig2_nm
                 })
-                print(f"Metrics frame {i+1}/{num_frames}: SE={total_se_j:.2e} J, Polar={polar_idx:.2f}")
+                print(f"Metrics frame {i+1}/{num_frames}: SE={total_se_j:.2e} J, Polar={polar_idx:.3f}")
 
             # Save to CSV
             df = pd.DataFrame(metrics_results_list)
