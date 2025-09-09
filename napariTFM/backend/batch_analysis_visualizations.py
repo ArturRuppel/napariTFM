@@ -122,11 +122,8 @@ class BatchVisualizationSaver:
             U = displacement_field[Y, X, 0] * vector_scale
             V = displacement_field[Y, X, 1] * vector_scale
 
-            # Calculate magnitudes for vector filtering
-            mask = sampled_magnitude > 0
-
-            # Plot filtered vectors with constant gray color
-            ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
+            # Plot vectors with constant gray color
+            ax_map.quiver(X, Y, U, V,
                           color='gray',
                           scale=1.0, scale_units='xy',
                           angles='xy', width=0.003)
@@ -198,10 +195,8 @@ class BatchVisualizationSaver:
             U = tx[frame_idx][Y, X] * vector_scale
             V = ty[frame_idx][Y, X] * vector_scale
 
-            mask = sampled_magnitude > f_max * 0.01
-
             # Use constant gray color for arrows
-            ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
+            ax_map.quiver(X, Y, U, V,
                           color='gray',
                           scale=1.0, scale_units='xy',
                           angles='xy', width=0.003)
