@@ -4,7 +4,7 @@ analysis_steps:
   displacement: true
   force: true
   preprocessing: true
-  stress: false
+  stress: true
 input_files:
   beads: beads.tif
   cells: cells.tif
@@ -18,9 +18,9 @@ metrics_parameters:
   mask_erosion: 0
 parameters:
   auto_gcv: false
-  cell_gaussian_sigma: 1.0
+  cell_gaussian_sigma: 0.0
   cell_max_intensity_percentile: 99.9
-  cell_min_intensity_percentile: 85.0
+  cell_min_intensity_percentile: 60.0
   d_max: 1.0
   density_factor: 0.01
   dilation: 10
@@ -28,44 +28,44 @@ parameters:
   disp_vector_stride: 20
   downscale_factor: 4
   epsilon: 0.01
-  f_max: 2000.0
+  f_max: 4000.0
   force_arrow_scale: 1.0
   force_vector_stride: 20
   frame_interval: 1.0
-  gaussian_sigma: 1.0
+  gaussian_sigma: 0.0
   gel_height: null
-  inner_iterations: 20
+  inner_iterations: 15
   lambda_: 0.1
-  lanczos_exp: 5
+  lanczos_exp: 1
   max_intensity_percentile: 99.9
-  max_stress: 1.0
-  median_filtering: 1
+  max_stress: 5.0
+  median_filtering: 5
   mesh_algorithm: Frontal-Del.
-  min_intensity_percentile: 90.0
+  min_intensity_percentile: 80.0
   nscales: 10
-  outer_iterations: 10
+  outer_iterations: 5
   pixel_size: 0.1
   poisson_ratio_cells: 0.5
   poisson_ratio_substrate: 0.5
   registration_mode: translation
-  regularization: 0.0001
-  rolling_ball_radius: 5
-  scale_step: 0.8
-  smoothing_sigma: 10.0
+  regularization: 7.943282347242822e-05
+  rolling_ball_radius: 0
+  scale_step: 0.5
+  smoothing_sigma: 20.0
   tau: 0.15
   theta: 0.3
-  threshold: 0.0
-  use_optimization: true
+  threshold: 35.0
+  use_optimization: false
   warps: 10
   young_modulus: 20000.0
 root_folders:
-- C:/Users/aruppel/Desktop/doublets_test
+- /home/artur/napariTFM/_validation/doublet_example
 visualizations:
   bead_overlay: true
   displacement_map: true
   force_cell_overlay: true
   force_map: true
-  mesh: false
-  normal_stress: false
-  sigma_xx: false
-  sigma_yy: false
+  mesh: true
+  normal_stress: true
+  sigma_xx: true
+  sigma_yy: true

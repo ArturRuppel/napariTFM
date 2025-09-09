@@ -125,11 +125,9 @@ class BatchVisualizationSaver:
             # Calculate magnitudes for vector filtering
             mask = sampled_magnitude > 0
 
-            # Plot filtered vectors with colors based on magnitude
-            colors = plt.cm.viridis(sampled_magnitude[mask] / d_max)
-
+            # Plot filtered vectors with constant gray color
             ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
-                          color=colors,
+                          color='gray',
                           scale=1.0, scale_units='xy',
                           angles='xy', width=0.003)
 
@@ -202,11 +200,9 @@ class BatchVisualizationSaver:
 
             mask = sampled_magnitude > f_max * 0.01
 
-            # Use sampled magnitude for coloring
-            colors = plt.cm.inferno(sampled_magnitude[mask] / f_max)
-
+            # Use constant gray color for arrows
             ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
-                          color=colors,
+                          color='gray',
                           scale=1.0, scale_units='xy',
                           angles='xy', width=0.003)
 
@@ -285,11 +281,9 @@ class BatchVisualizationSaver:
             U = tx[frame_idx][Y, X] * vector_scale
             V = ty[frame_idx][Y, X] * vector_scale
 
-            mask = sampled_magnitude > f_max * 0.1
+            colors = plt.cm.inferno(sampled_magnitude / f_max)
 
-            colors = plt.cm.inferno(sampled_magnitude[mask] / f_max)
-
-            ax_map.quiver(X[mask], Y[mask], U[mask], V[mask],
+            ax_map.quiver(X, Y, U, V,
                           color=colors,
                           scale=1.0, scale_units='xy',
                           angles='xy', width=0.003)
