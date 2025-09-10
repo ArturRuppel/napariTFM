@@ -12,6 +12,8 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib
+import tifffile
+
 matplotlib.use('Agg')  # Use non-interactive backend to avoid Qt issues
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -81,34 +83,37 @@ def get_displacement_parameters(scenario_name):
     # Scenario-specific parameter modifications
     scenario_configs = {
         'low': {
-            'tau': 0.15,
-            'lambda_': 0.1,
-            'theta': 0.1,
+            'tau': 0.1,
+            'lambda_': 0.15,
+            'theta': 0.15,
             'nscales': 10,
+            'scale_step': 0.7,
             'warps': 10,
             'epsilon': 0.01,
-            'inner_iterations': 20,
-            'outer_iterations': 10
+            'inner_iterations': 25,
+            'outer_iterations': 15
         },
         'mid': {
-            'tau': 0.15,
+            'tau': 0.1,
             'lambda_': 0.1,
             'theta': 0.1,
             'nscales': 10,
+            'scale_step': 0.5,
             'warps': 10,
             'epsilon': 0.01,
-            'inner_iterations': 20,
-            'outer_iterations': 10
+            'inner_iterations': 25,
+            'outer_iterations': 15
         },
         'high': {
             'tau': 0.15,
             'lambda_': 0.1,
             'theta': 0.1,
             'nscales': 10,
-            'warps': 10,
+            'scale_step': 0.5,
+            'warps': 15,
             'epsilon': 0.01,
-            'inner_iterations': 20,
-            'outer_iterations': 10
+            'inner_iterations': 25,
+            'outer_iterations': 15
         }
     }
     
@@ -131,9 +136,8 @@ def get_fttc_parameters(scenario_name):
             'young_modulus': 20000,  # Pa
             'poisson_ratio_substrate': 0.5,
             'lanczos_exp': 1,
-            # 'auto_gcv': True,
             'auto_gcv': False,
-            'regularization': 1e-17,
+            'regularization': 2e-6,
             'pixel_size': 0.1,  # µm
             'downscale_factor': 1
         },
@@ -141,9 +145,8 @@ def get_fttc_parameters(scenario_name):
             'young_modulus': 20000,  # Pa
             'poisson_ratio_substrate': 0.5,
             'lanczos_exp': 1,
-            # 'auto_gcv': True,
             'auto_gcv': False,
-            'regularization': 1e-17,
+            'regularization': 2e-6,
             'pixel_size': 0.1,  # µm
             'downscale_factor': 1
         },
@@ -151,9 +154,8 @@ def get_fttc_parameters(scenario_name):
             'young_modulus': 20000,  # Pa
             'poisson_ratio_substrate': 0.5,
             'lanczos_exp': 1,
-            # 'auto_gcv': True,
             'auto_gcv': False,
-            'regularization': 1e-17,
+            'regularization': 2e-6,
             'pixel_size': 0.1,  # µm
             'downscale_factor': 1
         }
@@ -215,20 +217,18 @@ def calculate_strain_energy_metrics(displacement_data, calculated_traction, grou
     """Calculate strain energy metrics for TFM validation."""
     # Convert displacement from pixels to meters
     displacement_m = displacement_data * (pixel_size_um * 1e-6)
-    
-    # Create a simple mask (non-zero regions)
-    mask = np.logical_and(
-        np.sqrt(calculated_traction[:,:,0]**2 + calculated_traction[:,:,1]**2) > 0,
-        np.sqrt(ground_truth_traction[:,:,0]**2 + ground_truth_traction[:,:,1]**2) > 0
-    )
-    
+
     # Calculate pixel area in m²
     pixel_area_m2 = (pixel_size_um * 1e-6) ** 2
     
     # Calculate strain energy density for both calculated and ground truth
     sed_calculated = calculate_strain_energy_density(displacement_m, calculated_traction)
     sed_gt = calculate_strain_energy_density(displacement_m, ground_truth_traction)
-    
+
+    # create simple square mask, excluding borders because of artifacts
+    mask = np.zeros_like(sed_calculated)
+    mask [10:-10, 10:-10] = 1
+
     # Calculate total strain energies
     total_se_calculated = calculate_total_strain_energy(sed_calculated, mask, pixel_area_m2)
     total_se_gt = calculate_total_strain_energy(sed_gt, mask, pixel_area_m2)
@@ -476,6 +476,7 @@ def plot_strain_energy_comparison(fttc_results):
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3, axis='y')
     ax.set_yscale('log')
+    ax.set_ylim(0, 1e-13)
     ax.tick_params(labelsize=6)
     
     plt.tight_layout()

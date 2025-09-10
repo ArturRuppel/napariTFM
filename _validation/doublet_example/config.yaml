@@ -21,45 +21,45 @@ parameters:
   cell_gaussian_sigma: 0.0
   cell_max_intensity_percentile: 99.9
   cell_min_intensity_percentile: 60.0
-  d_max: 1.0
+  d_max: 2.0
   density_factor: 0.01
-  dilation: 10
+  dilation: 50
   disp_arrow_scale: 1.0
   disp_vector_stride: 20
-  downscale_factor: 4
+  downscale_factor: 1
   epsilon: 0.01
-  f_max: 4000.0
+  f_max: 6000.0
   force_arrow_scale: 1.0
   force_vector_stride: 20
   frame_interval: 1.0
   gaussian_sigma: 0.0
   gel_height: null
-  inner_iterations: 15
+  inner_iterations: 25
   lambda_: 0.1
   lanczos_exp: 1
   max_intensity_percentile: 99.9
-  max_stress: 5.0
-  median_filtering: 5
+  max_stress: 10.0
+  median_filtering: 1
   mesh_algorithm: Frontal-Del.
   min_intensity_percentile: 80.0
   nscales: 10
-  outer_iterations: 5
+  outer_iterations: 15
   pixel_size: 0.1
   poisson_ratio_cells: 0.5
   poisson_ratio_substrate: 0.5
   registration_mode: translation
-  regularization: 7.943282347242822e-05
+  regularization: 3.1622776601683795e-05
   rolling_ball_radius: 0
-  scale_step: 0.5
+  scale_step: 0.8
   smoothing_sigma: 20.0
-  tau: 0.15
-  theta: 0.3
+  tau: 0.1
+  theta: 0.1
   threshold: 35.0
   use_optimization: false
   warps: 10
   young_modulus: 20000.0
 root_folders:
-- /home/artur/napariTFM/_validation/doublet_example
+- C:/Users/aruppel/Documents/python_projects/napariTFM/_validation/doublet_example
 visualizations:
   bead_overlay: true
   displacement_map: true

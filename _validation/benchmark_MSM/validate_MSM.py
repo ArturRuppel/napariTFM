@@ -101,8 +101,8 @@ def get_msm_parameters():
     """Get MSM parameters for validation."""
     return MSMParameters(
         # Mesh parameters
-        density_factor=0.01, 
-        mesh_algorithm='Frontal-Del.',
+        density_factor=0.005,
+        mesh_algorithm='Delaunay',
         use_optimization=False,
         
         # Material parameters  
@@ -375,7 +375,7 @@ def plot_average_stress_comparison(gt_stress_xx, gt_stress_yy, gt_stress_normal,
     ax.tick_params(labelsize=6)
     
     # Set y-axis limits
-    ax.set_ylim(-0.1, y_max)
+    ax.set_ylim(0, y_max)
     
     plt.tight_layout()
     return fig
@@ -707,7 +707,7 @@ def validate_square_plate_msm():
     validation_fig = plot_stress_validation_comparison(
         gt_stress_xx, gt_stress_yy, gt_stress_normal,
         calc_stress_xx, calc_stress_yy, calc_stress_normal,
-        xx_metrics, yy_metrics, normal_metrics, vmax=1.1
+        xx_metrics, yy_metrics, normal_metrics, vmax=1.5
     )
     validation_output_path = Path(__file__).parent / "square_plate_validation_comparison.png"
     validation_fig.savefig(validation_output_path, dpi=300, bbox_inches='tight')
