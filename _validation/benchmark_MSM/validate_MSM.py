@@ -101,7 +101,7 @@ def get_msm_parameters():
     """Get MSM parameters for validation."""
     return MSMParameters(
         # Mesh parameters
-        density_factor=0.005,
+        density_factor=0.01,
         mesh_algorithm='Delaunay',
         use_optimization=False,
         
@@ -227,7 +227,7 @@ def plot_stress_validation_comparison(gt_stress_xx, gt_stress_yy, gt_stress_norm
                                     calc_stress_xx, calc_stress_yy, calc_stress_normal, 
                                     xx_errors, yy_errors, normal_errors, vmax=5.1):
     """Plot 2x4 stress validation: Ground Truth vs Calculated for σ_xx, σ_yy, σ_normal with correlation bar plot."""
-    fig = plt.figure(figsize=(9.5, 5))  # DIN A4 compatible width
+    fig = plt.figure(figsize=(9.5, 4.5))  # DIN A4 compatible width
     
     # Use 5 rows to create vertical padding for correlation plot, 5 cols for spacing
     gs = gridspec.GridSpec(5, 5, figure=fig, 
@@ -346,7 +346,7 @@ def plot_average_stress_comparison(gt_stress_xx, gt_stress_yy, gt_stress_normal,
         gt_values.append(gt_avg)
         calc_values.append(calc_avg)
     
-    fig, ax = plt.subplots(1, 1, figsize=(7, 4))  # DIN A4 compatible
+    fig, ax = plt.subplots(1, 1, figsize=(3.5, 2.5))  # DIN A4 compatible
     
     x = np.arange(len(stress_components))
     width = 0.35
@@ -367,7 +367,7 @@ def plot_average_stress_comparison(gt_stress_xx, gt_stress_yy, gt_stress_normal,
     
     ax.set_xlabel('Stress Component', fontsize=8)
     ax.set_ylabel('Average Stress (mN/m)', fontsize=8)
-    ax.set_title('Average Stress Comparison: Ground Truth vs Calculated', fontsize=10)
+    ax.set_title('Average Stress Comparison\nGround Truth vs Calculated', fontsize=10)
     ax.set_xticks(x)
     ax.set_xticklabels(stress_components)
     ax.legend(fontsize=8)
@@ -401,7 +401,7 @@ def plot_normalized_average_stress(gt_stress_xx, gt_stress_yy, gt_stress_normal,
         else:
             normalized_values.append(0)
     
-    fig, ax = plt.subplots(1, 1, figsize=(7, 4))  # DIN A4 compatible
+    fig, ax = plt.subplots(1, 1, figsize=(3.5, 2.5))  # DIN A4 compatible
     
     # Create bar plot
     bars = ax.bar(stress_components, normalized_values, 
@@ -420,7 +420,7 @@ def plot_normalized_average_stress(gt_stress_xx, gt_stress_yy, gt_stress_normal,
     
     ax.set_xlabel('Stress Component', fontsize=8)
     ax.set_ylabel('Normalized Average Stress\n(Calculated / Ground Truth)', fontsize=8)
-    ax.set_title('Normalized Average Stress: Calculated vs Ground Truth', fontsize=10)
+    ax.set_title('Normalized Average Stress\nCalculated / Ground Truth', fontsize=10)
     ax.grid(True, alpha=0.3, axis='y')
     ax.legend(fontsize=8)
     ax.tick_params(labelsize=6)

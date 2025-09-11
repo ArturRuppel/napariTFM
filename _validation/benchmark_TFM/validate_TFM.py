@@ -450,7 +450,7 @@ def plot_strain_energy_comparison(fttc_results):
     se_gt_values = [fttc_results[s]['strain_energy_gt'] if s in fttc_results and fttc_results[s]['strain_energy_gt'] > 0 else 1e-20 for s in scenarios]
     se_calc_values = [fttc_results[s]['strain_energy_calc'] if s in fttc_results and fttc_results[s]['strain_energy_calc'] > 0 else 1e-20 for s in scenarios]
     
-    fig, ax = plt.subplots(1, 1, figsize=(7, 4))  # DIN A4 compatible
+    fig, ax = plt.subplots(1, 1, figsize=(3.5, 2.5))
     
     x = np.arange(len(scenarios))
     width = 0.35
@@ -470,7 +470,7 @@ def plot_strain_energy_comparison(fttc_results):
     
     ax.set_xlabel('Scenario', fontsize=8)
     ax.set_ylabel('Strain Energy (J)', fontsize=8)
-    ax.set_title('Strain Energy Comparison: Ground Truth vs Calculated', fontsize=10)
+    ax.set_title('Strain Energy Comparison\nGround Truth vs Calculated', fontsize=10)
     ax.set_xticks(x)
     ax.set_xticklabels([s.upper() for s in scenarios])
     ax.legend(fontsize=8)
@@ -500,7 +500,7 @@ def plot_normalized_strain_energy(fttc_results):
         else:
             normalized_values.append(0)
     
-    fig, ax = plt.subplots(1, 1, figsize=(7, 4))  # DIN A4 compatible
+    fig, ax = plt.subplots(1, 1, figsize=(3.5, 2.5))
     
     # Create bar plot
     bars = ax.bar(scenarios, normalized_values, 
@@ -518,7 +518,7 @@ def plot_normalized_strain_energy(fttc_results):
     
     ax.set_xlabel('Scenario', fontsize=8)
     ax.set_ylabel('Normalized Strain Energy\n(Calculated / Ground Truth)', fontsize=8)
-    ax.set_title('Normalized Strain Energy: Calculated vs Ground Truth', fontsize=10)
+    ax.set_title('Normalized Strain Energy\nCalculated / Ground Truth', fontsize=10)
     ax.set_xticklabels([s.upper() for s in scenarios])
     ax.grid(True, alpha=0.3, axis='y')
     ax.legend(fontsize=8)

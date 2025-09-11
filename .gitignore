@@ -70,4 +70,18 @@ venv.bak/
 .Trashes
 ehthumbs.db
 Thumbs.db
-gitignore/architecture_diagram.md
+
+# Large binary files (add specific exceptions as needed)
+*.npy
+*.tif
+*.tiff
+*.png
+*.gif
+*.jpg
+*.jpeg
+
+# Keep specific validation/benchmark files
+!_validation/**/*.npy
+!_validation/**/*.tif
+!_validation/**/*.png
+!_validation/**/*.gif
