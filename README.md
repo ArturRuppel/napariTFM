@@ -18,6 +18,14 @@ napariTFM is a comprehensive tool for Traction Force Microscopy (TFM) analysis, 
 
 The software combines established TFM algorithms with napari's visualization capabilities to enable systematic analysis of cell-substrate interactions. It supports both single-frame and time series analysis, making it suitable for studying various experimental setups from individual cells to cell monolayers.
 
+### Algorithm Sources and Acknowledgments
+
+The core algorithms implemented in napariTFM are based on established methods developed by our colleagues:
+
+**FTTC (Fourier Transform Traction Cytometry):** The force calculation implementation is based on the DirectMethod package by Usschwarz (https://github.com/usschwarz/DirectMethod, MIT License) and incorporates methods from Blumberg & Schwarz, "Comparison of direct and inverse methods for 2.5D traction force microscopy" (2022). Gel height corrections are adapted from the pyTFM package (https://github.com/fabrylab/pyTFM, GNU GPL v3.0 License).
+
+**MSM (Monolayer Stress Microscopy):** The stress field calculation implementation is based on the pyTFM package by Bauer et al. (https://github.com/fabrylab/pyTFM, GNU GPL v3.0 License), as described in "pyTFM: A tool for traction force and monolayer stress microscopy" PLoS Computational Biology (2021).
+
 ### Key Features
 - Complete TFM analysis pipeline from preprocessing to stress calculation
 - Monolayer Stress Microscopy (MSM) for internal stress analysis
