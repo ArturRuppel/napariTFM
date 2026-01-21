@@ -235,7 +235,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Frame interval
         frame_row = QHBoxLayout()
         frame_row.addWidget(QLabel("Frame Length (min):"))
-        frame_spin = self._create_double_spinbox(0.001, 1000.0, 0.1, 1)
+        frame_spin = self._create_double_spinbox(0.001, 1000.0, 0.1, 3)
         frame_spin.setToolTip("Time interval between consecutive image frames in minutes. Used for temporal analysis and rate calculations.")
         self.parameter_spins['frame_interval'] = frame_spin
         frame_row.addWidget(frame_spin)
@@ -320,9 +320,9 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
              "Weight of the smoothness term in the optical flow equation. Higher values produce smoother displacement fields."),
             ("theta", "Theta:", 0.1, 1.0, 0.01,
              "Weight between the brightness constancy and gradient constancy assumptions. Higher values favor gradient constancy."),
-            ("nscales", "Pyramid Scales:", 1, 10, 1,
+            ("nscales", "Pyramid Scales:", 1, 50, 1,
              "Number of image pyramid levels for multi-scale analysis. More scales handle larger displacements but increase computation time."),
-            ("warps", "Warps:", 1, 10, 1,
+            ("warps", "Warps:", 1, 50, 1,
              "Number of image warping steps per scale. More warps increase accuracy for large displacements but increase computation time."),
             ("epsilon", "Epsilon:", 0.001, 0.1, 0.001,
              "Stopping criterion for the optimization. Lower values give more precise results but may require more iterations."),
