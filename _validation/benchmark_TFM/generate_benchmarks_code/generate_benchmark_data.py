@@ -15,7 +15,7 @@ import tifffile
 from skimage.transform import warp
 
 # DirectMethod package imports using absolute path
-DIRECTMETHOD_ROOT = Path("/home/artur/DirectMethod")
+DIRECTMETHOD_ROOT = Path("/home/aruppel/projects/DirectMethod")
 DIRECTMETHOD_SRC = DIRECTMETHOD_ROOT / "src"
 sys.path.insert(0, str(DIRECTMETHOD_SRC))
 
@@ -178,7 +178,7 @@ def main():
     print("Generating complete benchmark dataset using DirectMethod framework...")
     
     # Default paths - can be modified as needed
-    base_folder = "/home/artur/napariTFM/_validation/benchmark_TFM/"
+    base_folder = "/home/aruppel/projects/napariTFM/_validation/benchmark_TFM/"
     toml_file = base_folder + "low/dipole_config.toml"
     reference_image = base_folder + "low/reference.tif"
     
