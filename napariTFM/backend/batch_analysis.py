@@ -1,4 +1,10 @@
+import os
 import sys
+
+# Set Qt to offscreen mode for headless/console execution (must be before any Qt imports)
+if 'QT_QPA_PLATFORM' not in os.environ:
+    os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+
 from datetime import datetime
 from pathlib import Path
 from time import sleep
@@ -8,7 +14,7 @@ from typing import Optional, Dict, List, Any
 import numpy as np
 import tifffile
 import yaml
-from skimage.transform import rescale
+from skimage.transform import rescale, resize
 from scipy.ndimage import center_of_mass
 import pandas as pd
 
@@ -81,7 +87,7 @@ class TeeLogger:
 
         contact_info = '''                 
             For comments, questions or bug reports, please contact:
-                           artur.ruppel@crbm.cnrs.fr
+                           artur.ruppel@pasteur.fr
                     https://github.com/ArturRuppel/napariTFM'''
 
         # Combined output for both terminal and log file
@@ -821,12 +827,10 @@ class BatchAnalysis:
         start_time = time()
         params = self._create_msm_parameters()
         msm_service = MSMService(params)
-        downscale_factor = self.config['parameters']['downscale_factor']
         masks = []
 
-        # Create masks and generate meshes
+        # Create masks at full resolution (resizing to match force field happens in stress analysis)
         for mask, frame, total in msm_service.create_mask_stack(cell_images, params):
-            mask = rescale(mask, 1 / downscale_factor, order=0, preserve_range=True, anti_aliasing=False)
             masks.append(mask)
             self._log_mask_progress(mask, frame, total)
 
@@ -900,6 +904,31 @@ class BatchAnalysis:
 
         params = self._create_msm_parameters()
         msm_service = MSMService(params)
+
+        # Ensure mask_data is 3D (t, y, x)
+        if mask_data.ndim == 2:
+            mask_data = mask_data[np.newaxis, ...]
+
+        # Resize masks to exactly match force field shape
+        force_shape = force_data.force_field.shape[1:3]  # (height, width)
+        mask_shape = mask_data.shape[1:3]  # (height, width)
+        # print(f"Mask data shape: {mask_data.shape}, dtype: {mask_data.dtype}")
+        # print(f"Force field shape: {force_data.force_field.shape}")
+        # print(f"Mask pixels > 0: {np.sum(mask_data > 0)}")
+
+        if mask_shape != force_shape:
+            print(f"Resizing masks from {mask_shape} to {force_shape} to match force field...")
+            mask_data = np.stack([
+                resize(
+                    mask.astype(float),
+                    force_shape,
+                    order=0,
+                    preserve_range=True,
+                    anti_aliasing=False
+                ) > 0.5
+                for mask in mask_data
+            ])
+            print(f"After resize - Mask pixels > 0: {np.sum(mask_data > 0)}")
 
         try:
             # Initialize mesh generation
