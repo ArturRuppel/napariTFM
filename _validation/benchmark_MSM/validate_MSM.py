@@ -505,7 +505,7 @@ def plot_square_plate_stress_metrics(stress_results, mask=None):
     stress_components = ['σ_xx', 'σ_yy', 'σ_normal']
     colors = {'σ_xx': '#1f77b4', 'σ_yy': '#ff7f0e', 'σ_normal': '#2ca02c'}
 
-    fig, axes = plt.subplots(1, 3, figsize=(7, 2.5))
+    fig, axes = plt.subplots(1, 2, figsize=(7, 2.5))
     fig.suptitle('MSM Stress Analysis Metrics', fontsize=12, y=0.875)
 
     # --- Left panel: Correlation bar chart ---
@@ -559,24 +559,24 @@ def plot_square_plate_stress_metrics(stress_results, mask=None):
             mae_values.append(0.0)
             mre_values.append(0.0)
 
-    # --- Middle panel: Mean Absolute Error bar chart ---
-    bars_mae = axes[1].bar(stress_components, mae_values, color=bar_colors, alpha=0.7)
-    axes[1].set_title('Mean Absolute Error', fontsize=10, y=1.05)
-    axes[1].set_ylabel('MAE (mN/m)', fontsize=9)
-    axes[1].grid(True, alpha=0.3)
-    axes[1].tick_params(labelsize=8)
-    for bar, val in zip(bars_mae, mae_values):
-        axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002,
-                     f'{val:.4f}', ha='center', va='bottom', fontsize=8)
+    # # --- Middle panel: Mean Absolute Error bar chart ---
+    # bars_mae = axes[1].bar(stress_components, mae_values, color=bar_colors, alpha=0.7)
+    # axes[1].set_title('Mean Absolute Error', fontsize=10, y=1.05)
+    # axes[1].set_ylabel('MAE (mN/m)', fontsize=9)
+    # axes[1].grid(True, alpha=0.3)
+    # axes[1].tick_params(labelsize=8)
+    # for bar, val in zip(bars_mae, mae_values):
+    #     axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002,
+    #                  f'{val:.4f}', ha='center', va='bottom', fontsize=8)
 
     # --- Right panel: Mean Relative Error bar chart ---
-    bars_mre = axes[2].bar(stress_components, mre_values, color=bar_colors, alpha=0.7)
-    axes[2].set_title('Mean Relative Error', fontsize=10, y=1.05)
-    axes[2].set_ylabel('MRE (|calc - GT| / |GT|)', fontsize=9)
-    axes[2].grid(True, alpha=0.3)
-    axes[2].tick_params(labelsize=8)
+    bars_mre = axes[1].bar(stress_components, mre_values, color=bar_colors, alpha=0.7)
+    axes[1].set_title('Mean Relative Error', fontsize=10, y=1.05)
+    axes[1].set_ylabel('MRE (|calc - GT| / |GT|)', fontsize=9)
+    axes[1].grid(True, alpha=0.3)
+    axes[1].tick_params(labelsize=8)
     for bar, val in zip(bars_mre, mre_values):
-        axes[2].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002,
+        axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002,
                      f'{val:.4f}', ha='center', va='bottom', fontsize=8)
 
     plt.tight_layout()
