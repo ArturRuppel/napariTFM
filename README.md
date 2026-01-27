@@ -18,6 +18,8 @@ napariTFM is a comprehensive tool for Traction Force Microscopy (TFM) analysis, 
 
 The software combines established TFM algorithms with napari's visualization capabilities to enable systematic analysis of cell-substrate interactions. It supports both single-frame and time series analysis, making it suitable for studying various experimental setups from individual cells to cell monolayers.
 
+A test data set, including recommended configuration parameters, can be found here: https://zenodo.org/records/18390989
+
 ### Algorithm Sources and Acknowledgments
 
 The core algorithms implemented in napariTFM are based on established methods developed by our colleagues:
