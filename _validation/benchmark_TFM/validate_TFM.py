@@ -679,7 +679,7 @@ def plot_displacement_metrics(displacement_results):
     colors = {'low': '#1f77b4', 'mid': '#ff7f0e', 'high': '#2ca02c'}
 
     fig, axes = plt.subplots(1, 2, figsize=(6.5, 2.5))
-    fig.suptitle('Displacement Analysis Metrics', fontsize=12)
+    fig.suptitle('Displacement Analysis Metrics', fontsize=12, y=0.875)
 
     # --- Left panel: Correlation bar chart ---
     ax_corr = axes[0]

@@ -101,7 +101,7 @@ def get_msm_parameters():
     """Get MSM parameters for validation."""
     return MSMParameters(
         # Mesh parameters
-        density_factor=0.01,
+        density_factor=0.005,
         mesh_algorithm='Delaunay',
         use_optimization=False,
         
@@ -198,238 +198,576 @@ def calculate_correlation_metrics(calculated, ground_truth, mask=None):
     """Calculate correlation metrics between calculated and ground truth stress fields (no RMSE)."""
     if mask is None:
         mask = np.ones_like(calculated, dtype=bool)
-    
+
     # Apply mask and filter out NaN values
     valid_mask = mask & ~np.isnan(calculated) & ~np.isnan(ground_truth)
-    
+
     if not np.any(valid_mask):
         return {'correlation': 0, 'max_error': 0}
-    
+
     calc_valid = calculated[valid_mask]
     gt_valid = ground_truth[valid_mask]
-    
+
     # Maximum error (kept for reference)
     max_error = np.max(np.abs(calc_valid - gt_valid))
-    
+
     # Correlation coefficient
     if np.std(calc_valid) > 0 and np.std(gt_valid) > 0:
         correlation = np.corrcoef(calc_valid, gt_valid)[0, 1]
     else:
         correlation = 0
-    
+
     return {
         'correlation': correlation,
         'max_error': max_error
     }
 
 
+def calculate_stress_relative_error(calculated, ground_truth, mask=None, min_threshold_fraction=0.01):
+    """
+    Calculate per-pixel signed relative error for stress fields.
+
+    Relative error = (calc - GT) / |GT|
+
+    Args:
+        calculated: Calculated stress field (H x W)
+        ground_truth: Ground truth stress field (H x W)
+        mask: Optional boolean mask defining valid region
+        min_threshold_fraction: Minimum GT magnitude threshold as fraction of max (to avoid division by ~0)
+
+    Returns:
+        gt_values: 1D array of valid GT values (absolute)
+        relative_errors: 1D array of corresponding signed relative errors
+    """
+    if mask is None:
+        mask = np.ones_like(calculated, dtype=bool)
+
+    # Apply mask and filter out NaN values
+    valid_mask = mask & ~np.isnan(calculated) & ~np.isnan(ground_truth)
+
+    gt_abs = np.abs(ground_truth)
+
+    # Filter out very small GT values to avoid division issues
+    max_gt = np.max(gt_abs[valid_mask]) if np.any(valid_mask) else 1.0
+    threshold = min_threshold_fraction * max_gt
+    valid_mask = valid_mask & (gt_abs > threshold)
+
+    if not np.any(valid_mask):
+        return np.array([]), np.array([])
+
+    gt_valid = gt_abs[valid_mask]
+    calc_valid = calculated[valid_mask]
+    gt_signed_valid = ground_truth[valid_mask]
+
+    # Signed relative error: positive = overestimation, negative = underestimation
+    relative_errors = (calc_valid - gt_signed_valid) / gt_valid
+
+    return gt_valid, relative_errors
+
+
 def plot_stress_validation_comparison(gt_stress_xx, gt_stress_yy, gt_stress_normal,
-                                    calc_stress_xx, calc_stress_yy, calc_stress_normal, 
-                                    xx_errors, yy_errors, normal_errors, vmax=5.1):
-    """Plot 2x4 stress validation: Ground Truth vs Calculated for σ_xx, σ_yy, σ_normal with correlation bar plot."""
-    fig = plt.figure(figsize=(9.5, 4.5))  # DIN A4 compatible width
-    
-    # Use 5 rows to create vertical padding for correlation plot, 5 cols for spacing
-    gs = gridspec.GridSpec(5, 5, figure=fig, 
-                          width_ratios=[0.25, 0.25, 0.25, 0.11, 0.14],
-                          height_ratios=[0.1, 0.4, 0.1, 0.4, 0.1],
-                          wspace=0.0, hspace=0.1)
-    
-    fig.suptitle('MSM Stress Field Validation', fontsize=12, y=0.9)
-    
-    # Create axes using gridspec - maps use rows 1 and 3, cols 0-2
-    axes = []
-    # Top row (row 1)
-    top_axes = []
-    for j in range(3):  # Only first 3 columns for maps
-        ax = fig.add_subplot(gs[1, j])
-        top_axes.append(ax)
-    axes.append(top_axes)
-    
-    # Bottom row (row 3) 
-    bottom_axes = []
-    for j in range(3):  # Only first 3 columns for maps
-        ax = fig.add_subplot(gs[3, j])
-        bottom_axes.append(ax)
-    axes.append(bottom_axes)
-    
+                                    calc_stress_xx, calc_stress_yy, calc_stress_normal,
+                                    vmax=5.1):
+    """Plot 2x3 stress validation: Ground Truth vs Calculated for σ_xx, σ_yy, σ_normal."""
+    fig = plt.figure(figsize=(8.2, 3.8))
+
+    # 2 rows x 3 cols for the maps only
+    gs = gridspec.GridSpec(2, 3, figure=fig,
+                          width_ratios=[1, 1, 1],
+                          height_ratios=[1, 1],
+                          wspace=0.15, hspace=0.15)
+
+    fig.suptitle('MSM Stress Field Validation', fontsize=12, y=0.98)
+
+    # Create axes for maps
+    axes = [[fig.add_subplot(gs[row, col]) for col in range(3)] for row in range(2)]
+
     # Data arrays and titles
     gt_data = [gt_stress_xx, gt_stress_yy, gt_stress_normal]
     calc_data = [calc_stress_xx, calc_stress_yy, calc_stress_normal]
-    titles = ['σ_xx', 'σ_yy', 'σ_normal']
-    errors = [xx_errors, yy_errors, normal_errors]
-    
+    titles = ['σ_xx Stress', 'σ_yy Stress', 'σ_normal Stress']
+
     # Plot stress fields for each component
     for i in range(3):
-        # Use the passed vmax parameter for colorbar scales
         vmin = -vmax
-        
+
         # Ground truth (top row)
         im_gt = axes[0][i].imshow(gt_data[i], cmap='RdBu_r', vmin=vmin, vmax=vmax)
-        axes[0][i].set_title(f'{titles[i]} Stress', fontsize=9)
+        axes[0][i].set_title(titles[i], fontsize=9)
         axes[0][i].axis('off')
         divider_gt = make_axes_locatable(axes[0][i])
         cax_gt = divider_gt.append_axes("right", size="5%", pad=0.05)
         cbar_gt = plt.colorbar(im_gt, cax=cax_gt)
-        if i == 2:  # Only add label to rightmost column
+        if i == 2:
             cbar_gt.set_label('Stress (mN/m)', fontsize=7)
         cbar_gt.ax.tick_params(labelsize=6)
-        
+
         # Calculated (bottom row)
         im_calc = axes[1][i].imshow(calc_data[i], cmap='RdBu_r', vmin=vmin, vmax=vmax)
-        axes[1][i].set_title('', fontsize=8)  # Remove individual title
+        axes[1][i].set_title('', fontsize=8)
         axes[1][i].axis('off')
         divider_calc = make_axes_locatable(axes[1][i])
         cax_calc = divider_calc.append_axes("right", size="5%", pad=0.05)
         cbar_calc = plt.colorbar(im_calc, cax=cax_calc)
-        if i == 2:  # Only add label to rightmost column
+        if i == 2:
             cbar_calc.set_label('Stress (mN/m)', fontsize=7)
         cbar_calc.ax.tick_params(labelsize=6)
-    
-    # Create correlation subplot spanning middle 80% vertical space (rows 1-3), column 4
-    ax_corr = fig.add_subplot(gs[1:4, 4])
-    
-    stress_types = ['σ_xx', 'σ_yy', 'σ_normal']
-    correlations = [xx_errors['correlation'], yy_errors['correlation'], normal_errors['correlation']]
-    bars = ax_corr.bar(stress_types, correlations, color=['#1f77b4', '#ff7f0e', '#2ca02c'], alpha=0.7)
-    ax_corr.set_title('Correlation between\nCalculated and\nGround Truth Data', fontsize=9)
-    ax_corr.set_ylabel('Correlation Coefficient', fontsize=8)
-    ax_corr.set_ylim(0, 1.1)
-    ax_corr.grid(True, alpha=0.3)
-    ax_corr.tick_params(labelsize=7)
-    
-    # Add correlation values on bars
-    for bar, corr in zip(bars, correlations):
-        ax_corr.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
-                     f'{corr:.3f}', ha='center', va='bottom', fontsize=7)
-    
+
     # Add row labels on the left side
-    fig.text(0.135, 0.675, 'Ground Truth', rotation=90, va='center', ha='center', fontsize=9)
-    fig.text(0.135, 0.32, 'Calculated', rotation=90, va='center', ha='center', fontsize=9)
+    fig.text(0.12, 0.72, 'Ground Truth', rotation=90, va='center', ha='center', fontsize=9)
+    fig.text(0.12, 0.28, 'Calculated', rotation=90, va='center', ha='center', fontsize=9)
+
+    plt.tight_layout(rect=[0.03, 0, 1, 0.95])
     return fig
 
 
-def calculate_average_stress(stress_xx, stress_yy, mask=None):
-    """Calculate average stress over the map."""
-    if mask is None:
-        mask = ~np.isnan(stress_xx) & ~np.isnan(stress_yy)
-    
-    # Calculate average of normal stresses (hydrostatic stress)
-    avg_stress = (stress_xx + stress_yy) / 2
-    
-    # Calculate mean over valid region
-    if np.any(mask):
-        mean_avg_stress = np.mean(avg_stress[mask])
-    else:
-        mean_avg_stress = 0
-    
-    return mean_avg_stress
+# def calculate_nrmse(calculated, ground_truth, mask=None):
+#     """
+#     Calculate NRMSE (Normalized Root Mean Square Error) normalized by average ground truth.
+
+#     Args:
+#         calculated: Calculated stress field (H x W)
+#         ground_truth: Ground truth stress field (H x W)
+#         mask: Optional boolean mask defining valid region
+
+#     Returns:
+#         nrmse: NRMSE value (RMSE / mean(|GT|))
+#     """
+#     if mask is None:
+#         mask = np.ones_like(calculated, dtype=bool)
+
+#     # Apply mask and filter out NaN values
+#     valid_mask = mask & ~np.isnan(calculated) & ~np.isnan(ground_truth)
+
+#     if not np.any(valid_mask):
+#         return 0.0
+
+#     calc_valid = calculated[valid_mask]
+#     gt_valid = ground_truth[valid_mask]
+
+#     # Calculate RMSE
+#     rmse = np.sqrt(np.mean((calc_valid - gt_valid) ** 2))
+
+#     # Normalize by average absolute ground truth
+#     avg_gt = np.mean(np.abs(gt_valid))
+
+#     if avg_gt > 1e-10:
+#         nrmse = rmse / avg_gt
+#     else:
+#         nrmse = 0.0
+
+#     return nrmse
 
 
-def plot_average_stress_comparison(gt_stress_xx, gt_stress_yy, gt_stress_normal,
-                                 calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=2.5):
-    """Create average stress comparison figure: GT vs calculated for stress components."""
+def plot_stress_metrics(stress_results, mask=None):
+    """
+    Create combined stress metrics figure:
+    - Left: Correlation bar chart
+    - Middle: Signed error (calc - GT) vs GT magnitude
+    - Right: Relative error (calc - GT)/|GT| vs GT magnitude (y-axis limited to +-1)
+
+    Args:
+        stress_results: dict with keys 'gt_stress_xx', 'gt_stress_yy', 'gt_stress_normal',
+                       'calc_stress_xx', 'calc_stress_yy', 'calc_stress_normal',
+                       'xx_metrics', 'yy_metrics', 'normal_metrics'
+        mask: Optional boolean mask for valid region
+    """
     stress_components = ['σ_xx', 'σ_yy', 'σ_normal']
-    
-    # Calculate average stress values for each component
-    gt_values = []
-    calc_values = []
-    
-    for gt_data, calc_data in [(gt_stress_xx, calc_stress_xx), 
-                               (gt_stress_yy, calc_stress_yy), 
-                               (gt_stress_normal, calc_stress_normal)]:
-        if np.any(mask):
-            gt_avg = np.mean(gt_data[mask])
-            calc_avg = np.mean(calc_data[mask])
-        else:
-            gt_avg = calc_avg = 0
-        gt_values.append(gt_avg)
-        calc_values.append(calc_avg)
-    
-    fig, ax = plt.subplots(1, 1, figsize=(3.5, 2.5))  # DIN A4 compatible
-    
-    x = np.arange(len(stress_components))
-    width = 0.35
-    
-    bars1 = ax.bar(x - width/2, gt_values, width, label='Ground Truth', 
-                  color='#1f77b4', alpha=0.7)
-    bars2 = ax.bar(x + width/2, calc_values, width, label='Calculated', 
-                  color='#ff7f0e', alpha=0.7)
-    
-    # Add value labels on bars
-    for bars in [bars1, bars2]:
-        for bar in bars:
-            height = bar.get_height()
-            if abs(height) > 1e-5:
-                ax.text(bar.get_x() + bar.get_width()/2, height * 1.1 if height > 0 else height * 0.9,
-                       f'{height:.3f}', ha='center', va='bottom' if height > 0 else 'top', 
-                       fontsize=6, rotation=45)
-    
-    ax.set_xlabel('Stress Component', fontsize=8)
-    ax.set_ylabel('Average Stress (mN/m)', fontsize=8)
-    ax.set_title('Average Stress Comparison\nGround Truth vs Calculated', fontsize=10)
-    ax.set_xticks(x)
-    ax.set_xticklabels(stress_components)
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.tick_params(labelsize=6)
-    
-    # Set y-axis limits
-    ax.set_ylim(0, y_max)
-    
+    colors = {'σ_xx': '#1f77b4', 'σ_yy': '#ff7f0e', 'σ_normal': '#2ca02c'}
+
+    fig, axes = plt.subplots(1, 3, figsize=(7, 2.5))
+    fig.suptitle('MSM Stress Analysis Metrics', fontsize=12, y=0.875)
+
+    # --- Left panel: Correlation bar chart ---
+    ax_corr = axes[0]
+    correlations = [
+        stress_results['xx_metrics']['correlation'],
+        stress_results['yy_metrics']['correlation'],
+        stress_results['normal_metrics']['correlation']
+    ]
+    bar_colors = [colors[s] for s in stress_components]
+
+    bars_corr = ax_corr.bar(stress_components, correlations, color=bar_colors, alpha=0.7)
+    ax_corr.set_title('Stress Correlation', fontsize=10, y=1.05)
+    ax_corr.set_ylabel('Correlation Coefficient', fontsize=9)
+    ax_corr.set_ylim(0, 1.15)
+    ax_corr.grid(True, alpha=0.3)
+    ax_corr.tick_params(labelsize=8)
+    for bar, corr in zip(bars_corr, correlations):
+        ax_corr.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                     f'{corr:.3f}', ha='center', va='bottom', fontsize=8)
+
+    # Prepare data pairs for each stress component
+    data_pairs = [
+        ('σ_xx', stress_results['calc_stress_xx'], stress_results['gt_stress_xx']),
+        ('σ_yy', stress_results['calc_stress_yy'], stress_results['gt_stress_yy']),
+        ('σ_normal', stress_results['calc_stress_normal'], stress_results['gt_stress_normal'])
+    ]
+
+    # Collect all GT magnitudes to determine global bin edges
+    all_gt_mags = []
+    for name, calc, gt in data_pairs:
+        gt_mags, _ = calculate_stress_relative_error(calc, gt, mask)
+        all_gt_mags.extend(gt_mags)
+
+    if all_gt_mags:
+        # Create linear bins spanning all components
+        all_gt_mags = np.array(all_gt_mags)
+        min_mag = np.min(all_gt_mags)
+        max_mag = np.max(all_gt_mags)
+        n_bins = 20
+        bin_edges = np.linspace(min_mag, max_mag, n_bins + 1)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        # Plot each stress component on both error panels
+        for name, calc, gt in data_pairs:
+            gt_mags, rel_errors = calculate_stress_relative_error(calc, gt, mask)
+
+            if len(gt_mags) == 0:
+                continue
+
+            signed_errors = rel_errors * gt_mags  # calc - GT
+
+            # Bin the data
+            bin_means = []
+            bin_stds = []
+            bin_means_norm = []
+            bin_stds_norm = []
+            valid_centers = []
+
+            for i in range(len(bin_edges) - 1):
+                bin_mask = (gt_mags >= bin_edges[i]) & (gt_mags < bin_edges[i + 1])
+                if np.sum(bin_mask) >= 10:  # Require at least 10 points per bin
+                    bin_means.append(np.mean(signed_errors[bin_mask]))
+                    bin_stds.append(np.std(signed_errors[bin_mask]))
+                    bin_means_norm.append(np.mean(rel_errors[bin_mask]))
+                    bin_stds_norm.append(np.std(rel_errors[bin_mask]))
+                    valid_centers.append(bin_centers[i])
+
+            if not valid_centers:
+                continue
+
+            bin_means = np.array(bin_means)
+            bin_stds = np.array(bin_stds)
+            bin_means_norm = np.array(bin_means_norm)
+            bin_stds_norm = np.array(bin_stds_norm)
+            valid_centers = np.array(valid_centers)
+
+            # Middle panel: signed error
+            axes[1].plot(valid_centers, bin_means, '-', color=colors[name],
+                        label=name, linewidth=2)
+            axes[1].fill_between(valid_centers, bin_means - bin_stds, bin_means + bin_stds,
+                               color=colors[name], alpha=0.2)
+
+            # Right panel: normalized (relative) error
+            axes[2].plot(valid_centers, bin_means_norm, '-', color=colors[name],
+                        label=name, linewidth=2)
+            axes[2].fill_between(valid_centers, bin_means_norm - bin_stds_norm,
+                               bin_means_norm + bin_stds_norm,
+                               color=colors[name], alpha=0.2)
+
+        # Add reference lines at y=0
+        axes[1].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+        axes[2].axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
+
+    # --- Middle panel: Signed error ---
+    axes[1].set_xlabel('GT Stress Magnitude (mN/m)', fontsize=9)
+    axes[1].set_ylabel('Error\n(calc - GT) (mN/m)', fontsize=9)
+    axes[1].set_title('Error vs GT Magnitude', fontsize=10, y=1.05)
+    axes[1].legend(fontsize=8)
+    axes[1].grid(True, alpha=0.3)
+    axes[1].tick_params(labelsize=8)
+
+    # --- Right panel: Normalized error ---
+    axes[2].set_xlabel('GT Stress Magnitude (mN/m)', fontsize=9)
+    axes[2].set_ylabel('Relative Error\n(calc - GT) / |GT|', fontsize=9)
+    axes[2].set_title('Relative Error vs GT Magnitude', fontsize=10, y=1.05)
+    axes[2].set_ylim(-1, 1)
+    axes[2].legend(fontsize=8)
+    axes[2].grid(True, alpha=0.3)
+    axes[2].tick_params(labelsize=8)
+
     plt.tight_layout()
     return fig
 
 
-def plot_normalized_average_stress(gt_stress_xx, gt_stress_yy, gt_stress_normal,
-                                 calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=1.5):
-    """Create normalized average stress plot: calculated/ground_truth ratio for stress components."""
+def plot_square_plate_stress_metrics(stress_results, mask=None):
+    """
+    Create stress metrics figure for square plate validation:
+    - Left: Correlation bar chart
+    - Middle: Mean absolute error bar chart
+    - Right: Mean relative error bar chart
+
+    Args:
+        stress_results: dict with keys 'gt_stress_*', 'calc_stress_*', '*_metrics'
+        mask: Optional boolean mask for valid region
+    """
     stress_components = ['σ_xx', 'σ_yy', 'σ_normal']
-    
-    # Calculate normalized average stresses (calculated/ground_truth)
-    normalized_values = []
-    for gt_data, calc_data in [(gt_stress_xx, calc_stress_xx), 
-                               (gt_stress_yy, calc_stress_yy), 
-                               (gt_stress_normal, calc_stress_normal)]:
-        if np.any(mask):
-            gt_avg = np.mean(gt_data[mask])
-            calc_avg = np.mean(calc_data[mask])
-            if abs(gt_avg) > 1e-6:
-                normalized_values.append(calc_avg / gt_avg)
+    colors = {'σ_xx': '#1f77b4', 'σ_yy': '#ff7f0e', 'σ_normal': '#2ca02c'}
+
+    fig, axes = plt.subplots(1, 3, figsize=(7, 2.5))
+    fig.suptitle('MSM Stress Analysis Metrics', fontsize=12, y=0.875)
+
+    # --- Left panel: Correlation bar chart ---
+    ax_corr = axes[0]
+    correlations = [
+        stress_results['xx_metrics']['correlation'],
+        stress_results['yy_metrics']['correlation'],
+        stress_results['normal_metrics']['correlation']
+    ]
+    bar_colors = [colors[s] for s in stress_components]
+
+    bars_corr = ax_corr.bar(stress_components, correlations, color=bar_colors, alpha=0.7)
+    ax_corr.set_title('Stress Correlation', fontsize=10, y=1.05)
+    ax_corr.set_ylabel('Correlation Coefficient', fontsize=9)
+    ax_corr.set_ylim(0, 1.15)
+    ax_corr.grid(True, alpha=0.3)
+    ax_corr.tick_params(labelsize=8)
+    for bar, corr in zip(bars_corr, correlations):
+        ax_corr.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                     f'{corr:.3f}', ha='center', va='bottom', fontsize=8)
+
+    # Prepare data pairs
+    data_pairs = [
+        ('σ_xx', stress_results['calc_stress_xx'], stress_results['gt_stress_xx']),
+        ('σ_yy', stress_results['calc_stress_yy'], stress_results['gt_stress_yy']),
+        ('σ_normal', stress_results['calc_stress_normal'], stress_results['gt_stress_normal'])
+    ]
+
+    # Calculate mean absolute and mean relative errors for each component
+    mae_values = []
+    mre_values = []
+    for name, calc, gt in data_pairs:
+        if mask is not None:
+            valid = mask & ~np.isnan(calc) & ~np.isnan(gt)
+        else:
+            valid = ~np.isnan(calc) & ~np.isnan(gt)
+
+        if np.any(valid):
+            abs_errors = np.abs(calc[valid] - gt[valid])
+            mae_values.append(np.mean(abs_errors))
+
+            gt_abs = np.abs(gt[valid])
+            # Avoid division by very small values
+            nonzero = gt_abs > 1e-10
+            if np.any(nonzero):
+                rel_errors = np.abs(calc[valid][nonzero] - gt[valid][nonzero]) / gt_abs[nonzero]
+                mre_values.append(np.mean(rel_errors))
             else:
-                normalized_values.append(0)
+                mre_values.append(0.0)
         else:
-            normalized_values.append(0)
-    
-    fig, ax = plt.subplots(1, 1, figsize=(3.5, 2.5))  # DIN A4 compatible
-    
-    # Create bar plot
-    bars = ax.bar(stress_components, normalized_values, 
-                  color=['#1f77b4', '#ff7f0e', '#2ca02c'], alpha=0.7)
-    
-    # Add value labels on bars
-    for bar, value in zip(bars, normalized_values):
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2, height + 0.02 if height >= 0 else height - 0.02,
-               f'{value:.3f}', ha='center', va='bottom' if height >= 0 else 'top', 
-               fontsize=6, fontweight='bold')
-    
-    # Add horizontal reference line at y=1 (perfect match)
-    ax.axhline(y=1.0, color='red', linestyle='--', alpha=0.8, linewidth=2, 
-               label='Perfect Match (Calc/GT = 1.0)')
-    
-    ax.set_xlabel('Stress Component', fontsize=8)
-    ax.set_ylabel('Normalized Average Stress\n(Calculated / Ground Truth)', fontsize=8)
-    ax.set_title('Normalized Average Stress\nCalculated / Ground Truth', fontsize=10)
-    ax.grid(True, alpha=0.3, axis='y')
-    ax.legend(fontsize=8)
-    ax.tick_params(labelsize=6)
-    
-    # Set y-axis limits using the passed parameter
-    ax.set_ylim(0, y_max)
-    
+            mae_values.append(0.0)
+            mre_values.append(0.0)
+
+    # --- Middle panel: Mean Absolute Error bar chart ---
+    bars_mae = axes[1].bar(stress_components, mae_values, color=bar_colors, alpha=0.7)
+    axes[1].set_title('Mean Absolute Error', fontsize=10, y=1.05)
+    axes[1].set_ylabel('MAE (mN/m)', fontsize=9)
+    axes[1].grid(True, alpha=0.3)
+    axes[1].tick_params(labelsize=8)
+    for bar, val in zip(bars_mae, mae_values):
+        axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002,
+                     f'{val:.4f}', ha='center', va='bottom', fontsize=8)
+
+    # --- Right panel: Mean Relative Error bar chart ---
+    bars_mre = axes[2].bar(stress_components, mre_values, color=bar_colors, alpha=0.7)
+    axes[2].set_title('Mean Relative Error', fontsize=10, y=1.05)
+    axes[2].set_ylabel('MRE (|calc - GT| / |GT|)', fontsize=9)
+    axes[2].grid(True, alpha=0.3)
+    axes[2].tick_params(labelsize=8)
+    for bar, val in zip(bars_mre, mre_values):
+        axes[2].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002,
+                     f'{val:.4f}', ha='center', va='bottom', fontsize=8)
+
     plt.tight_layout()
     return fig
+
+
+# def plot_pixel_error_maps(gt_stress_xx, gt_stress_yy, gt_stress_normal,
+#                           calc_stress_xx, calc_stress_yy, calc_stress_normal,
+#                           mask=None, error_vmax=None):
+#     """
+#     Plot pixel-wise absolute error maps for each stress component.
+
+#     Args:
+#         gt_stress_*: Ground truth stress fields
+#         calc_stress_*: Calculated stress fields
+#         mask: Optional boolean mask for valid region
+#         error_vmax: Maximum value for error colorbar (auto if None)
+
+#     Returns:
+#         fig: matplotlib figure
+#     """
+#     fig, axes = plt.subplots(1, 3, figsize=(7.8, 2.5))
+#     fig.suptitle('Pixel-wise Absolute Error |calc - GT|', fontsize=12, y=0.98)
+
+#     # Data pairs
+#     data_pairs = [
+#         ('σ_xx', calc_stress_xx, gt_stress_xx),
+#         ('σ_yy', calc_stress_yy, gt_stress_yy),
+#         ('σ_normal', calc_stress_normal, gt_stress_normal)
+#     ]
+
+#     # Calculate absolute errors for each component
+#     error_maps = []
+#     for name, calc, gt in data_pairs:
+#         error = np.abs(calc - gt)
+#         if mask is not None:
+#             error = np.where(mask, error, np.nan)
+#         error_maps.append(error)
+
+#     # Determine global vmax if not specified
+#     if error_vmax is None:
+#         all_errors = np.concatenate([e[~np.isnan(e)].flatten() for e in error_maps])
+#         error_vmax = np.percentile(all_errors, 95) if len(all_errors) > 0 else 1.0
+
+#     # Plot each error map
+#     for i, (name, error_map) in enumerate(zip(['σ_xx', 'σ_yy', 'σ_normal'], error_maps)):
+#         im = axes[i].imshow(error_map, cmap='hot', vmin=0, vmax=error_vmax)
+#         axes[i].set_title(f'{name} Error', fontsize=10)
+#         axes[i].set_xticks([])
+#         axes[i].set_yticks([])
+
+#         divider = make_axes_locatable(axes[i])
+#         cax = divider.append_axes("right", size="5%", pad=0.05)
+#         cbar = plt.colorbar(im, cax=cax)
+#         if i == 2:
+#             cbar.set_label('mN/m', fontsize=8)
+#         cbar.ax.tick_params(labelsize=6)
+
+#         # Add MAE annotation
+#         valid_error = error_map[~np.isnan(error_map)]
+#         if len(valid_error) > 0:
+#             mae = np.mean(valid_error)
+#             axes[i].text(0.02, 0.98, f'MAE: {mae:.3f}',
+#                         transform=axes[i].transAxes, fontsize=8, va='top', ha='left',
+#                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+#     plt.tight_layout(rect=[0, 0, 1, 0.95])
+#     return fig
+
+
+# def calculate_average_stress(stress_xx, stress_yy, mask=None):
+#     """Calculate average stress over the map."""
+#     if mask is None:
+#         mask = ~np.isnan(stress_xx) & ~np.isnan(stress_yy)
+    
+#     # Calculate average of normal stresses (hydrostatic stress)
+#     avg_stress = (stress_xx + stress_yy) / 2
+    
+#     # Calculate mean over valid region
+#     if np.any(mask):
+#         mean_avg_stress = np.mean(avg_stress[mask])
+#     else:
+#         mean_avg_stress = 0
+    
+#     return mean_avg_stress
+
+
+# def plot_average_stress_comparison(gt_stress_xx, gt_stress_yy, gt_stress_normal,
+#                                  calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=2.5):
+#     """Create average stress comparison figure: GT vs calculated for stress components."""
+#     stress_components = ['σ_xx', 'σ_yy', 'σ_normal']
+    
+#     # Calculate average stress values for each component
+#     gt_values = []
+#     calc_values = []
+    
+#     for gt_data, calc_data in [(gt_stress_xx, calc_stress_xx), 
+#                                (gt_stress_yy, calc_stress_yy), 
+#                                (gt_stress_normal, calc_stress_normal)]:
+#         if np.any(mask):
+#             gt_avg = np.mean(gt_data[mask])
+#             calc_avg = np.mean(calc_data[mask])
+#         else:
+#             gt_avg = calc_avg = 0
+#         gt_values.append(gt_avg)
+#         calc_values.append(calc_avg)
+    
+#     fig, ax = plt.subplots(1, 1, figsize=(3.5, 2.5))  # DIN A4 compatible
+    
+#     x = np.arange(len(stress_components))
+#     width = 0.35
+    
+#     bars1 = ax.bar(x - width/2, gt_values, width, label='Ground Truth', 
+#                   color='#1f77b4', alpha=0.7)
+#     bars2 = ax.bar(x + width/2, calc_values, width, label='Calculated', 
+#                   color='#ff7f0e', alpha=0.7)
+    
+#     # Add value labels on bars
+#     for bars in [bars1, bars2]:
+#         for bar in bars:
+#             height = bar.get_height()
+#             if abs(height) > 1e-5:
+#                 ax.text(bar.get_x() + bar.get_width()/2, height * 1.1 if height > 0 else height * 0.9,
+#                        f'{height:.3f}', ha='center', va='bottom' if height > 0 else 'top', 
+#                        fontsize=6, rotation=45)
+    
+#     ax.set_xlabel('Stress Component', fontsize=8)
+#     ax.set_ylabel('Average Stress (mN/m)', fontsize=8)
+#     ax.set_title('Average Stress Comparison\nGround Truth vs Calculated', fontsize=10)
+#     ax.set_xticks(x)
+#     ax.set_xticklabels(stress_components)
+#     ax.legend(fontsize=8)
+#     ax.grid(True, alpha=0.3, axis='y')
+#     ax.tick_params(labelsize=6)
+    
+#     # Set y-axis limits
+#     ax.set_ylim(0, y_max)
+    
+#     plt.tight_layout()
+#     return fig
+
+
+# def plot_normalized_average_stress(gt_stress_xx, gt_stress_yy, gt_stress_normal,
+#                                  calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=1.5):
+#     """Create normalized average stress plot: calculated/ground_truth ratio for stress components."""
+#     stress_components = ['σ_xx', 'σ_yy', 'σ_normal']
+    
+#     # Calculate normalized average stresses (calculated/ground_truth)
+#     normalized_values = []
+#     for gt_data, calc_data in [(gt_stress_xx, calc_stress_xx), 
+#                                (gt_stress_yy, calc_stress_yy), 
+#                                (gt_stress_normal, calc_stress_normal)]:
+#         if np.any(mask):
+#             gt_avg = np.mean(gt_data[mask])
+#             calc_avg = np.mean(calc_data[mask])
+#             if abs(gt_avg) > 1e-6:
+#                 normalized_values.append(calc_avg / gt_avg)
+#             else:
+#                 normalized_values.append(0)
+#         else:
+#             normalized_values.append(0)
+    
+#     fig, ax = plt.subplots(1, 1, figsize=(3.5, 2.5))  # DIN A4 compatible
+    
+#     # Create bar plot
+#     bars = ax.bar(stress_components, normalized_values, 
+#                   color=['#1f77b4', '#ff7f0e', '#2ca02c'], alpha=0.7)
+    
+#     # Add value labels on bars
+#     for bar, value in zip(bars, normalized_values):
+#         height = bar.get_height()
+#         ax.text(bar.get_x() + bar.get_width()/2, height + 0.02 if height >= 0 else height - 0.02,
+#                f'{value:.3f}', ha='center', va='bottom' if height >= 0 else 'top', 
+#                fontsize=6, fontweight='bold')
+    
+#     # Add horizontal reference line at y=1 (perfect match)
+#     ax.axhline(y=1.0, color='red', linestyle='--', alpha=0.8, linewidth=2, 
+#                label='Perfect Match (Calc/GT = 1.0)')
+    
+#     ax.set_xlabel('Stress Component', fontsize=8)
+#     ax.set_ylabel('Normalized Average Stress\n(Calculated / Ground Truth)', fontsize=8)
+#     ax.set_title('Normalized Average Stress\nCalculated / Ground Truth', fontsize=10)
+#     ax.grid(True, alpha=0.3, axis='y')
+#     ax.legend(fontsize=8)
+#     ax.tick_params(labelsize=6)
+    
+#     # Set y-axis limits using the passed parameter
+#     ax.set_ylim(0, y_max)
+    
+#     plt.tight_layout()
+#     return fig
 
 
 def validate_file_based_msm():
@@ -509,44 +847,70 @@ def validate_file_based_msm():
     # Create visualizations
     print(f"\nCreating validation plots...")
     
-    # Main validation plot (2x4 grid)
+    # Main validation plot (2x3 grid)
     validation_fig = plot_stress_validation_comparison(
         gt_stress_xx, gt_stress_yy, gt_stress_normal,
-        calc_stress_xx, calc_stress_yy, calc_stress_normal,
-        xx_metrics, yy_metrics, normal_metrics
+        calc_stress_xx, calc_stress_yy, calc_stress_normal
     )
     validation_output_path = Path(__file__).parent / "msm_validation_comparison.png"
     validation_fig.savefig(validation_output_path, dpi=300, bbox_inches='tight')
     print(f"✓ Saved validation comparison: {validation_output_path}")
     plt.close(validation_fig)
     
-    # Average stress comparison plot
-    avg_stress_fig = plot_average_stress_comparison(
-        gt_stress_xx, gt_stress_yy, gt_stress_normal,
-        calc_stress_xx, calc_stress_yy, calc_stress_normal, gt_mask
-    )
-    avg_stress_path = Path(__file__).parent / "average_stress_comparison.png"
-    avg_stress_fig.savefig(avg_stress_path, dpi=300, bbox_inches='tight')
-    print(f"✓ Saved average stress comparison plot: {avg_stress_path}")
-    plt.close(avg_stress_fig)
-    
-    # Normalized average stress plot
-    normalized_avg_stress_fig = plot_normalized_average_stress(
-        gt_stress_xx, gt_stress_yy, gt_stress_normal,
-        calc_stress_xx, calc_stress_yy, calc_stress_normal, gt_mask
-    )
-    normalized_avg_stress_path = Path(__file__).parent / "normalized_average_stress.png"
-    normalized_avg_stress_fig.savefig(normalized_avg_stress_path, dpi=300, bbox_inches='tight')
-    print(f"✓ Saved normalized average stress plot: {normalized_avg_stress_path}")
-    plt.close(normalized_avg_stress_fig)
-    
+    # # Average stress comparison plot
+    # avg_stress_fig = plot_average_stress_comparison(
+    #     gt_stress_xx, gt_stress_yy, gt_stress_normal,
+    #     calc_stress_xx, calc_stress_yy, calc_stress_normal, gt_mask
+    # )
+    # avg_stress_path = Path(__file__).parent / "average_stress_comparison.png"
+    # avg_stress_fig.savefig(avg_stress_path, dpi=300, bbox_inches='tight')
+    # print(f"✓ Saved average stress comparison plot: {avg_stress_path}")
+    # plt.close(avg_stress_fig)
+
+    # # Normalized average stress plot
+    # normalized_avg_stress_fig = plot_normalized_average_stress(
+    #     gt_stress_xx, gt_stress_yy, gt_stress_normal,
+    #     calc_stress_xx, calc_stress_yy, calc_stress_normal, gt_mask
+    # )
+    # normalized_avg_stress_path = Path(__file__).parent / "normalized_average_stress.png"
+    # normalized_avg_stress_fig.savefig(normalized_avg_stress_path, dpi=300, bbox_inches='tight')
+    # print(f"✓ Saved normalized average stress plot: {normalized_avg_stress_path}")
+    # plt.close(normalized_avg_stress_fig)
+
+    # Stress metrics plot (correlation + error vs magnitude)
+    stress_results = {
+        'gt_stress_xx': gt_stress_xx,
+        'gt_stress_yy': gt_stress_yy,
+        'gt_stress_normal': gt_stress_normal,
+        'calc_stress_xx': calc_stress_xx,
+        'calc_stress_yy': calc_stress_yy,
+        'calc_stress_normal': calc_stress_normal,
+        'xx_metrics': xx_metrics,
+        'yy_metrics': yy_metrics,
+        'normal_metrics': normal_metrics
+    }
+    stress_metrics_fig = plot_stress_metrics(stress_results, gt_mask)
+    stress_metrics_path = Path(__file__).parent / "stress_metrics.png"
+    stress_metrics_fig.savefig(stress_metrics_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved stress metrics plot: {stress_metrics_path}")
+    plt.close(stress_metrics_fig)
+
+    # # Pixel-wise error maps
+    # pixel_error_fig = plot_pixel_error_maps(
+    #     gt_stress_xx, gt_stress_yy, gt_stress_normal,
+    #     calc_stress_xx, calc_stress_yy, calc_stress_normal, gt_mask
+    # )
+    # pixel_error_path = Path(__file__).parent / "pixel_error_maps.png"
+    # pixel_error_fig.savefig(pixel_error_path, dpi=300, bbox_inches='tight')
+    # print(f"✓ Saved pixel error maps: {pixel_error_path}")
+    # plt.close(pixel_error_fig)
+
     print(f"\n" + "="*60)
     print("MSM VALIDATION COMPLETE")
     print("="*60)
     print(f"\nGenerated files:")
     print(f"  - {validation_output_path}")
-    print(f"  - {avg_stress_path}")
-    print(f"  - {normalized_avg_stress_path}")
+    print(f"  - {stress_metrics_path}")
     
     # Data statistics summary
     print(f"\nDATA STATISTICS:")
@@ -557,8 +921,8 @@ def validate_file_based_msm():
     
     # Calculate and display average stress values for each component
     print(f"\nAVERAGE STRESS VALUES:")
-    for name, gt_data, calc_data in [('σ_xx', gt_stress_xx, calc_stress_xx), 
-                                     ('σ_yy', gt_stress_yy, calc_stress_yy), 
+    for name, gt_data, calc_data in [('σ_xx', gt_stress_xx, calc_stress_xx),
+                                     ('σ_yy', gt_stress_yy, calc_stress_yy),
                                      ('σ_normal', gt_stress_normal, calc_stress_normal)]:
         if np.any(gt_mask):
             gt_avg = np.mean(gt_data[gt_mask])
@@ -570,7 +934,21 @@ def validate_file_based_msm():
                 print(f"  {name}: GT={gt_avg:.3f}, Calc={calc_avg:.3f}, Normalized=N/A")
         else:
             print(f"  {name}: No valid data")
-    
+
+    # Calculate and display mean relative error for each stress component
+    print(f"\nMEAN RELATIVE ERROR (similar to DTM in TFM validation):")
+    for name, gt_data, calc_data in [('σ_xx', gt_stress_xx, calc_stress_xx),
+                                     ('σ_yy', gt_stress_yy, calc_stress_yy),
+                                     ('σ_normal', gt_stress_normal, calc_stress_normal)]:
+        gt_mags, rel_errors = calculate_stress_relative_error(calc_data, gt_data, gt_mask)
+        if len(rel_errors) > 0:
+            mean_rel_error = np.mean(rel_errors)
+            std_rel_error = np.std(rel_errors)
+            print(f"  {name}: {mean_rel_error:+.3f} ± {std_rel_error:.3f} ({mean_rel_error*100:+.1f}%)")
+        else:
+            print(f"  {name}: N/A (no valid data)")
+    print("  (0 = perfect, negative = underestimation, positive = overestimation)")
+
     return {
         'gt_stress_xx': gt_stress_xx,
         'gt_stress_yy': gt_stress_yy, 
@@ -703,41 +1081,68 @@ def validate_square_plate_msm():
     # Create visualizations with prefix for square plate
     print(f"\nCreating validation plots...")
     
-    # Main validation plot (2x4 grid)
+    # Main validation plot (2x3 grid)
     validation_fig = plot_stress_validation_comparison(
         gt_stress_xx, gt_stress_yy, gt_stress_normal,
         calc_stress_xx, calc_stress_yy, calc_stress_normal,
-        xx_metrics, yy_metrics, normal_metrics, vmax=1.5
+        vmax=1.5
     )
     validation_output_path = Path(__file__).parent / "square_plate_validation_comparison.png"
     validation_fig.savefig(validation_output_path, dpi=300, bbox_inches='tight')
     print(f"✓ Saved validation comparison: {validation_output_path}")
     plt.close(validation_fig)
     
-    # Average stress comparison plot
-    avg_stress_fig = plot_average_stress_comparison(
-        gt_stress_xx, gt_stress_yy, gt_stress_normal,
-        calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=1.5
-    )
-    avg_stress_path = Path(__file__).parent / "square_plate_average_stress_comparison.png"
-    avg_stress_fig.savefig(avg_stress_path, dpi=300, bbox_inches='tight')
-    print(f"✓ Saved average stress comparison plot: {avg_stress_path}")
-    plt.close(avg_stress_fig)
-    
-    # Normalized average stress plot
-    normalized_avg_stress_fig = plot_normalized_average_stress(
-        gt_stress_xx, gt_stress_yy, gt_stress_normal,
-        calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=1.5
-    )
-    normalized_avg_stress_path = Path(__file__).parent / "square_plate_normalized_average_stress.png"
-    normalized_avg_stress_fig.savefig(normalized_avg_stress_path, dpi=300, bbox_inches='tight')
-    print(f"✓ Saved normalized average stress plot: {normalized_avg_stress_path}")
-    plt.close(normalized_avg_stress_fig)
-    
+    # # Average stress comparison plot
+    # avg_stress_fig = plot_average_stress_comparison(
+    #     gt_stress_xx, gt_stress_yy, gt_stress_normal,
+    #     calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=1.5
+    # )
+    # avg_stress_path = Path(__file__).parent / "square_plate_average_stress_comparison.png"
+    # avg_stress_fig.savefig(avg_stress_path, dpi=300, bbox_inches='tight')
+    # print(f"✓ Saved average stress comparison plot: {avg_stress_path}")
+    # plt.close(avg_stress_fig)
+
+    # # Normalized average stress plot
+    # normalized_avg_stress_fig = plot_normalized_average_stress(
+    #     gt_stress_xx, gt_stress_yy, gt_stress_normal,
+    #     calc_stress_xx, calc_stress_yy, calc_stress_normal, mask, y_max=1.5
+    # )
+    # normalized_avg_stress_path = Path(__file__).parent / "square_plate_normalized_average_stress.png"
+    # normalized_avg_stress_fig.savefig(normalized_avg_stress_path, dpi=300, bbox_inches='tight')
+    # print(f"✓ Saved normalized average stress plot: {normalized_avg_stress_path}")
+    # plt.close(normalized_avg_stress_fig)
+
+    # Stress metrics plot (correlation + averaged error bar plots)
+    stress_results = {
+        'gt_stress_xx': gt_stress_xx,
+        'gt_stress_yy': gt_stress_yy,
+        'gt_stress_normal': gt_stress_normal,
+        'calc_stress_xx': calc_stress_xx,
+        'calc_stress_yy': calc_stress_yy,
+        'calc_stress_normal': calc_stress_normal,
+        'xx_metrics': xx_metrics,
+        'yy_metrics': yy_metrics,
+        'normal_metrics': normal_metrics
+    }
+    stress_metrics_fig = plot_square_plate_stress_metrics(stress_results, mask)
+    stress_metrics_path = Path(__file__).parent / "square_plate_stress_metrics.png"
+    stress_metrics_fig.savefig(stress_metrics_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved stress metrics plot: {stress_metrics_path}")
+    plt.close(stress_metrics_fig)
+
+    # # Pixel-wise error maps
+    # pixel_error_fig = plot_pixel_error_maps(
+    #     gt_stress_xx, gt_stress_yy, gt_stress_normal,
+    #     calc_stress_xx, calc_stress_yy, calc_stress_normal, mask
+    # )
+    # pixel_error_path = Path(__file__).parent / "square_plate_pixel_error_maps.png"
+    # pixel_error_fig.savefig(pixel_error_path, dpi=300, bbox_inches='tight')
+    # print(f"✓ Saved pixel error maps: {pixel_error_path}")
+    # plt.close(pixel_error_fig)
+
     print(f"\nGenerated files:")
     print(f"  - {validation_output_path}")
-    print(f"  - {avg_stress_path}")
-    print(f"  - {normalized_avg_stress_path}")
+    print(f"  - {stress_metrics_path}")
     
     # Data statistics summary
     print(f"\nDATA STATISTICS:")
@@ -748,8 +1153,8 @@ def validate_square_plate_msm():
     
     # Calculate and display average stress values for each component
     print(f"\nAVERAGE STRESS VALUES:")
-    for name, gt_data, calc_data in [('σ_xx', gt_stress_xx, calc_stress_xx), 
-                                     ('σ_yy', gt_stress_yy, calc_stress_yy), 
+    for name, gt_data, calc_data in [('σ_xx', gt_stress_xx, calc_stress_xx),
+                                     ('σ_yy', gt_stress_yy, calc_stress_yy),
                                      ('σ_normal', gt_stress_normal, calc_stress_normal)]:
         if np.any(mask):
             gt_avg = np.mean(gt_data[mask])
@@ -761,10 +1166,24 @@ def validate_square_plate_msm():
                 print(f"  {name}: GT={gt_avg:.3f}, Calc={calc_avg:.3f}, Normalized=N/A")
         else:
             print(f"  {name}: No valid data")
-    
+
+    # Calculate and display mean relative error for each stress component
+    print(f"\nMEAN RELATIVE ERROR (similar to DTM in TFM validation):")
+    for name, gt_data, calc_data in [('σ_xx', gt_stress_xx, calc_stress_xx),
+                                     ('σ_yy', gt_stress_yy, calc_stress_yy),
+                                     ('σ_normal', gt_stress_normal, calc_stress_normal)]:
+        gt_mags, rel_errors = calculate_stress_relative_error(calc_data, gt_data, mask)
+        if len(rel_errors) > 0:
+            mean_rel_error = np.mean(rel_errors)
+            std_rel_error = np.std(rel_errors)
+            print(f"  {name}: {mean_rel_error:+.3f} ± {std_rel_error:.3f} ({mean_rel_error*100:+.1f}%)")
+        else:
+            print(f"  {name}: N/A (no valid data)")
+    print("  (0 = perfect, negative = underestimation, positive = overestimation)")
+
     return {
         'gt_stress_xx': gt_stress_xx,
-        'gt_stress_yy': gt_stress_yy, 
+        'gt_stress_yy': gt_stress_yy,
         'gt_stress_normal': gt_stress_normal,
         'calc_stress_xx': calc_stress_xx,
         'calc_stress_yy': calc_stress_yy,
