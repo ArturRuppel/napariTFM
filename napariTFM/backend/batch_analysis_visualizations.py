@@ -276,7 +276,7 @@ class BatchVisualizationSaver:
             U = tx[frame_idx][Y, X] * vector_scale
             V = ty[frame_idx][Y, X] * vector_scale
 
-            colors = plt.cm.inferno(sampled_magnitude / f_max)
+            colors = plt.cm.inferno(sampled_magnitude / f_max).reshape(-1, 4)
 
             ax_map.quiver(X, Y, U, V,
                           color=colors,
