@@ -435,12 +435,31 @@ class BatchAnalysis:
 
             displacements_um = displacement_results.displacement_field  # (t, y, x, 2) in µm
             forces_pa = force_results.force_field  # (t, y, x, 2) in Pa
-            
 
             if displacements_um.shape[0] != forces_pa.shape[0] or \
                (mask_data.ndim == 3 and displacements_um.shape[0] != mask_data.shape[0]):
                 print("Mismatch in number of frames between displacements, forces, or masks. Skipping metrics.")
                 return
+
+            # Ensure mask_data is 3D (t, y, x)
+            if mask_data.ndim == 2:
+                mask_data = mask_data[np.newaxis, ...]
+
+            # Resize masks to match force field resolution if needed
+            force_shape = forces_pa.shape[1:3]  # (height, width)
+            mask_shape = mask_data.shape[1:3]  # (height, width)
+            if mask_shape != force_shape:
+                print(f"Resizing masks from {mask_shape} to {force_shape} to match force field...")
+                mask_data = np.stack([
+                    resize(
+                        mask.astype(float),
+                        force_shape,
+                        order=0,
+                        preserve_range=True,
+                        anti_aliasing=False
+                    ) > 0.5
+                    for mask in mask_data
+                ])
 
             num_frames = displacements_um.shape[0]
             h, w = displacements_um.shape[1:3]
