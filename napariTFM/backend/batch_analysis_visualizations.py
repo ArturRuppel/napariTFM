@@ -139,8 +139,7 @@ class BatchVisualizationSaver:
             plt.tight_layout()
 
             fig.canvas.draw()
-            frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-            frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            frame = np.asarray(fig.canvas.buffer_rgba())[..., :3]
             frames.append(frame)
 
             plt.close(fig)
@@ -212,8 +211,7 @@ class BatchVisualizationSaver:
             plt.tight_layout()
 
             fig.canvas.draw()
-            frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-            frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            frame = np.asarray(fig.canvas.buffer_rgba())[..., :3]
             frames.append(frame)
 
             plt.close(fig)
@@ -295,8 +293,7 @@ class BatchVisualizationSaver:
             plt.tight_layout()
 
             fig.canvas.draw()
-            frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-            frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            frame = np.asarray(fig.canvas.buffer_rgba())[..., :3]
             frames.append(frame)
 
             plt.close(fig)
@@ -385,8 +382,7 @@ class BatchVisualizationSaver:
 
                 # Convert figure to image
                 fig.canvas.draw()
-                frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-                frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+                frame = np.asarray(fig.canvas.buffer_rgba())[..., :3]
                 frames.append(frame)
 
                 plt.close(fig)
@@ -460,9 +456,7 @@ class BatchVisualizationSaver:
 
                 # Convert figure to image with high resolution
                 fig.canvas.draw()
-                w, h = fig.canvas.get_width_height()
-                buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-                frame = buf.reshape((h, w, 3))
+                frame = np.asarray(fig.canvas.buffer_rgba())[..., :3]
                 frames.append(frame)
 
             except Exception as e:
@@ -511,8 +505,7 @@ class BatchVisualizationSaver:
 
         # Render to numpy array
         fig.canvas.draw()
-        legend_img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        legend_img = legend_img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        legend_img = np.asarray(fig.canvas.buffer_rgba())[..., :3]
         plt.close(fig)
 
         return legend_img
