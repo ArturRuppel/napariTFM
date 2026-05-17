@@ -71,6 +71,7 @@ class _StubParameterManager(QObject):
 
 class _StubDataManager:
     def __init__(self):
+        self._callbacks = []
         self.bead_stack = None
         self.reference = None
         self.cell_stack = None
@@ -81,6 +82,18 @@ class _StubDataManager:
         self.displacement_results = None
         self.force_results = None
         self.stress_results = None
+
+    def add_change_callback(self, callback):
+        if callback not in self._callbacks:
+            self._callbacks.append(callback)
+
+    def remove_change_callback(self, callback):
+        if callback in self._callbacks:
+            self._callbacks.remove(callback)
+
+    def notify_changed(self):
+        for callback in list(self._callbacks):
+            callback()
 
 
 class _StubVisualizationManager:
@@ -102,6 +115,23 @@ class _StubStageWidget(QWidget):
         self.process_btn = QPushButton("Run")
         self.cancel_btn = QPushButton("Cancel")
         self.save_btn = QPushButton("Save")
+        self.update_count = 0
+
+    def _update_ui_state(self):
+        self.update_count += 1
+
+
+class _StubPipelineDataWidget(QWidget):
+    data_changed = Signal()
+
+    def __init__(self, viewer, data_manager):
+        super().__init__()
+        self.viewer = viewer
+        self.data_manager = data_manager
+        self.setObjectName("pipeline_data_widget")
+
+    def refresh(self):
+        self.data_changed.emit()
 
 
 def _stub_module(name, **attrs):
@@ -130,6 +160,10 @@ _stub_module("napariTFM.widgets.msm_widget", MSMWidget=_StubStageWidget)
 _stub_module(
     "napariTFM.widgets.batch_analysis_widget",
     BatchAnalysisWidget=_StubStageWidget,
+)
+_stub_module(
+    "napariTFM.widgets._pipeline_data_widget",
+    PipelineDataWidget=_StubPipelineDataWidget,
 )
 
 from napariTFM.widgets import _widget
@@ -328,6 +362,7 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -341,6 +376,46 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     assert not widget.batch_widget.isVisible()
 
 
+def test_main_widget_mounts_pipeline_data_widget(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
+
+    widget = _widget.napariTFMWidget(object())
+
+    assert isinstance(widget.pipeline_data_widget, _StubPipelineDataWidget)
+    assert widget.pipeline_data_widget.objectName() == "pipeline_data_widget"
+    assert widget.pipeline_data_widget.data_manager is widget.data_manager
+
+
+def test_data_manager_change_callback_refreshes_stage_widgets(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
+
+    widget = _widget.napariTFMWidget(object())
+
+    widget.data_manager.notify_changed()
+
+    assert widget.preprocessing_widget.update_count == 1
+    assert widget.displacement_widget.update_count == 1
+    assert widget.force_widget.update_count == 1
+    assert widget.msm_widget.update_count == 1
+    assert widget.batch_widget.update_count == 1
+
+
 def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
@@ -350,6 +425,7 @@ def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -412,6 +488,7 @@ def test_main_widget_hides_stage_parameter_panels(monkeypatch, app):
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
 
@@ -429,6 +506,7 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -471,6 +549,7 @@ def test_main_widget_exposes_collapsed_stage_data_status_panels(monkeypatch, app
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -492,6 +571,7 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
     section = widget._stage_sections_by_key["preprocessing"]

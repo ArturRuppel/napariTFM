@@ -7,11 +7,12 @@ from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, Qt, QObject
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QFileDialog, QScrollArea, QSpinBox, QDoubleSpinBox, QPushButton, QMessageBox, QSpacerItem,
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QScrollArea, QSpinBox, QDoubleSpinBox, QPushButton, QMessageBox, QSpacerItem,
     QSizePolicy, QFrame, QProgressBar
 )
 
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.widgets._output_directory import ensure_output_dir_for_generated_artifacts
 from napariTFM.backend.displacement_analysis import (
     DisplacementResult,
     calculate_displacement_field,
@@ -378,22 +379,6 @@ class DisplacementActionPanel(QWidget):
         row1_layout.addWidget(self.calculate_btn)
         layout.addLayout(row1_layout)
 
-        # Row 2: Save and Load buttons
-        row2_layout = QHBoxLayout()
-        self.save_btn = QPushButton("Save Displacements")
-        self.save_btn.setToolTip(
-            "Save displacement calculation results to file"
-        )
-        self.load_btn = QPushButton("Load Displacements")
-        self.load_btn.setToolTip(
-            "Load previously saved displacement results"
-        )
-        self.save_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        self.load_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        row2_layout.addWidget(self.save_btn)
-        row2_layout.addWidget(self.load_btn)
-        layout.addLayout(row2_layout)
-
         # Cancel button (full width)
         self.cancel_btn = QPushButton("Cancel Operation")
         self.cancel_btn.setToolTip(
@@ -404,8 +389,6 @@ class DisplacementActionPanel(QWidget):
         # Connect signals
         self.preview_btn.clicked.connect(self.controller.preview_displacement)
         self.calculate_btn.clicked.connect(self.controller.calculate_all_frames)
-        self.save_btn.clicked.connect(self.controller.save_results)
-        self.load_btn.clicked.connect(self.controller.load_results)
         self.cancel_btn.clicked.connect(self.controller.cancel_operation)
 
         self.setLayout(layout)
@@ -414,8 +397,6 @@ class DisplacementActionPanel(QWidget):
         """Connect action panel buttons to controller methods."""
         self.preview_btn.clicked.connect(self.controller.preview_displacement)
         self.calculate_btn.clicked.connect(self.controller.calculate_all_frames)
-        self.save_btn.clicked.connect(self.controller.save_results)
-        self.load_btn.clicked.connect(self.controller.load_results)
         self.cancel_btn.clicked.connect(self.controller.cancel_operation)
 
     def freeze_ui(self, freeze: bool = True):
@@ -424,8 +405,6 @@ class DisplacementActionPanel(QWidget):
         action_buttons = [
             self.preview_btn,
             self.calculate_btn,
-            self.save_btn,
-            self.load_btn
         ]
         for btn in action_buttons:
             btn.setEnabled(not freeze)
@@ -440,8 +419,6 @@ class DisplacementActionPanel(QWidget):
         """Update button states based on data availability."""
         self.preview_btn.setEnabled(has_reference and has_beads)
         self.calculate_btn.setEnabled(has_reference and has_beads)
-        self.save_btn.setEnabled(has_results)
-        self.load_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
 
 
@@ -715,80 +692,6 @@ class DisplacementController(QObject):
         except Exception as e:
             QMessageBox.warning(None, "Error", str(e))
 
-    def save_results(self):
-        """Save displacement results to file."""
-        try:
-            if self.data_manager.displacement_results is None:
-                raise ValueError("No displacement results to save")
-
-            save_path, _ = QFileDialog.getSaveFileName(
-                None,
-                "Save Displacement Results",
-                str(Path.home()),
-                "NumPy Files (*.npy)"
-            )
-
-            if save_path:
-                # Get results and save
-                results = self.data_manager.displacement_results
-                np.save(save_path, results)
-                self.progress_updated.emit(100, f"Results saved to {save_path}")
-
-        except Exception as e:
-            self._handle_error(f"Failed to save results: {str(e)}")
-
-    def load_results(self):
-        """Load displacement results from file."""
-        try:
-            load_path, _ = QFileDialog.getOpenFileName(
-                None,
-                "Load Displacement Results",
-                str(Path.home()),
-                "NumPy Files (*.npy)"
-            )
-
-            if load_path:
-                # Load data
-                result = np.load(load_path, allow_pickle=True).item()
-
-                # Update parameters if they exist in the results
-                if hasattr(result, 'parameters'):
-                    # Block parameter change signals temporarily
-                    if self.parameter_panel:
-                        self.parameter_panel._block_widgets(True)
-                    try:
-                        # Update parameter manager with loaded parameters
-                        params = result.parameters
-                        for param_name, value in vars(params).items():
-                            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
-                                self.parameter_manager.set_parameter(param_name, value)
-
-                        # Sync UI with new parameters
-                        if self.parameter_panel:
-                            self.parameter_panel._sync_widget_with_parameters()
-                    finally:
-                        if self.parameter_panel:
-                            self.parameter_panel._block_widgets(False)
-
-                # Update data manager and visualization
-                self.data_manager.set_displacement_results(result)
-                self.visualization_manager.visualize_displacement_results()
-
-                # Manage layer visibility after loading
-                for layer in self.viewer.layers:
-                    if layer.name in ['Displacement Vectors', 'Displacement Magnitude']:
-                        layer.visible = True
-                        # Move displacement layers to top
-                        self.viewer.layers.move(self.viewer.layers.index(layer), -1)
-                    else:
-                        layer.visible = False
-
-                self.progress_updated.emit(100, f"Results and parameters loaded from {load_path}")
-                self.analysis_completed.emit(result)
-
-        except Exception as e:
-            self._handle_error(f"Failed to load results: {str(e)}")
-
     def _validate_prerequisites(self) -> bool:
         """Check if required data is available."""
         if self.data_manager.preprocessed_reference is None:
@@ -806,7 +709,7 @@ class DisplacementController(QObject):
                 raise RuntimeError("Analysis failed to produce results")
 
             # Update data manager
-            self.data_manager.set_displacement_results(result)
+            self.data_manager.set_displacement_results(result, source="generated", dirty=True)
 
             # Update visualization
             self.visualization_manager.visualize_displacement_results()
@@ -906,7 +809,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         # Initialize panels
         self.parameter_panel = DisplacementParameterPanel(parameter_manager)
-        self.data_panel = DisplacementDataPanel(data_manager, viewer)
+        self.data_panel = None
 
         # Initialize controller
         self.controller = DisplacementController(
@@ -914,14 +817,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,
-            data_panel=self.data_panel
+            data_panel=None
         )
 
         # Initialize action panel with controller
         self.action_panel = DisplacementActionPanel(self.controller)
 
         # Set controller in panels
-        self.data_panel.set_controller(self.controller)
         self.controller.set_panels(self.parameter_panel, self.action_panel)
 
         # Set up the UI
@@ -966,8 +868,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Add panels
-        layout.addWidget(self.data_panel)
-        layout.addItem(QSpacerItem(0, -12, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.parameter_panel)
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.action_panel)
@@ -990,47 +890,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
-
-        frame.setLayout(layout)
-        return frame
-
-    def _create_action_frame(self):
-        frame = QFrame()
-        frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)  # Constrain height
-        layout = QVBoxLayout()
-
-        # Main action row
-        action_layout = QHBoxLayout()
-
-        self.preview_btn = QPushButton("Preview Current Frame")
-        self.process_btn = QPushButton("Run Displacement Analysis")
-
-        # Set size policies for buttons to prevent expansion
-        self.preview_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        self.process_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-
-        action_layout.addWidget(self.preview_btn)
-        action_layout.addWidget(self.process_btn)
-        layout.addLayout(action_layout)
-
-        # Data buttons
-        data_layout = QHBoxLayout()
-        self.save_btn = QPushButton("Save Displacements")
-        self.load_btn = QPushButton("Load Displacements")
-
-        # Set size policies for additional buttons
-        self.save_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        self.load_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-
-        data_layout.addWidget(self.save_btn)
-        data_layout.addWidget(self.load_btn)
-
-        layout.addLayout(data_layout)
-
-        # Cancel button
-        self.cancel_btn = QPushButton("Cancel All Operations")
-        self.cancel_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        layout.addWidget(self.cancel_btn)
 
         frame.setLayout(layout)
         return frame
@@ -1072,10 +931,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
-        # Update data panel
-        self.data_panel.update_button_states()
-        self.data_panel.update_data_status()
-
         # Get current data state
         has_reference = self.data_manager.preprocessed_reference is not None
         has_beads = self.data_manager.preprocessed_bead_stack is not None
@@ -1088,20 +943,11 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self.action_panel.preview_btn.setEnabled(can_analyze)
             self.action_panel.calculate_btn.setEnabled(can_analyze)
 
-            # Save requires full results (not just preview)
-            self.action_panel.save_btn.setEnabled(has_results)
-
-            # Load is always enabled as it's independent of current state
-            self.action_panel.load_btn.setEnabled(True)
-
             # Cancel is always enabled
             self.action_panel.cancel_btn.setEnabled(True)
 
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze during processing."""
-        if hasattr(self, 'data_panel'):
-            self.data_panel.freeze_ui(frozen)
-
         if hasattr(self, 'parameter_panel'):
             self.parameter_panel.freeze_ui(frozen)
 
@@ -1109,8 +955,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             # During processing, disable all buttons except cancel
             self.action_panel.preview_btn.setEnabled(not frozen)
             self.action_panel.calculate_btn.setEnabled(not frozen)
-            self.action_panel.save_btn.setEnabled(not frozen)
-            self.action_panel.load_btn.setEnabled(not frozen)
             # Cancel button always enabled
             self.action_panel.cancel_btn.setEnabled(True)
 
@@ -1134,6 +978,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 has_beads=self.data_manager.preprocessed_bead_stack is not None,
                 has_results=True
             )
+
+        if ensure_output_dir_for_generated_artifacts(self, self.data_manager):
+            try:
+                self.data_manager.auto_save_artifact("displacement_results")
+            except Exception as exc:
+                self.data_manager.mark_artifact_error("displacement_results", str(exc))
+                QMessageBox.warning(self, "Auto-save Failed", str(exc))
 
         self.displacement_calculated.emit(results)
 

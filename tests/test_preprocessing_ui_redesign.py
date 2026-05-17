@@ -3,8 +3,8 @@ import types
 
 import numpy as np
 import pytest
-from qtpy.QtCore import QObject, QPoint, Signal
-from qtpy.QtWidgets import QApplication, QLineEdit, QPushButton, QScrollArea, QWidget
+from qtpy.QtCore import QObject, Signal
+from qtpy.QtWidgets import QApplication, QPushButton, QScrollArea, QWidget
 
 for module_name in [
     "napariTFM.utilities.data_manager",
@@ -97,7 +97,7 @@ for module_name in [
 
 from napariTFM.utilities.visualization_manager import VisualizationManager
 import napariTFM.widgets.preprocessing_widget as preprocessing_widget
-from napariTFM.widgets.preprocessing_widget import PreprocessingDataPanel, PreprocessingWidget
+from napariTFM.widgets.preprocessing_widget import PreprocessingWidget
 
 
 @pytest.fixture
@@ -234,30 +234,20 @@ class _FakeVisualizationManager:
         pass
 
 
-def test_preprocessing_body_exposes_three_compact_input_rows(app):
-    viewer = _FakeViewer()
-    panel = PreprocessingDataPanel(DataManager(), viewer)
-    panel.show()
+def test_preprocessing_widget_does_not_mount_stage_local_data_panel(app):
+    widget = PreprocessingWidget(
+        _FakeViewer(),
+        DataManager(),
+        _ParameterManager(),
+        _FakeVisualizationManager(),
+    )
+    widget.show()
     app.processEvents()
 
-    assert panel.findChild(QPushButton, "preprocessing_reference_assign_button") is None
-    assert panel.load_reference_btn.objectName() == "preprocessing_reference_assign_button"
-    assert panel.load_beads_btn.objectName() == "preprocessing_beads_assign_button"
-    assert panel.load_cells_btn.objectName() == "preprocessing_cells_assign_button"
-    assert panel.reference_status.objectName() == "preprocessing_reference_status"
-    assert panel.bead_status.objectName() == "preprocessing_beads_status"
-    assert panel.cell_status.objectName() == "preprocessing_cells_status"
-    assert isinstance(panel.reference_status, QLineEdit)
-    assert isinstance(panel.bead_status, QLineEdit)
-    assert isinstance(panel.cell_status, QLineEdit)
-    assert panel.reference_status.isReadOnly()
-    assert panel.bead_status.isReadOnly()
-    assert panel.cell_status.isReadOnly()
-    assert panel.cell_status.isVisibleTo(panel)
-    assert panel.load_cells_btn.isVisibleTo(panel)
-    assert panel.reference_status.text() == "Missing"
-    assert panel.bead_status.text() == "Missing"
-    assert panel.cell_status.text() == "Optional"
+    assert widget.data_panel is None
+    assert widget.findChild(QPushButton, "preprocessing_reference_assign_button") is None
+    assert widget.findChild(QPushButton, "preprocessing_beads_assign_button") is None
+    assert widget.findChild(QPushButton, "preprocessing_cells_assign_button") is None
 
 
 def test_preprocessing_widget_hides_large_body_actions_and_radio_buttons(app):
@@ -277,7 +267,7 @@ def test_preprocessing_widget_hides_large_body_actions_and_radio_buttons(app):
     assert not hasattr(widget, "cell_radio")
 
 
-def test_preprocessing_widget_does_not_clip_optional_cells_input(app):
+def test_preprocessing_widget_keeps_parameter_content_in_scroll_area(app):
     widget = PreprocessingWidget(
         _FakeViewer(),
         DataManager(),
@@ -289,16 +279,10 @@ def test_preprocessing_widget_does_not_clip_optional_cells_input(app):
     app.processEvents()
 
     scroll_area = widget.findChild(QScrollArea)
-    viewport_rect = scroll_area.viewport().rect()
 
-    for control in [widget.data_panel.cell_status, widget.data_panel.load_cells_btn]:
-        top_left = control.mapTo(scroll_area.viewport(), QPoint(0, 0))
-        bottom_right = control.mapTo(
-            scroll_area.viewport(),
-            QPoint(control.width() - 1, control.height() - 1),
-        )
-        assert viewport_rect.contains(top_left)
-        assert viewport_rect.contains(bottom_right)
+    assert scroll_area is not None
+    assert widget.parameter_panel.isVisibleTo(widget)
+    assert widget.data_panel is None
 
 
 def test_preprocessing_preview_renders_all_loaded_inputs(monkeypatch, app):
@@ -321,7 +305,7 @@ def test_preprocessing_preview_renders_all_loaded_inputs(monkeypatch, app):
     assert set(frames) == {"beads", "reference", "cells"}
 
 
-def test_preprocessing_run_and_save_enablement_tracks_required_inputs_and_outputs(app):
+def test_preprocessing_run_enablement_tracks_required_inputs(app):
     data_manager = DataManager()
     widget = PreprocessingWidget(
         _FakeViewer(),
@@ -331,7 +315,7 @@ def test_preprocessing_run_and_save_enablement_tracks_required_inputs_and_output
     )
 
     assert not widget.process_btn.isEnabled()
-    assert not widget.save_btn.isEnabled()
+    assert not hasattr(widget, "save_btn")
 
     data_manager.set_bead_stack(np.ones((1, 2, 2), dtype=np.float32))
     widget._update_ui_state()
@@ -340,11 +324,10 @@ def test_preprocessing_run_and_save_enablement_tracks_required_inputs_and_output
     data_manager.set_reference(np.ones((2, 2), dtype=np.float32))
     widget._update_ui_state()
     assert widget.process_btn.isEnabled()
-    assert not widget.save_btn.isEnabled()
 
     data_manager.set_preprocessed_reference(np.ones((2, 2), dtype=np.float32))
     widget._update_ui_state()
-    assert widget.save_btn.isEnabled()
+    assert widget.process_btn.isEnabled()
 
 
 def test_preprocessing_preview_error_unchecks_widget_preview_control(monkeypatch, app):

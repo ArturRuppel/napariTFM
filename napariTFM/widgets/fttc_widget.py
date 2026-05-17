@@ -6,7 +6,7 @@ from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal, Qt
-from qtpy.QtWidgets import (QFileDialog, QGroupBox, QDoubleSpinBox, QSpinBox, QCheckBox, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
+from qtpy.QtWidgets import (QGroupBox, QDoubleSpinBox, QSpinBox, QCheckBox, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
                             QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
 
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optimal_regularization
@@ -14,6 +14,7 @@ from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.widgets._output_directory import ensure_output_dir_for_generated_artifacts
 
 
 class FTTCDataPanel(QWidget):
@@ -63,10 +64,6 @@ class FTTCDataPanel(QWidget):
     def set_controller(self, controller):
         """Set the controller and connect signals."""
         self.controller = controller
-        if self.controller:
-            self.load_displacement_btn.clicked.connect(
-                lambda: self.controller.load_displacement_data()
-            )
 
     def update_data_status(self):
         """Update status labels based on loaded data."""
@@ -395,20 +392,6 @@ class FTTCActionPanel(QWidget):
         row1_layout.addWidget(self.calculate_btn)
         layout.addLayout(row1_layout)
 
-        # Row 2: Save and Load buttons
-        row2_layout = QHBoxLayout()
-        self.save_btn = QPushButton("Save Forces")
-        self.save_btn.setToolTip(
-            "Save force calculation results to file"
-        )
-        self.load_btn = QPushButton("Load Forces")
-        self.load_btn.setToolTip(
-            "Load previously saved force calculation results"
-        )
-        row2_layout.addWidget(self.save_btn)
-        row2_layout.addWidget(self.load_btn)
-        layout.addLayout(row2_layout)
-
         # Cancel button in its own row
         self.cancel_btn = QPushButton("Cancel Operation")
         self.cancel_btn.setToolTip(
@@ -422,8 +405,6 @@ class FTTCActionPanel(QWidget):
         """Connect action buttons to controller methods."""
         self.preview_btn.clicked.connect(self.controller.preview_force)
         self.calculate_btn.clicked.connect(self.controller.calculate_forces)
-        self.save_btn.clicked.connect(self.controller.save_results)
-        self.load_btn.clicked.connect(self.controller.load_results)
         self.cancel_btn.clicked.connect(self.controller.cancel_operation)
 
     def freeze_ui(self, freeze: bool = True):
@@ -432,8 +413,6 @@ class FTTCActionPanel(QWidget):
         action_buttons = [
             self.preview_btn,
             self.calculate_btn,
-            self.save_btn,
-            self.load_btn
         ]
         for btn in action_buttons:
             btn.setEnabled(not freeze)
@@ -444,10 +423,6 @@ class FTTCActionPanel(QWidget):
         # Analysis buttons need displacement data
         self.preview_btn.setEnabled(has_displacement)
         self.calculate_btn.setEnabled(has_displacement)
-
-        # Save button needs force results
-        self.save_btn.setEnabled(has_results)
-        self.load_btn.setEnabled(True)
 
 
 class FTTCController(QObject):
@@ -576,165 +551,6 @@ class FTTCController(QObject):
         except Exception as e:
             self._handle_error(str(e))
             self.unfreeze_ui()
-
-    def load_displacement_data(self):
-        """Load displacement data from file."""
-        try:
-            file_path, _ = QFileDialog.getOpenFileName(
-                None,
-                "Load Displacement Data",
-                str(Path.home()),
-                "NumPy Files (*.npy)"
-            )
-
-            if file_path:
-                # Load displacement data
-                displacement_data = np.load(file_path, allow_pickle=True).item()
-
-                # Update parameters if they exist in the loaded data
-                if hasattr(displacement_data, 'parameters'):
-                    # Block parameter change signals temporarily
-                    if self.parameter_panel:
-                        self.parameter_panel._block_widgets(True)
-                    try:
-                        # Update parameter manager with loaded parameters
-                        params = displacement_data.parameters
-                        for param_name, value in vars(params).items():
-                            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
-                                self.parameter_manager.set_parameter(param_name, value)
-
-                        # Sync UI with new parameters
-                        if self.parameter_panel:
-                            self.parameter_panel._sync_widget_with_parameters()
-                    finally:
-                        if self.parameter_panel:
-                            self.parameter_panel._block_widgets(False)
-
-                # Update data manager
-                self.data_manager.set_displacement_results(displacement_data)
-
-                # Update visualization
-                if displacement_data is not None:
-                    # Manage layer visibility
-                    for layer in self.viewer.layers:
-                        if layer.name in ['Displacement Vectors', 'Displacement Magnitude']:
-                            layer.visible = True
-                            # Move displacement layers to top
-                            self.viewer.layers.move(self.viewer.layers.index(layer), -1)
-                        else:
-                            layer.visible = False
-
-                    self.visualization_manager.visualize_displacement_results()
-                    self.data_updated.emit('displacement')
-                    self.progress_updated.emit(
-                        100,
-                        f"Displacement data loaded: {displacement_data.displacement_field.shape}"
-                    )
-                    self._update_ui_state()
-                else:
-                    self.progress_updated.emit(0, "No displacement data loaded")
-
-        except Exception as e:
-            self._handle_error(f"Failed to load displacement data: {str(e)}")
-
-    def save_results(self):
-        """Save force calculation results."""
-        try:
-            if self.data_manager.force_results is None:
-                raise ValueError("No force results to save")
-
-            save_path, _ = QFileDialog.getSaveFileName(
-                None,
-                "Save Force Results",
-                str(Path.home()),
-                "NumPy Files (*.npy)"
-            )
-
-            if save_path:
-                results = self.data_manager.force_results
-                np.save(save_path, results)
-                self.progress_updated.emit(100, f"Results saved to {save_path}")
-
-        except Exception as e:
-            self._handle_error(f"Failed to save results: {str(e)}")
-
-    def load_results(self):
-        """Load previously saved force results."""
-        try:
-            load_path, _ = QFileDialog.getOpenFileName(
-                None,
-                "Load Force Results",
-                str(Path.home()),
-                "NumPy Files (*.npy)"
-            )
-
-            if load_path:
-                # Load data
-                results = np.load(load_path, allow_pickle=True).item()
-
-                # Update parameters if they exist in the results
-                if hasattr(results, 'parameters'):
-                    # Block parameter change signals temporarily
-                    if self.parameter_panel:
-                        self.parameter_panel._block_widgets(True)
-                    try:
-                        # Update parameter manager with loaded parameters
-                        params = results.parameters
-                        for param_name, value in vars(params).items():
-                            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
-                                if param_name == 'young_modulus':
-                                    # Convert Pa to kPa for UI display
-                                    self.parameter_manager.set_parameter(param_name, value)
-                                elif param_name == 'regularization':
-                                    # Store actual value, UI will convert to log10
-                                    self.parameter_manager.set_parameter(param_name, value)
-                                else:
-                                    self.parameter_manager.set_parameter(param_name, value)
-
-                        # Sync UI with new parameters
-                        if self.parameter_panel:
-                            self.parameter_panel._sync_widget_with_parameters()
-                    finally:
-                        if self.parameter_panel:
-                            self.parameter_panel._block_widgets(False)
-
-                # Update data manager and visualization
-                self.data_manager.set_force_results(results)
-                self.visualization_manager.visualize_force_results()
-
-                # Manage layer visibility and order
-                vector_layer = None
-                magnitude_layer = None
-
-                # First pass: find the force layers and disable all others
-                for layer in self.viewer.layers:
-                    if layer.name == 'Force Vectors':
-                        vector_layer = layer
-                        layer.visible = True
-                    elif layer.name == 'Force Magnitude':
-                        magnitude_layer = layer
-                        layer.visible = True
-                    else:
-                        layer.visible = False
-
-                # Move layers to desired positions if they exist
-                if magnitude_layer is not None:
-                    current_index = self.viewer.layers.index(magnitude_layer)
-                    # Move magnitude layer to second from top (-2)
-                    if current_index != -2:
-                        self.viewer.layers.move(current_index, -2)
-
-                if vector_layer is not None:
-                    current_index = self.viewer.layers.index(vector_layer)
-                    # Move vector layer to top (-1)
-                    if current_index != -1:
-                        self.viewer.layers.move(current_index, -1)
-
-                self.progress_updated.emit(100, f"Results and parameters loaded from {load_path}")
-                self.analysis_completed.emit(results)
-
-        except Exception as e:
-            self._handle_error(f"Failed to load results: {str(e)}")
 
     def _sync_parameters_with_results(self, result):
         """Sync parameters from loaded results."""
@@ -899,7 +715,7 @@ class FTTCController(QObject):
                 raise RuntimeError("Analysis failed to produce results")
 
             # Update data manager
-            self.data_manager.set_force_results(result)
+            self.data_manager.set_force_results(result, source="generated", dirty=True)
 
             # Update visualization
             self.visualization_manager.visualize_force_results()
@@ -1030,7 +846,7 @@ class FTTCWidget(BaseAnalysisWidget):
         self.parameter_manager = parameter_manager
 
         # Initialize panels
-        self.data_panel = FTTCDataPanel(data_manager, viewer)
+        self.data_panel = None
         self.parameter_panel = FTTCParameterPanel(parameter_manager)
 
         # Initialize controller
@@ -1039,10 +855,8 @@ class FTTCWidget(BaseAnalysisWidget):
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,
-            data_panel=self.data_panel
+            data_panel=None
         )
-
-        self.data_panel.set_controller(self.controller)
 
         # Initialize action panel with controller
         self.action_panel = FTTCActionPanel(self.controller)
@@ -1083,8 +897,6 @@ class FTTCWidget(BaseAnalysisWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Add panels
-        layout.addWidget(self.data_panel)
-        layout.addItem(QSpacerItem(0, -12, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.parameter_panel)
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.action_panel)
@@ -1131,9 +943,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
-        # Update data panel
-        self.data_panel.update_data_status()
-
         # Update action panel
         has_displacement = self.data_manager.displacement_results is not None
         has_results = self.data_manager.force_results is not None
@@ -1148,6 +957,13 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _on_analysis_completed(self, results: FTTCResult):
         """Handle completed analysis."""
+        if ensure_output_dir_for_generated_artifacts(self, self.data_manager):
+            try:
+                self.data_manager.auto_save_artifact("force_results")
+            except Exception as exc:
+                self.data_manager.mark_artifact_error("force_results", str(exc))
+                QMessageBox.warning(self, "Auto-save Failed", str(exc))
+
         # Emit results
         self.force_calculated.emit(results)
 

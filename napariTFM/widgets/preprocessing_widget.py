@@ -9,7 +9,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import QObject
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
-    QFileDialog, QFrame, QScrollArea, QCheckBox, QApplication, QSpinBox,
+    QFrame, QScrollArea, QCheckBox, QApplication, QSpinBox,
     QProgressBar, QMessageBox, QSizePolicy, QGridLayout, QToolButton, QStyle
 )
 from qtpy.QtWidgets import (
@@ -19,6 +19,7 @@ from qtpy.QtWidgets import (
 from qtrangeslider import QRangeSlider
 
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.widgets._output_directory import ensure_output_dir_for_generated_artifacts
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 
@@ -998,16 +999,16 @@ class PreprocessingController(QObject):
             # Update data manager
             if self.data_manager.bead_stack is not None:
                 n_beads = self.data_manager.bead_stack.shape[0]
-                self.data_manager.set_preprocessed_bead_stack(np.stack(processed_images[:n_beads]))
+                self.data_manager.set_preprocessed_bead_stack(np.stack(processed_images[:n_beads]), source="generated", dirty=True)
                 processed_images = processed_images[n_beads:]
 
             if self.data_manager.reference is not None:
-                self.data_manager.set_preprocessed_reference(processed_images[0])
+                self.data_manager.set_preprocessed_reference(processed_images[0], source="generated", dirty=True)
                 processed_images = processed_images[1:]
 
             if self.data_manager.cell_stack is not None:
                 n_cells = self.data_manager.cell_stack.shape[0]
-                self.data_manager.set_preprocessed_cell_stack(np.stack(processed_images[:n_cells]))
+                self.data_manager.set_preprocessed_cell_stack(np.stack(processed_images[:n_cells]), source="generated", dirty=True)
 
             # Update visualization
             self.visualization_manager.update_preprocessing_visualization()
@@ -1023,8 +1024,21 @@ class PreprocessingController(QObject):
 
             # Get current parameters for the completion signal
             current_params = self.parameter_manager.get_preprocessing_parameters()
+            saved_message = ""
+            if ensure_output_dir_for_generated_artifacts(None, self.data_manager):
+                try:
+                    saved = self.data_manager.auto_save_generated_artifacts(
+                        ["preprocessed_bead_stack", "preprocessed_reference", "preprocessed_cell_stack"],
+                        pixel_size=self.parameter_manager.get_parameter("pixel_size"),
+                        frame_interval=self.parameter_manager.get_parameter("frame_interval"),
+                    )
+                    if saved:
+                        saved_message = f"; saved {len(saved)} file(s)"
+                except Exception as exc:
+                    self.data_manager.mark_artifact_error("preprocessed_bead_stack", str(exc))
+                    QMessageBox.warning(None, "Auto-save Failed", str(exc))
 
-            self.progress_updated.emit(100, "Preprocessing complete")
+            self.progress_updated.emit(100, f"Preprocessing complete{saved_message}")
             self.preprocessing_completed.emit({'parameters': current_params.__dict__})
 
         except Exception as e:
@@ -1033,116 +1047,6 @@ class PreprocessingController(QObject):
             QMessageBox.critical(None, "Error", error_msg)
         finally:
             self.unfreeze_ui()
-
-    def save_preprocessed_data(self):
-        """Save preprocessed data to files."""
-        try:
-            save_dir = QFileDialog.getExistingDirectory(
-                None,
-                "Select Directory to Save Preprocessed Data",
-                str(Path.home()),
-                QFileDialog.ShowDirsOnly
-            )
-
-            if not save_dir:
-                return
-
-            save_dir = Path(save_dir)
-            files_saved = []
-
-            # Get calibration parameters
-            pixel_size = self.parameter_manager.get_parameter('pixel_size')
-            frame_interval = self.parameter_manager.get_parameter('frame_interval')
-
-            # Helper function to save TIFF files
-            def _save_calibrated_tiff(data: np.ndarray, filepath: Path) -> bool:
-                """
-                Save data as calibrated TIFF file with ImageJ-compatible metadata.
-
-                Args:
-                    data: numpy array to save
-                    filepath: path where to save the file
-
-                Returns:
-                    bool: True if save was successful
-                """
-                if data is None:
-                    return False
-
-                # Convert to 16-bit
-                data_normalized = data.astype(float)
-                data_normalized = (data_normalized - data_normalized.min()) / (
-                        data_normalized.max() - data_normalized.min())
-                data_16bit = (data_normalized * 65535).astype(np.uint16)
-
-                # Create ImageJ-compatible metadata
-                imagej_metadata = {
-                    'ImageJ': '1.53c',
-                    'spacing': pixel_size,
-                    'unit': 'um',
-                    'frame_interval': frame_interval,
-                    'frame_interval_unit': 'minute'
-                }
-
-                # For Z-stacks or time series, specify dimensions
-                if data.ndim > 2:
-                    imagej_metadata.update({
-                        'frames': data.shape[0],
-                        'slices': 1,
-                        'channels': 1
-                    })
-
-                # Combine metadata for compatibility
-                metadata = {
-                    'PhysicalSizeX': pixel_size,
-                    'PhysicalSizeXUnit': 'um',
-                    'PhysicalSizeY': pixel_size,
-                    'PhysicalSizeYUnit': 'um',
-                    'TimeIncrement': frame_interval,
-                    'TimeIncrementUnit': 'min',
-                    **imagej_metadata
-                }
-
-                # Save with metadata using tifffile
-                tifffile.imwrite(
-                    str(filepath),
-                    data_16bit,
-                    imagej=True,
-                    metadata=metadata,
-                    resolution=(1 / pixel_size, 1 / pixel_size),  # resolution in pixels per unit
-                    photometric='minisblack'
-                )
-
-                return True
-
-            # Save each data type if available
-            if self.data_manager.preprocessed_bead_stack is not None:
-                bead_path = save_dir / "preprocessed_beads.tif"
-                if _save_calibrated_tiff(self.data_manager.preprocessed_bead_stack, bead_path):
-                    files_saved.append("preprocessed_beads.tif")
-
-            if self.data_manager.preprocessed_reference is not None:
-                ref_path = save_dir / "preprocessed_reference.tif"
-                if _save_calibrated_tiff(self.data_manager.preprocessed_reference, ref_path):
-                    files_saved.append("preprocessed_reference.tif")
-
-            if self.data_manager.preprocessed_cell_stack is not None:
-                cell_path = save_dir / "preprocessed_cells.tif"
-                if _save_calibrated_tiff(self.data_manager.preprocessed_cell_stack, cell_path):
-                    files_saved.append("preprocessed_cells.tif")
-
-            if files_saved:
-                self.progress_updated.emit(
-                    100,
-                    f"Saved files with calibration:\n"
-                    f"pixel size: {pixel_size} µm, frame interval: {frame_interval} min\n" +
-                    "\n".join(files_saved)
-                )
-            else:
-                self.progress_updated.emit(0, "No preprocessed data available to save")
-
-        except Exception as e:
-            QMessageBox.critical(None, "Error", f"Failed to save data: {str(e)}")
 
     # endregion === Data Management
 
@@ -1186,7 +1090,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Initialize panels
         self.parameter_panel = PreprocessingParameterPanel(parameter_manager)
-        self.data_panel = PreprocessingDataPanel(data_manager, viewer)
+        self.data_panel = None
 
         # Initialize controller
         self.controller = PreprocessingController(
@@ -1196,7 +1100,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             visualization_manager=visualization_manager
         )
 
-        self.controller.set_panels(self.parameter_panel, self.data_panel)
+        self.controller.set_panels(self.parameter_panel, None)
 
         # Set up UI and connections
         self._setup_ui()
@@ -1232,7 +1136,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Add components
-        layout.addWidget(self.data_panel)
         layout.addWidget(self.parameter_panel)
         self.preview_frame = self._create_preview_frame()
         self.preview_frame.setVisible(False)
@@ -1265,11 +1168,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Create button row
         button_layout = QHBoxLayout()
         self.process_btn = QPushButton("Run Preprocessing")
-        self.save_btn = QPushButton("Save Result Images")
         self.process_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        self.save_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         button_layout.addWidget(self.process_btn)
-        button_layout.addWidget(self.save_btn)
         layout.addLayout(button_layout)
 
         # Add cancel button (full width)
@@ -1299,15 +1199,11 @@ class PreprocessingWidget(BaseAnalysisWidget):
     # region === Signal Handling
     def _connect_signals(self):
         """Connect all widget signals."""
-        # Set controller in panels
-        self.data_panel.set_controller(self.controller)
-
         # Connect preview controls
         self.preview_check.toggled.connect(self._on_preview_toggled)
 
         # Connect action buttons
         self.process_btn.clicked.connect(self._on_process_clicked)
-        self.save_btn.clicked.connect(self._on_save_clicked)
         self.cancel_btn.clicked.connect(self.controller.cancel_all_operations)
 
         # Connect controller signals
@@ -1342,13 +1238,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
-    def _on_save_clicked(self):
-        """Handle save button click."""
-        try:
-            self.controller.save_preprocessed_data()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
-
     def _on_parameter_changed(self):
         """Handle parameter changes."""
         if self.preview_check.isChecked():
@@ -1373,10 +1262,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
-        # Update data panel
-        self.data_panel.update_button_states()
-        self.data_panel.update_data_status()
-
         # Update preview controls
         has_any_data = (
                 self.data_manager.bead_stack is not None or
@@ -1392,14 +1277,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Update action buttons - now uses _has_required_data()
         self.process_btn.setEnabled(self._has_required_data())
 
-        # Update save button based on preprocessed data
-        has_preprocessed = (
-                self.data_manager.preprocessed_bead_stack is not None or
-                self.data_manager.preprocessed_reference is not None or
-                self.data_manager.preprocessed_cell_stack is not None
-        )
-        self.save_btn.setEnabled(has_preprocessed)
-
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze."""
         # Disable preview and process buttons during processing
@@ -1408,14 +1285,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Cancel button is always enabled
         self.cancel_btn.setEnabled(True)
-
-        # Update save button based on preprocessed data availability
-        has_preprocessed = (
-                self.data_manager.preprocessed_bead_stack is not None or
-                self.data_manager.preprocessed_reference is not None or
-                self.data_manager.preprocessed_cell_stack is not None
-        )
-        self.save_btn.setEnabled(not frozen and has_preprocessed)
 
     def _check_preprocessed_data(self) -> bool:
         """Check availability of preprocessed data."""
@@ -1428,12 +1297,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
     # region === Results Handling
     def _on_preprocessing_completed(self, results):
         """Handle preprocessing completion."""
-        self.save_btn.setEnabled(True)
         self.preprocessing_completed.emit(results)
 
     def _on_preprocessing_failed(self, error_msg: str):
         """Handle preprocessing failure."""
-        self.save_btn.setEnabled(False)
         QMessageBox.critical(self, "Error", error_msg)
 
     # endregion

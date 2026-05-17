@@ -21,6 +21,7 @@ from napariTFM.backend.msm import (
     process_mask_data,
 )
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.widgets._output_directory import ensure_output_dir_for_generated_artifacts
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.utilities.visualization_manager import VisualizationManager
@@ -499,7 +500,7 @@ class MSMDataPanel(QWidget):
                             self.controller.parameter_panel._block_widgets(False)
 
                 # Update data manager
-                self.data_manager.set_force_results(force_data)
+                self.data_manager.set_force_results(force_data, path=file_path, source="file", dirty=False)
 
                 # Update visualization using visualization manager
                 self.controller.visualization_manager.visualize_force_results()
@@ -629,14 +630,6 @@ class MSMActionPanel(QWidget):
         row2_layout.addWidget(self.analyze_btn)
         button_layout.addLayout(row2_layout)
 
-        # Row 3: Save and Load Stress
-        row3_layout = QHBoxLayout()
-        self.save_btn = QPushButton("Save Stress Tensors")
-        self.load_stress_btn = QPushButton("Load Stress Tensors")
-        row3_layout.addWidget(self.save_btn)
-        row3_layout.addWidget(self.load_stress_btn)
-        button_layout.addLayout(row3_layout)
-
         layout.addLayout(button_layout)
 
         # Cancel button (full width)
@@ -649,8 +642,7 @@ class MSMActionPanel(QWidget):
         """Disable/enable action buttons (keep cancel enabled)"""
         buttons = [
             self.preview_mesh_btn, self.preview_frame_btn,
-            self.analyze_btn, self.save_btn, self.create_mask_btn,
-            self.load_stress_btn
+            self.analyze_btn, self.create_mask_btn,
         ]
         for btn in buttons:
             btn.setEnabled(not freeze)
@@ -696,25 +688,12 @@ class MSMActionPanel(QWidget):
                 else btn.text()
             )
 
-        # Load Stress button is always enabled
-        self.load_stress_btn.setEnabled(True)
-        self.load_stress_btn.setToolTip("Load pre-calculated stress tensor results")
-
-        # Save Results button
-        self.save_btn.setEnabled(stress_data)
-        self.save_btn.setToolTip(
-            "Calculate stress tensors first" if not stress_data
-            else "Save results"
-        )
-
     def _connect_signals(self):
         """Connect action panel buttons to controller methods."""
         # Connect buttons to controller methods
         self.preview_mesh_btn.clicked.connect(self.controller.preview_mesh)
         self.preview_frame_btn.clicked.connect(self.controller.preview_current_frame)
         self.analyze_btn.clicked.connect(self._handle_analyze_click)
-        self.save_btn.clicked.connect(self.controller.save_results)
-        self.load_stress_btn.clicked.connect(self.controller.load_results)
         self.create_mask_btn.clicked.connect(self.controller.create_masks_from_images)
         self.cancel_btn.clicked.connect(self.controller.cancel_all_operations)
 
@@ -723,15 +702,14 @@ class MSMActionPanel(QWidget):
 
     def _update_button_states(self, data_type=None):
         """Update button states based on data availability."""
-        has_force_data = self.controller.data_manager.force_field is not None
-        has_mask_data = self.controller.data_manager.masks is not None
-        has_stress_data = self.controller.data_manager.stress_tensor is not None
+        has_force_data = self.controller.data_manager.force_results is not None
+        has_mask_data = self.controller.data_manager.mask_stack is not None
+        has_stress_data = self.controller.data_manager.stress_results is not None
 
         # Enable/disable buttons based on data availability
         self.preview_mesh_btn.setEnabled(has_force_data and has_mask_data)
         self.preview_frame_btn.setEnabled(has_force_data and has_mask_data)
         self.analyze_btn.setEnabled(has_force_data and has_mask_data)
-        self.save_btn.setEnabled(has_stress_data)
 
     def _handle_analyze_click(self):
         """Handle analyze button click by disabling buttons and starting analysis."""
@@ -746,7 +724,7 @@ class MSMActionPanel(QWidget):
     def set_buttons_enabled(self, enabled: bool):
         """Enable/disable all action buttons."""
         for btn in [self.preview_mesh_btn, self.preview_frame_btn,
-                    self.analyze_btn, self.save_btn]:
+                    self.analyze_btn, self.create_mask_btn]:
             btn.setEnabled(enabled)
 
 
@@ -948,7 +926,7 @@ class MSMController(QObject):
 
             def on_returned(final_result):
                 # Store the complete results
-                self.data_manager.set_stress_results(final_result)
+                self.data_manager.set_stress_results(final_result, source="generated", dirty=True)
 
                 # Update visualization with all frames
                 self.visualization_manager.visualize_stress_results()
@@ -1165,7 +1143,7 @@ class MSMController(QObject):
 
         def on_returned(results):
             # Update data manager with results
-            self.data_manager.set_stress_results(results)
+            self.data_manager.set_stress_results(results, source="generated", dirty=True)
 
             # Update visualization
             self.visualization_manager.visualize_stress_results(
@@ -1184,105 +1162,6 @@ class MSMController(QObject):
         worker.returned.connect(on_returned)
         worker.errored.connect(self._handle_worker_error)
         worker.start()
-
-    def save_results(self):
-        """Save analysis results to file."""
-        try:
-            stress_results = self.data_manager.stress_results
-            if stress_results is None:
-                raise ValueError("No stress tensor data to save")
-
-            file_path, _ = QFileDialog.getSaveFileName(
-                None, "Save Stress Tensor Data", "", "NumPy Files (*.npy)"
-            )
-
-            if file_path:
-                if not file_path.endswith('.npy'):
-                    file_path += '.npy'
-
-                # Save the complete MSMResult object
-                np.save(file_path, stress_results)
-                return True
-
-        except Exception as e:
-            QMessageBox.critical(None, "Error", f"Failed to save results: {str(e)}")
-        return False
-
-    def load_results(self):
-        """Load previously saved stress results."""
-        try:
-            load_path, _ = QFileDialog.getOpenFileName(
-                None,
-                "Load Stress Results",
-                str(Path.home()),
-                "NumPy Files (*.npy)"
-            )
-
-            if load_path:
-                # Load data
-                results = np.load(load_path, allow_pickle=True).item()
-
-                # Update parameters if they exist in the loaded data
-                if hasattr(results, 'parameters'):
-                    if self.parameter_panel:
-                        self.parameter_panel._block_widgets(True)
-                    try:
-                        params = results.parameters
-                        for param_name, value in vars(params).items():
-                            if param_name != '_sa_instance_state':
-                                self.parameter_manager.set_parameter(param_name, value)
-                        if self.parameter_panel:
-                            self.parameter_panel._sync_widget_with_parameters()
-                    finally:
-                        if self.parameter_panel:
-                            self.parameter_panel._block_widgets(False)
-
-                # Update data manager and visualization
-                self.data_manager.set_stress_results(results)
-                self.visualization_manager.visualize_stress_results()
-
-                # Manage layer visibility and ordering
-                xx_layer = None
-                yy_layer = None
-                avg_layer = None
-
-                # First pass: find the stress layers and disable all others
-                for layer in self.viewer.layers:
-                    if layer.name == 'Normal Stress XX':
-                        xx_layer = layer
-                        layer.visible = False
-                    elif layer.name == 'Normal Stress YY':
-                        yy_layer = layer
-                        layer.visible = False
-                    elif layer.name == 'Average Normal Stress':
-                        avg_layer = layer
-                        layer.visible = True
-                    else:
-                        layer.visible = False
-
-                # Second pass: reorder layers
-                if xx_layer is not None:
-                    current_index = self.viewer.layers.index(xx_layer)
-                    if current_index != len(self.viewer.layers) - 3:  # -3 position
-                        self.viewer.layers.move(current_index, -3)
-
-                if yy_layer is not None:
-                    current_index = self.viewer.layers.index(yy_layer)
-                    if current_index != len(self.viewer.layers) - 2:  # -2 position
-                        self.viewer.layers.move(current_index, -2)
-
-                if avg_layer is not None:
-                    current_index = self.viewer.layers.index(avg_layer)
-                    if current_index != len(self.viewer.layers) - 1:  # -1 position (top)
-                        self.viewer.layers.move(current_index, -1)
-
-                self.progress_updated.emit(100, f"Results and parameters loaded from {load_path}")
-                self.analysis_completed.emit(results)
-
-        except Exception as e:
-            error_msg = f"Failed to load results: {str(e)}"
-            self.progress_updated.emit(0, error_msg)
-            QMessageBox.critical(None, "Error", error_msg)
 
     def set_panels(self, parameter_panel: 'MSMParameterPanel', action_panel: 'MSMActionPanel'):
         """Set the parameter and action panels after initialization."""
@@ -1348,8 +1227,8 @@ class MSMController(QObject):
                 self.mask_creation_progress.emit(progress, message)
 
             def on_returned(analysis_stack):
-                # Pass raw masks to data panel for processing
-                self.data_panel.load_mask_data(analysis_stack)
+                masks = process_mask_data(analysis_stack)
+                self.data_manager.set_mask_stack(masks, source="generated")
                 self.mask_creation_completed.emit()
                 self.active_workers.remove(worker)
                 if not self.active_workers:
@@ -1509,7 +1388,7 @@ class MSMWidget(BaseAnalysisWidget):
         self.msm_params = parameter_manager.get_msm_parameters()
 
         # Initialize panels
-        self.data_panel = MSMDataPanel(data_manager, viewer)
+        self.data_panel = None
         self.parameter_panel = MSMParameterPanel(parameter_manager)
 
         # Initialize controller
@@ -1518,7 +1397,7 @@ class MSMWidget(BaseAnalysisWidget):
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,
-            data_panel=self.data_panel
+            data_panel=None
         )
 
         # Initialize action panel with controller
@@ -1526,8 +1405,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Set panels in controller
         self.controller.set_panels(self.parameter_panel, self.action_panel)
-        self.data_panel.set_controller(self.controller)
-
         # Setup UI and connect signals
         self._setup_ui()
         self._connect_signals()
@@ -1566,8 +1443,6 @@ class MSMWidget(BaseAnalysisWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Add panels
-        layout.addWidget(self.data_panel)
-        layout.addItem(QSpacerItem(0, -12, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.parameter_panel)
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.action_panel)
@@ -1597,9 +1472,6 @@ class MSMWidget(BaseAnalysisWidget):
         """Connect all widget signals."""
         # Connect progress updates from controller to status panel
         self.controller.progress_updated.connect(self._update_status)
-
-        # Connect data panel signals
-        self.data_panel.data_loaded.connect(self._on_data_loaded)
 
         # Connect mask loading/creation signals
         self.controller.mask_creation_progress.connect(self._update_status)
@@ -1670,8 +1542,6 @@ class MSMWidget(BaseAnalysisWidget):
         has_mask = self.data_manager.mask_stack is not None
         has_stress = self.data_manager.stress_results is not None
 
-        self.data_panel.update_button_states(active_layer)
-        self.data_panel.update_data_status()
         self.action_panel.update_button_states(
             active_layer=active_layer,
             force_data=has_force,
@@ -1706,6 +1576,13 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _on_analysis_completed(self, results):
         """Handle analysis completion."""
+        if ensure_output_dir_for_generated_artifacts(self, self.data_manager):
+            try:
+                self.data_manager.auto_save_artifact("stress_results")
+            except Exception as exc:
+                self.data_manager.mark_artifact_error("stress_results", str(exc))
+                QMessageBox.warning(self, "Auto-save Failed", str(exc))
+
         self.stress_calculated.emit(results)
         self._update_ui_state()
 
@@ -1718,7 +1595,8 @@ class MSMWidget(BaseAnalysisWidget):
         """Handle mask creation completion."""
         masks = self.data_manager.mask_stack
         if masks is not None:
-            self.data_panel.update_mask_status(f"Loaded: {masks.shape}")
+            if self.data_panel is not None:
+                self.data_panel.update_mask_status(f"Loaded: {masks.shape}")
 
             downscale_factor = 1
             if self.data_manager.force_results is not None:
@@ -1732,6 +1610,7 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _on_mask_creation_failed(self, error_msg: str):
         """Handle mask creation failure."""
-        self.data_panel.update_mask_status("Mask creation failed")
+        if self.data_panel is not None:
+            self.data_panel.update_mask_status("Mask creation failed")
         QMessageBox.critical(self, "Error", error_msg)
         self._update_ui_state()

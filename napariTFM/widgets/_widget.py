@@ -18,6 +18,7 @@ from napariTFM.widgets.displacement_analysis_widget import DisplacementAnalysisW
 from napariTFM.widgets.fttc_widget import FTTCWidget
 from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
+from napariTFM.widgets._pipeline_data_widget import PipelineDataWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStatusPanel
 from napariTFM.widgets._stage_section import StageSection
 
@@ -249,6 +250,8 @@ class napariTFMWidget(QWidget):
         # Create calibration group
         calibration_group = self._create_general_group()
         container_layout.addWidget(calibration_group)
+        self.pipeline_data_widget = PipelineDataWidget(self.viewer, self.data_manager)
+        container_layout.addWidget(self.pipeline_data_widget)
         self.parameter_panel = WorkflowParameterPanel(self.parameter_manager)
         self.parameter_panel.setObjectName("workflow_parameter_panel")
         self.parameter_panel.setParent(self)
@@ -311,7 +314,6 @@ class napariTFMWidget(QWidget):
                     run=["process_btn"],
                     preview=["preview_check"],
                     cancel=["cancel_btn"],
-                    save=["save_btn"],
                 ),
             ),
             "displacement": _StageSection(
@@ -377,6 +379,8 @@ class napariTFMWidget(QWidget):
         self.setLayout(main_layout)
 
         self.connect_signals()
+        self.data_manager.add_change_callback(self._on_pipeline_data_changed)
+        self.pipeline_data_widget.data_changed.connect(self.refresh_stage_statuses)
         self.refresh_stage_statuses()
 
     def _hide_embedded_parameter_panels(self):
@@ -438,6 +442,18 @@ class napariTFMWidget(QWidget):
         for key, panel in self._stage_status_panels_by_key.items():
             status = panel.refresh()
             self._stage_sections_by_key[key].set_status(status)
+
+    def _on_pipeline_data_changed(self):
+        for widget in [
+            self.preprocessing_widget,
+            self.displacement_widget,
+            self.force_widget,
+            self.msm_widget,
+            self.batch_widget,
+        ]:
+            if hasattr(widget, '_update_ui_state'):
+                widget._update_ui_state()
+        self.refresh_stage_statuses()
 
     def _create_general_group(self) -> QGroupBox:
         """Create global file and reset controls."""
@@ -597,6 +613,9 @@ class napariTFMWidget(QWidget):
             try:
                 # Clear data manager
                 self.data_manager.__init__()
+                self.data_manager.add_change_callback(self._on_pipeline_data_changed)
+                self.pipeline_data_widget.data_manager = self.data_manager
+                self.pipeline_data_widget.refresh()
 
                 # Update UI state in all widgets
                 self.preprocessing_widget._update_ui_state()
