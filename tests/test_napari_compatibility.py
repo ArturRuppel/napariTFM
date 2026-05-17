@@ -36,9 +36,52 @@ def test_widget_constructs_with_pyqt6_qtpy_backend():
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         os.environ["QT_API"] = "pyqt6"
 
+        import sys
+        import types
+
+        sys.modules.setdefault("gmsh", types.ModuleType("gmsh"))
+        sys.modules.setdefault("solidspy", types.ModuleType("solidspy"))
+        sys.modules.setdefault("solidspy.assemutil", types.ModuleType("solidspy.assemutil"))
+        sys.modules.setdefault("solidspy.postprocesor", types.ModuleType("solidspy.postprocesor"))
+
         import napari
         from qtpy import API_NAME
-        from qtpy.QtWidgets import QApplication
+        from qtpy.QtCore import Signal
+        from qtpy.QtWidgets import QApplication, QWidget
+
+        class _RangeSlider(QWidget):
+            valueChanged = Signal(object)
+
+            def __init__(self, *args, **kwargs):
+                super().__init__()
+                self._value = (0, 1000)
+
+            def setMinimum(self, value):
+                pass
+
+            def setMaximum(self, value):
+                pass
+
+            def setRange(self, minimum, maximum):
+                pass
+
+            def setSingleStep(self, value):
+                pass
+
+            def setPageStep(self, value):
+                pass
+
+            def setValue(self, value):
+                self._value = value
+                self.valueChanged.emit(value)
+
+            def value(self):
+                return self._value
+
+        qtrangeslider = types.ModuleType("qtrangeslider")
+        qtrangeslider.QRangeSlider = _RangeSlider
+        sys.modules.setdefault("qtrangeslider", qtrangeslider)
+
         from napariTFM.widgets._widget import napariTFMWidget
 
         app = QApplication.instance() or QApplication([])

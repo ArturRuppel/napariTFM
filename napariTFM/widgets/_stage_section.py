@@ -80,6 +80,7 @@ class StageSection(QWidget):
         self.run_button = self._create_action_button("run", QStyle.SP_MediaPlay)
         self.preview_button = self._create_action_button("preview", QStyle.SP_FileDialogContentsView)
         self.cancel_button = self._create_action_button("cancel", QStyle.SP_DialogCancelButton)
+        self.save_button = self._create_action_button("save", QStyle.SP_DialogSaveButton)
         self.config_button = self._create_action_button("config", QStyle.SP_FileDialogDetailedView)
         self.config_button.setCheckable(True)
         if self.parameter_panel is None:
@@ -92,6 +93,7 @@ class StageSection(QWidget):
             self.run_button,
             self.preview_button,
             self.cancel_button,
+            self.save_button,
             self.config_button,
         ]:
             header_layout.addWidget(button)

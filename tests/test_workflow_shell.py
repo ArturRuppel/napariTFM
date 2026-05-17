@@ -101,6 +101,7 @@ class _StubStageWidget(QWidget):
         self.preview_btn = QPushButton("Preview")
         self.process_btn = QPushButton("Run")
         self.cancel_btn = QPushButton("Cancel")
+        self.save_btn = QPushButton("Save")
 
 
 def _stub_module(name, **attrs):
@@ -174,6 +175,7 @@ def test_stage_section_exposes_header_actions_with_stable_names(app):
             "run": child.process_btn,
             "preview": child.preview_btn,
             "cancel": child.cancel_btn,
+            "save": child.save_btn,
         },
         expanded=False,
     )
@@ -181,11 +183,13 @@ def test_stage_section_exposes_header_actions_with_stable_names(app):
     assert section.run_button.objectName() == "stage_preprocessing_run_button"
     assert section.preview_button.objectName() == "stage_preprocessing_preview_button"
     assert section.cancel_button.objectName() == "stage_preprocessing_cancel_button"
+    assert section.save_button.objectName() == "stage_preprocessing_save_button"
     assert section.config_button.objectName() == "stage_preprocessing_config_button"
 
     assert section.run_button.toolTip() == "Run Preprocessing"
     assert section.preview_button.toolTip() == "Preview Preprocessing"
     assert section.cancel_button.toolTip() == "Cancel Preprocessing"
+    assert section.save_button.toolTip() == "Save Preprocessing"
     assert section.config_button.toolTip() == "Configure Preprocessing"
 
 
@@ -244,10 +248,11 @@ def test_stage_section_status_indicator_remains_visible_when_collapsed(app):
 
 def test_stage_section_header_actions_proxy_child_buttons(app):
     child = _StubStageWidget()
-    clicks = {"run": 0, "preview": 0, "cancel": 0}
+    clicks = {"run": 0, "preview": 0, "cancel": 0, "save": 0}
     child.process_btn.clicked.connect(lambda: clicks.__setitem__("run", clicks["run"] + 1))
     child.preview_btn.clicked.connect(lambda: clicks.__setitem__("preview", clicks["preview"] + 1))
     child.cancel_btn.clicked.connect(lambda: clicks.__setitem__("cancel", clicks["cancel"] + 1))
+    child.save_btn.clicked.connect(lambda: clicks.__setitem__("save", clicks["save"] + 1))
 
     section = _widget._StageSection(
         "Preprocessing",
@@ -256,6 +261,7 @@ def test_stage_section_header_actions_proxy_child_buttons(app):
             "run": child.process_btn,
             "preview": child.preview_btn,
             "cancel": child.cancel_btn,
+            "save": child.save_btn,
         },
         expanded=False,
     )
@@ -263,8 +269,9 @@ def test_stage_section_header_actions_proxy_child_buttons(app):
     section.run_button.click()
     section.preview_button.click()
     section.cancel_button.click()
+    section.save_button.click()
 
-    assert clicks == {"run": 1, "preview": 1, "cancel": 1}
+    assert clicks == {"run": 1, "preview": 1, "cancel": 1, "save": 1}
 
 
 def test_stage_section_disables_unsupported_actions_and_config_toggles(app):

@@ -311,6 +311,7 @@ class napariTFMWidget(QWidget):
                     run=["process_btn"],
                     preview=["preview_check"],
                     cancel=["cancel_btn"],
+                    save=["save_btn"],
                 ),
             ),
             "displacement": _StageSection(

@@ -9,12 +9,12 @@ from napari.viewer import Viewer
 from qtpy.QtCore import QObject
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
-    QRadioButton, QFileDialog, QFrame, QScrollArea, QCheckBox, QApplication, QSpinBox,
-    QProgressBar, QMessageBox, QSizePolicy, QSpacerItem, QGridLayout
+    QFileDialog, QFrame, QScrollArea, QCheckBox, QApplication, QSpinBox,
+    QProgressBar, QMessageBox, QSizePolicy, QGridLayout, QToolButton, QStyle
 )
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget,
-    QDoubleSpinBox, QPushButton, QComboBox, QSlider
+    QDoubleSpinBox, QPushButton, QComboBox, QSlider, QLineEdit
 )
 from qtrangeslider import QRangeSlider
 
@@ -32,60 +32,62 @@ class PreprocessingDataPanel(QWidget):
         self.data_manager = data_manager
         self.viewer = viewer
         self.controller = None
+        self._frozen = False
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
 
-        # Create data input group
         data_group = QGroupBox("Input Data")
-        group_layout = QVBoxLayout()
+        group_layout = QGridLayout()
+        group_layout.setContentsMargins(8, 8, 8, 8)
+        group_layout.setHorizontalSpacing(6)
+        group_layout.setVerticalSpacing(4)
+        group_layout.setColumnStretch(1, 1)
 
-        # Bead data row
-        bead_layout = QHBoxLayout()
-        self.load_beads_btn = QPushButton("Load Bead Stack")
-        self.load_beads_btn.setFixedWidth(150)
-        self.load_beads_btn.setFixedHeight(25)
-        self.load_beads_btn.setToolTip("Load bead stack data from active layer")
-        self.bead_status = QLabel("Not loaded")
-        self.bead_status.setWordWrap(True)
+        self.reference_status = self._create_status_field("Missing", "preprocessing_reference_status")
+        self.load_reference_btn = self._create_assign_button("reference")
+        self._add_input_row(group_layout, 0, "Reference", self.reference_status, self.load_reference_btn)
 
-        bead_layout.addWidget(self.load_beads_btn)
-        bead_layout.addWidget(self.bead_status)
-        group_layout.addLayout(bead_layout)
+        self.bead_status = self._create_status_field("Missing", "preprocessing_beads_status")
+        self.load_beads_btn = self._create_assign_button("beads")
+        self._add_input_row(group_layout, 1, "Beads", self.bead_status, self.load_beads_btn)
 
-        # Reference data row
-        ref_layout = QHBoxLayout()
-        self.load_reference_btn = QPushButton("Load Reference Image")
-        self.load_reference_btn.setFixedWidth(150)
-        self.load_reference_btn.setFixedHeight(25)
-        self.load_reference_btn.setToolTip("Load reference image from active layer")
-        self.reference_status = QLabel("Not loaded")
-        self.reference_status.setWordWrap(True)
-        ref_layout.addWidget(self.load_reference_btn)
-        ref_layout.addWidget(self.reference_status)
-        group_layout.addLayout(ref_layout)
-
-        # Cell data row
-        cell_layout = QHBoxLayout()
-        self.load_cells_btn = QPushButton("Load Cell Stack")
-        self.load_cells_btn.setFixedWidth(150)
-        self.load_cells_btn.setFixedHeight(25)
-        self.cell_status = QLabel("Not loaded")
-        cell_layout.addWidget(self.load_cells_btn)
-        cell_layout.addWidget(self.cell_status)
-        group_layout.addLayout(cell_layout)
-
-        # Add description label for required data
-        info_label = QLabel(
-            "Required: Reference image and bead stack."
-        )
-        info_label.setWordWrap(True)
-        group_layout.addWidget(info_label)
+        self.cell_status = self._create_status_field("Optional", "preprocessing_cells_status")
+        self.load_cells_btn = self._create_assign_button("cells")
+        self._add_input_row(group_layout, 2, "Cells", self.cell_status, self.load_cells_btn)
 
         data_group.setLayout(group_layout)
         layout.addWidget(data_group)
         self.setLayout(layout)
+
+    def _create_status_field(self, text: str, object_name: str) -> QLineEdit:
+        field = QLineEdit(text, self)
+        field.setObjectName(object_name)
+        field.setReadOnly(True)
+        field.setMinimumWidth(120)
+        field.setToolTip("Current assigned layer status")
+        return field
+
+    def _create_assign_button(self, role: str) -> QToolButton:
+        button = QToolButton(self)
+        button.setAutoRaise(True)
+        button.setFixedSize(24, 24)
+        button.setIcon(self.style().standardIcon(QStyle.SP_ArrowRight))
+        button.setObjectName(f"preprocessing_{role}_assign_button")
+        button.setToolTip(f"Assign active image layer as {role}")
+        button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        return button
+
+    def _add_input_row(self, layout: QGridLayout, row: int, title: str, status: QLineEdit, button: QToolButton):
+        label = QLabel(title)
+        label.setObjectName(f"preprocessing_{title.lower()}_row_label")
+        label.setMinimumWidth(72)
+        layout.addWidget(label, row, 0)
+        layout.addWidget(status, row, 1)
+        layout.addWidget(button, row, 2)
 
     def set_controller(self, controller):
         """Set the controller and connect signals."""
@@ -99,38 +101,38 @@ class PreprocessingDataPanel(QWidget):
         active_layer = self.viewer.layers.selection.active
         has_valid_layer = (active_layer is not None and isinstance(active_layer, Image))
 
-        self.load_beads_btn.setEnabled(has_valid_layer)
-        self.load_reference_btn.setEnabled(has_valid_layer)
-        self.load_cells_btn.setEnabled(has_valid_layer)
+        enabled = has_valid_layer and not self._frozen
+        self.load_beads_btn.setEnabled(enabled)
+        self.load_reference_btn.setEnabled(enabled)
+        self.load_cells_btn.setEnabled(enabled)
 
     def update_data_status(self):
         """Update status labels based on loaded data."""
-        # Update bead status
         bead_data = self.data_manager.bead_stack
         if bead_data is not None:
-            self.bead_status.setText(f"Loaded: {bead_data.shape}")
+            self.bead_status.setText(self._format_data_status(bead_data))
         else:
-            self.bead_status.setText("Not loaded")
+            self.bead_status.setText("Missing")
 
-        # Update reference status
         ref_data = self.data_manager.reference
         if ref_data is not None:
-            self.reference_status.setText(f"Loaded: {ref_data.shape}")
+            self.reference_status.setText(self._format_data_status(ref_data))
         else:
-            self.reference_status.setText("Not loaded")
+            self.reference_status.setText("Missing")
 
-        # Update cell status
         cell_data = self.data_manager.cell_stack
         if cell_data is not None:
-            self.cell_status.setText(f"Loaded: {cell_data.shape}")
+            self.cell_status.setText(self._format_data_status(cell_data))
         else:
-            self.cell_status.setText("Not loaded")
+            self.cell_status.setText("Optional")
+
+    def _format_data_status(self, data: np.ndarray) -> str:
+        return " × ".join(str(dim) for dim in data.shape)
 
     def freeze_ui(self, frozen: bool):
         """Freeze or unfreeze UI elements."""
-        self.load_beads_btn.setEnabled(not frozen)
-        self.load_reference_btn.setEnabled(not frozen)
-        self.load_cells_btn.setEnabled(not frozen)
+        self._frozen = frozen
+        self.update_button_states()
 
 
 class PreprocessingParameterPanel(QWidget):
@@ -751,7 +753,6 @@ class PreprocessingController(QObject):
         self.parameter_panel = None
         self.data_panel = None
         self.preview_enabled = False
-        self.current_data_type = 'beads'
 
         # Connect to parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
@@ -920,75 +921,62 @@ class PreprocessingController(QObject):
             if enabled:
                 self._update_preview()
             else:
-                self.visualization_manager.handle_preview(
-                    frame=None,
-                    enable=False
-                )
+                self.visualization_manager.handle_preprocessing_preview({}, enable=False)
 
         except Exception as e:
             QMessageBox.warning(None, "Error", str(e))
-            if self.parameter_panel:
-                self.parameter_panel.preview_check.setChecked(False)
+            preview_check = getattr(self, "preview_check", None)
+            if preview_check is None and self.parameter_panel is not None:
+                preview_check = getattr(self.parameter_panel, "preview_check", None)
+            if preview_check is not None:
+                preview_check.setChecked(False)
             self.preview_enabled = False
 
     def _update_preview(self):
-        """Update preview with current frame."""
+        """Update preview with the current frame from all loaded inputs."""
         if not self.preview_enabled:
             return
 
         try:
-            # Get current data based on type
-            if self.current_data_type == 'beads':
-                data = self.data_manager.bead_stack
-            elif self.current_data_type == 'reference':
-                data = self.data_manager.reference
-            else:
-                data = self.data_manager.cell_stack
-
-            if data is None:
-                raise ValueError(f"No {self.current_data_type} data available")
-
-            # Get current frame if data is a stack
-            if data.ndim == 3:
-                # Get the current frame from viewer dimensions
-                current_step = min(self.viewer.dims.current_step[0], data.shape[0] - 1)
-                frame = data[current_step].copy()
-            else:
-                frame = data.copy()
-
             params = self.parameter_manager.get_preprocessing_parameters()
+            preview_frames = {}
+            statuses = []
 
-            # Process frame
-            result = preprocess_frame(
-                frame,
-                params,
-                is_cell=(self.current_data_type == 'cells')
-            )
+            for data_type, data, is_cell in (
+                    ('beads', self.data_manager.bead_stack, False),
+                    ('reference', self.data_manager.reference, False),
+                    ('cells', self.data_manager.cell_stack, True),
+            ):
+                if data is None:
+                    continue
 
-            # Update visualization
-            self.visualization_manager.handle_preview(
-                frame=result.processed_image,
-                enable=True,
-                layer_name='Preview'
-            )
+                if data.ndim == 3:
+                    current_step = min(self.viewer.dims.current_step[0], data.shape[0] - 1)
+                    frame = data[current_step].copy()
+                    frame_info = f" frame {current_step + 1}/{data.shape[0]}"
+                else:
+                    frame = data.copy()
+                    frame_info = ""
 
-            # Update status with frame information and current frame number
-            info = result.info
-            frame_info = f" (Frame {current_step + 1}/{data.shape[0]})" if data.ndim == 3 else ""
-            status = (
-                f"Preview{frame_info}\n"
-                f"Original range: ({info['original_range'][0]:.1f}, {info['original_range'][1]:.1f})\n"
-                f"Applied range: {info['intensity_range']}\n"
-                f"Mean: {info['final_mean']:.1f}, Std: {info['final_std']:.1f}"
-            )
-            self.progress_updated.emit(100, status)
+                result = preprocess_frame(frame, params, is_cell=is_cell)
+                preview_frames[data_type] = result.processed_image
+                statuses.append(f"{data_type}{frame_info}")
+
+            if not preview_frames:
+                raise ValueError("No preprocessing input data available")
+
+            self.visualization_manager.handle_preprocessing_preview(preview_frames, enable=True)
+            self.progress_updated.emit(100, "Preview: " + ", ".join(statuses))
 
         except Exception as e:
             self.progress_updated.emit(0, f"Preview failed: {str(e)}")
-            self.visualization_manager.handle_preview(
-                frame=None,
-                enable=False
-            )
+            self.visualization_manager.handle_preprocessing_preview({}, enable=False)
+            self.preview_enabled = False
+            preview_check = getattr(self, "preview_check", None)
+            if preview_check is not None:
+                preview_check.blockSignals(True)
+                preview_check.setChecked(False)
+                preview_check.blockSignals(False)
 
     def _handle_preprocessing_error(self, error):
         """Handle preprocessing error."""
@@ -1025,22 +1013,13 @@ class PreprocessingController(QObject):
             self.visualization_manager.update_preprocessing_visualization()
 
             # Manage layer visibility
-            bead_overlay_layer = None
-
-            # First pass: find the bead overlay layer and disable all others
+            preprocessing_layers = {
+                'Preprocessed Beads',
+                'Preprocessed Reference',
+                'Preprocessed Cells',
+            }
             for layer in self.viewer.layers:
-                if layer.name == 'Bead Overlay':
-                    bead_overlay_layer = layer
-                    layer.visible = True
-                else:
-                    layer.visible = False
-
-            # If bead overlay exists, move it to the top (index 0)
-            if bead_overlay_layer is not None:
-                current_index = self.viewer.layers.index(bead_overlay_layer)
-                # Move to index 0 (top-most position)
-                if current_index > 0:
-                    self.viewer.layers.move(current_index, -1)
+                layer.visible = layer.name in preprocessing_layers
 
             # Get current parameters for the completion signal
             current_params = self.parameter_manager.get_preprocessing_parameters()
@@ -1221,6 +1200,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Set up UI and connections
         self._setup_ui()
+        self.controller.preview_check = self.preview_check
         self._connect_signals()
         self._update_ui_state()
 
@@ -1253,13 +1233,13 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Add components
         layout.addWidget(self.data_panel)
-        layout.addItem(QSpacerItem(0, -12, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self.parameter_panel)
-        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-        layout.addWidget(self._create_preview_frame())
-        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-        layout.addWidget(self._create_action_frame())
-        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
+        self.preview_frame = self._create_preview_frame()
+        self.preview_frame.setVisible(False)
+        layout.addWidget(self.preview_frame)
+        self.action_frame = self._create_action_frame()
+        self.action_frame.setVisible(False)
+        layout.addWidget(self.action_frame)
         layout.addWidget(self._create_status_frame())
 
         container.setLayout(layout)
@@ -1267,31 +1247,12 @@ class PreprocessingWidget(BaseAnalysisWidget):
         return scroll
 
     def _create_preview_frame(self) -> QFrame:
-        """Create preview control frame."""
+        """Create compatibility preview control frame."""
         frame = QFrame()
         layout = QVBoxLayout()
 
-        # Preview data type selection
-        type_group = QGroupBox("Preview Data Type")
-        type_layout = QHBoxLayout()
-
-        self.bead_radio = QRadioButton("Bead Stack")
-        self.reference_radio = QRadioButton("Reference")
-        self.cell_radio = QRadioButton("Cell Stack")
-        self.bead_radio.setChecked(True)
-
-        for radio in [self.bead_radio, self.reference_radio, self.cell_radio]:
-            type_layout.addWidget(radio)
-
-        type_group.setLayout(type_layout)
-        layout.addWidget(type_group)
-
-        # Preview toggle
-        preview_layout = QHBoxLayout()
         self.preview_check = QCheckBox("Show Preview")
-        preview_layout.addWidget(self.preview_check)
-        preview_layout.addStretch()
-        layout.addLayout(preview_layout)
+        layout.addWidget(self.preview_check)
 
         frame.setLayout(layout)
         return frame
@@ -1343,8 +1304,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Connect preview controls
         self.preview_check.toggled.connect(self._on_preview_toggled)
-        for radio in [self.bead_radio, self.reference_radio, self.cell_radio]:
-            radio.toggled.connect(self._on_preview_type_changed)
 
         # Connect action buttons
         self.process_btn.clicked.connect(self._on_process_clicked)
@@ -1373,18 +1332,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
     def _on_preview_toggled(self, enabled: bool):
         """Handle preview toggle."""
         self.controller.toggle_preview(enabled)
-
-    def _on_preview_type_changed(self):
-        """Handle preview type selection change."""
-        if self.bead_radio.isChecked():
-            self.controller.current_data_type = 'beads'
-        elif self.reference_radio.isChecked():
-            self.controller.current_data_type = 'reference'
-        else:
-            self.controller.current_data_type = 'cells'
-
-        if self.preview_check.isChecked():
-            self.controller._update_preview()
 
     def _on_process_clicked(self):
         """Handle process button click."""
@@ -1438,11 +1385,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         )
         self.preview_check.setEnabled(has_any_data)
 
-        # Update radio button availability based on loaded data
-        self.bead_radio.setEnabled(self.data_manager.bead_stack is not None)
-        self.reference_radio.setEnabled(self.data_manager.reference is not None)
-        self.cell_radio.setEnabled(self.data_manager.cell_stack is not None)
-
         # Uncheck preview if no data
         if not has_any_data and self.preview_check.isChecked():
             self.preview_check.setChecked(False)
@@ -1466,11 +1408,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Cancel button is always enabled
         self.cancel_btn.setEnabled(True)
-
-        # Disable radio buttons during processing
-        self.bead_radio.setEnabled(not frozen)
-        self.reference_radio.setEnabled(not frozen)
-        self.cell_radio.setEnabled(not frozen)
 
         # Update save button based on preprocessed data availability
         has_preprocessed = (

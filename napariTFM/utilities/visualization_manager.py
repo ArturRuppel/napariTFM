@@ -961,27 +961,21 @@ class VisualizationManager(ErrorHandlingMixin):
         try:
             self.colorbar_manager.clear()
 
-            # Clear any existing layers first
-            if 'Preprocessed Beads' in self.viewer.layers:
-                self.viewer.layers.remove('Preprocessed Beads')
-            if 'Preprocessed Reference' in self.viewer.layers:
-                self.viewer.layers.remove('Preprocessed Reference')
-            if 'Preprocessed Cells' in self.viewer.layers:
-                self.viewer.layers.remove('Preprocessed Cells')
-            if 'Bead Overlay' in self.viewer.layers:
-                self.viewer.layers.remove('Bead Overlay')
+            for layer_name in [
+                'Preprocessed Beads',
+                'Preprocessed Reference',
+                'Preprocessed Cells',
+                'Bead Overlay',
+            ]:
+                if layer_name in self.viewer.layers:
+                    self.viewer.layers.remove(layer_name)
 
-            # Create bead-reference overlay if both are available
-            if (self.data_manager.preprocessed_bead_stack is not None and
-                    self.data_manager.preprocessed_reference is not None):
-                self.create_bead_overlay()
-
-            # Add individual layers
-            if self.data_manager.preprocessed_bead_stack is not None:
+            if self.data_manager.preprocessed_cell_stack is not None:
                 self.viewer.add_image(
-                    self.data_manager.preprocessed_bead_stack,
-                    name='Preprocessed Beads',
-                    colormap='green',
+                    self.data_manager.preprocessed_cell_stack,
+                    name='Preprocessed Cells',
+                    colormap='gray',
+                    blending='additive',
                     visible=True
                 )
 
@@ -990,14 +984,16 @@ class VisualizationManager(ErrorHandlingMixin):
                     self.data_manager.preprocessed_reference,
                     name='Preprocessed Reference',
                     colormap='magenta',
+                    blending='additive',
                     visible=True
                 )
 
-            if self.data_manager.preprocessed_cell_stack is not None:
+            if self.data_manager.preprocessed_bead_stack is not None:
                 self.viewer.add_image(
-                    self.data_manager.preprocessed_cell_stack,
-                    name='Preprocessed Cells',
-                    colormap='gray',
+                    self.data_manager.preprocessed_bead_stack,
+                    name='Preprocessed Beads',
+                    colormap='green',
+                    blending='additive',
                     visible=True
                 )
 
@@ -1065,6 +1061,47 @@ class VisualizationManager(ErrorHandlingMixin):
             overlay_stack[i, :, :, 2] = reference  # Blue channel (for magenta)
 
         return overlay_stack
+
+    def handle_preprocessing_preview(self, frames: Dict[str, np.ndarray], enable: bool = True) -> None:
+        """Render preprocessing preview inputs as separate additive layers."""
+        layer_specs = {
+            'cells': ('Preview Cells', 'gray'),
+            'reference': ('Preview Reference', 'magenta'),
+            'beads': ('Preview Beads', 'green'),
+        }
+
+        try:
+            for data_type, (layer_name, colormap) in layer_specs.items():
+                if not enable or data_type not in frames:
+                    if layer_name in self.viewer.layers:
+                        self.viewer.layers.remove(layer_name)
+                    continue
+
+                frame = frames[data_type]
+                if layer_name in self.viewer.layers:
+                    layer = self.viewer.layers[layer_name]
+                    layer.data = frame
+                    layer.visible = True
+                    layer.colormap = colormap
+                    layer.blending = 'additive'
+                else:
+                    self.viewer.add_image(
+                        frame,
+                        name=layer_name,
+                        colormap=colormap,
+                        blending='additive',
+                        visible=True,
+                    )
+
+            self._preview_config.enabled = enable
+
+        except Exception as e:
+            logger.error(f"Preprocessing preview handling failed: {str(e)}")
+            for layer_name, _ in layer_specs.values():
+                if layer_name in self.viewer.layers:
+                    self.viewer.layers.remove(layer_name)
+            self._preview_config.enabled = False
+            raise
 
     def handle_preview(self, frame: Optional[np.ndarray], enable: bool = True, layer_name: str = 'Preview') -> None:
         """Handle preview visualization"""
