@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 from skimage.transform import resize
 
 from napariTFM.backend.displacement_analysis import DisplacementResult
-from napariTFM.services.fttc_service import FTTCResult
+from napariTFM.backend.fttc import FTTCResult
 from napariTFM.services.msm_service import MSMResult
 
 

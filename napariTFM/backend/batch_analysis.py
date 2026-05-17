@@ -23,10 +23,10 @@ from napariTFM.backend.displacement_analysis import (
     DisplacementResult,
     calculate_displacement_field,
 )
+from napariTFM.backend.fttc import FTTCResult, calculate_force_field
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
 from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy, \
     calculate_moment_tensor, calculate_polarization
-from napariTFM.services.fttc_service import FTTCService, FTTCResult
 from napariTFM.services.msm_service import MSMService
 from napariTFM.services.preprocessing_service import PreprocessingService
 
@@ -771,11 +771,9 @@ class BatchAnalysis:
         print("Starting Force Analysis...")
         start_time = time()
 
-        fttc_service = FTTCService(self._create_fttc_parameters())
-
-        # Get the generator
-        force_generator = fttc_service.calculate_forces(
-            displacement_data.displacement_field
+        force_generator = calculate_force_field(
+            displacement_data.displacement_field,
+            self._create_fttc_parameters()
         )
 
         # Initialize result container

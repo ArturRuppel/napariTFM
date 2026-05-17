@@ -18,8 +18,10 @@ from napariTFM.backend.parameter_dataclasses import (
     MSMParameters,
     PreprocessingParameters,
 )
-from napariTFM.backend.parameter_validation import validate_displacement_parameters
-from napariTFM.services.fttc_service import FTTCService
+from napariTFM.backend.parameter_validation import (
+    validate_displacement_parameters,
+    validate_fttc_parameters,
+)
 from napariTFM.services.msm_service import MSMService
 from napariTFM.services.preprocessing_service import PreprocessingService
 from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
@@ -118,7 +120,7 @@ def test_validation_helpers_return_compatible_results():
         DisplacementParameters(nscales=0)
     ) == (False, "nscales must be at least 1")
 
-    assert FTTCService.validate_parameters(
+    assert validate_fttc_parameters(
         FTTCParameters(young_modulus=0)
     ) == (False, "Young's modulus must be positive")
 

@@ -9,7 +9,7 @@ from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (QFileDialog, QGroupBox, QDoubleSpinBox, QSpinBox, QCheckBox, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
                             QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
 
-from napariTFM.services.fttc_service import FTTCService, FTTCResult
+from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optimal_regularization
 from napariTFM.utilities.colorbar import ColorbarManager
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
@@ -461,11 +461,10 @@ class FTTCController(QObject):
     data_updated = Signal(str)  # Data type that was updated
     ui_frozen = Signal(bool)
 
-    def __init__(self, viewer, service, data_manager, parameter_manager,
+    def __init__(self, viewer, data_manager, parameter_manager,
                  visualization_manager, data_panel):
         super().__init__()
         self.viewer = viewer
-        self.service = service
         self.data_manager = data_manager
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
@@ -505,9 +504,7 @@ class FTTCController(QObject):
 
             displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
 
-            # Create and configure service
             params = self.parameter_manager.get_fttc_parameters()
-            self.service.update_parameters(params)
 
             # Create worker for processing
             worker = self._create_preview_worker(displacement_field, params)
@@ -532,9 +529,7 @@ class FTTCController(QObject):
             self.freeze_ui()
             self.progress_updated.emit(0, "Starting force calculation...")
 
-            # Get parameters and update service
             params = self.parameter_manager.get_fttc_parameters()
-            self.service.update_parameters(params)
 
             # Create worker for processing
             displacement_field = self.data_manager.displacement_results.displacement_field
@@ -801,7 +796,7 @@ class FTTCController(QObject):
     def _create_preview_worker(self, displacement_field, params):
         """Create worker for preview calculation."""
         try:
-            result = self.service.calculate_forces(displacement_field[np.newaxis, ...])
+            result = calculate_force_field(displacement_field[np.newaxis, ...], params)
             # Process generator to get result
             try:
                 while True:
@@ -816,16 +811,15 @@ class FTTCController(QObject):
     def _create_force_worker(self, displacement_field, params):
         """Create worker for full force calculation."""
         try:
-            # Get the generator from the service
-            force_generator = self.service.calculate_forces(displacement_field)
+            force_generator = calculate_force_field(displacement_field, params)
 
             # Process all frames through the generator
             try:
                 while True:
                     force_field, frame, total = next(force_generator)
                     yield {
-                        'progress': (frame + 1) / total * 100,
-                        'message': f"Processing frame {frame + 1}/{total}"
+                        'progress': frame / total * 100,
+                        'message': f"Processing frame {frame}/{total}"
                     }
             except StopIteration as e:
                 # Return the final result from the generator
@@ -838,7 +832,8 @@ class FTTCController(QObject):
     def _create_gcv_worker(self, displacement_field):
         """Create worker for GCV calculation."""
         try:
-            optimal_reg = self.service.find_optimal_regularization(displacement_field)
+            params = self.parameter_manager.get_fttc_parameters()
+            optimal_reg = find_optimal_regularization(displacement_field, params)
             return optimal_reg
         except Exception as e:
             raise ValueError(f"GCV calculation failed: {str(e)}")
@@ -1032,9 +1027,8 @@ class FTTCWidget(BaseAnalysisWidget):
     ):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Store managers and create service
+        # Store managers
         self.parameter_manager = parameter_manager
-        self.service = FTTCService(parameter_manager.get_fttc_parameters())
         self.colorbar_manager = ColorbarManager()
 
         # Initialize panels
@@ -1044,7 +1038,6 @@ class FTTCWidget(BaseAnalysisWidget):
         # Initialize controller
         self.controller = FTTCController(
             viewer=viewer,
-            service=self.service,
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,

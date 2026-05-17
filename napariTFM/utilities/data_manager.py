@@ -1,7 +1,7 @@
 from typing import Optional
 import numpy as np
 from napariTFM.backend.displacement_analysis import DisplacementResult
-from napariTFM.services.fttc_service import FTTCResult
+from napariTFM.backend.fttc import FTTCResult
 from napariTFM.services.msm_service import MSMResult
 
 

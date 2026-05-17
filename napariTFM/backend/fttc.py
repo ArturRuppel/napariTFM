@@ -22,7 +22,8 @@ Paper references:
   Choosing a Good Ridge Parameter (2012)
 """
 
-from typing import Tuple, Optional
+from dataclasses import dataclass
+from typing import Generator, Optional, Tuple
 
 from scipy import optimize
 import numpy as np
@@ -30,6 +31,109 @@ import numpy as np
 from napariTFM.backend.fttc_numba_functions import calculate_traction_2d, blkmul_adj
 from napariTFM.backend.fttc_numba_functions import *
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
+from napariTFM.backend.parameter_validation import validate_fttc_parameters
+
+
+@dataclass
+class FTTCResult:
+    """Results from FTTC force calculation."""
+    force_field: np.ndarray
+    original_shape: tuple
+    force_shape: tuple
+    parameters: FTTCParameters
+    physical_scale: dict
+
+
+def validate_displacement_field(displacement_field: np.ndarray) -> Tuple[bool, str]:
+    """Validate displacement field data format and values."""
+    if displacement_field is None:
+        return False, "No displacement field data provided"
+
+    if not isinstance(displacement_field, np.ndarray):
+        return False, "Displacement field must be a numpy array"
+
+    if displacement_field.ndim not in (3, 4):
+        return False, "Displacement field must be 3D (y,x,2) or 4D (t,y,x,2)"
+
+    if displacement_field.shape[-1] != 2:
+        return False, f"Last dimension must be 2 (x,y components), got {displacement_field.shape[-1]}"
+
+    if np.all(np.isnan(displacement_field)):
+        return False, "Displacement field contains only NaN values"
+
+    return True, ""
+
+
+def calculate_force_field(
+        displacement_field: np.ndarray,
+        params: FTTCParameters
+) -> Generator[Tuple[np.ndarray, int, int], None, FTTCResult]:
+    """Calculate traction forces from displacement field data."""
+    is_valid, error_msg = validate_fttc_parameters(params)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    is_valid, error_msg = validate_displacement_field(displacement_field)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    if displacement_field.ndim == 3:
+        displacement_field = displacement_field[np.newaxis, ...]
+
+    total_frames = displacement_field.shape[0]
+    force_shape = displacement_field.shape[1:4]
+    force_stack = np.zeros((total_frames, *force_shape), dtype=np.float32)
+    calculator = FTTC(params)
+
+    for frame in range(total_frames):
+        result = calculator.calculate_traction(
+            displacements=displacement_field[frame],
+            pixel_size=params.pixel_size,
+            downscale_factor=params.downscale_factor,
+            regularization=None if params.auto_gcv else params.regularization,
+        )
+
+        force_stack[frame, ..., 0] = result[1][0]
+        force_stack[frame, ..., 1] = result[1][1]
+
+        yield force_stack[frame].copy(), frame + 1, total_frames
+
+    physical_scale = {
+        'pixel_size': params.pixel_size,
+        'grid_spacing': params.pixel_size * params.downscale_factor,
+        'time_interval': params.frame_interval,
+        'force_units': 'Pa',
+        'grid_spacing_units': 'µm',
+        'time_interval_units': 'min',
+    }
+
+    return FTTCResult(
+        force_field=force_stack,
+        original_shape=displacement_field.shape[1:3],
+        force_shape=force_stack.shape[1:3],
+        parameters=params,
+        physical_scale=physical_scale,
+    )
+
+
+def find_optimal_regularization(displacement_field: np.ndarray, params: FTTCParameters) -> float:
+    """Find the GCV regularization parameter for one displacement frame."""
+    is_valid, error_msg = validate_fttc_parameters(params)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    is_valid, error_msg = validate_displacement_field(displacement_field)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    if displacement_field.ndim != 3:
+        raise ValueError("Optimal regularization requires one 3D displacement frame")
+
+    shape = displacement_field.shape[:-1]
+    pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
+    vec = np.array([displacement_field[..., 0], displacement_field[..., 1]])
+    return FTTC(params)._find_regularization(
+        pos, vec, params.pixel_size * params.downscale_factor, shape[1], shape[0])
 
 
 class FTTC:
