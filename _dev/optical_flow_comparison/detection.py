@@ -17,15 +17,11 @@ def _auto_minmass(image_u16: np.ndarray) -> float:
     """Estimate minmass: locate everything, take the 30th-percentile mass.
 
     Mirrors `_dev/spt_piv/spt_piv_displacement.py`.
-
-    TrackPy filters with ``mass > minmass`` (strict), so we scale the
-    percentile by 0.99 to ensure detected features are not inadvertently
-    excluded when all features share the same mass (e.g. synthetic data).
     """
     feats = tp.locate(image_u16, diameter=DIAMETER, minmass=0, separation=SEPARATION)
     if feats.empty:
         return 0.0
-    return float(np.percentile(feats["mass"].values, AUTO_MINMASS_PERCENTILE)) * 0.99
+    return float(np.percentile(feats["mass"].values, AUTO_MINMASS_PERCENTILE))
 
 
 def detect_beads(image: np.ndarray) -> np.ndarray:
