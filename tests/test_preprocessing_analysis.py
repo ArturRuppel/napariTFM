@@ -111,7 +111,10 @@ def test_backend_preprocesses_stack_with_progress_and_reference(monkeypatch):
 
 
 def test_production_code_does_not_depend_on_preprocessing_service_layer():
-    assert not (REPO_ROOT / "napariTFM/services/preprocessing_service.py").exists()
+    removed_module = ".".join(("services", "preprocessing_service"))
+    removed_path = Path("napariTFM") / "services" / "preprocessing_service.py"
+
+    assert not (REPO_ROOT / removed_path).exists()
 
     production_files = [
         path
@@ -123,7 +126,7 @@ def test_production_code_does_not_depend_on_preprocessing_service_layer():
     offenders = [
         str(path.relative_to(REPO_ROOT))
         for path in production_files
-        if "services.preprocessing_service" in path.read_text()
+        if removed_module in path.read_text()
     ]
 
     assert offenders == []

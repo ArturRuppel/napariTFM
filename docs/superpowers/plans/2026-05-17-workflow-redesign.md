@@ -79,6 +79,6 @@
 - [ ] Run: `git diff -- napariTFM docs tests`
 - [ ] Run: `PYTHONDONTWRITEBYTECODE=1 python -m pytest tests -q`
 - [ ] Run: `PYTHONDONTWRITEBYTECODE=1 python -c "from napariTFM.utilities.parameter_manager import ParameterManager; pm=ParameterManager(); print(pm.validate_all_parameters())"`
-- [ ] Run: `PYTHONDONTWRITEBYTECODE=1 python -c "from napariTFM.services.preprocessing_service import PreprocessingService; from napariTFM.services.displacement_service import DisplacementService; from napariTFM.services.fttc_service import FTTCService; from napariTFM.services.msm_service import MSMService; print('services import ok')"`
+- [ ] Run: `PYTHONDONTWRITEBYTECODE=1 python -c "from napariTFM.backend.preprocessing import preprocess_stack; from napariTFM.backend.displacement_analysis import calculate_displacement_field; from napariTFM.backend.fttc import calculate_force_field; from napariTFM.backend.msm import calculate_stresses; print('backend orchestration imports ok')"`
 - [ ] Run: `git status --short`
 - [ ] Report exact verification results and any skipped dependency-heavy checks.

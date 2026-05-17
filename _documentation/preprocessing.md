@@ -1,16 +1,8 @@
 # Preprocessing API Documentation
 
-## PreprocessingService Class
+## Backend Function API
 
-The `PreprocessingService` class provides a high-level interface for preprocessing microscopy images. It handles parameter management, data validation, and supports both single-frame and time series processing with different parameters for cell and bead/reference images.
-
-### Service Constructor
-
-```python
-PreprocessingService(params: PreprocessingParameters)
-```
-
-Initializes the preprocessing service with analysis parameters.
+The preprocessing backend provides functions for validating images and preprocessing single frames or stacks. Widgets and batch analysis call these functions directly.
 
 #### Parameters
 - `params` (PreprocessingParameters): Configuration including:
@@ -48,17 +40,15 @@ Generator yielding progress updates and returning final results:
 
 ##### Example Usage
 ```python
-# Initialize service
 params = PreprocessingParameters(
     min_intensity_percentile=1,
     max_intensity_percentile=99,
     gaussian_sigma=1.0,
     rolling_ball_radius=50
 )
-service = PreprocessingService(params)
 
 # Get the generator
-prep_generator = service.preprocess_stack(image_stack)
+prep_generator = preprocess_stack(image_stack, params)
 
 # Process intermediate results
 try:
@@ -122,7 +112,7 @@ The `info` dictionary contains:
 
 ## ImageProcessor Class
 
-The `ImageProcessor` class implements core image processing operations for microscopy analysis. This class provides stateless methods for individual processing steps and is typically used through the PreprocessingService.
+The `ImageProcessor` class implements core image processing operations for microscopy analysis. This class provides stateless methods for individual processing steps; higher-level callers usually use `preprocess_frame` or `preprocess_stack`.
 
 ### Constructor
 

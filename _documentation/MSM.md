@@ -1,16 +1,8 @@
 # MSM API Documentation
 
-## MSMService Class
+## Backend Function API
 
-The `MSMService` class provides a high-level interface for calculating internal stresses in cell monolayers from traction force measurements. It handles data validation, parameter management, mesh generation, and both single-frame and time series calculations.
-
-### Service Constructor
-
-```python
-MSMService(params: MSMParameters)
-```
-
-Initializes the MSM service with calculation parameters.
+The MSM backend provides functions for mask creation, mesh generation, mask/force-field alignment, and stress calculation. Widgets and batch analysis call these functions directly.
 
 #### Parameters
 - `params` (MSMParameters): Configuration including:
@@ -47,11 +39,8 @@ Generator yielding progress updates and returning final masks:
 
 ##### Example Usage
 ```python
-# Initialize service
-service = MSMService(params)
-
 # Process masks with progress tracking
-mask_generator = service.create_mask_stack(
+mask_generator = create_mask_stack(
     images, params, target_shape=(512, 512)
 )
 
@@ -87,12 +76,12 @@ Generator yielding progress updates and mesh data:
 ##### Example Usage
 ```python
 # Single frame preview
-mesh_generator = service.generate_mesh_stack(mask)
+mesh_generator = generate_mesh_stack(mask, params)
 nodes, elements, metrics, frame, total = next(mesh_generator)
 print(f"Generated mesh with {len(nodes)} nodes")
 
 # Process all frames
-mesh_generator = service.generate_mesh_stack(masks)
+mesh_generator = generate_mesh_stack(masks, params)
 mesh_data = []
 try:
     while True:
@@ -130,7 +119,7 @@ Generator yielding progress updates and returning final results:
 
 ##### Example Usage
 ```python
-stress_generator = service.calculate_stresses(forces, masks, mesh_data)
+stress_generator = calculate_stresses(forces, masks, params, mesh_data=mesh_data)
 
 try:
     while True:

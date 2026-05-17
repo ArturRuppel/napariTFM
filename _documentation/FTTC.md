@@ -1,16 +1,8 @@
 # FTTC API Documentation
 
-## FTTCService Class
+## Backend Function API
 
-The `FTTCService` class provides a high-level interface for calculating traction forces from displacement field measurements. It handles data validation, parameter management, and both single-frame and time series calculations.
-
-### Service Constructor
-
-```python
-FTTCService(params: FTTCParameters)
-```
-
-Initializes the FTTC service with calculation parameters.
+The FTTC backend provides functions for validating displacement fields, calculating traction forces, and estimating regularization. Widgets and batch analysis call these functions directly.
 
 #### Parameters
 - `params` (FTTCParameters): Configuration including:
@@ -20,10 +12,13 @@ Initializes the FTTC service with calculation parameters.
 
 ### Main Methods
 
-#### calculate_forces
+#### calculate_force_field
 
 ```python
-calculate_forces(displacement_field: np.ndarray) -> Generator[Tuple[np.ndarray, int, int], None, FTTCResult]
+calculate_force_field(
+    displacement_field: np.ndarray,
+    params: FTTCParameters
+) -> Generator[Tuple[np.ndarray, int, int], None, FTTCResult]
 ```
 
 Calculates traction forces from displacement field data, supporting both single frames and time series.
@@ -33,6 +28,7 @@ Calculates traction forces from displacement field data, supporting both single 
   - (y, x, 2) for single frame
   - (t, y, x, 2) for time series
   where final dimension contains (dx, dy) displacements in μm
+- `params` (FTTCParameters): Material, regularization, scale, and visualization parameters
 
 ##### Returns
 Generator yielding progress updates and returning final results:
@@ -41,11 +37,8 @@ Generator yielding progress updates and returning final results:
 
 ##### Example Usage
 ```python
-# Initialize service
-service = FTTCService(params)
-
 # Get the generator
-force_generator = service.calculate_forces(displacements)
+force_generator = calculate_force_field(displacements, params)
 
 # Process intermediate results
 try:
@@ -65,7 +58,7 @@ print(f"Max force: {np.max(final_result.force_field)} Pa")
 #### find_optimal_regularization
 
 ```python
-find_optimal_regularization(displacement_field: np.ndarray) -> float
+find_optimal_regularization(displacement_field: np.ndarray, params: FTTCParameters) -> float
 ```
 
 Finds optimal regularization parameter using Generalized Cross-Validation.
@@ -105,7 +98,7 @@ The `physical_scale` dictionary contains:
 ## FTTC Class
 
 
-The `FTTC` (Fourier Transform Traction Cytometry) class implements force calculations for Traction Force Microscopy (TFM) using the FTTC method with Generalized Cross-Validation (GCV) for regularization parameter optimization. This class is typically used through the FTTCService, but can be used directly for more control over the analysis process.
+The `FTTC` (Fourier Transform Traction Cytometry) class implements force calculations for Traction Force Microscopy (TFM) using the FTTC method with Generalized Cross-Validation (GCV) for regularization parameter optimization. Most callers should use `calculate_force_field`, which adds validation, stack handling, result packaging, and progress reporting.
 
 
 ## Class Constructor

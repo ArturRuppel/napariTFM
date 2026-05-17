@@ -1,16 +1,8 @@
 # Displacement Analysis API Documentation
 
-## DisplacementService Class
+## Backend Function API
 
-The `DisplacementService` class provides a high-level interface for calculating displacement fields between microscopy images using TV-L1 optical flow. It handles parameter management, data validation, and supports both single-frame and time series analysis.
-
-### Service Constructor
-
-```python
-DisplacementService(params: DisplacementParameters)
-```
-
-Initializes the displacement service with analysis parameters.
+The displacement backend provides functions for validating microscopy images and calculating displacement fields between reference and target images. Widgets and batch analysis call these functions directly.
 
 #### Parameters
 - `params` (DisplacementParameters): Configuration including:
@@ -26,7 +18,8 @@ Initializes the displacement service with analysis parameters.
 ```python
 calculate_displacement_field(
     reference: np.ndarray,
-    target: np.ndarray
+    target: np.ndarray,
+    params: DisplacementParameters
 ) -> Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]
 ```
 
@@ -37,6 +30,7 @@ Calculates displacement fields between reference and target images using optical
 - `target` (np.ndarray): Target image(s)
   - 2D array for single frame
   - 3D array (t, y, x) for time series
+- `params` (DisplacementParameters): Configuration including physical scale, processing options, and optical-flow parameters
 
 ##### Returns
 Generator yielding progress updates and returning final results:
@@ -45,17 +39,13 @@ Generator yielding progress updates and returning final results:
 
 ##### Example Usage
 ```python
-# Initialize service
 params = DisplacementParameters(
     pixel_size=0.1,  # 0.1 μm per pixel
     downscale_factor=4,
-    tau=0.25,
-    lambda_=0.15
 )
-service = DisplacementService(params)
 
 # Get the generator
-disp_generator = service.calculate_displacement_field(ref_img, target_imgs)
+disp_generator = calculate_displacement_field(ref_img, target_imgs, params)
 
 # Process intermediate results
 try:
@@ -98,7 +88,7 @@ The `physical_scale` dictionary contains:
 
 ## DisplacementAnalyzer Class
 
-The `DisplacementAnalyzer` class implements the core displacement analysis using the TV-L1 optical flow algorithm. This class is typically used through the DisplacementService, but can be used directly for more control over the analysis process.
+The `DisplacementAnalyzer` class implements the core dense optical-flow calculation. Most callers should use `calculate_displacement_field`, which adds validation, stack handling, downscaling, unit conversion, and progress reporting.
 
 ### Constructor
 

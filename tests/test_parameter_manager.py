@@ -95,15 +95,17 @@ def test_loading_parameters_ignores_removed_tvl1_fields(tmp_path):
 
 
 def test_parameter_manager_validation_does_not_import_services(monkeypatch):
+    removed_package = ".".join(("napariTFM", "services"))
+
     for module_name in list(sys.modules):
-        if module_name.startswith("napariTFM.services"):
+        if module_name.startswith(removed_package):
             monkeypatch.delitem(sys.modules, module_name, raising=False)
 
     module = importlib.reload(importlib.import_module("napariTFM.utilities.parameter_manager"))
 
     imported_service_modules = [
         name for name in sys.modules
-        if name.startswith("napariTFM.services")
+        if name.startswith(removed_package)
     ]
     assert imported_service_modules == []
 

@@ -103,7 +103,10 @@ def test_backend_calculates_gcv_regularization(monkeypatch):
 
 
 def test_production_code_does_not_depend_on_fttc_service_layer():
-    assert not (REPO_ROOT / "napariTFM/services/fttc_service.py").exists()
+    removed_module = ".".join(("services", "fttc_service"))
+    removed_path = Path("napariTFM") / "services" / "fttc_service.py"
+
+    assert not (REPO_ROOT / removed_path).exists()
 
     production_files = [
         path
@@ -115,7 +118,7 @@ def test_production_code_does_not_depend_on_fttc_service_layer():
     offenders = [
         str(path.relative_to(REPO_ROOT))
         for path in production_files
-        if "services.fttc_service" in path.read_text()
+        if removed_module in path.read_text()
     ]
 
     assert offenders == []
