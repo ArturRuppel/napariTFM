@@ -4,7 +4,8 @@ from typing import Any
 import napari
 from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog, QToolButton
+    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox, QGroupBox,
+    QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog, QToolButton, QStyle
 )
 
 from napariTFM.utilities.parameter_manager import ParameterManager
@@ -21,9 +22,17 @@ logger = logging.getLogger(__name__)
 
 
 class _StageSection(QWidget):
-    def __init__(self, title: str, child: QWidget, expanded: bool = False):
+    def __init__(
+        self,
+        title: str,
+        child: QWidget,
+        expanded: bool = False,
+        action_targets: dict[str, QWidget] | None = None,
+    ):
         super().__init__()
+        self._title = title
         self._child = child
+        self._action_targets = action_targets or {}
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -38,13 +47,22 @@ class _StageSection(QWidget):
         header_layout.addWidget(label)
         header_layout.addStretch()
 
-        self._toggle_button = QToolButton()
-        self._toggle_button.setCheckable(True)
-        self._toggle_button.setAutoRaise(True)
-        self._toggle_button.setText("Configure")
-        self._toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self._toggle_button.toggled.connect(self._set_expanded)
-        header_layout.addWidget(self._toggle_button)
+        self.run_button = self._create_action_button("run", QStyle.SP_MediaPlay)
+        self.preview_button = self._create_action_button("preview", QStyle.SP_FileDialogContentsView)
+        self.cancel_button = self._create_action_button("cancel", QStyle.SP_DialogCancelButton)
+        self.config_button = self._create_action_button("config", QStyle.SP_FileDialogDetailedView)
+        self.config_button.setToolTip(f"Configure {self._title}")
+        self.config_button.setCheckable(True)
+        self.config_button.toggled.connect(self._set_expanded)
+        self._toggle_button = self.config_button
+
+        for button in [
+            self.run_button,
+            self.preview_button,
+            self.cancel_button,
+            self.config_button,
+        ]:
+            header_layout.addWidget(button)
 
         self._content = QWidget()
         content_layout = QVBoxLayout()
@@ -55,11 +73,32 @@ class _StageSection(QWidget):
         layout.addLayout(header_layout)
         layout.addWidget(self._content)
 
-        self._toggle_button.setChecked(expanded)
+        self.config_button.setChecked(expanded)
         self._set_expanded(expanded)
 
+    @property
+    def _slug(self) -> str:
+        return self._title.lower().replace(" ", "_")
+
+    def _create_action_button(self, action: str, standard_icon: QStyle.StandardPixmap) -> QToolButton:
+        button = QToolButton()
+        button.setAutoRaise(True)
+        button.setIcon(self.style().standardIcon(standard_icon))
+        button.setObjectName(f"stage_{self._slug}_{action}_button")
+        button.setToolTip(f"{action.capitalize()} {self._title}")
+        button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+
+        if action == "config":
+            return button
+
+        target = self._action_targets.get(action)
+        button.setEnabled(target is not None and target.isEnabled())
+        if target is not None:
+            button.clicked.connect(target.click)
+        return button
+
     def _set_expanded(self, expanded: bool):
-        self._toggle_button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self.config_button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self._content.setVisible(expanded)
         self._child.setVisible(expanded)
 
@@ -159,13 +198,60 @@ class napariTFMWidget(QWidget):
             self.visualization_manager
         )
 
-        self._stage_sections = [
-            _StageSection("Preprocessing", self.preprocessing_widget, expanded=True),
-            _StageSection("Displacement", self.displacement_widget),
-            _StageSection("Force Analysis", self.force_widget),
-            _StageSection("Stress Analysis", self.msm_widget),
-            _StageSection("Batch Analysis", self.batch_widget),
-        ]
+        self._stage_sections_by_key = {
+            "preprocessing": _StageSection(
+                "Preprocessing",
+                self.preprocessing_widget,
+                expanded=True,
+                action_targets=self._find_stage_action_targets(
+                    self.preprocessing_widget,
+                    run=["process_btn"],
+                    preview=["preview_check"],
+                    cancel=["cancel_btn"],
+                ),
+            ),
+            "displacement": _StageSection(
+                "Displacement",
+                self.displacement_widget,
+                action_targets=self._find_stage_action_targets(
+                    self.displacement_widget,
+                    run=["process_btn", "action_panel.calculate_btn"],
+                    preview=["preview_btn", "action_panel.preview_btn"],
+                    cancel=["cancel_btn", "action_panel.cancel_btn"],
+                ),
+            ),
+            "force": _StageSection(
+                "Force Analysis",
+                self.force_widget,
+                action_targets=self._find_stage_action_targets(
+                    self.force_widget,
+                    run=["action_panel.calculate_btn", "calculate_btn"],
+                    preview=["action_panel.preview_btn", "preview_btn"],
+                    cancel=["action_panel.cancel_btn", "cancel_btn"],
+                ),
+            ),
+            "stress": _StageSection(
+                "Stress Analysis",
+                self.msm_widget,
+                action_targets=self._find_stage_action_targets(
+                    self.msm_widget,
+                    run=["action_panel.analyze_btn", "analyze_btn"],
+                    preview=["action_panel.preview_frame_btn", "action_panel.preview_mesh_btn"],
+                    cancel=["action_panel.cancel_btn", "cancel_btn"],
+                ),
+            ),
+            "batch": _StageSection(
+                "Batch Analysis",
+                self.batch_widget,
+                action_targets=self._find_stage_action_targets(
+                    self.batch_widget,
+                    run=["run_analysis_btn"],
+                    preview=[],
+                    cancel=[],
+                ),
+            ),
+        }
+        self._stage_sections = list(self._stage_sections_by_key.values())
 
         for section in self._stage_sections:
             container_layout.addWidget(section)
@@ -180,6 +266,26 @@ class napariTFMWidget(QWidget):
         self.setLayout(main_layout)
 
         self.connect_signals()
+
+    def _find_stage_action_targets(self, widget: QWidget, **action_paths: list[str]) -> dict[str, QWidget]:
+        """Find existing child controls that can be triggered from the stage header."""
+        targets = {}
+        for action, paths in action_paths.items():
+            target = self._first_existing_widget(widget, paths)
+            if target is not None and hasattr(target, "click"):
+                targets[action] = target
+        return targets
+
+    def _first_existing_widget(self, widget: QWidget, paths: list[str]) -> QWidget | None:
+        for path in paths:
+            target = widget
+            for attr in path.split("."):
+                target = getattr(target, attr, None)
+                if target is None:
+                    break
+            if target is not None:
+                return target
+        return None
 
     def _create_general_group(self) -> QGroupBox:
         """Create calibration group box with controls."""
