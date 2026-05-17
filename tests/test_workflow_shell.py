@@ -70,7 +70,17 @@ class _StubParameterManager(QObject):
 
 
 class _StubDataManager:
-    pass
+    def __init__(self):
+        self.bead_stack = None
+        self.reference = None
+        self.cell_stack = None
+        self.preprocessed_bead_stack = None
+        self.preprocessed_reference = None
+        self.preprocessed_cell_stack = None
+        self.mask_stack = None
+        self.displacement_results = None
+        self.force_results = None
+        self.stress_results = None
 
 
 class _StubVisualizationManager:
@@ -372,3 +382,56 @@ def test_main_widget_hides_stage_parameter_panels(monkeypatch, app):
     assert isinstance(widget.parameter_panel, _widget.WorkflowParameterPanel)
     assert widget.parameter_panel.parameter_controls["nscales"].isVisibleTo(widget)
     assert not widget.displacement_widget.parameter_panel.isVisibleTo(widget)
+
+
+def test_main_widget_exposes_collapsed_stage_data_status_panels(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    widget.show()
+    app.processEvents()
+
+    displacement_panel = widget._stage_status_panels_by_key["displacement"]
+
+    assert displacement_panel.objectName() == "stage_displacement_data_status_panel"
+    assert displacement_panel.isVisibleTo(widget)
+    assert not widget.displacement_widget.isVisible()
+
+
+def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    section = widget._stage_sections_by_key["preprocessing"]
+    panel = widget._stage_status_panels_by_key["preprocessing"]
+
+    assert section.status_indicator.toolTip() == "Preprocessing status: not_started"
+    assert panel.artifact_labels["reference"].text() == "Reference image: missing"
+
+    widget.data_manager.reference = object()
+    widget.data_manager.bead_stack = object()
+    widget.refresh_stage_statuses()
+
+    assert section.status_indicator.toolTip() == "Preprocessing status: ready"
+    assert panel.artifact_labels["reference"].text() == "Reference image: available"
+
+    widget.data_manager.preprocessed_reference = object()
+    widget.data_manager.preprocessed_bead_stack = object()
+    widget.refresh_stage_statuses()
+
+    assert section.status_indicator.toolTip() == "Preprocessing status: done"
+    assert panel.artifact_labels["preprocessed_bead_stack"].text() == "Preprocessed beads: available"

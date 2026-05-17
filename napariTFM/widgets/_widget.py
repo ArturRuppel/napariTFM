@@ -18,9 +18,38 @@ from napariTFM.widgets.displacement_analysis_widget import DisplacementAnalysisW
 from napariTFM.widgets.fttc_widget import FTTCWidget
 from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
+from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStatusPanel
 from napariTFM.widgets._stage_section import StageSection
 
 logger = logging.getLogger(__name__)
+
+
+STAGE_DATA_ARTIFACTS = {
+    "preprocessing": [
+        DataArtifactSpec("reference", "Reference image", "reference", "input"),
+        DataArtifactSpec("bead_stack", "Bead stack", "bead_stack", "input"),
+        DataArtifactSpec("cell_stack", "Cell stack", "cell_stack", "input", required=False),
+        DataArtifactSpec("preprocessed_reference", "Preprocessed reference", "preprocessed_reference", "output"),
+        DataArtifactSpec("preprocessed_bead_stack", "Preprocessed beads", "preprocessed_bead_stack", "output"),
+    ],
+    "displacement": [
+        DataArtifactSpec("preprocessed_reference", "Preprocessed reference", "preprocessed_reference", "input"),
+        DataArtifactSpec("preprocessed_bead_stack", "Preprocessed beads", "preprocessed_bead_stack", "input"),
+        DataArtifactSpec("displacement_results", "Displacement field", "displacement_results", "output"),
+    ],
+    "force": [
+        DataArtifactSpec("displacement_results", "Displacement field", "displacement_results", "input"),
+        DataArtifactSpec("force_results", "Traction map", "force_results", "output"),
+    ],
+    "stress": [
+        DataArtifactSpec("force_results", "Traction map", "force_results", "input"),
+        DataArtifactSpec("mask_stack", "Mask stack", "mask_stack", "input", required=False),
+        DataArtifactSpec("stress_results", "Stress map", "stress_results", "output"),
+    ],
+    "batch": [
+        DataArtifactSpec("batch_outputs", "Batch outputs", None, "output"),
+    ],
+}
 
 
 class WorkflowParameterPanel(QWidget):
@@ -260,11 +289,17 @@ class napariTFMWidget(QWidget):
         )
         self._hide_embedded_parameter_panels()
 
+        self._stage_status_panels_by_key = {
+            key: StageDataStatusPanel(key, self.data_manager, artifacts)
+            for key, artifacts in STAGE_DATA_ARTIFACTS.items()
+        }
+
         self._stage_sections_by_key = {
             "preprocessing": _StageSection(
                 "Preprocessing",
                 self.preprocessing_widget,
                 expanded=True,
+                status_panel=self._stage_status_panels_by_key["preprocessing"],
                 action_targets=self._find_stage_action_targets(
                     self.preprocessing_widget,
                     run=["process_btn"],
@@ -275,6 +310,7 @@ class napariTFMWidget(QWidget):
             "displacement": _StageSection(
                 "Displacement",
                 self.displacement_widget,
+                status_panel=self._stage_status_panels_by_key["displacement"],
                 action_targets=self._find_stage_action_targets(
                     self.displacement_widget,
                     run=["process_btn", "action_panel.calculate_btn"],
@@ -285,6 +321,7 @@ class napariTFMWidget(QWidget):
             "force": _StageSection(
                 "Force Analysis",
                 self.force_widget,
+                status_panel=self._stage_status_panels_by_key["force"],
                 action_targets=self._find_stage_action_targets(
                     self.force_widget,
                     run=["action_panel.calculate_btn", "calculate_btn"],
@@ -295,6 +332,7 @@ class napariTFMWidget(QWidget):
             "stress": _StageSection(
                 "Stress Analysis",
                 self.msm_widget,
+                status_panel=self._stage_status_panels_by_key["stress"],
                 action_targets=self._find_stage_action_targets(
                     self.msm_widget,
                     run=["action_panel.analyze_btn", "analyze_btn"],
@@ -305,6 +343,7 @@ class napariTFMWidget(QWidget):
             "batch": _StageSection(
                 "Batch Analysis",
                 self.batch_widget,
+                status_panel=self._stage_status_panels_by_key["batch"],
                 action_targets=self._find_stage_action_targets(
                     self.batch_widget,
                     run=["run_analysis_btn"],
@@ -328,6 +367,7 @@ class napariTFMWidget(QWidget):
         self.setLayout(main_layout)
 
         self.connect_signals()
+        self.refresh_stage_statuses()
 
     def _hide_embedded_parameter_panels(self):
         """Keep stage-local panels alive for controllers while removing duplicate visible editors."""
@@ -370,6 +410,11 @@ class napariTFMWidget(QWidget):
             if target is not None:
                 return target
         return None
+
+    def refresh_stage_statuses(self):
+        for key, panel in self._stage_status_panels_by_key.items():
+            status = panel.refresh()
+            self._stage_sections_by_key[key].set_status(status)
 
     def _create_general_group(self) -> QGroupBox:
         """Create global file and reset controls."""
@@ -536,6 +581,7 @@ class napariTFMWidget(QWidget):
                 self.force_widget._update_ui_state()
                 self.msm_widget._update_ui_state()
                 self.batch_widget._update_ui_state()
+                self.refresh_stage_statuses()
 
                 logger.info("All data cleared successfully")
 
@@ -552,6 +598,7 @@ class napariTFMWidget(QWidget):
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
         self.batch_widget._update_ui_state()
+        self.refresh_stage_statuses()
 
     def _on_displacement_completed(self, results):
         """Handle completion of displacement analysis"""
@@ -561,6 +608,7 @@ class napariTFMWidget(QWidget):
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
         self.batch_widget._update_ui_state()
+        self.refresh_stage_statuses()
 
     def _on_force_completed(self, results):
         """Handle completion of force calculation"""
@@ -570,6 +618,7 @@ class napariTFMWidget(QWidget):
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
         self.batch_widget._update_ui_state()
+        self.refresh_stage_statuses()
 
     def _on_stress_completed(self, results):
         """Handle completion of stress calculation"""
@@ -579,3 +628,4 @@ class napariTFMWidget(QWidget):
         self.force_widget._update_ui_state()
         self.msm_widget._update_ui_state()
         self.batch_widget._update_ui_state()
+        self.refresh_stage_statuses()

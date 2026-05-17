@@ -41,12 +41,14 @@ class StageSection(QWidget):
         action_targets: dict[str, QWidget] | None = None,
         status: str = "not_started",
         accent: str | None = None,
+        status_panel: QWidget | None = None,
     ):
         super().__init__()
         self._title = title
         self._child = child
         self._action_targets = action_targets or {}
         self._status = status
+        self.status_panel = status_panel
         self._accent = accent or STAGE_ACCENTS.get(self._slug, STAGE_ACCENTS["inputs"])
         self._action_state_syncs: list[_ActionStateSync] = []
 
@@ -96,6 +98,8 @@ class StageSection(QWidget):
         content_layout.addWidget(child)
 
         layout.addLayout(header_layout)
+        if self.status_panel is not None:
+            layout.addWidget(self.status_panel)
         layout.addWidget(self._content)
 
         self.set_status(status)
