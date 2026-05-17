@@ -5,7 +5,7 @@ import napari
 from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox, QGroupBox,
-    QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog, QToolButton, QStyle, QCheckBox,
+    QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog, QCheckBox,
     QFormLayout
 )
 
@@ -18,6 +18,7 @@ from napariTFM.widgets.displacement_analysis_widget import DisplacementAnalysisW
 from napariTFM.widgets.fttc_widget import FTTCWidget
 from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
+from napariTFM.widgets._stage_section import StageSection
 
 logger = logging.getLogger(__name__)
 
@@ -158,86 +159,7 @@ class WorkflowParameterPanel(QWidget):
             control.blockSignals(False)
 
 
-class _StageSection(QWidget):
-    def __init__(
-        self,
-        title: str,
-        child: QWidget,
-        expanded: bool = False,
-        action_targets: dict[str, QWidget] | None = None,
-    ):
-        super().__init__()
-        self._title = title
-        self._child = child
-        self._action_targets = action_targets or {}
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-        self.setLayout(layout)
-
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-
-        label = QLabel(title)
-        label.setStyleSheet("font-weight: bold;")
-        header_layout.addWidget(label)
-        header_layout.addStretch()
-
-        self.run_button = self._create_action_button("run", QStyle.SP_MediaPlay)
-        self.preview_button = self._create_action_button("preview", QStyle.SP_FileDialogContentsView)
-        self.cancel_button = self._create_action_button("cancel", QStyle.SP_DialogCancelButton)
-        self.config_button = self._create_action_button("config", QStyle.SP_FileDialogDetailedView)
-        self.config_button.setToolTip(f"Configure {self._title}")
-        self.config_button.setCheckable(True)
-        self.config_button.toggled.connect(self._set_expanded)
-        self._toggle_button = self.config_button
-
-        for button in [
-            self.run_button,
-            self.preview_button,
-            self.cancel_button,
-            self.config_button,
-        ]:
-            header_layout.addWidget(button)
-
-        self._content = QWidget()
-        content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        self._content.setLayout(content_layout)
-        content_layout.addWidget(child)
-
-        layout.addLayout(header_layout)
-        layout.addWidget(self._content)
-
-        self.config_button.setChecked(expanded)
-        self._set_expanded(expanded)
-
-    @property
-    def _slug(self) -> str:
-        return self._title.lower().replace(" ", "_")
-
-    def _create_action_button(self, action: str, standard_icon: QStyle.StandardPixmap) -> QToolButton:
-        button = QToolButton()
-        button.setAutoRaise(True)
-        button.setIcon(self.style().standardIcon(standard_icon))
-        button.setObjectName(f"stage_{self._slug}_{action}_button")
-        button.setToolTip(f"{action.capitalize()} {self._title}")
-        button.setToolButtonStyle(Qt.ToolButtonIconOnly)
-
-        if action == "config":
-            return button
-
-        target = self._action_targets.get(action)
-        button.setEnabled(target is not None and target.isEnabled())
-        if target is not None:
-            button.clicked.connect(target.click)
-        return button
-
-    def _set_expanded(self, expanded: bool):
-        self.config_button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
-        self._content.setVisible(expanded)
-        self._child.setVisible(expanded)
+_StageSection = StageSection
 
 
 class SpinBoxEventFilter(QObject):

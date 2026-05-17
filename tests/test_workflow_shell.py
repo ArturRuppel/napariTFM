@@ -179,6 +179,59 @@ def test_stage_section_exposes_header_actions_with_stable_names(app):
     assert section.config_button.toolTip() == "Configure Preprocessing"
 
 
+def test_stage_section_exposes_status_indicator_with_stable_name(app):
+    child = QWidget()
+
+    section = _widget._StageSection("Preprocessing", child, status="ready")
+
+    assert section.status_indicator.objectName() == "stage_preprocessing_status_indicator"
+    assert section.status_indicator.toolTip() == "Preprocessing status: ready"
+
+    section.set_status("done")
+
+    assert section.status_indicator.toolTip() == "Preprocessing status: done"
+
+
+def test_stage_section_applies_stage_accent_to_header(app):
+    child = QWidget()
+
+    section = _widget._StageSection("Traction / FTTC", child, accent="#2a9d8f")
+
+    assert "#2a9d8f" in section.header_label.styleSheet()
+
+
+def test_stage_section_header_action_state_follows_child_button(app):
+    child = _StubStageWidget()
+    child.process_btn.setEnabled(False)
+
+    section = _widget._StageSection(
+        "Preprocessing",
+        child,
+        action_targets={"run": child.process_btn},
+    )
+
+    assert not section.run_button.isEnabled()
+
+    child.process_btn.setEnabled(True)
+    app.processEvents()
+
+    assert section.run_button.isEnabled()
+
+
+def test_stage_section_status_indicator_remains_visible_when_collapsed(app):
+    child = QWidget()
+
+    section = _widget._StageSection("Preprocessing", child, expanded=True, status="ready")
+    section.show()
+    app.processEvents()
+
+    section.config_button.click()
+    app.processEvents()
+
+    assert not section._content.isVisible()
+    assert section.status_indicator.isVisible()
+
+
 def test_stage_section_header_actions_proxy_child_buttons(app):
     child = _StubStageWidget()
     clicks = {"run": 0, "preview": 0, "cancel": 0}
