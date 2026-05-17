@@ -1,9 +1,9 @@
 import logging
-from typing import Optional, Tuple
+from typing import Optional
 
 import napari
 from qtpy.QtCore import Signal
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTabWidget, QSizePolicy, QSpacerItem
+from qtpy.QtWidgets import QWidget, QTabWidget
 
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
@@ -49,62 +49,6 @@ class BaseAnalysisWidget(QWidget):
             current = current.parent()
         return None
 
-    def create_colorbar_widget(
-            self,
-            colormap_name: str,
-            label: str,
-            clim: Tuple[float, float],
-            colorbar_manager: "ColorbarManager"
-    ) -> QGroupBox:
-        """Create a consistent colorbar widget with proper spacing.
-
-        Parameters
-        ----------
-        colormap_name : str
-            Name of the colormap to use (e.g., 'viridis', 'inferno')
-        label : str
-            Label for the colorbar
-        clim : tuple
-            Color limits (min, max) for the colorbar
-        colorbar_manager : ColorbarManager
-            Instance of the ColorbarManager class
-
-        Returns
-        -------
-        QGroupBox
-            A group box containing the colorbar widget
-        """
-        colorbar_group = QGroupBox()
-        colorbar_group.setContentsMargins(0, 0, 0, 0)
-
-        colorbar_group.setFixedWidth(90)
-        colorbar_group.setFixedHeight(600)
-
-        colorbar_layout = QVBoxLayout()
-        colorbar_layout.setContentsMargins(6, 20, 6, 20)  # Add padding top/bottom for tick labels
-
-        colorbar_widget = colorbar_manager.create_colorbar(
-            width=100,
-            height=500,
-            colormap_name=colormap_name,
-            label=label,
-            clim=clim,
-            orientation='right',
-            label_color='white',
-            border_color='gray',
-            border_width=1.0,
-            padding=(0.1, 0.1),
-            axis_ratio=0.075,
-            label_offset=(-16, 0),
-            label_rotation=0,
-            tick_label_offset=(-49, -45)
-        )
-
-        colorbar_layout.addWidget(colorbar_widget)
-        colorbar_group.setLayout(colorbar_layout)
-
-        return colorbar_group
-
     def register_control(self, control):
         """Register a UI control for common operations like enable/disable."""
         self._controls.append(control)
@@ -138,4 +82,3 @@ class BaseAnalysisWidget(QWidget):
     def cleanup(self):
         """Clean up resources before widget is destroyed."""
         pass
-

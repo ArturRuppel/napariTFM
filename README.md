@@ -173,17 +173,14 @@ Calculate displacement fields from bead movements using optical flow algorithms.
 
 ### Technical Background
 #### Optical Flow Algorithm
-napariTFM uses the TV-L1 optical flow algorithm, which is particularly well-suited for TFM analysis because it:
-- Handles steep gradients in displacement fields effectively
+napariTFM uses OpenCV's Farneback dense optical flow algorithm, which is well-suited for production TFM analysis because it:
+- Runs with standard `opencv-python` without requiring OpenCV contrib modules
 - Handles large displacements through multi-scale analysis
-- Provides sub-pixel accuracy
-- Is robust to intensity variations
+- Provides dense sub-pixel displacement estimates
+- Uses local polynomial expansion to estimate bead motion from intensity structure
 
 The algorithm works by:
-1. Minimizing an energy functional that combines:
-   - Brightness constancy assumption (beads maintain intensity)
-   - Total variation regularization (smooth displacement fields)
-   - Additional constraints for numerical stability
+1. Estimating local polynomial models of image intensity in the reference and deformed images.
 
 2. Using a multi-scale pyramid approach:
    - Images are analyzed at different resolution levels
@@ -193,25 +190,20 @@ The algorithm works by:
 ### Parameters
 
 #### Basic Parameters
-- **Lambda (λ)**: Controls the balance between data fitting and smoothness
-  - Lower values (0.01-0.1): More smoothing, good for noisy data and small displacements
-  - Higher values (0.1-1.0): Less smoothing, better for clear bead images and larger displacements
-  - Default: 0.1
+- **Farneback Levels**: Number of pyramid levels used for multi-scale tracking
+  - More levels handle larger displacements but increase computation time
+  - Default: 10
 
 #### Advanced Parameters
-- **Pyramid Scales**
-  - Number of resolution levels
-  - More scales handle larger displacements
-  - Typical range: 3-5 for standard TFM data
+- **Farneback Iterations**
+  - Number of refinement iterations per pyramid level
+  - More iterations may improve accuracy but increase computation time
+  - Default: 10
 
-- **Warps**
-  - Number of iterative refinements per scale
-  - More warps increase accuracy for large displacements
-  - Typical range: 3-5
-
-- **Epsilon**
-  - Stopping criterion for optimization
-  - Smaller values give more precise results but increase computation time
+- **Window Size**
+  - Local averaging window size for Farneback flow
+  - Larger odd values produce smoother dense fields
+  - Default: 9
   - Default: 0.01
 
 - **Scale Step**

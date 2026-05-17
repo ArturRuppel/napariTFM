@@ -19,7 +19,14 @@ class DISAdapter:
     name = "DIS"
 
     def __init__(self) -> None:
-        self._analyzer = DisplacementAnalyzer(DisplacementParameters())
+        # nscales=50 → max meaningful pyramid depth (validation-script default).
+        # outer_iterations=0 → skip the variational refinement step entirely,
+        # which removes DIS's smoothness prior. The raw multi-scale matching
+        # result is noisier but reports magnitudes faithfully instead of
+        # squashing large displacements via regularization.
+        self._analyzer = DisplacementAnalyzer(
+            DisplacementParameters(nscales=50, inner_iterations=25, outer_iterations=0)
+        )
 
     def displacements_at(
         self,

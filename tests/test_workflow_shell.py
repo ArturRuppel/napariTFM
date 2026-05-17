@@ -25,7 +25,7 @@ class _StubParameterManager(QObject):
             "nscales": 3,
             "inner_iterations": 15,
             "outer_iterations": 5,
-            "median_filtering": 5,
+            "median_filtering": 9,
             "downscale_factor": 4,
             "disp_vector_stride": 20,
             "disp_arrow_scale": 1.0,
@@ -285,6 +285,33 @@ def test_stage_section_disables_unsupported_actions_and_config_toggles(app):
     assert section._content.isVisible()
 
 
+def test_stage_section_config_toggles_inline_parameter_panel_when_provided(app):
+    child = QWidget()
+    parameter_panel = QWidget()
+
+    section = _widget._StageSection(
+        "Displacement",
+        child,
+        parameter_panel=parameter_panel,
+        expanded=False,
+    )
+    section.show()
+    app.processEvents()
+
+    assert not child.isVisible()
+    assert not section._content.isVisible()
+    assert not parameter_panel.isVisible()
+    assert not section._parameter_content.isVisible()
+
+    section.config_button.click()
+    app.processEvents()
+
+    assert not child.isVisible()
+    assert not section._content.isVisible()
+    assert parameter_panel.isVisible()
+    assert section._parameter_content.isVisible()
+
+
 def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
@@ -348,6 +375,8 @@ def test_workflow_parameter_panel_exposes_one_control_per_managed_parameter(app)
         assert name in panel.parameter_controls
         assert panel.parameter_controls[name].objectName() == f"workflow_parameter_{name}"
 
+    assert "outer_iterations" not in panel.parameter_controls
+
 
 def test_workflow_parameter_panel_writes_through_ui_parameter_api(app):
     manager = _StubParameterManager()
@@ -380,8 +409,50 @@ def test_main_widget_hides_stage_parameter_panels(monkeypatch, app):
     widget = _widget.napariTFMWidget(object())
 
     assert isinstance(widget.parameter_panel, _widget.WorkflowParameterPanel)
-    assert widget.parameter_panel.parameter_controls["nscales"].isVisibleTo(widget)
+    assert not widget.parameter_panel.isVisibleTo(widget)
     assert not widget.displacement_widget.parameter_panel.isVisibleTo(widget)
+
+
+def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    widget.show()
+    app.processEvents()
+
+    assert set(widget._stage_parameter_panels_by_key) == {
+        "preprocessing",
+        "displacement",
+        "force",
+        "stress",
+    }
+    assert "batch" not in widget._stage_parameter_panels_by_key
+
+    preprocessing_panel = widget._stage_parameter_panels_by_key["preprocessing"]
+    displacement_panel = widget._stage_parameter_panels_by_key["displacement"]
+    force_panel = widget._stage_parameter_panels_by_key["force"]
+    stress_panel = widget._stage_parameter_panels_by_key["stress"]
+
+    assert {"pixel_size", "rolling_ball_radius"}.issubset(preprocessing_panel.parameter_controls)
+    assert "nscales" not in preprocessing_panel.parameter_controls
+    assert {"nscales", "inner_iterations"}.issubset(displacement_panel.parameter_controls)
+    assert "young_modulus" not in displacement_panel.parameter_controls
+    assert {"young_modulus", "auto_gcv"}.issubset(force_panel.parameter_controls)
+    assert {"threshold", "mesh_algorithm"}.issubset(stress_panel.parameter_controls)
+
+    displacement_section = widget._stage_sections_by_key["displacement"]
+    assert not displacement_panel.isVisibleTo(widget)
+    displacement_section.config_button.click()
+    app.processEvents()
+    assert displacement_panel.isVisibleTo(widget)
+    assert not widget.displacement_widget.isVisibleTo(widget)
 
 
 def test_main_widget_exposes_collapsed_stage_data_status_panels(monkeypatch, app):
@@ -435,3 +506,21 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
 
     assert section.status_indicator.toolTip() == "Preprocessing status: done"
     assert panel.artifact_labels["preprocessed_bead_stack"].text() == "Preprocessed beads: available"
+
+
+def test_workflow_parameter_panel_labels_farneback_controls(app):
+    manager = _StubParameterManager()
+    panel = _widget.WorkflowParameterPanel(manager)
+
+    labels = {
+        panel.layout().itemAt(i).widget().layout().labelForField(control).text()
+        for i in range(panel.layout().count())
+        if panel.layout().itemAt(i).widget().title() == "Displacement"
+        for control in panel.parameter_controls.values()
+        if panel.layout().itemAt(i).widget().layout().labelForField(control) is not None
+    }
+
+    assert "Farneback Levels" in labels
+    assert "Farneback Iterations" in labels
+    assert "Window Size" in labels
+    assert "Refinement Iterations" not in labels

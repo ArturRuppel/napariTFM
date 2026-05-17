@@ -21,7 +21,6 @@ from napariTFM.backend.msm import (
     process_mask_data,
 )
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
-from napariTFM.utilities.colorbar import ColorbarManager
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.utilities.visualization_manager import VisualizationManager
@@ -1509,8 +1508,6 @@ class MSMWidget(BaseAnalysisWidget):
         # Get initial parameters from parameter manager
         self.msm_params = parameter_manager.get_msm_parameters()
 
-        self.colorbar_manager = ColorbarManager()
-
         # Initialize panels
         self.data_panel = MSMDataPanel(data_manager, viewer)
         self.parameter_panel = MSMParameterPanel(parameter_manager)
@@ -1550,32 +1547,10 @@ class MSMWidget(BaseAnalysisWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Left: Colorbar
-        colorbar_container = self._create_colorbar_container()
-        colorbar_container.setFixedWidth(100)
-        main_layout.addWidget(colorbar_container)
-
-        # Right: Scrollable content
         content_container = self._create_content_container()
         main_layout.addWidget(content_container)
 
         self.setLayout(main_layout)
-
-    def _create_colorbar_container(self) -> QWidget:
-        """Create the colorbar container."""
-        container = QWidget()
-        layout = QVBoxLayout()
-
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='seismic',
-            label="Stress (mN/m)",
-            clim=(-self.parameter_manager.get_parameter('max_stress'),
-                  self.parameter_manager.get_parameter('max_stress')),
-            colorbar_manager=self.colorbar_manager
-        )
-        layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        container.setLayout(layout)
-        return container
 
     def _create_content_container(self) -> QWidget:
         """Create the main content container."""
@@ -1706,8 +1681,6 @@ class MSMWidget(BaseAnalysisWidget):
 
     def cleanup(self):
         """Clean up resources."""
-        if self.colorbar_manager:
-            self.colorbar_manager.cleanup()
         if hasattr(self, 'viewer') and self.viewer is not None:
             self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
         super().cleanup()

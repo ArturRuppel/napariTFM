@@ -16,9 +16,12 @@ class LucasKanadeAdapter:
 
     name = "Lucas-Kanade"
 
+    # Tuned: deep pyramid for displacement reach, modest window to keep
+    # sub-pixel accuracy. Same principle as the validation script's DIS
+    # config: lots of pyramid levels + lots of iterations.
     WIN_SIZE = (15, 15)
-    MAX_LEVEL = 3
-    CRITERIA = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 0.03)
+    MAX_LEVEL = 7
+    CRITERIA = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
 
     def displacements_at(
         self,

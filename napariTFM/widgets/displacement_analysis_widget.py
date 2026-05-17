@@ -16,7 +16,6 @@ from napariTFM.backend.displacement_analysis import (
     DisplacementResult,
     calculate_displacement_field,
 )
-from napariTFM.utilities.colorbar import ColorbarManager
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.utilities.visualization_manager import VisualizationManager
@@ -156,18 +155,16 @@ class DisplacementParameterPanel(QWidget):
 
     def _create_flow_parameters(self) -> QGroupBox:
         """Create optical flow parameter group."""
-        group = QGroupBox("DIS Optical Flow Parameters")
+        group = QGroupBox("Farneback Optical Flow Parameters")
         layout = QVBoxLayout()
 
         params = [
-            ("nscales", "Pyramid Levels:", 1, 50, 1,
-             "Number of DIS pyramid levels. More levels handle larger displacements but increase computation time."),
-            ("inner_iterations", "Gradient Descent Iterations:", 1, 50, 1,
-             "DIS gradient descent iterations. More iterations may improve accuracy but increase computation time."),
-            ("outer_iterations", "Refinement Iterations:", 0, 20, 1,
-             "DIS variational refinement iterations. Increase for smoother dense fields."),
-            ("median_filtering", "Median Filter:", 1, 5, 2,
-             "Median filter kernel size (1 = no filter) (3 or 5)"),
+            ("nscales", "Farneback Levels:", 1, 50, 1,
+             "Number of Farneback pyramid levels. More levels handle larger displacements but increase computation time."),
+            ("inner_iterations", "Farneback Iterations:", 1, 50, 1,
+             "Farneback iterations per pyramid level. More iterations may improve accuracy but increase computation time."),
+            ("median_filtering", "Window Size:", 1, 51, 2,
+             "Farneback averaging window size. Larger odd values produce smoother dense fields."),
         ]
 
         for name, label, min_val, max_val, step, tooltip in params:
@@ -906,7 +903,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         super().__init__(viewer, data_manager, visualization_manager)
 
         self.parameter_manager = parameter_manager
-        self.colorbar_manager = ColorbarManager()
 
         # Initialize panels
         self.parameter_panel = DisplacementParameterPanel(parameter_manager)
@@ -950,31 +946,10 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        # Left: Colorbar
-        colorbar_container = self._create_colorbar_container()
-        colorbar_container.setFixedWidth(100)
-        main_layout.addWidget(colorbar_container)
-
-        # Right: Scrollable content
         content_container = self._create_content_container()
         main_layout.addWidget(content_container)
 
         self.setLayout(main_layout)
-
-    def _create_colorbar_container(self) -> QWidget:
-        """Create the colorbar container."""
-        container = QWidget()
-        layout = QVBoxLayout()
-
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='viridis',
-            label="Displacement (µm)",
-            clim=(0, self.parameter_manager.get_parameter('d_max')),
-            colorbar_manager=self.colorbar_manager
-        )
-        layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        container.setLayout(layout)
-        return container
 
     def _create_content_container(self) -> QWidget:
         """Create the main content container."""
@@ -1160,10 +1135,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
                 has_results=True
             )
 
-        # Update colorbar
-        if hasattr(results, 'parameters'):
-            d_max = results.parameters.d_max
-            self.colorbar_manager.update_limits(0, d_max)
         self.displacement_calculated.emit(results)
 
     def _on_analysis_failed(self, error_msg: str):
@@ -1188,8 +1159,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     # region === Cleanup
     def cleanup(self):
         """Clean up resources."""
-        if self.colorbar_manager:
-            self.colorbar_manager.cleanup()
         if hasattr(self, 'viewer') and self.viewer is not None:
             self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
         super().cleanup()

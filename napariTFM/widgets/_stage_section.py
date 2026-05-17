@@ -42,6 +42,8 @@ class StageSection(QWidget):
         status: str = "not_started",
         accent: str | None = None,
         status_panel: QWidget | None = None,
+        parameter_panel: QWidget | None = None,
+        parameters_expanded: bool = False,
     ):
         super().__init__()
         self._title = title
@@ -49,6 +51,7 @@ class StageSection(QWidget):
         self._action_targets = action_targets or {}
         self._status = status
         self.status_panel = status_panel
+        self.parameter_panel = parameter_panel
         self._accent = accent or STAGE_ACCENTS.get(self._slug, STAGE_ACCENTS["inputs"])
         self._action_state_syncs: list[_ActionStateSync] = []
 
@@ -79,7 +82,10 @@ class StageSection(QWidget):
         self.cancel_button = self._create_action_button("cancel", QStyle.SP_DialogCancelButton)
         self.config_button = self._create_action_button("config", QStyle.SP_FileDialogDetailedView)
         self.config_button.setCheckable(True)
-        self.config_button.toggled.connect(self._set_expanded)
+        if self.parameter_panel is None:
+            self.config_button.toggled.connect(self._set_expanded)
+        else:
+            self.config_button.toggled.connect(self._set_parameter_panel_expanded)
         self._toggle_button = self.config_button
 
         for button in [
@@ -89,6 +95,14 @@ class StageSection(QWidget):
             self.config_button,
         ]:
             header_layout.addWidget(button)
+
+        self._parameter_content = QWidget()
+        parameter_layout = QVBoxLayout()
+        parameter_layout.setContentsMargins(0, 0, 0, 0)
+        parameter_layout.setSpacing(COMPACT_SPACING)
+        self._parameter_content.setLayout(parameter_layout)
+        if self.parameter_panel is not None:
+            parameter_layout.addWidget(self.parameter_panel)
 
         self._content = QWidget()
         content_layout = QVBoxLayout()
@@ -100,11 +114,18 @@ class StageSection(QWidget):
         layout.addLayout(header_layout)
         if self.status_panel is not None:
             layout.addWidget(self.status_panel)
+        layout.addWidget(self._parameter_content)
         layout.addWidget(self._content)
+        if self.parameter_panel is None:
+            self._parameter_content.setVisible(False)
 
         self.set_status(status)
-        self.config_button.setChecked(expanded)
         self._set_expanded(expanded)
+        if self.parameter_panel is None:
+            self.config_button.setChecked(expanded)
+        else:
+            self.config_button.setChecked(parameters_expanded)
+            self._set_parameter_panel_expanded(parameters_expanded)
 
     @property
     def _slug(self) -> str:
@@ -140,3 +161,9 @@ class StageSection(QWidget):
         self.config_button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self._content.setVisible(expanded)
         self._child.setVisible(expanded)
+
+    def _set_parameter_panel_expanded(self, expanded: bool):
+        self.config_button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self._parameter_content.setVisible(expanded)
+        if self.parameter_panel is not None:
+            self.parameter_panel.setVisible(expanded)

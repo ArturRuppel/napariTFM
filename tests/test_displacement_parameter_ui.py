@@ -16,10 +16,9 @@ from napariTFM.widgets.displacement_analysis_widget import DisplacementParameter
 
 
 STALE_TVL1_PARAMETERS = {"tau", "lambda_", "theta", "warps", "epsilon", "scale_step"}
-ACTIVE_DIS_PARAMETERS = {
+ACTIVE_FARNEBACK_PARAMETERS = {
     "nscales",
     "inner_iterations",
-    "outer_iterations",
     "median_filtering",
     "downscale_factor",
 }
@@ -37,7 +36,7 @@ def _group_titles(widget):
     return {group.title() for group in widget.findChildren(QGroupBox)}
 
 
-def test_displacement_panel_exposes_dis_parameters_not_tvl1_controls():
+def test_displacement_panel_exposes_farneback_parameters_not_tvl1_controls():
     app = _app()
 
     panel = DisplacementParameterPanel(ParameterManager())
@@ -45,6 +44,9 @@ def test_displacement_panel_exposes_dis_parameters_not_tvl1_controls():
     app.processEvents()
 
     assert STALE_TVL1_PARAMETERS.isdisjoint(panel.parameter_spins)
-    assert ACTIVE_DIS_PARAMETERS.issubset(panel.parameter_spins)
-    assert any("DIS" in title for title in _group_titles(panel))
+    assert ACTIVE_FARNEBACK_PARAMETERS.issubset(panel.parameter_spins)
+    assert "outer_iterations" not in panel.parameter_spins
+    assert any("Farneback" in title for title in _group_titles(panel))
     assert "Lambda:" not in _label_texts(panel)
+    assert "Farneback Iterations:" in _label_texts(panel)
+    assert "Window Size:" in _label_texts(panel)

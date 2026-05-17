@@ -20,11 +20,13 @@ class PreprocessingParameters:
 @dataclass
 class DisplacementParameters:
     """Parameters for displacement analysis"""
-    # DIS optical flow parameters
-    nscales: int = 3
-    inner_iterations: int = 15
-    outer_iterations: int = 5
-    median_filtering: int = 5
+    # Farneback optical flow parameters. Names are retained for compatibility
+    # with existing saved configs: nscales=levels, inner_iterations=iterations,
+    # median_filtering=window size. outer_iterations is ignored.
+    nscales: int = 10
+    inner_iterations: int = 10
+    outer_iterations: int = 0
+    median_filtering: int = 9
 
     # Analysis parameters
     downscale_factor: int = 1
@@ -116,10 +118,10 @@ class UnifiedParameters:
     registration_mode: str = 'translation'
 
     # Displacement parameters
-    nscales: int = 3
-    inner_iterations: int = 15
-    outer_iterations: int = 5
-    median_filtering: int = 5
+    nscales: int = 10
+    inner_iterations: int = 10
+    outer_iterations: int = 0
+    median_filtering: int = 9
     downscale_factor: int = 4
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0

@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def test_displacement_analyzer_initializes_with_standard_opencv():
     analyzer = DisplacementAnalyzer(DisplacementParameters())
 
-    assert hasattr(analyzer.flow_algorithm, "calc")
+    assert analyzer.algorithm_name == "Farneback"
 
 
 def test_displacement_analyzer_returns_dense_xy_flow():
@@ -31,6 +31,59 @@ def test_displacement_analyzer_returns_dense_xy_flow():
     assert flow.shape == (24, 24, 2)
     assert flow.dtype == np.float32
     assert np.isfinite(flow).all()
+
+
+def test_displacement_analyzer_calls_standard_opencv_farneback(monkeypatch):
+    captured = {}
+
+    def fake_farneback(
+        reference,
+        moving,
+        initial_flow,
+        pyr_scale,
+        levels,
+        winsize,
+        iterations,
+        poly_n,
+        poly_sigma,
+        flags,
+    ):
+        captured.update(
+            reference_dtype=reference.dtype,
+            moving_dtype=moving.dtype,
+            initial_flow=initial_flow,
+            pyr_scale=pyr_scale,
+            levels=levels,
+            winsize=winsize,
+            iterations=iterations,
+            poly_n=poly_n,
+            poly_sigma=poly_sigma,
+            flags=flags,
+        )
+        return np.zeros((*reference.shape, 2), dtype=np.float32)
+
+    monkeypatch.setattr(
+        "napariTFM.backend.displacement_analysis.cv2.calcOpticalFlowFarneback",
+        fake_farneback,
+    )
+    params = DisplacementParameters(nscales=10, inner_iterations=10, median_filtering=9)
+    analyzer = DisplacementAnalyzer(params)
+
+    flow = analyzer.calculate_flow(np.zeros((8, 8)), np.ones((8, 8)))
+
+    assert flow.shape == (8, 8, 2)
+    assert captured == {
+        "reference_dtype": np.dtype("uint8"),
+        "moving_dtype": np.dtype("uint8"),
+        "initial_flow": None,
+        "pyr_scale": 0.5,
+        "levels": 10,
+        "winsize": 9,
+        "iterations": 10,
+        "poly_n": 5,
+        "poly_sigma": 1.2,
+        "flags": 0,
+    }
 
 
 def test_backend_validates_displacement_images():

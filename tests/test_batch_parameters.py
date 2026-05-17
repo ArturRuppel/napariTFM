@@ -78,7 +78,7 @@ def test_batch_widget_does_not_create_duplicate_analysis_parameter_controls():
     analysis_parameter_titles = {
         "General Parameters",
         "Preprocessing Parameters",
-        "DIS Displacement Parameters",
+        "Farneback Displacement Parameters",
         "Force Parameters",
         "Stress Parameters",
     }
@@ -194,10 +194,9 @@ def test_batch_displacement_parameters_do_not_require_removed_tvl1_keys():
     analysis = BatchAnalysis.__new__(BatchAnalysis)
     analysis.config = {
         "parameters": {
-            "nscales": 3,
-            "inner_iterations": 15,
-            "outer_iterations": 5,
-            "median_filtering": 5,
+            "nscales": 10,
+            "inner_iterations": 10,
+            "median_filtering": 9,
             "downscale_factor": 4,
             "pixel_size": 0.1,
             "frame_interval": 1.0,
@@ -209,6 +208,7 @@ def test_batch_displacement_parameters_do_not_require_removed_tvl1_keys():
 
     params = analysis._create_displacement_parameters()
 
-    assert params.nscales == 3
-    assert params.inner_iterations == 15
-    assert params.outer_iterations == 5
+    assert params.nscales == 10
+    assert params.inner_iterations == 10
+    assert params.outer_iterations == 0
+    assert params.median_filtering == 9

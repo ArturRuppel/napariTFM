@@ -27,6 +27,8 @@ from _dev.optical_flow_comparison.adapters.base import FlowAdapter, sample_dense
 from _dev.optical_flow_comparison.adapters.dis import DISAdapter
 from _dev.optical_flow_comparison.adapters.farneback import FarnebackAdapter
 from _dev.optical_flow_comparison.adapters.lucas_kanade import LucasKanadeAdapter
+from _dev.optical_flow_comparison.adapters.lucas_kanade_fb import LucasKanadeFBAdapter
+from _dev.optical_flow_comparison.adapters.tvl1 import TVL1Adapter
 from _dev.optical_flow_comparison.detection import detect_beads
 from _dev.optical_flow_comparison.metrics import compute_metrics
 from _dev.optical_flow_comparison.preprocessing import preprocess
@@ -44,6 +46,8 @@ ADAPTERS: dict[str, type[FlowAdapter]] = {
     "DIS": DISAdapter,
     "Farneback": FarnebackAdapter,
     "Lucas-Kanade": LucasKanadeAdapter,
+    "Lucas-Kanade-FB": LucasKanadeFBAdapter,
+    "TV-L1": TVL1Adapter,
 }
 
 

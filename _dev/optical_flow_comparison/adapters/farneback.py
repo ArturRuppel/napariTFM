@@ -18,10 +18,13 @@ class FarnebackAdapter:
 
     name = "Farneback"
 
+    # Deep pyramid + small window. winsize=9 is the main smoothness knob:
+    # smaller window = less local averaging = less squashing of large
+    # displacements. Same logic as zeroing DIS's variational refinement.
     PYR_SCALE = 0.5
-    LEVELS = 3
-    WIN_SIZE = 15
-    ITERATIONS = 3
+    LEVELS = 10
+    WIN_SIZE = 9
+    ITERATIONS = 10
     POLY_N = 5
     POLY_SIGMA = 1.2
     FLAGS = 0

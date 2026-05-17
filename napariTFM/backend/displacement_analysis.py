@@ -22,31 +22,33 @@ class DisplacementAnalyzer:
     """Analyzes displacements using dense optical flow.
 
     This class implements displacement analysis for bead tracking in microscopy
-    using OpenCV's DIS optical flow algorithm. It supports both full-resolution
-    and downscaled analysis, with methods for calculating, manipulating, and
-    applying flow fields.
+    using OpenCV's Farneback optical flow algorithm. It supports both
+    full-resolution and downscaled analysis, with methods for calculating,
+    manipulating, and applying flow fields.
     """
 
+    FARNEBACK_PYR_SCALE = 0.5
+    FARNEBACK_POLY_N = 5
+    FARNEBACK_POLY_SIGMA = 1.2
+    FARNEBACK_FLAGS = 0
+
     def __init__(self, params: Optional[DisplacementParameters] = None):
-        """Initialize DIS optical flow analyzer.
+        """Initialize Farneback optical flow analyzer.
 
         Args:
             params (DisplacementParameters, optional): Algorithm parameters including:
-                - nscales: Number of scales for pyramid
-                - inner_iterations: Inner iteration count
-                - outer_iterations: Outer iteration count
+                - nscales: Number of pyramid levels
+                - inner_iterations: Farneback iteration count
+                - median_filtering: Farneback window size
                 If None, uses default parameters.
         """
         self.params = params or DisplacementParameters()
-        self.flow_algorithm = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
-        self.flow_algorithm.setCoarsestScale(max(0, self.params.nscales - 1))
-        self.flow_algorithm.setGradientDescentIterations(max(1, self.params.inner_iterations))
-        self.flow_algorithm.setVariationalRefinementIterations(max(0, self.params.outer_iterations))
+        self.algorithm_name = "Farneback"
 
     def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
         """Calculate optical flow between reference and moving image at full resolution.
 
-        Computes the displacement field between two images using DIS optical flow.
+        Computes the displacement field between two images using Farneback optical flow.
         Images are automatically normalized before processing.
 
         Args:
@@ -61,17 +63,35 @@ class DisplacementAnalyzer:
                 Positive values indicate rightward/downward motion.
 
         Note:
-            Images are normalized to [0, 1] range before processing to ensure
+            Images are normalized to 8-bit before processing to ensure
             consistent results regardless of input intensity range.
         """
         ref_image = self._normalize_for_optical_flow(reference)
         mov_image = self._normalize_for_optical_flow(moving)
 
-        return self.flow_algorithm.calc(ref_image, mov_image, None).astype(np.float32, copy=False)
+        return cv2.calcOpticalFlowFarneback(
+            ref_image,
+            mov_image,
+            None,
+            self.FARNEBACK_PYR_SCALE,
+            max(1, self.params.nscales),
+            self._farneback_window_size(),
+            max(1, self.params.inner_iterations),
+            self.FARNEBACK_POLY_N,
+            self.FARNEBACK_POLY_SIGMA,
+            self.FARNEBACK_FLAGS,
+        ).astype(np.float32, copy=False)
+
+    def _farneback_window_size(self) -> int:
+        """Return an odd, positive Farneback window size from the legacy field."""
+        window_size = max(1, int(self.params.median_filtering))
+        if window_size % 2 == 0:
+            window_size += 1
+        return window_size
 
     @staticmethod
     def _normalize_for_optical_flow(image: np.ndarray) -> np.ndarray:
-        """Convert microscopy intensity data to the 8-bit format expected by DIS."""
+        """Convert microscopy intensity data to the 8-bit format expected by OpenCV."""
         image_float = image.astype(np.float32, copy=False)
         image_range = image_float.max() - image_float.min()
 
@@ -208,7 +228,6 @@ def calculate_displacement_field(
         parameters=params,
         physical_scale=physical_scale,
     )
-
 
 
 

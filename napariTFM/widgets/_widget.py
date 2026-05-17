@@ -72,10 +72,9 @@ class WorkflowParameterPanel(QWidget):
              ["translation", "rigid", "no registration"]),
         ]),
         ("Displacement", [
-            ("nscales", "Pyramid Levels", "int", 1, 50, 1, 0, None),
-            ("inner_iterations", "Gradient Descent Iterations", "int", 1, 50, 1, 0, None),
-            ("outer_iterations", "Refinement Iterations", "int", 0, 20, 1, 0, None),
-            ("median_filtering", "Median Filter", "int", 1, 9, 2, 0, None),
+            ("nscales", "Farneback Levels", "int", 1, 50, 1, 0, None),
+            ("inner_iterations", "Farneback Iterations", "int", 1, 50, 1, 0, None),
+            ("median_filtering", "Window Size", "int", 1, 51, 2, 0, None),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
             ("disp_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("disp_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -105,9 +104,10 @@ class WorkflowParameterPanel(QWidget):
         ]),
     ]
 
-    def __init__(self, parameter_manager: ParameterManager):
+    def __init__(self, parameter_manager: ParameterManager, section_titles: tuple[str, ...] | None = None):
         super().__init__()
         self.parameter_manager = parameter_manager
+        self._section_titles = set(section_titles) if section_titles is not None else None
         self.parameter_controls = {}
         self._setup_ui()
         self._sync_all_controls()
@@ -119,6 +119,8 @@ class WorkflowParameterPanel(QWidget):
         layout.setSpacing(4)
 
         for title, specs in self.PARAMETER_SECTIONS:
+            if self._section_titles is not None and title not in self._section_titles:
+                continue
             group = QGroupBox(title)
             form = QFormLayout()
             form.setContentsMargins(8, 8, 8, 8)
@@ -248,7 +250,10 @@ class napariTFMWidget(QWidget):
         calibration_group = self._create_general_group()
         container_layout.addWidget(calibration_group)
         self.parameter_panel = WorkflowParameterPanel(self.parameter_manager)
-        container_layout.addWidget(self.parameter_panel)
+        self.parameter_panel.setObjectName("workflow_parameter_panel")
+        self.parameter_panel.setParent(self)
+        self.parameter_panel.hide()
+        self._stage_parameter_panels_by_key = self._create_stage_parameter_panels()
 
         # # Initialize all widgets with parameter_manager
         self.preprocessing_widget = PreprocessingWidget(
@@ -300,6 +305,7 @@ class napariTFMWidget(QWidget):
                 self.preprocessing_widget,
                 expanded=True,
                 status_panel=self._stage_status_panels_by_key["preprocessing"],
+                parameter_panel=self._stage_parameter_panels_by_key["preprocessing"],
                 action_targets=self._find_stage_action_targets(
                     self.preprocessing_widget,
                     run=["process_btn"],
@@ -311,6 +317,7 @@ class napariTFMWidget(QWidget):
                 "Displacement",
                 self.displacement_widget,
                 status_panel=self._stage_status_panels_by_key["displacement"],
+                parameter_panel=self._stage_parameter_panels_by_key["displacement"],
                 action_targets=self._find_stage_action_targets(
                     self.displacement_widget,
                     run=["process_btn", "action_panel.calculate_btn"],
@@ -322,6 +329,7 @@ class napariTFMWidget(QWidget):
                 "Force Analysis",
                 self.force_widget,
                 status_panel=self._stage_status_panels_by_key["force"],
+                parameter_panel=self._stage_parameter_panels_by_key["force"],
                 action_targets=self._find_stage_action_targets(
                     self.force_widget,
                     run=["action_panel.calculate_btn", "calculate_btn"],
@@ -333,6 +341,7 @@ class napariTFMWidget(QWidget):
                 "Stress Analysis",
                 self.msm_widget,
                 status_panel=self._stage_status_panels_by_key["stress"],
+                parameter_panel=self._stage_parameter_panels_by_key["stress"],
                 action_targets=self._find_stage_action_targets(
                     self.msm_widget,
                     run=["action_panel.analyze_btn", "analyze_btn"],
@@ -385,11 +394,24 @@ class napariTFMWidget(QWidget):
             if group.title() in {
                 "General Parameters",
                 "Preprocessing Parameters",
-                "DIS Displacement Parameters",
+                "Farneback Displacement Parameters",
                 "Force Parameters",
                 "Stress Parameters",
             }:
                 group.setVisible(False)
+
+    def _create_stage_parameter_panels(self) -> dict[str, WorkflowParameterPanel]:
+        """Create inline workflow parameter editors grouped by pipeline stage."""
+        stage_sections = {
+            "preprocessing": ("General", "Preprocessing"),
+            "displacement": ("Displacement",),
+            "force": ("Force",),
+            "stress": ("Stress",),
+        }
+        return {
+            key: WorkflowParameterPanel(self.parameter_manager, section_titles=titles)
+            for key, titles in stage_sections.items()
+        }
 
     def _find_stage_action_targets(self, widget: QWidget, **action_paths: list[str]) -> dict[str, QWidget]:
         """Find existing child controls that can be triggered from the stage header."""

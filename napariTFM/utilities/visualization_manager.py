@@ -9,6 +9,7 @@ from matplotlib import pyplot as plt
 from napari.layers import Layer
 
 from napariTFM.utilities.error_handling import ErrorSeverity, ErrorHandlingMixin
+from napariTFM.utilities.viewer_colorbar import ViewerColorbarManager
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class VisualizationManager(ErrorHandlingMixin):
         self.viewer = viewer
         self.data_manager = data_manager
         self._layers: Dict[str, Any] = {}
+        self.colorbar_manager = ViewerColorbarManager(viewer)
         self._preview_config = PreviewConfig()
         self._displacement_dims_callback = None  # Store callback reference
 
@@ -51,6 +53,7 @@ class VisualizationManager(ErrorHandlingMixin):
         try:
             # Clear displacement callback
             self._clear_displacement_callback()
+            self.colorbar_manager.clear()
 
             # Disconnect other events
             if self.viewer is not None:
@@ -343,6 +346,11 @@ class VisualizationManager(ErrorHandlingMixin):
                     contrast_limits=(0, vis_params['d_max']),
                     visible=True
                 )
+                self.colorbar_manager.show_for_layer(
+                    self._layers['displacement_magnitude'],
+                    colormap_name='viridis',
+                    label='Displacement (µm)'
+                )
 
                 # Get valid current frame index
                 current_frame = self._validate_frame_index(
@@ -444,6 +452,11 @@ class VisualizationManager(ErrorHandlingMixin):
                     blending='additive',
                     contrast_limits=(0, d_max),
                     visible=True
+                )
+                self.colorbar_manager.show_for_layer(
+                    self._layers['displacement_magnitude'],
+                    colormap_name='viridis',
+                    label='Displacement (µm)'
                 )
 
                 # Create vector data and add layer
@@ -558,6 +571,11 @@ class VisualizationManager(ErrorHandlingMixin):
                     contrast_limits=(0, vis_params['f_max']),
                     visible=True
                 )
+                self.colorbar_manager.show_for_layer(
+                    self._layers['force_magnitude'],
+                    colormap_name='inferno',
+                    label='Force (Pa)'
+                )
 
                 # Get valid current frame index
                 current_frame = self._validate_frame_index(
@@ -655,6 +673,11 @@ class VisualizationManager(ErrorHandlingMixin):
                     colormap='inferno',
                     blending='additive',
                     contrast_limits=(0, f_max)
+                )
+                self.colorbar_manager.show_for_layer(
+                    self._layers['force_magnitude'],
+                    colormap_name='inferno',
+                    label='Force (Pa)'
                 )
 
                 # Create vector data and add layer
@@ -792,6 +815,11 @@ class VisualizationManager(ErrorHandlingMixin):
                     blending='additive',
                     contrast_limits=(-max_stress, max_stress)
                 )
+                self.colorbar_manager.show_for_layer(
+                    self._layers['stress_normal'],
+                    colormap_name='seismic',
+                    label='Stress (mN/m)'
+                )
 
                 # Update viewer dimensions to match data
                 self.viewer.dims.set_point(0, current_frame)
@@ -907,6 +935,11 @@ class VisualizationManager(ErrorHandlingMixin):
                     blending='additive',
                     contrast_limits=(-max_stress, max_stress)
                 )
+                self.colorbar_manager.show_for_layer(
+                    self._layers['stress_normal'],
+                    colormap_name='seismic',
+                    label='Stress (mN/m)'
+                )
 
         except Exception as e:
             error = self.create_error(
@@ -926,6 +959,8 @@ class VisualizationManager(ErrorHandlingMixin):
     def update_preprocessing_visualization(self) -> None:
         """Update visualization after preprocessing."""
         try:
+            self.colorbar_manager.clear()
+
             # Clear any existing layers first
             if 'Preprocessed Beads' in self.viewer.layers:
                 self.viewer.layers.remove('Preprocessed Beads')

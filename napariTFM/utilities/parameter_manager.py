@@ -174,7 +174,7 @@ class ParameterManager(QObject):
                 'registration_mode'
             ],
             ParameterCategory.DISPLACEMENT: [
-                'nscales', 'inner_iterations', 'outer_iterations',
+                'nscales', 'inner_iterations',
                 'median_filtering', 'downscale_factor',
                 'disp_vector_stride', 'disp_arrow_scale', 'd_max'
             ],

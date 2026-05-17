@@ -19,7 +19,6 @@ from qtpy.QtWidgets import (
 from qtrangeslider import QRangeSlider
 
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
-from napariTFM.utilities.colorbar import ColorbarManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 
@@ -1205,7 +1204,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Initialize managers
         self.parameter_manager = parameter_manager
-        self.colorbar_manager = ColorbarManager()
 
         # Initialize panels
         self.parameter_panel = PreprocessingParameterPanel(parameter_manager)
@@ -1234,32 +1232,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        # Left: Colorbar
-        colorbar_container = self._create_colorbar_container()
-        colorbar_container.setFixedWidth(100)
-        main_layout.addWidget(colorbar_container)
-
-        # Right: Scrollable content
         content_container = self._create_content_container()
         main_layout.addWidget(content_container)
 
         self.setLayout(main_layout)
-
-    def _create_colorbar_container(self) -> QWidget:
-        """Create the colorbar container."""
-        container = QWidget()
-        layout = QVBoxLayout()
-
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='gray',
-            label="Relative Intensity Value",
-            clim=(1, 0),
-            colorbar_manager=self.colorbar_manager
-        )
-        layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-
-        container.setLayout(layout)
-        return container
 
     def _create_content_container(self) -> QWidget:
         """Create the main content container with scroll area."""
@@ -1528,8 +1504,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
     # region === Cleanup
     def cleanup(self):
         """Clean up resources."""
-        if self.colorbar_manager:
-            self.colorbar_manager.cleanup()
         self.visualization_manager.cleanup()
         super().cleanup()
 

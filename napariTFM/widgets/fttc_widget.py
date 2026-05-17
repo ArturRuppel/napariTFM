@@ -10,7 +10,6 @@ from qtpy.QtWidgets import (QFileDialog, QGroupBox, QDoubleSpinBox, QSpinBox, QC
                             QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
 
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optimal_regularization
-from napariTFM.utilities.colorbar import ColorbarManager
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
@@ -1029,7 +1028,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
         # Store managers
         self.parameter_manager = parameter_manager
-        self.colorbar_manager = ColorbarManager()
 
         # Initialize panels
         self.data_panel = FTTCDataPanel(data_manager, viewer)
@@ -1066,31 +1064,10 @@ class FTTCWidget(BaseAnalysisWidget):
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        # Left: Colorbar
-        colorbar_container = self._create_colorbar_container()
-        colorbar_container.setFixedWidth(100)
-        main_layout.addWidget(colorbar_container)
-
-        # Right: Scrollable content
         content_container = self._create_content_container()
         main_layout.addWidget(content_container)
 
         self.setLayout(main_layout)
-
-    def _create_colorbar_container(self) -> QWidget:
-        """Create the colorbar container."""
-        container = QWidget()
-        layout = QVBoxLayout()
-
-        colorbar_group = self.create_colorbar_widget(
-            colormap_name='inferno',
-            label="Force (Pa)",
-            clim=(0, self.parameter_manager.get_parameter('f_max')),
-            colorbar_manager=self.colorbar_manager
-        )
-        layout.addWidget(colorbar_group, alignment=Qt.AlignTop)
-        container.setLayout(layout)
-        return container
 
     def _create_content_container(self) -> QWidget:
         """Create the main content container."""
@@ -1171,9 +1148,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _on_analysis_completed(self, results: FTTCResult):
         """Handle completed analysis."""
-        # Update colorbar
-        if hasattr(results, 'parameters'):
-            self.colorbar_manager.update_limits(0, results.parameters.f_max)
         # Emit results
         self.force_calculated.emit(results)
 
@@ -1190,8 +1164,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def cleanup(self):
         """Clean up resources."""
-        if self.colorbar_manager:
-            self.colorbar_manager.cleanup()
         if hasattr(self, 'viewer') and self.viewer is not None:
             self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
         super().cleanup()

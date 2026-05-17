@@ -70,7 +70,8 @@ def test_displacement_category_omits_tvl1_only_parameters():
     params = manager.get_category_parameters(ParameterCategory.DISPLACEMENT)
 
     assert STALE_TVL1_PARAMETERS.isdisjoint(params)
-    assert {"nscales", "inner_iterations", "outer_iterations"}.issubset(params)
+    assert {"nscales", "inner_iterations", "median_filtering"}.issubset(params)
+    assert "outer_iterations" not in params
 
 
 def test_loading_parameters_ignores_removed_tvl1_fields(tmp_path):
