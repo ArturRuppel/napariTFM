@@ -5,7 +5,8 @@ import napari
 from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox, QGroupBox,
-    QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog, QToolButton, QStyle
+    QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog, QToolButton, QStyle, QCheckBox,
+    QFormLayout
 )
 
 from napariTFM.utilities.parameter_manager import ParameterManager
@@ -19,6 +20,142 @@ from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
 
 logger = logging.getLogger(__name__)
+
+
+class WorkflowParameterPanel(QWidget):
+    """Single visible parameter editor for the workflow shell."""
+
+    PARAMETER_SECTIONS = [
+        ("General", [
+            ("pixel_size", "Pixel Size (um)", "float", 0.001, 100.0, 0.1, 3, None),
+            ("frame_interval", "Frame Length (min)", "float", 0.001, 1000.0, 0.1, 3, None),
+        ]),
+        ("Preprocessing", [
+            ("rolling_ball_radius", "Rolling Ball Radius", "int", 0, 50, 1, 0, None),
+            ("min_intensity_percentile", "Min Intensity (%)", "float", 0.0, 100.0, 0.1, 1, None),
+            ("max_intensity_percentile", "Max Intensity (%)", "float", 0.0, 100.0, 0.1, 1, None),
+            ("gaussian_sigma", "Gaussian Sigma", "float", 0.0, 10.0, 0.1, 1, None),
+            ("cell_min_intensity_percentile", "Cell Min Intensity (%)", "float", 0.0, 100.0, 0.1, 1, None),
+            ("cell_max_intensity_percentile", "Cell Max Intensity (%)", "float", 0.0, 100.0, 0.1, 1, None),
+            ("cell_gaussian_sigma", "Cell Gaussian Sigma", "float", 0.0, 10.0, 0.1, 1, None),
+            ("registration_mode", "Registration Mode", "choice", None, None, None, None,
+             ["translation", "rigid", "no registration"]),
+        ]),
+        ("Displacement", [
+            ("nscales", "Pyramid Levels", "int", 1, 50, 1, 0, None),
+            ("inner_iterations", "Gradient Descent Iterations", "int", 1, 50, 1, 0, None),
+            ("outer_iterations", "Refinement Iterations", "int", 0, 20, 1, 0, None),
+            ("median_filtering", "Median Filter", "int", 1, 9, 2, 0, None),
+            ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
+            ("disp_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
+            ("disp_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
+            ("d_max", "Max Displacement (um)", "float", 0.1, 200.0, 0.1, 1, None),
+        ]),
+        ("Force", [
+            ("young_modulus", "Young's Modulus (kPa)", "float", 0.1, 1000.0, 0.1, 2, None),
+            ("poisson_ratio_substrate", "Poisson Ratio", "float", 0.0, 0.5, 0.01, 2, None),
+            ("gel_height", "Gel Height (um)", "float", 0.0, 1000.0, 10.0, 1, None),
+            ("lanczos_exp", "Lanczos Exponent", "int", 0, 5, 1, 0, None),
+            ("regularization", "Regularization (10^x)", "float", -21.0, 0.0, 0.5, 1, None),
+            ("auto_gcv", "Auto-GCV per frame", "bool", None, None, None, None, None),
+            ("force_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
+            ("force_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
+            ("f_max", "Max Force (Pa)", "float", 0.1, 10000.0, 1.0, 1, None),
+        ]),
+        ("Stress", [
+            ("threshold", "Threshold Percentile (%)", "float", 0.0, 100.0, 0.1, 1, None),
+            ("dilation", "Mask Dilation (px)", "int", 0, 50, 1, 0, None),
+            ("smoothing_sigma", "Boundary Smoothing", "float", 0.0, 40.0, 0.1, 1, None),
+            ("density_factor", "Density Factor", "float", 0.005, 0.1, 0.001, 3, None),
+            ("mesh_algorithm", "Mesh Algorithm", "choice", None, None, None, None,
+             ["Frontal-Del.", "Delaunay", "MeshAdapt", "BAMG", "FD Quads", "Para. Pack"]),
+            ("use_optimization", "Mesh Optimization", "bool", None, None, None, None, None),
+            ("poisson_ratio_cells", "Poisson Ratio", "float", 0.0, 0.5, 0.01, 2, None),
+            ("max_stress", "Max Stress (mN/m)", "float", 0.01, 1000.0, 0.1, 2, None),
+        ]),
+    ]
+
+    def __init__(self, parameter_manager: ParameterManager):
+        super().__init__()
+        self.parameter_manager = parameter_manager
+        self.parameter_controls = {}
+        self._setup_ui()
+        self._sync_all_controls()
+        self.parameter_manager.parameter_changed.connect(self._sync_parameter)
+
+    def _setup_ui(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        for title, specs in self.PARAMETER_SECTIONS:
+            group = QGroupBox(title)
+            form = QFormLayout()
+            form.setContentsMargins(8, 8, 8, 8)
+            form.setSpacing(4)
+
+            for spec in specs:
+                name, label, kind, min_val, max_val, step, decimals, choices = spec
+                control = self._create_control(name, kind, min_val, max_val, step, decimals, choices)
+                form.addRow(label, control)
+
+            group.setLayout(form)
+            layout.addWidget(group)
+
+        self.setLayout(layout)
+
+    def _create_control(self, name, kind, min_val, max_val, step, decimals, choices):
+        if kind == "int":
+            control = QSpinBox()
+            control.setRange(min_val, max_val)
+            control.setSingleStep(step)
+            control.valueChanged.connect(lambda value, n=name: self.parameter_manager.set_ui_parameter(n, value))
+        elif kind == "float":
+            control = QDoubleSpinBox()
+            control.setRange(min_val, max_val)
+            control.setSingleStep(step)
+            control.setDecimals(decimals)
+            if name == "gel_height":
+                control.setSpecialValueText("∞")
+            control.valueChanged.connect(lambda value, n=name: self.parameter_manager.set_ui_parameter(n, value))
+        elif kind == "choice":
+            control = QComboBox()
+            control.addItems(choices)
+            control.currentTextChanged.connect(lambda value, n=name: self.parameter_manager.set_ui_parameter(n, value))
+        elif kind == "bool":
+            control = QCheckBox()
+            control.stateChanged.connect(
+                lambda state, n=name: self.parameter_manager.set_ui_parameter(n, state == Qt.Checked)
+            )
+        else:
+            raise ValueError(f"Unsupported parameter control type: {kind}")
+
+        control.setObjectName(f"workflow_parameter_{name}")
+        self.parameter_controls[name] = control
+        return control
+
+    def _sync_all_controls(self):
+        for name in self.parameter_controls:
+            self._sync_parameter(name, self.parameter_manager.get_ui_parameter(name))
+
+    def _sync_parameter(self, param_name: str, value: Any):
+        control = self.parameter_controls.get(param_name)
+        if control is None:
+            return
+
+        display_value = self.parameter_manager.get_ui_parameter(param_name)
+        control.blockSignals(True)
+        try:
+            if isinstance(control, QComboBox):
+                index = control.findText(str(display_value), Qt.MatchFixedString)
+                if index >= 0:
+                    control.setCurrentIndex(index)
+            elif isinstance(control, QCheckBox):
+                control.setChecked(bool(display_value))
+            else:
+                control.setValue(display_value)
+        finally:
+            control.blockSignals(False)
 
 
 class _StageSection(QWidget):
@@ -159,6 +296,8 @@ class napariTFMWidget(QWidget):
         # Create calibration group
         calibration_group = self._create_general_group()
         container_layout.addWidget(calibration_group)
+        self.parameter_panel = WorkflowParameterPanel(self.parameter_manager)
+        container_layout.addWidget(self.parameter_panel)
 
         # # Initialize all widgets with parameter_manager
         self.preprocessing_widget = PreprocessingWidget(
@@ -197,6 +336,7 @@ class napariTFMWidget(QWidget):
             self.parameter_manager,
             self.visualization_manager
         )
+        self._hide_embedded_parameter_panels()
 
         self._stage_sections_by_key = {
             "preprocessing": _StageSection(
@@ -267,6 +407,28 @@ class napariTFMWidget(QWidget):
 
         self.connect_signals()
 
+    def _hide_embedded_parameter_panels(self):
+        """Keep stage-local panels alive for controllers while removing duplicate visible editors."""
+        for widget in [
+            self.preprocessing_widget,
+            self.displacement_widget,
+            self.force_widget,
+            self.msm_widget,
+        ]:
+            panel = getattr(widget, "parameter_panel", None)
+            if panel is not None:
+                panel.setVisible(False)
+
+        for group in self.batch_widget.findChildren(QGroupBox):
+            if group.title() in {
+                "General Parameters",
+                "Preprocessing Parameters",
+                "DIS Displacement Parameters",
+                "Force Parameters",
+                "Stress Parameters",
+            }:
+                group.setVisible(False)
+
     def _find_stage_action_targets(self, widget: QWidget, **action_paths: list[str]) -> dict[str, QWidget]:
         """Find existing child controls that can be triggered from the stage header."""
         targets = {}
@@ -288,50 +450,10 @@ class napariTFMWidget(QWidget):
         return None
 
     def _create_general_group(self) -> QGroupBox:
-        """Create calibration group box with controls."""
+        """Create global file and reset controls."""
         calibration_group = QGroupBox("")
         calibration_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         calibration_layout = QVBoxLayout()
-
-        # First row: spinboxes
-        spinbox_layout = QHBoxLayout()
-
-        # Pixel size controls
-        pixel_layout = QHBoxLayout()
-        pixel_layout.addWidget(QLabel("Pixel Size (µm):"))
-        self.pixel_spin = QDoubleSpinBox()
-        self.pixel_spin.setRange(0.001, 100.0)
-        self.pixel_spin.setSingleStep(0.1)
-        self.pixel_spin.setDecimals(3)
-        pixel_layout.addWidget(self.pixel_spin)
-        spinbox_layout.addLayout(pixel_layout)
-
-        spinbox_layout.addSpacing(20)
-
-        # Frame length controls
-        frame_layout = QHBoxLayout()
-        frame_layout.addWidget(QLabel("Frame Length (min):"))
-        self.frame_spin = QDoubleSpinBox()
-        self.frame_spin.setRange(0.001, 1000.0)
-        self.frame_spin.setSingleStep(0.1)
-        self.frame_spin.setDecimals(3)
-        frame_layout.addWidget(self.frame_spin)
-        spinbox_layout.addLayout(frame_layout)
-
-        # Register callbacks for parameter changes
-        self.parameter_manager.register_callback('pixel_size', lambda value: self.pixel_spin.setValue(value))
-        self.parameter_manager.register_callback('frame_interval', lambda value: self.frame_spin.setValue(value))
-
-        # Connect spinbox signals to parameter manager
-        self.pixel_spin.valueChanged.connect(lambda value: self.parameter_manager.set_parameter('pixel_size', value))
-        self.frame_spin.valueChanged.connect(lambda value: self.parameter_manager.set_parameter('frame_interval', value))
-
-        # Initialize spinbox values from parameter manager
-        self.pixel_spin.setValue(self.parameter_manager.get_parameter('pixel_size'))
-        self.frame_spin.setValue(self.parameter_manager.get_parameter('frame_interval'))
-
-        spinbox_layout.addStretch()
-        calibration_layout.addLayout(spinbox_layout)
 
         # Create 2x2 button grid
         button_grid = QVBoxLayout()

@@ -14,8 +14,42 @@ class _StubParameterManager(QObject):
         self._values = {
             "pixel_size": 1.0,
             "frame_interval": 1.0,
+            "rolling_ball_radius": 0,
+            "min_intensity_percentile": 0.0,
+            "max_intensity_percentile": 100.0,
+            "gaussian_sigma": 0.0,
+            "cell_min_intensity_percentile": 0.0,
+            "cell_max_intensity_percentile": 100.0,
+            "cell_gaussian_sigma": 0.0,
+            "registration_mode": "translation",
+            "nscales": 3,
+            "inner_iterations": 15,
+            "outer_iterations": 5,
+            "median_filtering": 5,
+            "downscale_factor": 4,
+            "disp_vector_stride": 20,
+            "disp_arrow_scale": 1.0,
+            "d_max": 1.0,
+            "young_modulus": 5.0,
+            "poisson_ratio_substrate": 0.5,
+            "gel_height": 0.0,
+            "lanczos_exp": 1,
+            "regularization": -4.0,
+            "auto_gcv": False,
+            "force_vector_stride": 20,
+            "force_arrow_scale": 1.0,
+            "f_max": 500.0,
+            "threshold": 0.0,
+            "dilation": 10,
+            "smoothing_sigma": 10.0,
+            "density_factor": 0.01,
+            "mesh_algorithm": "Frontal-Del.",
+            "use_optimization": True,
+            "poisson_ratio_cells": 0.5,
+            "max_stress": 1.0,
         }
         self._callbacks = {}
+        self.ui_writes = []
 
     def register_callback(self, name, callback):
         self._callbacks[name] = callback
@@ -26,6 +60,13 @@ class _StubParameterManager(QObject):
     def set_parameter(self, name, value):
         self._values[name] = value
         self.parameter_changed.emit(name, value)
+
+    def get_ui_parameter(self, name):
+        return self.get_parameter(name)
+
+    def set_ui_parameter(self, name, value):
+        self.ui_writes.append((name, value))
+        self.set_parameter(name, value)
 
 
 class _StubDataManager:
@@ -46,6 +87,7 @@ class _StubStageWidget(QWidget):
 
     def __init__(self, *args):
         super().__init__()
+        self.parameter_panel = QWidget()
         self.preview_btn = QPushButton("Preview")
         self.process_btn = QPushButton("Run")
         self.cancel_btn = QPushButton("Cancel")
@@ -225,3 +267,55 @@ def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app)
     displacement_section.run_button.click()
 
     assert clicks["run"] == 1
+
+
+def test_workflow_parameter_panel_exposes_one_control_per_managed_parameter(app):
+    manager = _StubParameterManager()
+
+    panel = _widget.WorkflowParameterPanel(manager)
+
+    for name in [
+        "pixel_size",
+        "rolling_ball_radius",
+        "nscales",
+        "young_modulus",
+        "auto_gcv",
+        "mesh_algorithm",
+    ]:
+        assert name in panel.parameter_controls
+        assert panel.parameter_controls[name].objectName() == f"workflow_parameter_{name}"
+
+
+def test_workflow_parameter_panel_writes_through_ui_parameter_api(app):
+    manager = _StubParameterManager()
+    panel = _widget.WorkflowParameterPanel(manager)
+
+    panel.parameter_controls["young_modulus"].setValue(8.5)
+
+    assert manager.ui_writes[-1] == ("young_modulus", 8.5)
+
+
+def test_workflow_parameter_panel_syncs_from_parameter_manager(app):
+    manager = _StubParameterManager()
+    panel = _widget.WorkflowParameterPanel(manager)
+
+    manager.set_parameter("nscales", 6)
+
+    assert panel.parameter_controls["nscales"].value() == 6
+
+
+def test_main_widget_hides_stage_parameter_panels(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+
+    assert isinstance(widget.parameter_panel, _widget.WorkflowParameterPanel)
+    assert widget.parameter_panel.parameter_controls["nscales"].isVisibleTo(widget)
+    assert not widget.displacement_widget.parameter_panel.isVisibleTo(widget)
