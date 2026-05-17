@@ -85,3 +85,6 @@ Thumbs.db
 !_validation/**/*.tif
 !_validation/**/*.png
 !_validation/**/*.gif
+
+# Optical flow comparison outputs
+_dev/optical_flow_comparison/output/
