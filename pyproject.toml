@@ -25,8 +25,7 @@ classifiers = [
     "Framework :: napari",
 ]
 dependencies = [
-    "napari[all]>=0.5.4",
-    "PyQt5>=5.15.0",
+    "napari[pyqt]>=0.7.0",
     "solidspy>=1.1.0",
     "scipy>=1.9.3",
     "scikit-image>=0.24.0",
@@ -47,9 +46,6 @@ dependencies = [
 
 [project.entry-points."napari.manifest"]
 napariTFM = "napariTFM:napari.yaml"
-
-[project.entry-points."console_scripts"]
-napari = "napari.__main__:main"
 
 [tool.setuptools]
 packages = {find = {}}
