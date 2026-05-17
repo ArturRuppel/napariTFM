@@ -3,21 +3,18 @@ import subprocess
 import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
 
-import numpy as np
 import yaml
 from qtpy.QtCore import Qt, Signal, QSettings
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QGridLayout, QButtonGroup, QRadioButton, QListView,
-    QSpinBox, QDoubleSpinBox, QPushButton, QFrame, QScrollArea, QAbstractItemView, QTreeView, QDialog, QFormLayout,
-    QProgressBar, QMessageBox, QListWidget, QCheckBox, QLineEdit,
-    QFileDialog, QComboBox
+    QPushButton, QFrame, QScrollArea, QTreeView, QDialog,
+    QProgressBar, QMessageBox, QListWidget, QCheckBox, QLineEdit, QFileDialog,
 )
 
 from napariTFM.backend.batch_analysis import BatchAnalysis
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
-from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
+from napariTFM.utilities.parameter_manager import ParameterManager
 
 
 class BatchAnalysisWidget(BaseAnalysisWidget):
@@ -45,23 +42,11 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self.visualization_checkboxes = {}
         self.folder_list = []
 
-        # Block signals during setup
         self.blockSignals(True)
         try:
             self._setup_ui()
             self._connect_signals()
-
-            # Ensure parameters are connected before syncing
-            self._connect_parameters()
-
-            # Force an initial sync with parameter manager
-            self._sync_widget_with_parameters()
-
             self._update_ui_state()
-
-            # Connect to parameter manager signals after everything is set up
-            self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
-            self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
         finally:
             self.blockSignals(False)
 
@@ -78,14 +63,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         main_layout.addWidget(self._create_file_paths_group())
         main_layout.addWidget(self._create_metadata_group())
 
-        # Add existing parameter groups
-        main_layout.addWidget(self._create_general_params_group())
-        main_layout.addWidget(self._create_preprocessing_params_group())
-        main_layout.addWidget(self._create_displacement_params_group())
-        main_layout.addWidget(self._create_force_params_group())
-        main_layout.addWidget(self._create_stress_params_group())
-
-        # Add modified analysis steps and visualization groups
+        # Batch execution consumes the shared workflow parameters from
+        # ParameterManager; this panel only owns batch-specific inputs.
         main_layout.addWidget(self._create_analysis_steps_group())
         main_layout.addWidget(self._create_visualization_group())
         main_layout.addWidget(self._create_folder_management_group())
@@ -100,56 +79,11 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
     def _connect_signals(self):
         """Connect widget signals."""
-        # Keep existing signal connections
         self.add_folder_btn.clicked.connect(self._add_folder)
         self.clear_folders_btn.clicked.connect(self._clear_folders)
         self.run_analysis_btn.clicked.connect(self._run_batch_analysis)
         self.save_config_btn.clicked.connect(self._save_config_dialog)
         self.load_config_btn.clicked.connect(self._load_config_dialog)
-
-    def _connect_parameters(self):
-        """Connect widget controls to parameter manager."""
-        self._block_parameter_widgets(True)
-        try:
-            # Connect all spinboxes
-            for name, spin in self.parameter_spins.items():
-                if isinstance(spin, tuple):
-                    continue
-
-                # Create closure for the callback
-                def make_callback(name=name):
-                    def callback(value):
-                        self.parameter_manager.set_ui_parameter(name, value)
-
-                    return callback
-
-                spin.valueChanged.connect(make_callback())
-
-            # Connect all comboboxes
-            for name, combo in self.parameter_combos.items():
-                if name == 'mesh_algorithm':
-                    combo.currentTextChanged.connect(
-                        lambda text: self.parameter_manager.set_parameter('mesh_algorithm', text)
-                    )
-                elif name == 'registration_mode':
-                    combo.currentTextChanged.connect(
-                        lambda text: self.parameter_manager.set_parameter('registration_mode', text.lower())
-                    )
-                else:
-                    combo.currentTextChanged.connect(
-                        lambda text, name=name: self.parameter_manager.set_parameter(name, text)
-                    )
-
-            # Connect all checkboxes
-            for name, checkbox in self.parameter_checks.items():
-                checkbox.stateChanged.connect(
-                    lambda state, name=name: self.parameter_manager.set_parameter(
-                        name, state == Qt.Checked
-                    )
-                )
-
-        finally:
-            self._block_parameter_widgets(False)
 
     # endregion === Initialization ===
 
@@ -206,329 +140,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             self.file_inputs[key] = line_edit
             row.addWidget(line_edit)
             layout.addLayout(row)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_general_params_group(self) -> QGroupBox:
-        """Create general parameters group without setting defaults."""
-        group = QGroupBox("General Parameters")
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-
-        # Pixel size
-        pixel_row = QHBoxLayout()
-        pixel_row.addWidget(QLabel("Pixel Size (µm):"))
-        pixel_spin = self._create_double_spinbox(0.01, 10.0, 0.1, 2)
-        pixel_spin.setDecimals(3)
-        pixel_spin.setToolTip("Physical size of each pixel in micrometers. Used for converting image measurements to physical units.")
-        self.parameter_spins['pixel_size'] = pixel_spin
-        pixel_row.addWidget(pixel_spin)
-        layout.addLayout(pixel_row)
-
-        # Frame interval
-        frame_row = QHBoxLayout()
-        frame_row.addWidget(QLabel("Frame Length (min):"))
-        frame_spin = self._create_double_spinbox(0.001, 1000.0, 0.1, 3)
-        frame_spin.setToolTip("Time interval between consecutive image frames in minutes. Used for temporal analysis and rate calculations.")
-        self.parameter_spins['frame_interval'] = frame_spin
-        frame_row.addWidget(frame_spin)
-        layout.addLayout(frame_row)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_preprocessing_params_group(self) -> QGroupBox:
-        """Create preprocessing parameters group without setting defaults."""
-        group = QGroupBox("Preprocessing Parameters")
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-
-        # Bead/Reference parameters
-        bead_params = [
-            ("rolling_ball_radius", "Rolling Ball Radius:", 0, 50, 1,
-             "Radius for rolling ball background subtraction in pixels. Set to 0 to disable background subtraction."),
-            ("min_intensity_percentile", "Min Intensity (%)", 0, 100, 0.1,
-             "Minimum intensity threshold percentile for bead detection. Lower values include dimmer beads."),
-            ("max_intensity_percentile", "Max Intensity (%)", 0, 100, 0.1,
-             "Maximum intensity threshold percentile for bead detection. Higher values include brighter beads."),
-            ("gaussian_sigma", "Gaussian Sigma", 0.0, 10.0, 0.1,
-             "Standard deviation for Gaussian smoothing of bead images. Higher values reduce noise but may blur features.")
-        ]
-
-        for name, label, min_val, max_val, step, tooltip in bead_params:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-            if name == "rolling_ball_radius":
-                spin = self._create_spinbox(min_val, max_val, step)
-            else:
-                spin = self._create_double_spinbox(min_val, max_val, step)
-            spin.setToolTip(tooltip)
-            self.parameter_spins[name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        # Cell parameters
-        cell_params = [
-            ("cell_min_intensity_percentile", "Cell Min Intensity (%)", 0, 100, 0.1,
-             "Minimum intensity threshold percentile for cell detection. Lower values include dimmer cell regions."),
-            ("cell_max_intensity_percentile", "Cell Max Intensity (%)", 0, 100, 0.1,
-             "Maximum intensity threshold percentile for cell detection. Higher values include brighter cell regions."),
-            ("cell_gaussian_sigma", "Cell Gaussian Sigma", 0.0, 10.0, 0.1,
-             "Standard deviation for Gaussian smoothing of cell images. Higher values reduce noise but may blur cell boundaries.")
-        ]
-
-        for name, label, min_val, max_val, step, tooltip in cell_params:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-            spin = self._create_double_spinbox(min_val, max_val, step)
-            spin.setToolTip(tooltip)
-            self.parameter_spins[name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        # Registration mode
-        reg_row = QHBoxLayout()
-        reg_row.addWidget(QLabel("Registration Mode:"))
-        reg_combo = QComboBox()
-        reg_combo.addItems(['Translation', 'Rigid', 'No registration'])
-        reg_combo.setToolTip("Method for aligning image sequences:\n- Translation: Corrects x-y drift\n- Rigid: Corrects drift and rotation\n- No registration: Uses raw images")
-        self.parameter_combos['registration_mode'] = reg_combo
-        reg_row.addWidget(reg_combo)
-        layout.addLayout(reg_row)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_displacement_params_group(self) -> QGroupBox:
-        """Create displacement analysis parameters group without setting defaults."""
-        group = QGroupBox("DIS Displacement Parameters")
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-
-        # Optical flow parameters
-        flow_params = [
-            ("nscales", "Pyramid Levels:", 1, 50, 1,
-             "Number of DIS pyramid levels. More levels handle larger displacements but increase computation time."),
-            ("inner_iterations", "Gradient Descent Iterations:", 1, 50, 1,
-             "DIS gradient descent iterations. More iterations may improve accuracy but increase computation time."),
-            ("outer_iterations", "Refinement Iterations:", 0, 20, 1,
-             "DIS variational refinement iterations. Increase for smoother dense fields."),
-            ("median_filtering", "Median Filter:", 1, 9, 2,
-             "Size of the median filter kernel for post-processing. Larger values remove more outliers but may smooth legitimate features."),
-            ("downscale_factor", "Downscale Factor:", 1, 10, 1,
-             "Factor by which to downscale displacement fields after processing. Higher values speed up computation fo subsequent steps but reduce spatial resolution.")
-        ]
-
-        for name, label, min_val, max_val, step, tooltip in flow_params:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-            if isinstance(step, int):
-                spin = QSpinBox()
-                spin.setRange(min_val, max_val)
-                spin.setSingleStep(step)
-            else:
-                spin = self._create_double_spinbox(min_val, max_val, step)
-                spin.setDecimals(2)
-            spin.setToolTip(tooltip)
-            self.parameter_spins[name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        # Visualization parameters
-        vis_params = [
-            ("disp_vector_stride", "Vector Stride:", 1, 100, 1,
-             "Display every nth displacement vector. Higher values show fewer vectors but improve visualization clarity."),
-            ("disp_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1,
-             "Scaling factor for displacement vector arrows. Adjust to make vectors more visible or less cluttered."),
-            ("d_max", "Max Displacement (µm):", 0.1, 200.0, 0.1,
-             "Maximum displacement magnitude for color scaling. Displacements above this value will be capped for visualization.")
-        ]
-
-        for name, label, min_val, max_val, step, tooltip in vis_params:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-            spin = self._create_double_spinbox(min_val, max_val, step) if isinstance(step, float) else QSpinBox()
-            if isinstance(spin, QSpinBox):
-                spin.setRange(min_val, max_val)
-                spin.setSingleStep(step)
-            spin.setToolTip(tooltip)
-            self.parameter_spins[name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_force_params_group(self) -> QGroupBox:
-        """Create force analysis parameters group without setting defaults."""
-        group = QGroupBox("Force Parameters")
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-
-        # Material parameters setup
-        material_params = [
-            ("young_modulus", "Young's Modulus (kPa):", 0.1, 100, 0.1,
-             "Elastic modulus of the substrate material. Higher values indicate stiffer substrates."),
-            ("poisson_ratio_substrate", "Poisson's Ratio:", 0, 0.5, 0.01,
-             "Poisson's ratio of the substrate material. Describes lateral expansion when compressed (typically 0.45-0.5 for hydrogels)."),
-            ("gel_height", "Gel Height (µm):", 0, 1000, 10,
-             "Thickness of the substrate gel. Set to ∞ for semi-infinite substrate approximation.")
-        ]
-
-        for name, label, min_val, max_val, step, tooltip in material_params:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-            spin = self._create_double_spinbox(min_val, max_val, step)
-            if name == "gel_height":
-                spin.setSpecialValueText("∞")
-            if name == "poisson_ratio_substrate":
-                spin.setDecimals(2)
-            spin.setToolTip(tooltip)
-            self.parameter_spins[name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        # Lanczos exponent
-        lanczos_row = QHBoxLayout()
-        lanczos_row.addWidget(QLabel("Lanczos Exponent:"))
-        lanczos_spin = QSpinBox()
-        lanczos_spin.setRange(0, 5)
-        lanczos_spin.setToolTip("Exponent for Lanczos regularization in force calculation. Higher values provide stronger regularization.")
-        self.parameter_spins['lanczos_exp'] = lanczos_spin
-        lanczos_row.addWidget(lanczos_spin)
-        layout.addLayout(lanczos_row)
-
-        # Regularization parameter
-        reg_row = QHBoxLayout()
-        reg_row.addWidget(QLabel("Regularization (10^x):"))
-        reg_spin = self._create_double_spinbox(-21, 0, 0.5)
-        reg_spin.setToolTip("Regularization parameter for force calculation (10^x). Controls trade-off between solution smoothness and accuracy.")
-        self.parameter_spins['regularization'] = reg_spin
-        reg_row.addWidget(reg_spin)
-        layout.addLayout(reg_row)
-
-        # Auto-GCV checkbox
-        auto_gcv = QCheckBox("Auto-GCV per frame")
-        auto_gcv.setToolTip("Automatically determine optimal regularization parameter using Generalized Cross-Validation for each frame.")
-        self.parameter_checks['auto_gcv'] = auto_gcv
-        layout.addWidget(auto_gcv)
-
-        # Connect auto-GCV checkbox to enable/disable regularization spinbox
-        def toggle_reg_spin(state):
-            reg_spin.setEnabled(not state)
-
-        auto_gcv.stateChanged.connect(toggle_reg_spin)
-
-        # Add visualization parameters
-        vis_params = [
-            ("force_vector_stride", "Vector Stride:", 1, 100, 1,
-             "Display every nth force vector. Higher values show fewer vectors but improve visualization clarity."),
-            ("force_arrow_scale", "Arrow Scale:", 0.1, 50.0, 0.1,
-             "Scaling factor for force vector arrows. Adjust to make vectors more visible or less cluttered."),
-            ("f_max", "Max Force (Pa):", 0.1, 10000.0, 1.0,
-             "Maximum force magnitude for color scaling. Forces above this value will be capped for visualization.")
-        ]
-
-        for name, label, min_val, max_val, step, tooltip in vis_params:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
-            spin = self._create_double_spinbox(min_val, max_val, step) if isinstance(step, float) else QSpinBox()
-            if isinstance(spin, QSpinBox):
-                spin.setRange(min_val, max_val)
-                spin.setSingleStep(step)
-            spin.setToolTip(tooltip)
-            self.parameter_spins[name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_stress_params_group(self) -> QGroupBox:
-        """Create stress parameters group without setting defaults."""
-        group = QGroupBox("Stress Parameters")
-        layout = QVBoxLayout()
-        layout.setSpacing(4)
-
-        # Mask parameters
-        mask_params = [
-            ("threshold", "Threshold Percentile (%):", 0, 100, 0.1,  # Changed step to 0.1 to match float type
-             "Intensity percentile threshold for cell mask generation. Higher values create more restrictive masks."),
-            ("dilation", "Mask Dilation (px):", 0, 50, 1,  # Keep as integer
-             "Number of pixels to expand the cell mask. Helps include cell edges and compensate for thresholding."),
-            ("smoothing_sigma", "Boundary Smoothing:", 0.0, 40.0, 0.1,  # Changed to match float type
-             "Gaussian smoothing sigma for mask boundary. Higher values create smoother cell boundaries.")
-        ]
-
-        for name, label, min_val, max_val, step, tooltip in mask_params:
-            row = QHBoxLayout()
-            label_widget = QLabel(label)
-            label_widget.setToolTip(tooltip)
-            row.addWidget(label_widget)
-
-            if isinstance(step, float):
-                spin = self._create_double_spinbox(min_val, max_val, step)
-            else:
-                spin = QSpinBox()
-                spin.setRange(min_val, max_val)
-                spin.setSingleStep(step)
-            spin.setToolTip(tooltip)
-            self.parameter_spins[name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-        # Mesh parameters
-        mesh_params = [
-            ("density_factor", "Density Factor:", 0.001, 0.1, 0.001,
-             "Controls mesh refinement. Lower values create finer meshes with more elements, increasing accuracy but computation time.")
-        ]
-
-        for name, label, min_val, max_val, step, tooltip in mesh_params:
-            row = QHBoxLayout()
-            label_widget = QLabel(label)
-            label_widget.setToolTip(tooltip)
-            row.addWidget(label_widget)
-
-            spin = self._create_double_spinbox(min_val, max_val, step, 3)  # 3 decimals for density factor
-            spin.setToolTip(tooltip)
-            self.parameter_spins[name] = spin
-            row.addWidget(spin)
-            layout.addLayout(row)
-
-            # Mesh algorithm combo
-        algo_row = QHBoxLayout()
-        algo_row.addWidget(QLabel("Mesh Algorithm:"))
-        algo_combo = QComboBox()
-        algo_combo.addItems(self.MESH_ALGORITHMS.keys())
-        algo_combo.setToolTip(
-            "Algorithm used for mesh generation:\n- Delaunay: Creates triangular mesh optimized for quality\n- Front: Advancing front method for more uniform elements\n- MeshAdapt: Adaptive meshing based on size fields")
-        self.parameter_combos['mesh_algorithm'] = algo_combo
-        algo_row.addWidget(algo_combo)
-        layout.addLayout(algo_row)
-
-        # Add optimization checkbox
-        optimization_check = QCheckBox("Mesh Optimization")
-        optimization_check.setToolTip("Enable post-processing optimization of mesh quality. Improves element shapes but increases mesh generation time.")
-        self.parameter_checks['use_optimization'] = optimization_check
-        layout.addWidget(optimization_check)
-
-        # Add Poisson ratio and max stress parameters
-        poisson_row = QHBoxLayout()
-        poisson_row.addWidget(QLabel("Poisson's Ratio:"))
-        poisson_spin = self._create_double_spinbox(0, 1.0, 0.01, 2)
-        poisson_spin.setToolTip("Poisson's ratio of the cell material. Describes how much the material expands perpendicular to applied stress (typically 0.3-0.5 for cells).")
-        self.parameter_spins['poisson_ratio_cells'] = poisson_spin
-        poisson_row.addWidget(poisson_spin)
-        layout.addLayout(poisson_row)
-
-        stress_row = QHBoxLayout()
-        stress_row.addWidget(QLabel("Max Stress (mN/m):"))
-        max_stress_spin = self._create_double_spinbox(0.01, 1000.0, 0.1, 2)
-        max_stress_spin.setToolTip("Maximum stress magnitude for color scaling and visualization. Stresses above this value will be capped.")
-        self.parameter_spins['max_stress'] = max_stress_spin
-        stress_row.addWidget(max_stress_spin)
-        layout.addLayout(stress_row)
 
         group.setLayout(layout)
         return group
@@ -644,21 +255,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         frame.setLayout(layout)
         return frame
-
-    def _create_spinbox(self, min_val: float, max_val: float, step: float, decimals: int = 1) -> QDoubleSpinBox:
-        """Helper method to create a spinbox without setting default value"""
-        spin = QSpinBox()
-        spin.setRange(min_val, max_val)
-        spin.setSingleStep(step)
-        return spin
-
-    def _create_double_spinbox(self, min_val: float, max_val: float, step: float, decimals: int = 1) -> QDoubleSpinBox:
-        """Helper method to create a spinbox without setting default value"""
-        spin = QDoubleSpinBox()
-        spin.setRange(min_val, max_val)
-        spin.setSingleStep(step)
-        spin.setDecimals(decimals)
-        return spin
 
     # endregion === UI Creation Groups ===
 
@@ -832,54 +428,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                     if key in config.get('metadata', {}):
                         input_widget.setText(config['metadata'][key])
 
-                # Update parameters
-                params = config.get('parameters', {})
-
-                # Create a list to track parameters that fail to update
-                failed_updates = []
-
-                for name, value in params.items():
-                    try:
-                        # Handle special cases first
-                        if name == 'young_modulus':
-                            value = value / 1000  # Convert Pa to kPa for display
-                        elif name == 'gel_height':
-                            value = 0 if value is None else value
-                        elif name == 'regularization':
-                            value = np.log10(value)
-                        elif name == 'registration_mode':
-                            # Ensure first letter is capitalized for combo box
-                            value = value.capitalize()
-
-                        # Update spinboxes
-                        if name in self.parameter_spins:
-                            spin = self.parameter_spins[name]
-                            if value is not None:  # Only update if value exists
-                                if isinstance(spin, tuple):
-                                    # Handle special cases like threshold
-                                    spin_widget, slider = spin
-                                    self._safe_set_value(spin_widget, value)
-                                    self._safe_set_value(slider, value)
-                                else:
-                                    self._safe_set_value(spin, value)
-                                    self.parameter_manager.set_ui_parameter(name, value)
-
-                        # Update comboboxes
-                        elif name in self.parameter_combos:
-                            combo = self.parameter_combos[name]
-                            if value is not None:
-                                self._safe_set_combo_text(combo, str(value))
-                                self.parameter_manager.set_parameter(name, str(value))
-
-                        # Update checkboxes
-                        elif name in self.parameter_checks:
-                            checkbox = self.parameter_checks[name]
-                            if value is not None:
-                                self._safe_set_checked(checkbox, bool(value))
-                                self.parameter_manager.set_parameter(name, bool(value))
-
-                    except Exception as e:
-                        failed_updates.append((name, str(e)))
+                failed_updates = self._apply_config_parameters(config.get('parameters', {}))
 
                 # Update analysis steps
                 for key, checkbox in self.analysis_checkboxes.items():
@@ -900,7 +449,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                         self.folder_list.append(folder)
                         self.folder_list_widget.addItem(folder)
 
-                # Report any failures
                 if failed_updates:
                     error_msg = "Failed to update the following parameters:\n"
                     for param, error in failed_updates:
@@ -913,159 +461,34 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             # Update UI state
             self._update_ui_state()
 
-            # Force a final parameter sync
-            self._sync_parameters_with_manager()
-
         except Exception as e:
             raise IOError(f"Failed to load configuration from {filepath}: {str(e)}")
 
     # endregion === Configuration Interface ===
 
     # region === Parameter Management ===
-    def _sync_parameters_with_manager(self):
-        """Sync current widget values with parameter manager."""
-        try:
-            # Block signals during sync
-            self.blockSignals(True)
+    def _apply_config_parameters(self, params: dict) -> list[tuple[str, str]]:
+        """Apply YAML parameters to the shared ParameterManager.
 
-            # Sync spinboxes
-            for name, spin in self.parameter_spins.items():
-                try:
-                    if isinstance(spin, tuple):
-                        continue  # Skip special cases if any
-                    self.parameter_manager.set_ui_parameter(name, spin.value())
-                except Exception as e:
-                    print(f"Error syncing parameter {name}: {str(e)}")
+        Unknown keys are ignored so older config files with retired parameters
+        such as TV-L1 settings remain loadable.
+        """
+        failed_updates = []
+        valid_parameters = set(self.parameter_manager.get_all_parameters())
 
-            # Sync comboboxes
-            for name, combo in self.parameter_combos.items():
-                try:
-                    value = combo.currentText()
-                    if name == 'registration_mode':
-                        value = value.lower()
-                    self.parameter_manager.set_parameter(name, value)
-                except Exception as e:
-                    print(f"Error syncing combo {name}: {str(e)}")
-
-            # Sync checkboxes
-            for name, checkbox in self.parameter_checks.items():
-                try:
-                    self.parameter_manager.set_parameter(name, checkbox.isChecked())
-                except Exception as e:
-                    print(f"Error syncing checkbox {name}: {str(e)}")
-
-        finally:
-            self.blockSignals(False)
-
-    def _sync_widget_with_parameters(self):
-        """Sync widget values with parameter manager values."""
-        self._block_parameter_widgets(True)
-        try:
-            # Sync spinboxes
-            for name, spin in self.parameter_spins.items():
-                try:
-                    value = self.parameter_manager.get_ui_parameter(name)
-                    if isinstance(spin, tuple):
-                        spin_widget, slider = spin
-                        self._safe_set_value(spin_widget, value)
-                        self._safe_set_value(slider, value)
-                    else:
-                        self._safe_set_value(spin, value)
-                except Exception as e:
-                    print(f"Error syncing parameter {name}: {str(e)}")
-
-            # Sync comboboxes
-            for name, combo in self.parameter_combos.items():
-                try:
-                    value = self.parameter_manager.get_parameter(name)
-                    self._safe_set_combo_text(combo, value)
-                except Exception as e:
-                    print(f"Error syncing combo {name}: {str(e)}")
-
-            # Sync checkboxes
-            for name, checkbox in self.parameter_checks.items():
-                try:
-                    value = self.parameter_manager.get_parameter(name)
-                    self._safe_set_checked(checkbox, value)
-                except Exception as e:
-                    print(f"Error syncing checkbox {name}: {str(e)}")
-
-        finally:
-            self._block_parameter_widgets(False)
-
-    def _block_parameter_widgets(self, block: bool):
-        """Block or unblock signals for all parameter widgets."""
-        widgets = []
-
-        # Add all spinboxes
-        for spin in self.parameter_spins.values():
-            if isinstance(spin, tuple):  # Handle special cases like threshold
-                widgets.extend(spin)
-            else:
-                widgets.append(spin)
-
-        # Add all comboboxes
-        for combo in self.parameter_combos.values():
-            widgets.append(combo)
-
-        # Add all checkboxes
-        for checkbox in self.parameter_checks.values():
-            widgets.append(checkbox)
-
-        # Add visualization checkboxes
-        for checkbox in self.visualization_checkboxes.values():
-            widgets.append(checkbox)
-
-        for widget in widgets:
-            widget.blockSignals(block)
-
-    def _on_parameter_changed(self, param_name: str, value: Any):
-        """Handle parameter changes from parameter manager."""
-        if not self.signalsBlocked():
-            if param_name == 'mesh_algorithm':
-                combo = self.parameter_combos.get(param_name)
-                if combo is not None:
-                    self._safe_set_combo_text(combo, value)
-            else:
-                self._sync_widget_with_parameters()
-
-    def _on_parameters_reset(self, category: ParameterCategory):
-        """Handle parameter reset events."""
-        self._sync_widget_with_parameters()
-
-    def _safe_set_value(self, widget, value):
-        """Safely set widget value with signal blocking and range checking."""
-        if value is not None and widget is not None:
-            widget.blockSignals(True)
+        for name, value in params.items():
+            if name not in valid_parameters:
+                continue
             try:
-                # Ensure value is within widget's range
-                if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
-                    value = max(widget.minimum(), min(widget.maximum(), value))
-                widget.setValue(value)
+                if name == 'registration_mode' and isinstance(value, str):
+                    value = value.lower()
+                self.parameter_manager.set_parameter(name, value)
             except Exception as e:
-                print(f"Error setting widget value: {str(e)}")
-            widget.blockSignals(False)
+                failed_updates.append((name, str(e)))
 
-    def _safe_set_combo_text(self, combo, text):
-        """Safely set combo box text with signal blocking."""
-        if combo is not None and text is not None:
-            combo.blockSignals(True)
-            try:
-                # For mesh_algorithm, use the text directly
-                index = combo.findText(text, Qt.MatchExactly)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-            finally:
-                combo.blockSignals(False)
+        return failed_updates
 
-    def _safe_set_checked(self, checkbox, checked):
-        """Safely set checkbox state with signal blocking."""
-        if checkbox is not None:
-            checkbox.blockSignals(True)
-            checkbox.setChecked(bool(checked))
-            checkbox.blockSignals(False)
-
-    # endregion === Parameter Management ===conn
+    # endregion === Parameter Management ===
 
     # region === Folder Management ===
     def _add_folder(self):

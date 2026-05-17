@@ -2,6 +2,9 @@ import sys
 import types
 from types import SimpleNamespace
 
+import yaml
+from qtpy.QtWidgets import QApplication, QGroupBox
+
 qtrangeslider = types.ModuleType("qtrangeslider")
 qtrangeslider.QRangeSlider = object
 sys.modules.setdefault("qtrangeslider", qtrangeslider)
@@ -11,6 +14,7 @@ sys.modules.setdefault("solidspy.assemutil", types.ModuleType("solidspy.assemuti
 sys.modules.setdefault("solidspy.postprocesor", types.ModuleType("solidspy.postprocesor"))
 
 from napariTFM.backend.batch_analysis import BatchAnalysis
+from napariTFM.utilities.parameter_manager import ParameterManager
 from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
 
 
@@ -61,6 +65,79 @@ class _Manager:
         self.set_calls.append((name, value))
 
 
+def _app():
+    return QApplication.instance() or QApplication([])
+
+
+def test_batch_widget_does_not_create_duplicate_analysis_parameter_controls():
+    app = _app()
+    widget = BatchAnalysisWidget(None, object(), ParameterManager(), object())
+    widget.show()
+    app.processEvents()
+
+    analysis_parameter_titles = {
+        "General Parameters",
+        "Preprocessing Parameters",
+        "DIS Displacement Parameters",
+        "Force Parameters",
+        "Stress Parameters",
+    }
+
+    visible_group_titles = {
+        group.title()
+        for group in widget.findChildren(QGroupBox)
+        if group.isVisibleTo(widget)
+    }
+
+    assert widget.parameter_spins == {}
+    assert widget.parameter_combos == {}
+    assert widget.parameter_checks == {}
+    assert analysis_parameter_titles.isdisjoint(visible_group_titles)
+
+
+def test_load_config_writes_parameters_directly_to_parameter_manager(tmp_path):
+    app = _app()
+    manager = ParameterManager()
+    widget = BatchAnalysisWidget(None, object(), manager, object())
+    widget.show()
+    app.processEvents()
+
+    config_path = tmp_path / "batch.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "root_folders": [],
+                "input_files": {
+                    "beads": "beads.tif",
+                    "reference": "reference.tif",
+                    "cells": "",
+                },
+                "analysis_steps": {"displacement": True, "force": False},
+                "visualizations": {"displacement_map": True, "force_map": False},
+                "parameters": {
+                    "pixel_size": 0.33,
+                    "young_modulus": 9000,
+                    "regularization": 1e-6,
+                    "registration_mode": "Rigid",
+                    "mesh_algorithm": "Delaunay",
+                    "auto_gcv": True,
+                    "tau": 0.25,
+                },
+            }
+        )
+    )
+
+    widget.load_config_from_yaml(str(config_path))
+
+    parameters = manager.get_all_parameters()
+    assert parameters["pixel_size"] == 0.33
+    assert parameters["young_modulus"] == 9000
+    assert parameters["regularization"] == 1e-6
+    assert parameters["registration_mode"] == "rigid"
+    assert parameters["mesh_algorithm"] == "Delaunay"
+    assert parameters["auto_gcv"] is True
+
+
 def test_generate_config_uses_parameter_manager_values():
     fake = SimpleNamespace(
         folder_list_widget=_List(),
@@ -87,23 +164,6 @@ def test_generate_config_uses_parameter_manager_values():
     assert config["parameters"]["pixel_size"] == 0.33
     assert config["parameters"]["young_modulus"] == 9000
     assert config["parameters"]["mesh_algorithm"] == "Frontal-Del."
-
-
-def test_sync_parameters_preserves_mesh_algorithm_case():
-    manager = _Manager()
-    combo = SimpleNamespace(currentText=lambda: "Frontal-Del.")
-    fake = SimpleNamespace(
-        blockSignals=lambda value: None,
-        parameter_spins={},
-        parameter_combos={"mesh_algorithm": combo},
-        parameter_checks={},
-        parameter_manager=manager,
-    )
-
-    BatchAnalysisWidget._sync_parameters_with_manager(fake)
-
-    assert ("mesh_algorithm", "Frontal-Del.") in manager.set_calls
-    assert ("mesh_algorithm", "frontal-del.") not in manager.set_calls
 
 
 def test_batch_fttc_parameters_honor_auto_gcv():
