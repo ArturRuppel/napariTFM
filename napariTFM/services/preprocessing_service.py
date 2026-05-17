@@ -4,6 +4,7 @@ from typing import Optional, Tuple, Dict, Any, List, Generator
 import numpy as np
 
 from napariTFM.backend.parameter_dataclasses import PreprocessingParameters
+from napariTFM.backend.parameter_validation import validate_preprocessing_parameters
 from napariTFM.backend.preprocessing import ImageProcessor
 
 
@@ -116,22 +117,7 @@ class PreprocessingService:
             - Sigmas must be non-negative
             - Registration mode must be supported
         """
-        if not 0 <= params.min_intensity_percentile < params.max_intensity_percentile <= 100:
-            return False, "Invalid intensity percentile range"
-
-        if not 0 <= params.cell_min_intensity_percentile < params.cell_max_intensity_percentile <= 100:
-            return False, "Invalid cell intensity percentile range"
-
-        if params.gaussian_sigma < 0:
-            return False, "Gaussian sigma must be non-negative"
-
-        if params.cell_gaussian_sigma < 0:
-            return False, "Cell gaussian sigma must be non-negative"
-
-        if params.registration_mode not in ['translation', 'rigid', 'no registration']:
-            return False, f"Invalid registration mode: {params.registration_mode}"
-
-        return True, ""
+        return validate_preprocessing_parameters(params)
 
     @staticmethod
     def validate_image(image: np.ndarray) -> Tuple[bool, str]:

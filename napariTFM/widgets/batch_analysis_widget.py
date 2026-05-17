@@ -119,13 +119,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 # Create closure for the callback
                 def make_callback(name=name):
                     def callback(value):
-                        if name == 'young_modulus':
-                            value = value * 1000
-                        elif name == 'regularization':
-                            value = 10 ** value
-                        elif name == 'gel_height' and value == 0:
-                            value = None
-                        self.parameter_manager.set_parameter(name, value)
+                        self.parameter_manager.set_ui_parameter(name, value)
 
                     return callback
 
@@ -718,59 +712,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             'mesh': self.visualization_checkboxes['mesh'].isChecked()
         }
 
-        # Parameters
-        parameters = {
-            # General
-            'pixel_size': self.parameter_spins['pixel_size'].value(),
-            'frame_interval': self.parameter_spins['frame_interval'].value(),
-
-            # Preprocessing
-            'rolling_ball_radius': self.parameter_spins['rolling_ball_radius'].value(),
-            'min_intensity_percentile': self.parameter_spins['min_intensity_percentile'].value(),
-            'max_intensity_percentile': self.parameter_spins['max_intensity_percentile'].value(),
-            'gaussian_sigma': self.parameter_spins['gaussian_sigma'].value(),
-            'cell_min_intensity_percentile': self.parameter_spins['cell_min_intensity_percentile'].value(),
-            'cell_max_intensity_percentile': self.parameter_spins['cell_max_intensity_percentile'].value(),
-            'cell_gaussian_sigma': self.parameter_spins['cell_gaussian_sigma'].value(),
-            'registration_mode': self.parameter_combos['registration_mode'].currentText().lower(),
-
-            # Displacement
-            'tau': self.parameter_spins['tau'].value(),
-            'lambda_': self.parameter_spins['lambda_'].value(),
-            'theta': self.parameter_spins['theta'].value(),
-            'nscales': self.parameter_spins['nscales'].value(),
-            'warps': self.parameter_spins['warps'].value(),
-            'epsilon': self.parameter_spins['epsilon'].value(),
-            'inner_iterations': self.parameter_spins['inner_iterations'].value(),
-            'outer_iterations': self.parameter_spins['outer_iterations'].value(),
-            'scale_step': self.parameter_spins['scale_step'].value(),
-            'median_filtering': self.parameter_spins['median_filtering'].value(),
-            'downscale_factor': self.parameter_spins['downscale_factor'].value(),
-            'd_max': self.parameter_spins['d_max'].value(),
-            'disp_vector_stride': self.parameter_spins['disp_vector_stride'].value(),
-            'disp_arrow_scale': self.parameter_spins['disp_arrow_scale'].value(),
-
-            # Force
-            'young_modulus': self.parameter_spins['young_modulus'].value() * 1000, # Convert kPa to Pa
-            'poisson_ratio_substrate': self.parameter_spins['poisson_ratio_substrate'].value(),
-            'gel_height': None if self.parameter_spins['gel_height'].value() == 0 else self.parameter_spins['gel_height'].value(),
-            'lanczos_exp': self.parameter_spins['lanczos_exp'].value(),
-            'regularization': 10**self.parameter_spins['regularization'].value(), # Convert from log10
-            'auto_gcv': self.parameter_checks['auto_gcv'].isChecked(),
-            'force_vector_stride': self.parameter_spins['force_vector_stride'].value(),
-            'force_arrow_scale': self.parameter_spins['force_arrow_scale'].value(),
-            'f_max': self.parameter_spins['f_max'].value(),
-
-            # Stress
-            'threshold': self.parameter_spins['threshold'].value(),
-            'dilation': self.parameter_spins['dilation'].value(),
-            'smoothing_sigma': self.parameter_spins['smoothing_sigma'].value(),
-            'density_factor': self.parameter_spins['density_factor'].value(),
-            'mesh_algorithm': self.parameter_combos['mesh_algorithm'].currentText(),
-            'use_optimization': self.parameter_checks['use_optimization'].isChecked(),
-            'poisson_ratio_cells': self.parameter_spins['poisson_ratio_cells'].value(),
-            'max_stress': self.parameter_spins['max_stress'].value()
-        }
+        parameters = self.parameter_manager.get_all_parameters()
 
         # Add metrics parameters
         # 'mask_source' is removed as per request, assuming mask is always required
@@ -934,13 +876,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                                     self._safe_set_value(slider, value)
                                 else:
                                     self._safe_set_value(spin, value)
-                                    # Force an update through the parameter manager
-                                    if name == 'young_modulus':
-                                        self.parameter_manager.set_parameter(name, value * 1000)
-                                    elif name == 'regularization':
-                                        self.parameter_manager.set_parameter(name, 10 ** value)
-                                    else:
-                                        self.parameter_manager.set_parameter(name, value)
+                                    self.parameter_manager.set_ui_parameter(name, value)
 
                         # Update comboboxes
                         elif name in self.parameter_combos:
@@ -1011,21 +947,17 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 try:
                     if isinstance(spin, tuple):
                         continue  # Skip special cases if any
-                    value = spin.value()
-                    if name == 'young_modulus':
-                        value = value * 1000  # Convert kPa to Pa
-                    elif name == 'regularization':
-                        value = 10 ** value
-                    elif name == 'gel_height' and value == 0:
-                        value = None
-                    self.parameter_manager.set_parameter(name, value)
+                    self.parameter_manager.set_ui_parameter(name, spin.value())
                 except Exception as e:
                     print(f"Error syncing parameter {name}: {str(e)}")
 
             # Sync comboboxes
             for name, combo in self.parameter_combos.items():
                 try:
-                    self.parameter_manager.set_parameter(name, combo.currentText().lower())
+                    value = combo.currentText()
+                    if name == 'registration_mode':
+                        value = value.lower()
+                    self.parameter_manager.set_parameter(name, value)
                 except Exception as e:
                     print(f"Error syncing combo {name}: {str(e)}")
 
@@ -1046,13 +978,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             # Sync spinboxes
             for name, spin in self.parameter_spins.items():
                 try:
-                    value = self.parameter_manager.get_parameter(name)
-                    if name == 'young_modulus':
-                        value = value / 1000  # Convert Pa to kPa for display
-                    elif name == 'regularization':
-                        value = np.log10(value)  # Convert to log10 for display
-                    elif name == 'gel_height' and value is None:
-                        value = 0
+                    value = self.parameter_manager.get_ui_parameter(name)
                     if isinstance(spin, tuple):
                         spin_widget, slider = spin
                         self._safe_set_value(spin_widget, value)

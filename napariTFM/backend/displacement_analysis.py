@@ -1,5 +1,4 @@
-from dataclasses import dataclass
-from typing import Optional, Dict, Generator
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -8,86 +7,34 @@ from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 
 
 class DisplacementAnalyzer:
-    """Analyzes displacements using TV-L1 optical flow.
+    """Analyzes displacements using dense optical flow.
 
     This class implements displacement analysis for bead tracking in microscopy
-    using the TV-L1 optical flow algorithm. It supports both full-resolution
+    using OpenCV's DIS optical flow algorithm. It supports both full-resolution
     and downscaled analysis, with methods for calculating, manipulating, and
     applying flow fields.
-
-    The TV-L1 algorithm is particularly suitable for microscopy analysis as it:
-    - Preserves discontinuities in the displacement field
-    - Is robust to brightness changes
-    - Provides sub-pixel accuracy
     """
 
     def __init__(self, params: Optional[DisplacementParameters] = None):
-        """Initialize TV-L1 optical flow analyzer.
+        """Initialize DIS optical flow analyzer.
 
         Args:
             params (DisplacementParameters, optional): Algorithm parameters including:
-                - tau: Time step for TV-L1 (default determined by params)
-                - lambda_: Weight parameter for data term
-                - theta: Weight parameter for gradient term
                 - nscales: Number of scales for pyramid
-                - warps: Number of warpings per scale
-                - epsilon: Stopping criterion threshold
                 - inner_iterations: Inner iteration count
                 - outer_iterations: Outer iteration count
-                - scale_step: Scale step for pyramid
-                - median_filtering: Whether to apply median filtering
                 If None, uses default parameters.
         """
         self.params = params or DisplacementParameters()
-        self.flow_algorithm = cv2.optflow.DualTVL1OpticalFlow_create(
-            self.params.tau, self.params.lambda_, self.params.theta,
-            self.params.nscales, self.params.warps, self.params.epsilon,
-            self.params.inner_iterations, self.params.outer_iterations,
-            self.params.scale_step, 0.0,
-            self.params.median_filtering, False
-        )
-
-        self.params = params or DisplacementParameters()
-        self.flow_algorithm = cv2.optflow.DualTVL1OpticalFlow_create(
-            self.params.tau, self.params.lambda_, self.params.theta,
-            self.params.nscales, self.params.warps, self.params.epsilon,
-            self.params.inner_iterations, self.params.outer_iterations,
-            self.params.scale_step, 0.0,
-            self.params.median_filtering, False
-        )
-
-
-    # def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
-    #     """Calculate optical flow between reference and moving image at full resolution.
-    #
-    #     Computes the displacement field between two images using TV-L1 optical flow.
-    #     Images are automatically normalized before processing.
-    #
-    #     Args:
-    #         reference (np.ndarray): Reference (fixed) image
-    #         moving (np.ndarray): Moving (deformed) image
-    #             Both images should be 2D arrays of the same shape.
-    #
-    #     Returns:
-    #         np.ndarray: Optical flow field with shape (H, W, 2) where:
-    #             - H, W are the image dimensions
-    #             - Last dimension contains (dx, dy) displacements in pixels
-    #             Positive values indicate rightward/downward motion.
-    #
-    #     Note:
-    #         Images are normalized to [0, 1] range before processing to ensure
-    #         consistent results regardless of input intensity range.
-    #     """
-    #     # Ensure images are float32 and normalized
-    #     ref_float = (reference.astype(np.float32) - reference.min()) / (reference.max() - reference.min())
-    #     mov_float = (moving.astype(np.float32) - moving.min()) / (moving.max() - moving.min())
-    #
-    #     return self.flow_algorithm.calc(ref_float, mov_float, None)
+        self.flow_algorithm = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+        self.flow_algorithm.setCoarsestScale(max(0, self.params.nscales - 1))
+        self.flow_algorithm.setGradientDescentIterations(max(1, self.params.inner_iterations))
+        self.flow_algorithm.setVariationalRefinementIterations(max(0, self.params.outer_iterations))
 
     def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
         """Calculate optical flow between reference and moving image at full resolution.
 
-        Computes the displacement field between two images using TV-L1 optical flow.
+        Computes the displacement field between two images using DIS optical flow.
         Images are automatically normalized before processing.
 
         Args:
@@ -105,20 +52,23 @@ class DisplacementAnalyzer:
             Images are normalized to [0, 1] range before processing to ensure
             consistent results regardless of input intensity range.
         """
-        # Ensure images are float32 and properly normalized
-        ref_float = reference.astype(np.float32)
-        mov_float = moving.astype(np.float32)
+        ref_image = self._normalize_for_optical_flow(reference)
+        mov_image = self._normalize_for_optical_flow(moving)
 
-        # Only normalize if the data isn't already in [0,1] range or has zero range
-        ref_range = ref_float.max() - ref_float.min()
-        if ref_range > 1e-8:  # Avoid division by very small numbers
-            ref_float = (ref_float - ref_float.min()) / ref_range
+        return self.flow_algorithm.calc(ref_image, mov_image, None).astype(np.float32, copy=False)
 
-        mov_range = mov_float.max() - mov_float.min()
-        if mov_range > 1e-8:  # Avoid division by very small numbers
-            mov_float = (mov_float - mov_float.min()) / mov_range
+    @staticmethod
+    def _normalize_for_optical_flow(image: np.ndarray) -> np.ndarray:
+        """Convert microscopy intensity data to the 8-bit format expected by DIS."""
+        image_float = image.astype(np.float32, copy=False)
+        image_range = image_float.max() - image_float.min()
 
-        return self.flow_algorithm.calc(ref_float, mov_float, None)
+        if image_range <= 1e-8:
+            normalized = np.zeros_like(image_float, dtype=np.uint8)
+        else:
+            normalized = ((image_float - image_float.min()) / image_range * 255).astype(np.uint8)
+
+        return np.ascontiguousarray(normalized)
 
     def downscale_flow(self, flow: np.ndarray, factor: int) -> np.ndarray:
         """Downscale flow field using local averaging.
@@ -161,7 +111,6 @@ class DisplacementAnalyzer:
                 downscaled[i, j] = np.mean(block, axis=(0, 1))
 
         return downscaled
-
 
 
 

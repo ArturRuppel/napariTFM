@@ -4,7 +4,7 @@ from typing import Any
 import napari
 from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QTabWidget, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog
+    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox, QGroupBox, QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog, QToolButton
 )
 
 from napariTFM.utilities.parameter_manager import ParameterManager
@@ -18,6 +18,51 @@ from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
 
 logger = logging.getLogger(__name__)
+
+
+class _StageSection(QWidget):
+    def __init__(self, title: str, child: QWidget, expanded: bool = False):
+        super().__init__()
+        self._child = child
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self.setLayout(layout)
+
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+
+        label = QLabel(title)
+        label.setStyleSheet("font-weight: bold;")
+        header_layout.addWidget(label)
+        header_layout.addStretch()
+
+        self._toggle_button = QToolButton()
+        self._toggle_button.setCheckable(True)
+        self._toggle_button.setAutoRaise(True)
+        self._toggle_button.setText("Configure")
+        self._toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._toggle_button.toggled.connect(self._set_expanded)
+        header_layout.addWidget(self._toggle_button)
+
+        self._content = QWidget()
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content.setLayout(content_layout)
+        content_layout.addWidget(child)
+
+        layout.addLayout(header_layout)
+        layout.addWidget(self._content)
+
+        self._toggle_button.setChecked(expanded)
+        self._set_expanded(expanded)
+
+    def _set_expanded(self, expanded: bool):
+        self._toggle_button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self._content.setVisible(expanded)
+        self._child.setVisible(expanded)
+
 
 class SpinBoxEventFilter(QObject):
     def eventFilter(self, obj, event):
@@ -76,9 +121,6 @@ class napariTFMWidget(QWidget):
         calibration_group = self._create_general_group()
         container_layout.addWidget(calibration_group)
 
-        # Create tab widget for different components
-        tabs = QTabWidget()
-
         # # Initialize all widgets with parameter_manager
         self.preprocessing_widget = PreprocessingWidget(
             self.viewer,
@@ -117,15 +159,17 @@ class napariTFMWidget(QWidget):
             self.visualization_manager
         )
 
-        # Add widgets to tabs
-        tabs.addTab(self.preprocessing_widget, "Preprocessing")
-        tabs.addTab(self.displacement_widget, "Displacement")
-        tabs.addTab(self.force_widget, "Force Analysis")
-        tabs.addTab(self.msm_widget, "Stress Analysis")
-        tabs.addTab(self.batch_widget, "Batch Analysis")
+        self._stage_sections = [
+            _StageSection("Preprocessing", self.preprocessing_widget, expanded=True),
+            _StageSection("Displacement", self.displacement_widget),
+            _StageSection("Force Analysis", self.force_widget),
+            _StageSection("Stress Analysis", self.msm_widget),
+            _StageSection("Batch Analysis", self.batch_widget),
+        ]
 
-        # Add tabs to container
-        container_layout.addWidget(tabs)
+        for section in self._stage_sections:
+            container_layout.addWidget(section)
+        container_layout.addStretch()
 
         # Set container as scroll area widget
         scroll.setWidget(container)

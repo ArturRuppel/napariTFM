@@ -7,6 +7,7 @@ from skimage.transform import resize
 from napariTFM.backend.mesh_generator import MeshParameters, MeshGenerator
 from napariTFM.backend.msm import MonolayerStressMicroscopy
 from napariTFM.backend.parameter_dataclasses import MSMParameters
+from napariTFM.backend.parameter_validation import validate_msm_parameters
 
 
 @dataclass
@@ -581,40 +582,7 @@ class MSMService:
             >>> if not is_valid:
             ...     print(f"Invalid parameters: {msg}")
         """
-        if params.density_factor < 0.005:
-            return False, "Density factor is too low (< 0.005). This may lead to numerical instabilities."
-
-        if params.density_factor > 0.05:
-            return False, "Density factor is too high (> 0.05). This may lead to poor resolution."
-
-        if not 0 <= params.poisson_ratio_cells <= 0.5:
-            return False, "Poisson ratio must be between 0 and 0.5"
-
-        if params.threshold < 0 or params.threshold > 100:
-            return False, "Threshold percentile must be between 0 and 100"
-
-        if params.dilation < 0:
-            return False, "Dilation must be non-negative"
-
-        if params.smoothing_sigma < 0:
-            return False, "Smoothing sigma must be non-negative"
-
-        if params.max_stress <= 0:
-            return False, "Maximum stress must be positive"
-
-        if params.frame_interval <= 0:
-            return False, "Frame interval must be positive"
-
-        if params.pixel_size <= 0:
-            return False, "Pixel size must be positive"
-
-        if params.downscale_factor < 1:
-            return False, "Downscale factor must be at least 1"
-
-        if params.young_modulus <= 0:
-            return False, "Young's modulus must be positive"
-
-        return True, ""
+        return validate_msm_parameters(params)
 
     def update_parameters(self, parameters: MSMParameters):
         """Update MSM parameters"""

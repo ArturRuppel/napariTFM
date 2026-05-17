@@ -1,14 +1,17 @@
 from dataclasses import dataclass, asdict, fields
 from typing import Dict, Any, Callable, Set, Optional, Tuple
 from enum import Enum, auto
+import math
 import yaml
 from pathlib import Path
 from qtpy.QtCore import QObject, Signal
 from napariTFM.backend.parameter_dataclasses import PreprocessingParameters, DisplacementParameters, FTTCParameters, MSMParameters, UnifiedParameters
-from napariTFM.services.displacement_service import DisplacementService
-from napariTFM.services.fttc_service import FTTCService
-from napariTFM.services.msm_service import MSMService
-from napariTFM.services.preprocessing_service import PreprocessingService
+from napariTFM.backend.parameter_validation import (
+    validate_displacement_parameters,
+    validate_fttc_parameters,
+    validate_msm_parameters,
+    validate_preprocessing_parameters,
+)
 
 
 class ParameterCategory(Enum):
@@ -63,6 +66,17 @@ class ParameterManager(QObject):
                 return 0
         return value
 
+    def get_ui_parameter(self, name: str) -> Any:
+        """Get a parameter value converted for display in UI controls."""
+        value = self.get_parameter(name)
+        if name == 'young_modulus':
+            return value / 1000
+        if name == 'regularization':
+            return math.log10(value)
+        if name == 'gel_height':
+            return value
+        return value
+
     def set_parameter(self, name: str, value: Any) -> None:
         """Set a parameter value and trigger callbacks"""
         if not hasattr(self._parameters, name):
@@ -84,6 +98,14 @@ class ParameterManager(QObject):
 
             # Emit signal
             self.parameter_changed.emit(name, value)
+
+    def set_ui_parameter(self, name: str, value: Any) -> None:
+        """Set a parameter from a UI control value, converting to internal units."""
+        if name == 'young_modulus':
+            value = value * 1000
+        elif name == 'regularization':
+            value = 10 ** value
+        self.set_parameter(name, value)
 
     def get_preprocessing_parameters(self) -> PreprocessingParameters:
         """Get parameters for preprocessing service"""
@@ -146,8 +168,9 @@ class ParameterManager(QObject):
         category_mappings = {
             ParameterCategory.GENERAL: ['pixel_size', 'frame_interval'],
             ParameterCategory.PREPROCESSING: [
-                'min_intensity', 'max_intensity', 'gaussian_sigma',
-                'cell_min_intensity', 'cell_max_intensity', 'cell_gaussian_sigma',
+                'rolling_ball_radius', 'min_intensity_percentile', 'max_intensity_percentile',
+                'gaussian_sigma', 'cell_min_intensity_percentile',
+                'cell_max_intensity_percentile', 'cell_gaussian_sigma',
                 'registration_mode'
             ],
             ParameterCategory.DISPLACEMENT: [
@@ -260,25 +283,25 @@ class ParameterManager(QObject):
         """Validate all parameters using service validation methods"""
         # Check preprocessing parameters
         preproc_params = self.get_preprocessing_parameters()
-        valid, msg = PreprocessingService.validate_parameters(preproc_params)
+        valid, msg = validate_preprocessing_parameters(preproc_params)
         if not valid:
             return False, f"Preprocessing parameters invalid: {msg}"
 
         # Check displacement parameters
         disp_params = self.get_displacement_parameters()
-        valid, msg = DisplacementService.validate_parameters(disp_params)
+        valid, msg = validate_displacement_parameters(disp_params)
         if not valid:
             return False, f"Displacement parameters invalid: {msg}"
 
         # Check force parameters
         force_params = self.get_fttc_parameters()
-        valid, msg = FTTCService.validate_parameters(force_params)
+        valid, msg = validate_fttc_parameters(force_params)
         if not valid:
             return False, f"Force parameters invalid: {msg}"
 
         # Check stress parameters
         stress_params = self.get_msm_parameters()
-        valid, msg = MSMService.validate_parameters(stress_params)
+        valid, msg = validate_msm_parameters(stress_params)
         if not valid:
             return False, f"Stress parameters invalid: {msg}"
 

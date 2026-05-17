@@ -1045,7 +1045,7 @@ class BatchAnalysis:
             gel_height=self.config['parameters'].get('gel_height'),
             lanczos_exp=self.config['parameters']['lanczos_exp'],
             regularization=self.config['parameters']['regularization'],
-            auto_gcv=False,
+            auto_gcv=self.config['parameters'].get('auto_gcv', False),
             force_vector_stride=self.config['parameters']['force_vector_stride'],
             force_arrow_scale=self.config['parameters']['force_arrow_scale'],
             f_max=self.config['parameters']['f_max'],

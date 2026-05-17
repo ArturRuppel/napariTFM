@@ -5,6 +5,7 @@ import numpy as np
 
 from napariTFM.backend.displacement_analysis import DisplacementAnalyzer
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
+from napariTFM.backend.parameter_validation import validate_displacement_parameters
 
 
 @dataclass
@@ -142,55 +143,7 @@ class DisplacementService:
             - Physical parameters must be positive
             - Theta must be between 0 and 10
         """
-        if params.tau <= 0:
-            return False, "tau must be positive"
-
-        if params.lambda_ <= 0:
-            return False, "lambda must be positive"
-
-        if not 0 < params.theta < 10:
-            return False, "theta must be between 0 and 10"
-
-        if params.nscales < 1:
-            return False, "nscales must be at least 1"
-
-        if params.warps < 1:
-            return False, "warps must be at least 1"
-
-        if params.epsilon <= 0:
-            return False, "epsilon must be positive"
-
-        if params.inner_iterations < 1:
-            return False, "inner_iterations must be at least 1"
-
-        if params.outer_iterations < 1:
-            return False, "outer_iterations must be at least 1"
-
-        if params.scale_step <= 0:
-            return False, "scale_step must be positive"
-
-        if params.median_filtering < 0:
-            return False, "median_filtering must be non-negative"
-
-        if params.downscale_factor < 1:
-            return False, "downscale_factor must be at least 1"
-
-        if params.pixel_size <= 0:
-            return False, "pixel_size must be positive"
-
-        if params.frame_interval <= 0:
-            return False, "frame_interval must be positive"
-
-        if params.d_max <= 0:
-            return False, "d_max must be positive"
-
-        if params.disp_vector_stride < 1:
-            return False, "disp_vector_stride must be at least 1"
-
-        if params.disp_arrow_scale <= 0:
-            return False, "disp_arrow_scale must be positive"
-
-        return True, ""
+        return validate_displacement_parameters(params)
 
     @staticmethod
     def validate_image(image: np.ndarray) -> Tuple[bool, str]:
