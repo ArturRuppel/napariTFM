@@ -302,30 +302,18 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
     def _create_displacement_params_group(self) -> QGroupBox:
         """Create displacement analysis parameters group without setting defaults."""
-        group = QGroupBox("Displacement Parameters")
+        group = QGroupBox("DIS Displacement Parameters")
         layout = QVBoxLayout()
         layout.setSpacing(4)
 
         # Optical flow parameters
         flow_params = [
-            ("tau", "Tau:", 0.01, 1.0, 0.01,
-             "Weight of the brightness constancy term in the optical flow equation. Higher values enforce stronger brightness consistency."),
-            ("lambda_", "Lambda:", 0.01, 1.0, 0.01,
-             "Weight of the smoothness term in the optical flow equation. Higher values produce smoother displacement fields."),
-            ("theta", "Theta:", 0.1, 1.0, 0.01,
-             "Weight between the brightness constancy and gradient constancy assumptions. Higher values favor gradient constancy."),
-            ("nscales", "Pyramid Scales:", 1, 50, 1,
-             "Number of image pyramid levels for multi-scale analysis. More scales handle larger displacements but increase computation time."),
-            ("warps", "Warps:", 1, 50, 1,
-             "Number of image warping steps per scale. More warps increase accuracy for large displacements but increase computation time."),
-            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001,
-             "Stopping criterion for the optimization. Lower values give more precise results but may require more iterations."),
-            ("inner_iterations", "Inner Iterations:", 1, 50, 1,
-             "Maximum number of iterations for solving the nonlinear system. More iterations increase precision but computation time."),
-            ("outer_iterations", "Outer Iterations:", 1, 20, 1,
-             "Maximum number of outer fixed-point iterations. More iterations may improve accuracy for complex flows."),
-            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01,
-             "Scale factor between pyramid levels. Closer to 1 means finer scale steps but more computation."),
+            ("nscales", "Pyramid Levels:", 1, 50, 1,
+             "Number of DIS pyramid levels. More levels handle larger displacements but increase computation time."),
+            ("inner_iterations", "Gradient Descent Iterations:", 1, 50, 1,
+             "DIS gradient descent iterations. More iterations may improve accuracy but increase computation time."),
+            ("outer_iterations", "Refinement Iterations:", 0, 20, 1,
+             "DIS variational refinement iterations. Increase for smoother dense fields."),
             ("median_filtering", "Median Filter:", 1, 9, 2,
              "Size of the median filter kernel for post-processing. Larger values remove more outliers but may smooth legitimate features."),
             ("downscale_factor", "Downscale Factor:", 1, 10, 1,
@@ -342,8 +330,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             else:
                 spin = self._create_double_spinbox(min_val, max_val, step)
                 spin.setDecimals(2)
-                if name == "epsilon":
-                    spin.setDecimals(3)
             spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)

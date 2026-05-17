@@ -38,7 +38,7 @@ class DisplacementService:
     """Service layer handling business logic for displacement analysis using optical flow.
 
     This class provides a high-level interface for calculating displacement fields
-    between microscopy images using the TV-L1 optical flow algorithm. It handles
+    between microscopy images using OpenCV DIS optical flow. It handles
     parameter validation, unit conversion, and supports both single-frame and
     time series analysis.
     """
@@ -48,7 +48,7 @@ class DisplacementService:
 
         Args:
             params (DisplacementParameters): Configuration including:
-                - TV-L1 algorithm parameters (tau, lambda_, theta, etc.)
+                - DIS algorithm parameters
                 - Physical parameters (pixel size, frame interval)
                 - Processing options (downscaling factor)
                 - Visualization settings
@@ -59,9 +59,7 @@ class DisplacementService:
         Example:
             >>> params = DisplacementParameters(
             ...     pixel_size=0.1,  # 0.1 μm per pixel
-            ...     downscale_factor=4,
-            ...     tau=0.1,
-            ...     lambda_=0.15
+            ...     downscale_factor=4
             ... )
             >>> service = DisplacementService(params)
         """
@@ -69,21 +67,7 @@ class DisplacementService:
         if not is_valid:
             raise ValueError(error_msg)
 
-        tvl1_params = DisplacementParameters(
-            tau=params.tau,
-            lambda_=params.lambda_,
-            theta=params.theta,
-            nscales=params.nscales,
-            warps=params.warps,
-            epsilon=params.epsilon,
-            inner_iterations=params.inner_iterations,
-            outer_iterations=params.outer_iterations,
-            scale_step=params.scale_step,
-            median_filtering=params.median_filtering,
-            downscale_factor=params.downscale_factor
-        )
-
-        self.analyzer = DisplacementAnalyzer(tvl1_params)
+        self.analyzer = DisplacementAnalyzer(params)
         self.params = params
 
     def update_parameters(self, parameters: DisplacementParameters):
@@ -102,21 +86,7 @@ class DisplacementService:
         if not is_valid:
             raise ValueError(error_msg)
 
-        tvl1_params = DisplacementParameters(
-            tau=parameters.tau,
-            lambda_=parameters.lambda_,
-            theta=parameters.theta,
-            nscales=parameters.nscales,
-            warps=parameters.warps,
-            epsilon=parameters.epsilon,
-            inner_iterations=parameters.inner_iterations,
-            outer_iterations=parameters.outer_iterations,
-            scale_step=parameters.scale_step,
-            median_filtering=parameters.median_filtering,
-            downscale_factor=parameters.downscale_factor
-        )
-
-        self.analyzer = DisplacementAnalyzer(tvl1_params)
+        self.analyzer = DisplacementAnalyzer(parameters)
         self.params = parameters
 
     @staticmethod
@@ -124,7 +94,7 @@ class DisplacementService:
         """Validate displacement analysis parameters.
 
         Checks all parameters for physical and numerical validity including:
-        - Algorithm parameters (tau, lambda_, theta, etc.)
+        - DIS optical flow parameters
         - Physical parameters (pixel size, frame interval)
         - Processing options (downscaling factor)
         - Visualization settings
@@ -138,7 +108,7 @@ class DisplacementService:
 
         Note:
             Specific validation rules include:
-            - All time steps and iterations must be positive
+            - Iterations must be positive
             - Scaling factors must be ≥ 1
             - Physical parameters must be positive
             - Theta must be between 0 and 10
@@ -182,7 +152,7 @@ class DisplacementService:
     ) -> Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]:
         """Calculate optical flow between reference and target image(s).
 
-        Computes displacement fields using TV-L1 optical flow, with optional
+        Computes displacement fields using DIS optical flow, with optional
         downscaling for efficiency. For time series, yields intermediate results
         to allow progress tracking.
 

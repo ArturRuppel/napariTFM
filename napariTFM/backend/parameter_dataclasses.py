@@ -20,16 +20,10 @@ class PreprocessingParameters:
 @dataclass
 class DisplacementParameters:
     """Parameters for displacement analysis"""
-    # TV-L1 optical flow parameters
-    tau: float = 0.25
-    lambda_: float = 0.1
-    theta: float = 0.3
+    # DIS optical flow parameters
     nscales: int = 3
-    warps: int = 3
-    epsilon: float = 0.01
     inner_iterations: int = 15
     outer_iterations: int = 5
-    scale_step: float = 0.5
     median_filtering: int = 5
 
     # Analysis parameters
@@ -122,15 +116,9 @@ class UnifiedParameters:
     registration_mode: str = 'translation'
 
     # Displacement parameters
-    tau: float = 0.25
-    lambda_: float = 0.1
-    theta: float = 0.3
     nscales: int = 3
-    warps: int = 3
-    epsilon: float = 0.01
     inner_iterations: int = 15
     outer_iterations: int = 5
-    scale_step: float = 0.5
     median_filtering: int = 5
     downscale_factor: int = 4
     disp_vector_stride: int = 20
@@ -174,15 +162,9 @@ class UnifiedParameters:
     def to_displacement_parameters(self) -> DisplacementParameters:
         """Create DisplacementParameters from unified parameters"""
         return DisplacementParameters(
-            tau=self.tau,
-            lambda_=self.lambda_,
-            theta=self.theta,
             nscales=self.nscales,
-            warps=self.warps,
-            epsilon=self.epsilon,
             inner_iterations=self.inner_iterations,
             outer_iterations=self.outer_iterations,
-            scale_step=self.scale_step,
             median_filtering=self.median_filtering,
             downscale_factor=self.downscale_factor,
             pixel_size=self.pixel_size,

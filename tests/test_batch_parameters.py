@@ -128,3 +128,27 @@ def test_batch_fttc_parameters_honor_auto_gcv():
     params = analysis._create_fttc_parameters()
 
     assert params.auto_gcv is True
+
+
+def test_batch_displacement_parameters_do_not_require_removed_tvl1_keys():
+    analysis = BatchAnalysis.__new__(BatchAnalysis)
+    analysis.config = {
+        "parameters": {
+            "nscales": 3,
+            "inner_iterations": 15,
+            "outer_iterations": 5,
+            "median_filtering": 5,
+            "downscale_factor": 4,
+            "pixel_size": 0.1,
+            "frame_interval": 1.0,
+            "d_max": 1.0,
+            "disp_vector_stride": 20,
+            "disp_arrow_scale": 1.0,
+        }
+    }
+
+    params = analysis._create_displacement_parameters()
+
+    assert params.nscales == 3
+    assert params.inner_iterations == 15
+    assert params.outer_iterations == 5

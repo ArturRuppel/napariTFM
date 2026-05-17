@@ -153,72 +153,16 @@ class DisplacementParameterPanel(QWidget):
 
     def _create_flow_parameters(self) -> QGroupBox:
         """Create optical flow parameter group."""
-        group = QGroupBox("Optical Flow Parameters")
+        group = QGroupBox("DIS Optical Flow Parameters")
         layout = QVBoxLayout()
 
-        # Basic parameter (lambda)
-        lambda_layout = QHBoxLayout()
-        lambda_layout.addWidget(QLabel("Lambda:"))
-        lambda_spin = QDoubleSpinBox()
-        lambda_spin.setFixedWidth(135)
-        lambda_spin.setRange(0.01, 1.0)
-        lambda_spin.setSingleStep(0.01)
-        lambda_spin.setDecimals(2)
-        lambda_spin.setToolTip("Weight parameter for the data term. Smaller values produce smoother solutions.")
-        self.parameter_spins['lambda_'] = lambda_spin
-        lambda_layout.addWidget(lambda_spin)
-        layout.addLayout(lambda_layout)
-
-        # Advanced parameters section
-        advanced_container = QWidget()
-        advanced_layout = QVBoxLayout()
-        advanced_layout.setContentsMargins(0, 0, 0, 0)
-        advanced_layout.setSpacing(5)
-
-        # Create a custom label-style toggle
-        toggle_container = QWidget()
-        toggle_layout = QHBoxLayout()
-        toggle_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.arrow_label = QLabel("▶")
-        self.text_label = QLabel("Advanced Parameters")
-
-        toggle_layout.addWidget(self.arrow_label)
-        toggle_layout.addWidget(self.text_label)
-        toggle_layout.addStretch()  # Push widgets to the left
-
-        toggle_container.setLayout(toggle_layout)
-        toggle_container.setCursor(Qt.PointingHandCursor)  # Show pointer cursor on hover
-
-        # Install event filter for click handling
-        toggle_container.mousePressEvent = self._toggle_advanced_parameters
-
-        layout.addWidget(toggle_container)
-
-        # Container for advanced parameters
-        self.advanced_widget = QWidget()
-        self.advanced_widget.setVisible(False)
-        advanced_params_layout = QVBoxLayout()
-        advanced_params_layout.setContentsMargins(10, 0, 0, 0)  # Add left indent
-
-        # Define advanced parameters with tooltips
         params = [
-            ("tau", "Tau:", 0.1, 1.0, 0.01,
-             "Time step of the numerical scheme. Smaller values may improve accuracy but increase computation time."),
-            ("theta", "Theta:", 0.01, 1.0, 0.01,
-             "Weight parameter that balances between matching image intensities (data term) and ensuring smooth transitions between neighboring flow vectors. Lower values recommended."),
-            ("nscales", "Pyramid Scales:", 1, 50, 1,
-             "Number of image pyramid levels. More levels allow detection of larger displacements but increase computation time. Reduce if small displacements expected."),
-            ("warps", "Warps:", 1, 50, 1,
-             "Number of warpings per scale. More warps increase accuracy but increase computation time."),
-            ("epsilon", "Epsilon:", 0.001, 0.1, 0.001,
-             "Stopping criterion threshold. Lower values give more precise results but increase computation time."),
-            ("inner_iterations", "Inner Iterations:", 1, 50, 1,
-             "Inner iterations between outlier filtering. More iterations may improve accuracy but increase computation time."),
-            ("outer_iterations", "Outer Iterations:", 1, 20, 1,
-             "Outer iterations (number of inner loops). More iterations may improve accuracy but increase computation time."),
-            ("scale_step", "Scale Step:", 0.1, 0.99, 0.01,
-             "Scale factor between pyramid levels. For a 1000x1000 image with scale_step=0.5: 1000→500→250→125. With scale_step=0.8: 1000→800→640→512"),
+            ("nscales", "Pyramid Levels:", 1, 50, 1,
+             "Number of DIS pyramid levels. More levels handle larger displacements but increase computation time."),
+            ("inner_iterations", "Gradient Descent Iterations:", 1, 50, 1,
+             "DIS gradient descent iterations. More iterations may improve accuracy but increase computation time."),
+            ("outer_iterations", "Refinement Iterations:", 0, 20, 1,
+             "DIS variational refinement iterations. Increase for smoother dense fields."),
             ("median_filtering", "Median Filter:", 1, 5, 2,
              "Median filter kernel size (1 = no filter) (3 or 5)"),
         ]
@@ -237,28 +181,15 @@ class DisplacementParameterPanel(QWidget):
                 spin.setFixedWidth(135)
                 spin.setRange(min_val, max_val)
                 spin.setSingleStep(step)
-                if name == "epsilon":
-                    spin.setDecimals(3)
-                else:
-                    spin.setDecimals(2)
+                spin.setDecimals(2)
 
             spin.setToolTip(tooltip)
             self.parameter_spins[name] = spin
             row.addWidget(spin)
-            advanced_params_layout.addLayout(row)
-
-        self.advanced_widget.setLayout(advanced_params_layout)
-        advanced_layout.addWidget(self.advanced_widget)
-        advanced_container.setLayout(advanced_layout)
-        layout.addWidget(advanced_container)
+            layout.addLayout(row)
 
         group.setLayout(layout)
         return group
-
-    def _toggle_advanced_parameters(self, event):
-        """Toggle visibility of advanced parameters."""
-        self.advanced_widget.setVisible(not self.advanced_widget.isVisible())
-        self.arrow_label.setText("▼" if self.advanced_widget.isVisible() else "▶")
     def _create_analysis_parameters(self) -> QGroupBox:
         """Create analysis parameter group."""
         group = QGroupBox("Analysis Parameters")

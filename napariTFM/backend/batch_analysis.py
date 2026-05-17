@@ -667,13 +667,12 @@ class BatchAnalysis:
         2. Optionally loads cell images if specified in config
         3. Applies preprocessing pipeline:
             - Background subtraction
-            - Optical flow calculation (e.g., TV-L1)
+            - Optical flow calculation (DIS)
             - Optional downscaling and filtering
         4. Saves displacement field as NumPy array
 
         The displacement parameters are taken from the config:
-            - tau, lambda_, theta (TV-L1 parameters)
-            - nscales, warps, epsilon (pyramidal optical flow parameters)
+            - nscales, inner_iterations, outer_iterations (DIS parameters)
             - downscale_factor, pixel_size
 
         Raises
@@ -1019,15 +1018,9 @@ class BatchAnalysis:
     def _create_displacement_parameters(self) -> DisplacementParameters:
         """Create displacement parameters from config."""
         return DisplacementParameters(
-            tau=self.config['parameters']['tau'],
-            lambda_=self.config['parameters']['lambda_'],
-            theta=self.config['parameters']['theta'],
             nscales=self.config['parameters']['nscales'],
-            warps=self.config['parameters']['warps'],
-            epsilon=self.config['parameters']['epsilon'],
             inner_iterations=self.config['parameters']['inner_iterations'],
             outer_iterations=self.config['parameters']['outer_iterations'],
-            scale_step=self.config['parameters']['scale_step'],
             median_filtering=self.config['parameters']['median_filtering'],
             downscale_factor=self.config['parameters']['downscale_factor'],
             pixel_size=self.config['parameters']['pixel_size'],

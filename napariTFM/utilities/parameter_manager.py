@@ -174,8 +174,7 @@ class ParameterManager(QObject):
                 'registration_mode'
             ],
             ParameterCategory.DISPLACEMENT: [
-                'tau', 'lambda_', 'theta', 'nscales', 'warps', 'epsilon',
-                'inner_iterations', 'outer_iterations', 'scale_step',
+                'nscales', 'inner_iterations', 'outer_iterations',
                 'median_filtering', 'downscale_factor',
                 'disp_vector_stride', 'disp_arrow_scale', 'd_max'
             ],
@@ -258,7 +257,12 @@ class ParameterManager(QObject):
 
         # Create new parameters instance with loaded values
         current_params = asdict(self._parameters)
-        current_params.update(data)
+        valid_parameter_names = {field.name for field in fields(UnifiedParameters)}
+        current_params.update({
+            name: value
+            for name, value in data.items()
+            if name in valid_parameter_names
+        })
         new_params = UnifiedParameters(**current_params)
 
         # Update all parameters

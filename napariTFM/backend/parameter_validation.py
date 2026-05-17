@@ -28,32 +28,14 @@ def validate_preprocessing_parameters(params: PreprocessingParameters) -> Tuple[
 
 
 def validate_displacement_parameters(params: DisplacementParameters) -> Tuple[bool, str]:
-    if params.tau <= 0:
-        return False, "tau must be positive"
-
-    if params.lambda_ <= 0:
-        return False, "lambda must be positive"
-
-    if not 0 < params.theta < 10:
-        return False, "theta must be between 0 and 10"
-
     if params.nscales < 1:
         return False, "nscales must be at least 1"
-
-    if params.warps < 1:
-        return False, "warps must be at least 1"
-
-    if params.epsilon <= 0:
-        return False, "epsilon must be positive"
 
     if params.inner_iterations < 1:
         return False, "inner_iterations must be at least 1"
 
-    if params.outer_iterations < 1:
-        return False, "outer_iterations must be at least 1"
-
-    if params.scale_step <= 0:
-        return False, "scale_step must be positive"
+    if params.outer_iterations < 0:
+        return False, "outer_iterations must be non-negative"
 
     if params.median_filtering < 0:
         return False, "median_filtering must be non-negative"
