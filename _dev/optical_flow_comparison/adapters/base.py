@@ -47,6 +47,9 @@ def sample_dense_at_points(flow: np.ndarray, points: np.ndarray) -> np.ndarray:
         shape (N, 2), columns (dx, dy). Points outside the image are clamped
         to the nearest edge value.
     """
+    if len(points) == 0:
+        return np.empty((0, 2), dtype=np.float32)
+
     h, w = flow.shape[:2]
     fx = np.clip(points[:, 0].astype(np.float32), 0.0, w - 1.0)
     fy = np.clip(points[:, 1].astype(np.float32), 0.0, h - 1.0)
