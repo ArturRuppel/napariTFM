@@ -26,9 +26,9 @@ from napariTFM.backend.displacement_analysis import (
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
 from napariTFM.backend.msm import MSMResult, calculate_stresses, create_mask_stack, generate_mesh_stack
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
+from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy, \
     calculate_moment_tensor, calculate_polarization
-from napariTFM.services.preprocessing_service import PreprocessingService
 
 
 # TODO black image when only one frame for cell-force overlay visualization
@@ -574,7 +574,6 @@ class BatchAnalysis:
         print("Starting Preprocessing...")
         start_time = time()
         params = self._create_preprocessing_parameters()
-        preprocessing_service = PreprocessingService(params)
 
         # Process bead images
         bead_stack = tifffile.imread(str(folder / self.config['input_files']['beads']))
@@ -590,17 +589,17 @@ class BatchAnalysis:
                 print(f"Warning: Cell image file specified but not found: {self.config['input_files']['cells']}")
 
         bead_results = []
-        for result, frame, total in preprocessing_service.preprocess_stack(bead_stack, reference):
+        for result, frame, total in preprocess_stack(bead_stack, params, reference):
             bead_results.append(result)
             print(f"Progress (beads): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
 
-        reference_result = preprocessing_service.preprocess_frame(reference)
+        reference_result = preprocess_frame(reference, params)
 
         # Process cell images if available
         cell_results = []
         if cell_stack is not None:
             print("Processing cell images...")
-            for result, frame, total in preprocessing_service.preprocess_stack(cell_stack, reference_image=None, is_cell=True):
+            for result, frame, total in preprocess_stack(cell_stack, params, reference_image=None, is_cell=True):
                 cell_results.append(result)
                 print(f"Progress (cells): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
 
@@ -670,12 +669,12 @@ class BatchAnalysis:
         2. Optionally loads cell images if specified in config
         3. Applies preprocessing pipeline:
             - Background subtraction
-            - Optical flow calculation (DIS)
+            - Optical flow calculation (Farneback)
             - Optional downscaling and filtering
         4. Saves displacement field as NumPy array
 
         The displacement parameters are taken from the config:
-            - nscales, inner_iterations, outer_iterations (DIS parameters)
+            - nscales, inner_iterations, median_filtering (Farneback parameters)
             - downscale_factor, pixel_size
 
         Raises
@@ -1022,7 +1021,7 @@ class BatchAnalysis:
         return DisplacementParameters(
             nscales=self.config['parameters']['nscales'],
             inner_iterations=self.config['parameters']['inner_iterations'],
-            outer_iterations=self.config['parameters']['outer_iterations'],
+            outer_iterations=self.config['parameters'].get('outer_iterations', 0),
             median_filtering=self.config['parameters']['median_filtering'],
             downscale_factor=self.config['parameters']['downscale_factor'],
             pixel_size=self.config['parameters']['pixel_size'],

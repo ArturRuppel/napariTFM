@@ -1,9 +1,157 @@
-import numpy as np
-import cv2
-from scipy.ndimage import gaussian_filter
 import logging
+from dataclasses import dataclass
+from typing import Any, Dict, Generator, List, Optional, Tuple
+
+import cv2
+import numpy as np
+from scipy.ndimage import gaussian_filter
+
+from napariTFM.backend.parameter_dataclasses import PreprocessingParameters
+from napariTFM.backend.parameter_validation import validate_preprocessing_parameters
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PreprocessingIntermediateResult:
+    """Results from preprocessing operations on microscopy images."""
+
+    processed_image: np.ndarray
+    transform_matrix: Optional[np.ndarray] = None
+    info: Dict[str, Any] = None
+
+
+def validate_preprocessing_image(image: np.ndarray) -> Tuple[bool, str]:
+    """Validate input image data for preprocessing."""
+    if image is None:
+        return False, "No image data provided"
+
+    if not isinstance(image, np.ndarray):
+        return False, "Image must be a numpy array"
+
+    if image.ndim not in (2, 3):
+        return False, "Image must be 2D or 3D (time series)"
+
+    if np.all(np.isnan(image)):
+        return False, "Image contains only NaN values"
+
+    return True, ""
+
+
+def _validate_parameters(params: PreprocessingParameters) -> None:
+    is_valid, error_msg = validate_preprocessing_parameters(params)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+
+def preprocess_frame(
+    image: np.ndarray,
+    params: PreprocessingParameters,
+    is_cell: bool = False,
+    reference_image: Optional[np.ndarray] = None,
+    processor: Optional["ImageProcessor"] = None,
+) -> PreprocessingIntermediateResult:
+    """Preprocess a single microscopy image frame."""
+    _validate_parameters(params)
+
+    is_valid, error_msg = validate_preprocessing_image(image)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    processor = processor or ImageProcessor()
+    info = {
+        "original_dtype": image.dtype,
+        "original_range": (float(image.min()), float(image.max())),
+        "original_mean": float(image.mean()),
+        "original_std": float(image.std()),
+    }
+
+    if is_cell:
+        min_percentile = params.cell_min_intensity_percentile
+        max_percentile = params.cell_max_intensity_percentile
+        gaussian_sigma = params.cell_gaussian_sigma
+        processed = image
+        rolling_ball_radius = None
+    else:
+        min_percentile = params.min_intensity_percentile
+        max_percentile = params.max_intensity_percentile
+        gaussian_sigma = params.gaussian_sigma
+        processed = processor.apply_rolling_ball(image, params.rolling_ball_radius)
+        rolling_ball_radius = params.rolling_ball_radius
+
+    processed = processor.apply_gaussian_filter(processed, gaussian_sigma)
+    processed, intensity_range = processor.apply_intensity_scaling(
+        processed,
+        min_percentile,
+        max_percentile,
+    )
+
+    transform_matrix = None
+    if reference_image is not None and params.registration_mode != "no registration":
+        processed, transform_matrix = processor.register_to_reference(
+            processed,
+            reference_image,
+            params.registration_mode,
+        )
+
+    info.update({
+        "final_mean": float(processed.mean()),
+        "final_std": float(processed.std()),
+        "intensity_range": intensity_range,
+        "gaussian_sigma": gaussian_sigma,
+        "rolling_ball_radius": rolling_ball_radius,
+    })
+
+    return PreprocessingIntermediateResult(
+        processed_image=processed,
+        transform_matrix=transform_matrix,
+        info=info,
+    )
+
+
+def preprocess_stack(
+    image_stack: Optional[np.ndarray],
+    params: PreprocessingParameters,
+    reference_image: Optional[np.ndarray] = None,
+    is_cell: bool = False,
+) -> Generator[
+    Tuple[PreprocessingIntermediateResult, int, int],
+    None,
+    List[PreprocessingIntermediateResult],
+]:
+    """Process an image stack with progress tracking."""
+    _validate_parameters(params)
+
+    if image_stack is None:
+        return []
+
+    is_valid, error_msg = validate_preprocessing_image(image_stack)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    if image_stack.ndim == 2:
+        image_stack = image_stack[np.newaxis, ...]
+
+    results = []
+    total_frames = image_stack.shape[0]
+
+    processed_reference = None
+    if reference_image is not None:
+        reference_result = preprocess_frame(reference_image, params)
+        processed_reference = reference_result.processed_image
+
+    for frame in range(total_frames):
+        result = preprocess_frame(
+            image_stack[frame],
+            params,
+            is_cell=is_cell,
+            reference_image=processed_reference,
+        )
+        results.append(result)
+        yield result, frame, total_frames
+
+    return results
+
 
 class ImageProcessor:
     """Core image processing operations for microscopy image analysis.

@@ -14,8 +14,10 @@
 
 - Commit `7c6890b`: workflow shell refactor, backend validation extraction, batch parameter centralization, DIS backend replacement.
 - Commit `41fc7e4`: active displacement parameter surface aligned with OpenCV DIS.
-- Verification baseline: `conda run -n napariTFMv2 python -m pytest tests -q` reports `16 passed`.
-- Worktree expectation before the next implementation slice: only `_dev/` may remain untracked.
+- Commits `7571616`, `d2f7989`, `e5cdaf3`: displacement, FTTC, and MSM service layers removed.
+- Current slice: preprocessing service layer removed; preprocessing orchestration now lives in `napariTFM.backend.preprocessing`.
+- Verification baseline: `conda run -n napariTFMv2 python -m pytest tests -q` reports `44 passed`.
+- Worktree expectation before the next implementation slice: unrelated algorithm experiment files under `_dev/` and `_validation/` may remain dirty.
 
 ## Roadmap
 
@@ -85,11 +87,12 @@
 - `napariTFM/widgets/*_widget.py`
 - Focused tests for each analysis stage.
 
-- [ ] Classify each service method as orchestration, validation, DTO packaging, or pure computation.
-- [ ] Move pure computation and validation into backend modules.
-- [ ] Keep a thin frontend-facing orchestration layer only where it owns progress, cancellation, or widget-friendly result packaging.
-- [ ] Remove pass-through service code one stage at a time.
-- [ ] After each stage, verify widget construction and focused backend tests.
+- [x] Classify each service method as orchestration, validation, DTO packaging, or pure computation.
+- [x] Move pure computation and validation into backend modules.
+- [x] Remove pass-through service code one stage at a time for displacement, FTTC, MSM, and preprocessing.
+- [x] After each stage, verify focused backend tests and the full test suite.
+- [ ] Preserve or document compatibility for old pickled result objects whose dataclass module paths changed.
+- [ ] Do a final scan for stale `services.*_service` references outside production tests and roadmap notes.
 
 **Checkpoint:** One commit per stage, for example `Simplify displacement orchestration boundary`.
 

@@ -22,8 +22,8 @@ from napariTFM.backend.parameter_validation import (
     validate_displacement_parameters,
     validate_fttc_parameters,
     validate_msm_parameters,
+    validate_preprocessing_parameters,
 )
-from napariTFM.services.preprocessing_service import PreprocessingService
 from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
 
 
@@ -112,7 +112,7 @@ def test_parameter_manager_validation_does_not_import_services(monkeypatch):
 
 
 def test_validation_helpers_return_compatible_results():
-    assert PreprocessingService.validate_parameters(
+    assert validate_preprocessing_parameters(
         PreprocessingParameters(min_intensity_percentile=80, max_intensity_percentile=20)
     ) == (False, "Invalid intensity percentile range")
 

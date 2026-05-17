@@ -21,7 +21,7 @@ from qtrangeslider import QRangeSlider
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
 from napariTFM.utilities.colorbar import ColorbarManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
-from napariTFM.services.preprocessing_service import PreprocessingService
+from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 
 class PreprocessingDataPanel(QWidget):
     """Panel for handling data loading and status display."""
@@ -741,10 +741,9 @@ class PreprocessingController(QObject):
     ui_frozen = Signal(bool)
 
     # region === Initialization
-    def __init__(self, viewer, service, data_manager, parameter_manager, visualization_manager):
+    def __init__(self, viewer, data_manager, parameter_manager, visualization_manager):
         super().__init__()
         self.viewer = viewer
-        self.service = service
         self.data_manager = data_manager
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
@@ -806,14 +805,14 @@ class PreprocessingController(QObject):
     def _create_processing_worker(self):
         """Create worker for processing data."""
         params = self.parameter_manager.get_preprocessing_parameters()
-        self.service.update_parameters(params)
 
         results = []
 
         # Process bead stack with generator
         if self.data_manager.bead_stack is not None:
-            for result, frame, total in self.service.preprocess_stack(
+            for result, frame, total in preprocess_stack(
                     image_stack=self.data_manager.bead_stack,
+                    params=params,
                     reference_image=self.data_manager.reference
             ):
                 results.append(result)
@@ -821,13 +820,14 @@ class PreprocessingController(QObject):
 
         # Process reference image
         if self.data_manager.reference is not None:
-            results.append(self.service.preprocess_frame(self.data_manager.reference))
+            results.append(preprocess_frame(self.data_manager.reference, params))
 
         # Process cell stack if available
         if self.data_manager.cell_stack is not None:
             start_progress = len(results)
-            for result, frame, total in self.service.preprocess_stack(
+            for result, frame, total in preprocess_stack(
                     image_stack=self.data_manager.cell_stack,
+                    params=params,
                     is_cell=True
             ):
                 results.append(result)
@@ -957,13 +957,12 @@ class PreprocessingController(QObject):
             else:
                 frame = data.copy()
 
-            # Get parameters and update service
             params = self.parameter_manager.get_preprocessing_parameters()
-            self.service.update_parameters(params)
 
             # Process frame
-            result = self.service.preprocess_frame(
+            result = preprocess_frame(
                 frame,
+                params,
                 is_cell=(self.current_data_type == 'cells')
             )
 
@@ -1204,9 +1203,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
     ):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Initialize managers and service
+        # Initialize managers
         self.parameter_manager = parameter_manager
-        self.service = PreprocessingService(parameter_manager.get_preprocessing_parameters())
         self.colorbar_manager = ColorbarManager()
 
         # Initialize panels
@@ -1216,7 +1214,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Initialize controller
         self.controller = PreprocessingController(
             viewer=viewer,
-            service=self.service,
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager
