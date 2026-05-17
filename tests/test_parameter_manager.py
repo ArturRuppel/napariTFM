@@ -21,8 +21,8 @@ from napariTFM.backend.parameter_dataclasses import (
 from napariTFM.backend.parameter_validation import (
     validate_displacement_parameters,
     validate_fttc_parameters,
+    validate_msm_parameters,
 )
-from napariTFM.services.msm_service import MSMService
 from napariTFM.services.preprocessing_service import PreprocessingService
 from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
 
@@ -124,6 +124,6 @@ def test_validation_helpers_return_compatible_results():
         FTTCParameters(young_modulus=0)
     ) == (False, "Young's modulus must be positive")
 
-    assert MSMService.validate_parameters(
+    assert validate_msm_parameters(
         MSMParameters(density_factor=0.001)
     ) == (False, "Density factor is too low (< 0.005). This may lead to numerical instabilities.")

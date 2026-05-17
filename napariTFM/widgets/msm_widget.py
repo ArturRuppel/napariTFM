@@ -12,11 +12,18 @@ from qtpy.QtWidgets import (
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
 
 from napariTFM.backend.parameter_dataclasses import MSMParameters
+from napariTFM.backend.msm import (
+    MSMResult,
+    calculate_stresses,
+    create_mask_stack,
+    create_preview_mask,
+    generate_mesh_stack,
+    process_mask_data,
+)
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
 from napariTFM.utilities.colorbar import ColorbarManager
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
-from napariTFM.services.msm_service import MSMService, MSMResult
 from napariTFM.utilities.visualization_manager import VisualizationManager
 
 
@@ -566,7 +573,7 @@ class MSMDataPanel(QWidget):
                 )
 
             # Process masks (resizing if needed)
-            processed_masks, warnings = self.controller.service.process_mask_data(
+            processed_masks, warnings = process_mask_data(
                 mask_data,
                 force_field
             )
@@ -758,12 +765,11 @@ class MSMController(QObject):
     mask_creation_failed = Signal(str)
     ui_frozen = Signal(bool)
 
-    def __init__(self, viewer: Viewer, service: MSMService,
+    def __init__(self, viewer: Viewer,
                  data_manager: DataManager, parameter_manager: ParameterManager,
                  visualization_manager: VisualizationManager, data_panel: MSMDataPanel):
         super().__init__()
         self.viewer = viewer
-        self.service = service
         self.data_manager = data_manager
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
@@ -803,8 +809,7 @@ class MSMController(QObject):
                 target_shape = force_field[0].shape[:2]
                 downscale_factor = self.data_manager.force_results.parameters.downscale_factor
 
-            # Create preview mask using MSM service
-            preview_mask = self.service.create_preview_mask(
+            preview_mask = create_preview_mask(
                 image,
                 threshold_percentile=params.threshold,
                 dilation=params.dilation,
@@ -871,9 +876,7 @@ class MSMController(QObject):
             self.analysis_started.emit()
             self._update_progress(0, "Starting analysis...")
 
-            # Get current parameters and update service
             params = self._get_current_parameters()
-            self.service.update_parameters(params)
 
             # Get mask and force data
             masks = self.data_manager.mask_stack
@@ -886,7 +889,7 @@ class MSMController(QObject):
 
             # First generate all meshes in the main thread
             print("Generating meshes for all frames...")
-            mesh_generator = self.service.generate_mesh_stack(masks)
+            mesh_generator = generate_mesh_stack(masks, params)
             mesh_data = []
 
             # Process mesh generation results in main thread
@@ -914,16 +917,17 @@ class MSMController(QObject):
             def stress_calculation_worker():
                 try:
                     # Get stress generator with pre-generated meshes
-                    stress_generator = self.service.calculate_stresses(
+                    stress_generator = calculate_stresses(
                         force_field=force_results.force_field,
                         masks=masks,
+                        params=params,
                         mesh_data=mesh_data
                     )
 
                     while True:
                         result, current_frame, total_frames = next(stress_generator)
-                        progress = 50 + int((current_frame + 1) / total_frames * 50)  # Start from 50%
-                        yield (progress, f"Calculating stress: Frame {current_frame + 1}/{total_frames}", result)
+                        progress = 50 + int(current_frame / total_frames * 50)  # Start from 50%
+                        yield (progress, f"Calculating stress: Frame {current_frame}/{total_frames}", result)
 
                 except StopIteration as e:
                     return e.value
@@ -1035,9 +1039,7 @@ class MSMController(QObject):
             else:
                 current_frame = self.viewer.dims.current_step[0]
 
-            # Get current parameters and update service
             params = self._get_current_parameters()
-            self.service.update_parameters(params)
 
             # Get mask and force data for current frame
             masks = self.data_manager.mask_stack
@@ -1053,9 +1055,10 @@ class MSMController(QObject):
             force_field = force_results.force_field[current_frame] if force_results.force_field.ndim > 3 else force_results.force_field
 
             # Calculate stress field for current frame
-            stress_generator = self.service.calculate_stresses(
+            stress_generator = calculate_stresses(
                 force_field=force_field[np.newaxis, ...],
                 masks=mask[np.newaxis, ...],
+                params=params,
             )
 
             try:
@@ -1142,17 +1145,18 @@ class MSMController(QObject):
             total_frames = force_field.shape[0]
 
             # Initialize stress generator with explicit mask passing
-            stress_generator = self.service.calculate_stresses(
+            stress_generator = calculate_stresses(
                 force_field=force_field,
                 masks=masks,
+                params=params,
                 mesh_data=mesh_results
             )
 
             try:
                 while True:
                     result, current_frame, total_frames = next(stress_generator)
-                    progress = int((current_frame + 1) / total_frames * 100)
-                    yield (progress, f"Calculating stress: Frame {current_frame + 1}/{total_frames}")
+                    progress = int(current_frame / total_frames * 100)
+                    yield (progress, f"Calculating stress: Frame {current_frame}/{total_frames}")
             except StopIteration as e:
                 return e.value
 
@@ -1161,22 +1165,12 @@ class MSMController(QObject):
         self.active_workers.append(worker)
 
         def on_returned(results):
-            # Create MSMResult object
-            stress_result = MSMResult(
-                stress_tensor=results.stress_tensor,
-                nodes=results.nodes,
-                elements=results.elements,
-                parameters=params,
-                condition_number=results.condition_number,
-                residual=results.residual
-            )
-
             # Update data manager with results
-            self.data_manager.set_stress_results(stress_result)
+            self.data_manager.set_stress_results(results)
 
             # Update visualization
             self.visualization_manager.visualize_stress_results(
-                stress_result,
+                results,
                 max_stress=params.max_stress
             )
 
@@ -1332,7 +1326,7 @@ class MSMController(QObject):
 
             @thread_worker
             def mask_creation_worker():
-                mask_generator = self.service.create_mask_stack(image_data, params)
+                mask_generator = create_mask_stack(image_data, params)
                 total_frames = image_data.shape[0] if image_data.ndim > 2 else 1
 
                 try:
@@ -1385,7 +1379,7 @@ class MSMController(QObject):
     def _generate_mesh_stack(self, masks, params):
         """Generate mesh stack in the main thread."""
         try:
-            mesh_generator = self.service.generate_mesh_stack(masks, params)
+            mesh_generator = generate_mesh_stack(masks, params)
             total_frames = masks.shape[0]
             mesh_results = []
 
@@ -1426,9 +1420,7 @@ class MSMController(QObject):
             else:
                 current_frame = self.viewer.dims.current_step[0]
 
-            # Get current parameters and update service
             params = self._get_current_parameters()
-            self.service.update_parameters(params)
 
             # Get mask for current frame
             masks = self.data_manager.mask_stack
@@ -1437,8 +1429,7 @@ class MSMController(QObject):
 
             mask = masks[current_frame] if masks.ndim > 2 else masks
 
-            # Generate mesh using service
-            mesh_generator = self.service.generate_mesh_stack(mask)
+            mesh_generator = generate_mesh_stack(mask, params)
 
             try:
                 # Get first mesh result
@@ -1512,14 +1503,12 @@ class MSMWidget(BaseAnalysisWidget):
     ):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Store managers and create service
+        # Store managers
         self.parameter_manager = parameter_manager
 
         # Get initial parameters from parameter manager
         self.msm_params = parameter_manager.get_msm_parameters()
 
-        # Initialize service with parameters
-        self.service = MSMService(self.msm_params)
         self.colorbar_manager = ColorbarManager()
 
         # Initialize panels
@@ -1529,7 +1518,6 @@ class MSMWidget(BaseAnalysisWidget):
         # Initialize controller
         self.controller = MSMController(
             viewer=viewer,
-            service=self.service,
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,
@@ -1688,7 +1676,6 @@ class MSMWidget(BaseAnalysisWidget):
         """Update service parameters when parameters are reset."""
         if category == ParameterCategory.STRESS:
             self.msm_params = self.parameter_manager.get_msm_parameters()
-            self.service.update_parameters(self.msm_params)
 
     def _handle_parameter_change(self, param_name: str, value: Any):
         """Update service parameters when individual parameters change."""
@@ -1699,7 +1686,6 @@ class MSMWidget(BaseAnalysisWidget):
         }
         if param_name in stress_params:
             self.msm_params = self.parameter_manager.get_msm_parameters()
-            self.service.update_parameters(self.msm_params)
 
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""

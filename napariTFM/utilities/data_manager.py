@@ -2,7 +2,7 @@ from typing import Optional
 import numpy as np
 from napariTFM.backend.displacement_analysis import DisplacementResult
 from napariTFM.backend.fttc import FTTCResult
-from napariTFM.services.msm_service import MSMResult
+from napariTFM.backend.msm import MSMResult
 
 
 class DataManager:

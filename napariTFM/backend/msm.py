@@ -32,8 +32,11 @@ The implementation provides methods for:
 4. Handling boundary conditions and numerical stability
 """
 
+from dataclasses import dataclass
+from typing import Dict, Generator, List, Optional, Tuple
 import warnings
 
+import numpy as np
 import solidspy.assemutil as ass
 import solidspy.postprocesor as pos
 from scipy.ndimage import binary_fill_holes, generate_binary_structure, binary_dilation, label, gaussian_filter, sum as ndimage_sum
@@ -45,7 +48,298 @@ from skimage.transform import resize
 
 from napariTFM.backend.mesh_generator import MeshGenerator
 from napariTFM.backend.msm_numba_functions import *
-from napariTFM.backend.parameter_dataclasses import MeshParameters
+from napariTFM.backend.parameter_dataclasses import MeshParameters, MSMParameters
+from napariTFM.backend.parameter_validation import validate_msm_parameters
+
+
+@dataclass
+class MSMResult:
+    """Results from Monolayer Stress Microscopy calculations."""
+    stress_tensor: np.ndarray
+    nodes: List[np.ndarray]
+    elements: List[np.ndarray]
+    condition_number: float
+    residual: float
+    parameters: MSMParameters
+    physical_scale: dict
+    original_shape: tuple
+    stress_shape: tuple
+
+
+def create_preview_mask(
+        image: np.ndarray,
+        threshold_percentile: float,
+        dilation: int,
+        smoothing_sigma: float,
+        target_shape: Optional[Tuple[int, int]] = None,
+        downscale_factor: int = 1
+) -> np.ndarray:
+    """Create a binary MSM preview mask from one image frame."""
+    base_mask = MonolayerStressMicroscopy.create_mask_from_image(
+        image,
+        threshold_percentile=threshold_percentile,
+        dilation=dilation,
+        smoothing_sigma=smoothing_sigma
+    )
+
+    if target_shape is not None and base_mask.shape != target_shape:
+        analysis_mask = resize(
+            base_mask.astype(float),
+            target_shape,
+            order=0,
+            preserve_range=True,
+            anti_aliasing=False
+        ) > 0.5
+    else:
+        analysis_mask = base_mask
+
+    if downscale_factor > 1:
+        vis_shape = (
+            analysis_mask.shape[0] * downscale_factor,
+            analysis_mask.shape[1] * downscale_factor
+        )
+        return resize(
+            analysis_mask.astype(float),
+            vis_shape,
+            order=0,
+            preserve_range=True,
+            anti_aliasing=False
+        ) > 0.5
+
+    return analysis_mask
+
+
+def create_mask_stack(
+        image_stack: np.ndarray,
+        params: MSMParameters,
+        target_shape: Optional[Tuple[int, int]] = None,
+) -> Generator[Tuple[np.ndarray, int, int], None, np.ndarray]:
+    """Create analysis masks from an image stack and yield per-frame progress."""
+    is_valid, error_msg = validate_msm_parameters(params)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    if image_stack.ndim == 2:
+        image_stack = image_stack[np.newaxis, ...]
+
+    total_frames = image_stack.shape[0]
+    analysis_masks = []
+
+    for frame in range(total_frames):
+        base_mask = MonolayerStressMicroscopy.create_mask_from_image(
+            image_stack[frame],
+            threshold_percentile=params.threshold,
+            dilation=params.dilation,
+            smoothing_sigma=params.smoothing_sigma
+        )
+
+        if target_shape is not None and base_mask.shape != target_shape:
+            analysis_mask = resize(
+                base_mask.astype(float),
+                target_shape,
+                order=0,
+                preserve_range=True,
+                anti_aliasing=False
+            ) > 0.5
+        else:
+            analysis_mask = base_mask
+
+        analysis_masks.append(analysis_mask)
+        yield analysis_mask, frame, total_frames
+
+    return np.stack(analysis_masks)
+
+
+def process_mask_data(
+        mask_data: np.ndarray,
+        force_field: Optional[np.ndarray] = None
+) -> Tuple[np.ndarray, List[str]]:
+    """Convert mask data to a validated boolean stack, resizing to force shape when needed."""
+    warnings_list = []
+
+    if mask_data is None:
+        raise ValueError("No mask data provided")
+
+    unique_values = np.unique(mask_data)
+    unique_values = unique_values[unique_values != 0]
+    if len(unique_values) > 1:
+        warnings_list.append("Multiple non-zero values detected in mask. Converting to binary (0 and 1).")
+
+    mask_data = mask_data > 0
+
+    if mask_data.ndim == 2:
+        mask_data = mask_data[np.newaxis, ...]
+
+    if mask_data.ndim != 3:
+        raise ValueError(f"Mask data must be 2D or 3D, got shape {mask_data.shape}")
+
+    if force_field is not None:
+        force_shape = force_field.shape[1:3]
+        if mask_data.shape[1:] != force_shape:
+            mask_data = np.stack([
+                resize(
+                    frame.astype(float),
+                    force_shape,
+                    order=0,
+                    preserve_range=True,
+                    anti_aliasing=False
+                ) > 0.5
+                for frame in mask_data
+            ])
+
+    return mask_data, warnings_list
+
+
+def generate_mesh_stack(
+        mask_stack: np.ndarray,
+        params: MSMParameters,
+) -> Generator[Tuple[np.ndarray, np.ndarray, Dict[str, float], int, int], None, List[Tuple[np.ndarray, np.ndarray, Dict[str, float]]]]:
+    """Generate finite-element meshes for each mask frame."""
+    is_valid, error_msg = validate_msm_parameters(params)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    if mask_stack.ndim == 2:
+        mask_stack = mask_stack[np.newaxis, ...]
+
+    total_frames = mask_stack.shape[0]
+    mesh_params = MeshParameters(
+        mask=mask_stack[0],
+        density_factor=params.density_factor,
+        mesh_algorithm=_get_algorithm_code(params.mesh_algorithm),
+        use_optimization=params.use_optimization
+    )
+    mesh_generator = MeshGenerator(mesh_params)
+    mesh_results = []
+
+    for frame in range(total_frames):
+        nodes, elements = mesh_generator.generate_mesh(mask_stack[frame])
+        quality_metrics = mesh_generator.analyze_mesh_quality(nodes, elements)
+        mesh_results.append((nodes, elements, quality_metrics))
+        yield nodes, elements, quality_metrics, frame, total_frames
+
+    return mesh_results
+
+
+def calculate_stresses(
+        force_field: np.ndarray,
+        masks: np.ndarray,
+        params: MSMParameters,
+        mesh_data: Optional[List[Tuple[np.ndarray, np.ndarray, Dict[str, float]]]] = None
+) -> Generator[Tuple[MSMResult, int, int], None, MSMResult]:
+    """Calculate MSM stress fields from traction forces and masks."""
+    is_valid, error_msg = validate_msm_parameters(params)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    if force_field.ndim == 3:
+        force_field = force_field[np.newaxis, ...]
+    if masks.ndim == 2:
+        masks = masks[np.newaxis, ...]
+
+    total_frames = force_field.shape[0]
+    stress_shape = (*force_field.shape[1:3], 2, 2)
+    stress_stack = np.zeros((total_frames, *stress_shape), dtype=np.float32)
+    nodes_stack = []
+    elements_stack = []
+    condition_numbers = []
+    residuals = []
+    physical_scale = _create_physical_scale(params)
+    analyzer = MonolayerStressMicroscopy(params, mask=None)
+
+    def process_frame(frame_idx):
+        tx = force_field[frame_idx, ..., 0]
+        ty = force_field[frame_idx, ..., 1]
+        current_mask = masks[frame_idx]
+
+        if current_mask.shape != tx.shape:
+            current_mask = resize(
+                current_mask.astype(float),
+                tx.shape,
+                order=0,
+                preserve_range=True,
+                anti_aliasing=False
+            ) > 0.5
+
+        if mesh_data is not None:
+            nodes, elements, _ = mesh_data[frame_idx]
+        else:
+            mesh_params = MeshParameters(
+                mask=current_mask,
+                density_factor=params.density_factor,
+                mesh_algorithm=_get_algorithm_code(params.mesh_algorithm),
+                use_optimization=params.use_optimization
+            )
+            mesh_generator = MeshGenerator(mesh_params)
+            nodes, elements = mesh_generator.generate_mesh(current_mask)
+
+        analyzer.mask = current_mask
+        analyzer.nodes = nodes
+        analyzer.elements = elements
+
+        stress_tensor, condition_number, residual = analyzer.calculate_stress_field(tx, ty)
+        stress_tensor *= params.downscale_factor * params.pixel_size * 1e-3
+
+        return stress_tensor, nodes, elements, condition_number, residual
+
+    for frame in range(total_frames):
+        stress_tensor, nodes, elements, condition_number, residual = process_frame(frame)
+
+        stress_stack[frame] = stress_tensor
+        nodes_stack.append(nodes)
+        elements_stack.append(elements)
+        condition_numbers.append(condition_number)
+        residuals.append(residual)
+
+        yield MSMResult(
+            stress_tensor=stress_stack[:frame + 1],
+            nodes=nodes,
+            elements=elements,
+            condition_number=condition_number,
+            residual=residual,
+            parameters=params,
+            physical_scale=physical_scale,
+            original_shape=force_field.shape[1:3],
+            stress_shape=stress_stack.shape[1:3]
+        ), frame + 1, total_frames
+
+    return MSMResult(
+        stress_tensor=stress_stack,
+        nodes=nodes_stack,
+        elements=elements_stack,
+        condition_number=np.mean(np.stack(condition_numbers)),
+        residual=np.mean(residuals),
+        parameters=params,
+        physical_scale=physical_scale,
+        original_shape=force_field.shape[1:3],
+        stress_shape=stress_stack.shape[1:3]
+    )
+
+
+def _create_physical_scale(params: MSMParameters) -> dict:
+    """Create physical scale information for MSM results."""
+    return {
+        'pixel_size': params.pixel_size,
+        'grid_spacing': params.pixel_size * params.downscale_factor,
+        'time_interval': params.frame_interval,
+        'stress_units': 'mN/m',
+        'grid_spacing_units': 'µm',
+        'time_interval_units': 'min',
+    }
+
+
+def _get_algorithm_code(algorithm_name: str) -> int:
+    """Convert configured mesh algorithm name to the gmsh algorithm code."""
+    algorithm_map = {
+        "frontal-del": 6,
+        "delaunay": 5,
+        "meshadapt": 1,
+        "bamg": 7,
+        "fd quads": 8,
+        "para pack": 9
+    }
+    normalized_name = algorithm_name.lower().replace(".", "").replace("-", " ")
+    return algorithm_map.get(normalized_name, 6)
 
 
 class MonolayerStressMicroscopy:

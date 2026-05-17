@@ -24,10 +24,10 @@ from napariTFM.backend.displacement_analysis import (
     calculate_displacement_field,
 )
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
+from napariTFM.backend.msm import MSMResult, calculate_stresses, create_mask_stack, generate_mesh_stack
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
 from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy, \
     calculate_moment_tensor, calculate_polarization
-from napariTFM.services.msm_service import MSMService
 from napariTFM.services.preprocessing_service import PreprocessingService
 
 
@@ -847,11 +847,10 @@ class BatchAnalysis:
         print("Starting Mask Creation...")
         start_time = time()
         params = self._create_msm_parameters()
-        msm_service = MSMService(params)
         masks = []
 
         # Create masks at full resolution (resizing to match force field happens in stress analysis)
-        for mask, frame, total in msm_service.create_mask_stack(cell_images, params):
+        for mask, frame, total in create_mask_stack(cell_images, params):
             masks.append(mask)
             self._log_mask_progress(mask, frame, total)
 
@@ -924,7 +923,6 @@ class BatchAnalysis:
         start_time = time()
 
         params = self._create_msm_parameters()
-        msm_service = MSMService(params)
 
         # Ensure mask_data is 3D (t, y, x)
         if mask_data.ndim == 2:
@@ -954,7 +952,7 @@ class BatchAnalysis:
         try:
             # Initialize mesh generation
             print("Generating meshes for all frames...")
-            mesh_generator = msm_service.generate_mesh_stack(mask_data)
+            mesh_generator = generate_mesh_stack(mask_data, params)
 
             # Store mesh data for all frames
             mesh_data = []
@@ -977,9 +975,10 @@ class BatchAnalysis:
             # Calculate stress for each frame
             print("Calculating stress fields...")
             # Get the generator
-            stress_generator = msm_service.calculate_stresses(
+            stress_generator = calculate_stresses(
                 force_field=force_data.force_field,  # Access forces from the dictionary
                 masks=mask_data,
+                params=params,
                 mesh_data=mesh_data
             )
 

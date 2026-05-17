@@ -19,7 +19,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 # Add the parent directory to path to import napariTFM modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from napariTFM.services.msm_service import MSMService
+from napariTFM.backend.msm import calculate_stresses
 from napariTFM.backend.parameter_dataclasses import MSMParameters
 
 
@@ -116,7 +116,7 @@ def get_msm_parameters():
 
 
 def calculate_msm_stress(trac_x, trac_y, params):
-    """Calculate stress field using MSMService with given parameters."""
+    """Calculate stress field with backend MSM helpers."""
     # Debug: Print data statistics
     print(f"  Input data ranges:")
     print(f"    Traction X: [{np.nanmin(trac_x):.6f}, {np.nanmax(trac_x):.6f}] Pa")
@@ -133,27 +133,23 @@ def calculate_msm_stress(trac_x, trac_y, params):
     trac_y_clean = np.nan_to_num(trac_y, nan=0.0)
     
     try:
-        # Initialize MSM service
-        print(f"  Initializing MSM service with parameters:")
+        print(f"  Initializing MSM calculation with parameters:")
         print(f"    Young's modulus: {params.young_modulus} Pa")
         print(f"    Poisson ratio: {params.poisson_ratio_cells}")
         print(f"    Density factor: {params.density_factor}")
         print(f"    Pixel size: {params.pixel_size} µm")
-        
-        service = MSMService(params)
-        
-        # Prepare force field in the format expected by MSMService (H, W, 2)
+
+        # Prepare force field in the backend MSM format (H, W, 2)
         force_field = np.stack([trac_x_clean, trac_y_clean], axis=-1)
-        
-        # Prepare masks (add time dimension as service expects 3D: T, H, W)
+
+        # Prepare masks (add time dimension as backend expects 3D: T, H, W)
         masks = mask[np.newaxis, ...]  # Shape: (1, H, W)
-        
-        print(f"  Running MSM calculation using service...")
+
+        print(f"  Running MSM calculation...")
         print(f"    Force field shape: {force_field.shape}")
         print(f"    Masks shape: {masks.shape}")
         
-        # Calculate stresses using the service - this returns a generator
-        stress_generator = service.calculate_stresses(force_field, masks)
+        stress_generator = calculate_stresses(force_field, masks, params)
         
         # Get the final result from the generator
         try:
@@ -1015,17 +1011,14 @@ def validate_square_plate_msm():
     # Run MSM calculation using the working approach from original square plate file
     print(f"\nRunning MSM calculation...")
     try:
-        service = MSMService(params)
-        
         # Use the working MSM calculation approach
-        # Prepare force field in the format expected by MSMService (H, W, 2)
+        # Prepare force field in the backend MSM format (H, W, 2)
         force_field = np.stack([trac_x, trac_y], axis=-1)
-        
-        # Prepare masks (add time dimension as service expects 3D: T, H, W)
+
+        # Prepare masks (add time dimension as backend expects 3D: T, H, W)
         masks = mask[np.newaxis, ...]  # Shape: (1, H, W)
-        
-        # Calculate stresses using the service - this returns a generator
-        stress_generator = service.calculate_stresses(force_field, masks)
+
+        stress_generator = calculate_stresses(force_field, masks, params)
         
         # Get the final result from the generator
         try:
