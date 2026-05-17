@@ -1,13 +1,13 @@
 from typing import Optional
 import numpy as np
-from napariTFM.services.displacement_service import DisplacementResult
+from napariTFM.backend.displacement_analysis import DisplacementResult
 from napariTFM.services.fttc_service import FTTCResult
 from napariTFM.services.msm_service import MSMResult
 
 
 class DataManager:
     """
-    DataManager storing complete Result objects from service layer.
+    DataManager storing complete analysis result objects.
     """
     def __init__(self):
         # Raw input data
@@ -21,7 +21,7 @@ class DataManager:
 
         self._mask_stack: Optional[np.ndarray] = None
 
-        # Analysis results as service Result objects
+        # Analysis results
         self._displacement_results: Optional[DisplacementResult] = None
         self._force_results: Optional[FTTCResult] = None
         self._stress_results: Optional[MSMResult] = None

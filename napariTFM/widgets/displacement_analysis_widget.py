@@ -12,10 +12,13 @@ from qtpy.QtWidgets import (
 )
 
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.backend.displacement_analysis import (
+    DisplacementResult,
+    calculate_displacement_field,
+)
 from napariTFM.utilities.colorbar import ColorbarManager
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
-from napariTFM.services.displacement_service import DisplacementService, DisplacementResult
 from napariTFM.utilities.visualization_manager import VisualizationManager
 
 class DisplacementDataPanel(QWidget):
@@ -456,11 +459,10 @@ class DisplacementController(QObject):
     ui_frozen = Signal(bool)
 
     # region === Initialization
-    def __init__(self, viewer, service, data_manager, parameter_manager,
+    def __init__(self, viewer, data_manager, parameter_manager,
                  visualization_manager, data_panel):
         super().__init__()
         self.viewer = viewer
-        self.service = service
         self.data_manager = data_manager
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
@@ -511,12 +513,10 @@ class DisplacementController(QObject):
             moving = self.data_manager.preprocessed_bead_stack[current_frame]
             reference = self.data_manager.preprocessed_reference
 
-            # Get parameters and update service
             params = self.parameter_manager.get_displacement_parameters()
-            self.service.update_parameters(params)
 
             # Calculate displacement field for single frame
-            result = self.service.calculate_displacement_field(reference, moving)
+            result = calculate_displacement_field(reference, moving, params)
 
             # Process generator to get the result
             try:
@@ -594,9 +594,7 @@ class DisplacementController(QObject):
             self.freeze_ui()
             self.progress_updated.emit(0, "Starting displacement analysis...")
 
-            # Get parameters and update service
             params = self.parameter_manager.get_displacement_parameters()
-            self.service.update_parameters(params)
 
             # Create worker for processing
             worker = self._create_displacement_worker(
@@ -621,8 +619,7 @@ class DisplacementController(QObject):
     def _create_displacement_worker(self, reference, bead_stack, params):
         """Create worker for processing data."""
         try:
-            # Get the generator from the service
-            displacement_generator = self.service.calculate_displacement_field(reference, bead_stack)
+            displacement_generator = calculate_displacement_field(reference, bead_stack, params)
 
             # Process all frames through the generator
             try:
@@ -908,9 +905,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     ):
         super().__init__(viewer, data_manager, visualization_manager)
 
-        # Store managers and create service
         self.parameter_manager = parameter_manager
-        self.service = DisplacementService(parameter_manager.get_displacement_parameters())
         self.colorbar_manager = ColorbarManager()
 
         # Initialize panels
@@ -920,7 +915,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Initialize controller
         self.controller = DisplacementController(
             viewer=viewer,
-            service=self.service,
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,

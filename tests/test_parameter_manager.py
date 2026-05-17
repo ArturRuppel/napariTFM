@@ -18,7 +18,7 @@ from napariTFM.backend.parameter_dataclasses import (
     MSMParameters,
     PreprocessingParameters,
 )
-from napariTFM.services.displacement_service import DisplacementService
+from napariTFM.backend.parameter_validation import validate_displacement_parameters
 from napariTFM.services.fttc_service import FTTCService
 from napariTFM.services.msm_service import MSMService
 from napariTFM.services.preprocessing_service import PreprocessingService
@@ -109,12 +109,12 @@ def test_parameter_manager_validation_does_not_import_services(monkeypatch):
     assert manager.validate_all_parameters() == (True, "")
 
 
-def test_service_validate_parameters_delegates_compatible_results():
+def test_validation_helpers_return_compatible_results():
     assert PreprocessingService.validate_parameters(
         PreprocessingParameters(min_intensity_percentile=80, max_intensity_percentile=20)
     ) == (False, "Invalid intensity percentile range")
 
-    assert DisplacementService.validate_parameters(
+    assert validate_displacement_parameters(
         DisplacementParameters(nscales=0)
     ) == (False, "nscales must be at least 1")
 

@@ -19,10 +19,13 @@ from scipy.ndimage import center_of_mass
 import pandas as pd
 
 from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
+from napariTFM.backend.displacement_analysis import (
+    DisplacementResult,
+    calculate_displacement_field,
+)
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
 from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy, \
     calculate_moment_tensor, calculate_polarization
-from napariTFM.services.displacement_service import DisplacementService, DisplacementResult
 from napariTFM.services.fttc_service import FTTCService, FTTCResult
 from napariTFM.services.msm_service import MSMService
 from napariTFM.services.preprocessing_service import PreprocessingService
@@ -684,10 +687,12 @@ class BatchAnalysis:
         """
         print("Starting Displacement Analysis...")
         start_time = time()
-        displacement_service = DisplacementService(self._create_displacement_parameters())
 
-        # Get the generator
-        displacement_field_generator = displacement_service.calculate_displacement_field(preprocessed_data['reference'], preprocessed_data['beads'])
+        displacement_field_generator = calculate_displacement_field(
+            preprocessed_data['reference'],
+            preprocessed_data['beads'],
+            self._create_displacement_parameters(),
+        )
 
         # Initialize result container
         try:

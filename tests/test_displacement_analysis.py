@@ -1,16 +1,16 @@
+from pathlib import Path
+
 import numpy as np
 
 from napariTFM.backend.displacement_analysis import (
     DisplacementAnalyzer,
-    DisplacementResult as BackendDisplacementResult,
     calculate_displacement_field,
     validate_displacement_image,
 )
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
-from napariTFM.services.displacement_service import (
-    DisplacementResult as ServiceDisplacementResult,
-    DisplacementService,
-)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_displacement_analyzer_initializes_with_standard_opencv():
@@ -79,26 +79,20 @@ def test_backend_calculates_displacement_result_with_progress():
     assert np.isfinite(result.displacement_field).all()
 
 
-def test_displacement_service_keeps_result_import_compatibility():
-    assert ServiceDisplacementResult is BackendDisplacementResult
+def test_production_code_does_not_depend_on_displacement_service_layer():
+    assert not (REPO_ROOT / "napariTFM/services/displacement_service.py").exists()
 
+    production_files = [
+        path
+        for root in ("napariTFM",)
+        for path in (REPO_ROOT / root).rglob("*.py")
+        if "__pycache__" not in path.parts
+    ]
 
-def test_displacement_service_delegates_field_calculation_to_backend_shape_contract():
-    reference = np.zeros((16, 16), dtype=np.float32)
-    moving = np.zeros((16, 16), dtype=np.float32)
-    reference[5:11, 5:11] = 1.0
-    moving[5:11, 6:12] = 1.0
-    params = DisplacementParameters(pixel_size=0.3, downscale_factor=1)
-    service = DisplacementService(params)
+    offenders = [
+        str(path.relative_to(REPO_ROOT))
+        for path in production_files
+        if "services.displacement_service" in path.read_text()
+    ]
 
-    generator = service.calculate_displacement_field(reference, moving)
-    next(generator)
-    try:
-        next(generator)
-    except StopIteration as exc:
-        result = exc.value
-
-    assert isinstance(result, BackendDisplacementResult)
-    assert result.displacement_field.shape == (1, 16, 16, 2)
-    assert result.parameters == params
-    assert result.physical_scale["pixel_size"] == 0.3
+    assert offenders == []
