@@ -1519,6 +1519,45 @@ class MSMWidget(BaseAnalysisWidget):
                 self.viewer.dims.current_step[0]
             )
 
+    def load_result_artifact(self, key: str):
+        if key == "mask_stack":
+            self._load_mask_stack_from_active_layer()
+        else:
+            path = self._choose_result_path(key)
+            if not path:
+                return
+            self.data_manager.load_result_artifact(key, path)
+            show_force = getattr(self.visualization_manager, "visualize_force_results", None)
+            if key == "force_results" and show_force is not None:
+                show_force()
+        self._update_ui_state()
+
+    def _choose_result_path(self, key: str):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Load {key.replace('_', ' ')}",
+            "",
+            "NumPy Files (*.npy)",
+        )
+        return path
+
+    def _load_mask_stack_from_active_layer(self):
+        active_layer = self.viewer.layers.selection.active
+        if active_layer is None or not hasattr(active_layer, "data"):
+            QMessageBox.warning(self, "No Layer Selected", "Please select an image layer to load masks from.")
+            return
+        mask_data = active_layer.data
+        if not isinstance(mask_data, np.ndarray):
+            QMessageBox.warning(self, "Invalid Layer", "Selected layer is not a valid image layer.")
+            return
+        force_results = self.data_manager.force_results
+        force_field = force_results.force_field if force_results is not None else None
+        processed_masks, warnings = process_mask_data(mask_data, force_field)
+        for warning in warnings:
+            QMessageBox.warning(self, "Warning", warning)
+        self.data_manager.set_mask_stack(processed_masks)
+        self.visualization_manager.visualize_masks(processed_masks)
+
     def _update_service_parameters(self, category: ParameterCategory):
         """Update service parameters when parameters are reset."""
         if category == ParameterCategory.STRESS:

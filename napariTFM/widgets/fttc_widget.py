@@ -8,6 +8,7 @@ from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal, Qt
 from qtpy.QtWidgets import (QGroupBox, QDoubleSpinBox, QSpinBox, QCheckBox, QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
                             QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
+from qtpy.QtWidgets import QFileDialog
 
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optimal_regularization
 from napariTFM.utilities.data_manager import DataManager
@@ -977,6 +978,25 @@ class FTTCWidget(BaseAnalysisWidget):
             self.visualization_manager.update_force_frame(
                 self.viewer.dims.current_step[0]
             )
+
+    def load_result_artifact(self, key: str):
+        path = self._choose_result_path(key)
+        if not path:
+            return
+        self.data_manager.load_result_artifact(key, path)
+        show_displacement = getattr(self.visualization_manager, "visualize_displacement_results", None)
+        if key == "displacement_results" and show_displacement is not None:
+            show_displacement()
+        self._update_ui_state()
+
+    def _choose_result_path(self, key: str):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            f"Load {key.replace('_', ' ')}",
+            "",
+            "NumPy Files (*.npy)",
+        )
+        return path
 
     def cleanup(self):
         """Clean up resources."""

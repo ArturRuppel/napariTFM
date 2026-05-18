@@ -136,6 +136,7 @@ class _StubStageWidget(QWidget):
         self.cancel_btn = QPushButton("Cancel")
         self.save_btn = QPushButton("Save")
         self.loaded_active_layers = []
+        self.loaded_files = []
         self.update_count = 0
 
     def _update_ui_state(self):
@@ -143,6 +144,9 @@ class _StubStageWidget(QWidget):
 
     def load_active_layer(self, role):
         self.loaded_active_layers.append(role)
+
+    def load_result_artifact(self, key):
+        self.loaded_files.append(key)
 
 
 def _stub_module(name, **attrs):
@@ -571,6 +575,45 @@ def test_failed_generated_output_save_marks_artifact_error(monkeypatch, app):
     row.action_btn.click()
 
     assert widget.data_manager.artifact_errors[-1] == ("preprocessed_reference", "disk full")
+
+
+def test_displacement_data_rows_route_assignment_actions(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    rows = widget._stage_status_panels_by_key["displacement"].artifact_rows
+
+    rows["preprocessed_reference"].action_btn.click()
+    rows["preprocessed_bead_stack"].action_btn.click()
+
+    assert widget.displacement_widget.loaded_active_layers == ["reference", "beads"]
+
+
+def test_force_and_stress_input_rows_route_load_actions(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+
+    widget._stage_status_panels_by_key["force"].artifact_rows["displacement_results"].action_btn.click()
+    widget._stage_status_panels_by_key["stress"].artifact_rows["force_results"].action_btn.click()
+    widget._stage_status_panels_by_key["stress"].artifact_rows["mask_stack"].action_btn.click()
+
+    assert widget.force_widget.loaded_files == ["displacement_results"]
+    assert widget.msm_widget.loaded_files == ["force_results", "mask_stack"]
 
 
 def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):

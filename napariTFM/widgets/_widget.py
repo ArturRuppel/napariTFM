@@ -115,10 +115,25 @@ def _build_preprocessing_specs(preprocessing_widget, visualization_manager, save
     ]
 
 
-def _build_displacement_specs(save_artifact):
+def _build_displacement_specs(displacement_widget, save_artifact):
+    def assign(role: str):
+        return lambda: displacement_widget.load_active_layer(role)
+
     return [
-        DataArtifactSpec("preprocessed_reference", "Preprocessed reference", "preprocessed_reference", "input"),
-        DataArtifactSpec("preprocessed_bead_stack", "Preprocessed beads", "preprocessed_bead_stack", "input"),
+        DataArtifactSpec(
+            "preprocessed_reference",
+            "Preprocessed reference",
+            "preprocessed_reference",
+            "input",
+            on_action=assign("reference"),
+        ),
+        DataArtifactSpec(
+            "preprocessed_bead_stack",
+            "Preprocessed beads",
+            "preprocessed_bead_stack",
+            "input",
+            on_action=assign("beads"),
+        ),
         DataArtifactSpec(
             "displacement_results",
             "Displacement field",
@@ -129,9 +144,15 @@ def _build_displacement_specs(save_artifact):
     ]
 
 
-def _build_force_specs(save_artifact):
+def _build_force_specs(force_widget, save_artifact):
     return [
-        DataArtifactSpec("displacement_results", "Displacement field", "displacement_results", "input"),
+        DataArtifactSpec(
+            "displacement_results",
+            "Displacement field",
+            "displacement_results",
+            "input",
+            on_action=lambda: force_widget.load_result_artifact("displacement_results"),
+        ),
         DataArtifactSpec(
             "force_results",
             "Traction map",
@@ -142,10 +163,23 @@ def _build_force_specs(save_artifact):
     ]
 
 
-def _build_stress_specs(save_artifact):
+def _build_stress_specs(stress_widget, save_artifact):
     return [
-        DataArtifactSpec("force_results", "Traction map", "force_results", "input"),
-        DataArtifactSpec("mask_stack", "Mask stack", "mask_stack", "input", required=False),
+        DataArtifactSpec(
+            "force_results",
+            "Traction map",
+            "force_results",
+            "input",
+            on_action=lambda: stress_widget.load_result_artifact("force_results"),
+        ),
+        DataArtifactSpec(
+            "mask_stack",
+            "Mask stack",
+            "mask_stack",
+            "input",
+            required=False,
+            on_action=lambda: stress_widget.load_result_artifact("mask_stack"),
+        ),
         DataArtifactSpec(
             "stress_results",
             "Stress map",
@@ -410,12 +444,15 @@ class napariTFMWidget(QWidget):
             self._save_generated_artifact,
         )
         stage_data_artifacts["displacement"] = _build_displacement_specs(
+            self.displacement_widget,
             self._save_generated_artifact,
         )
         stage_data_artifacts["force"] = _build_force_specs(
+            self.force_widget,
             self._save_generated_artifact,
         )
         stage_data_artifacts["stress"] = _build_stress_specs(
+            self.msm_widget,
             self._save_generated_artifact,
         )
         self._stage_status_panels_by_key = {
