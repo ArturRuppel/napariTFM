@@ -6,6 +6,7 @@ from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QStyle, QVBoxLayout
 from napariTFM.widgets._ui_style import (
     COMPACT_SPACING,
     make_icon_button,
+    muted_stage_accent,
     stage_accent,
     status_indicator_style,
 )
@@ -52,7 +53,14 @@ class StageSection(QWidget):
         self._status = status
         self.status_panel = status_panel
         self.parameter_panel = parameter_panel
-        self._accent = accent or stage_accent(self._slug)
+        if accent is not None:
+            self._accent = accent
+        else:
+            inherited = self._find_ancestor_accent()
+            if inherited is not None:
+                self._accent = inherited
+            else:
+                self._accent = stage_accent(self._slug)
         self._action_state_syncs: list[_ActionStateSync] = []
 
         layout = QVBoxLayout()
@@ -70,10 +78,7 @@ class StageSection(QWidget):
         header_layout.addWidget(self.status_indicator)
 
         self.header_label = QLabel(title)
-        self.header_label.setStyleSheet(
-            f"font-weight: bold; color: {self._accent}; border-left: 3px solid {self._accent};"
-            " padding-left: 6px;"
-        )
+        self.header_label.setStyleSheet(self._header_stylesheet(self._accent))
         header_layout.addWidget(self.header_label)
         header_layout.addStretch()
 
@@ -134,6 +139,29 @@ class StageSection(QWidget):
         slug = re.sub(r"[^a-z0-9]+", "_", self._title.lower()).strip("_")
         return slug or "stage"
 
+    def _find_ancestor_accent(self) -> str | None:
+        """Walk up the Qt parent chain for a StageSection ancestor's muted accent.
+
+        Currently dormant: StageSection is always constructed before being
+        reparented, so self.parent() is None at __init__. The method is kept
+        for callers that re-resolve the accent after reparenting (e.g., a
+        future move-section-to-new-parent API). add_inner_section bypasses
+        this by passing accent= directly to the inner constructor.
+        """
+        parent = self.parent()
+        while parent is not None:
+            if isinstance(parent, StageSection):
+                return muted_stage_accent(parent._slug)
+            parent = parent.parent()
+        return None
+
+    @staticmethod
+    def _header_stylesheet(accent: str) -> str:
+        return (
+            f"font-weight: bold; color: {accent}; "
+            f"border-left: 3px solid {accent}; padding-left: 6px;"
+        )
+
     def set_status(self, status: str):
         self._status = status
         self.status_indicator.setStyleSheet(status_indicator_style(status))
@@ -169,3 +197,23 @@ class StageSection(QWidget):
         self._parameter_content.setVisible(expanded)
         if self.parameter_panel is not None:
             self.parameter_panel.setVisible(expanded)
+
+    def add_inner_section(
+        self,
+        title: str,
+        child: QWidget,
+        expanded: bool = False,
+    ) -> "StageSection":
+        """Create a nested StageSection inside this section's content area.
+
+        The inner section is rendered with a muted variant of this section's
+        accent (CellFlow-style accent inheritance).
+        """
+        inner = StageSection(
+            title,
+            child,
+            expanded=expanded,
+            accent=muted_stage_accent(self._slug),
+        )
+        self._content.layout().addWidget(inner)
+        return inner
