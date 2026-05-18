@@ -1,3 +1,5 @@
+import colorsys
+
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QStyle, QToolButton, QWidget
 
@@ -42,6 +44,26 @@ def make_icon_button(
     button.setToolTip(tooltip)
     button.setToolButtonStyle(Qt.ToolButtonIconOnly)
     return button
+
+
+def stage_accent(key: str) -> str:
+    """Return the accent hex color for a stage key, falling back to inputs."""
+    return STAGE_ACCENTS.get(key, STAGE_ACCENTS["inputs"])
+
+
+def muted_stage_accent(key: str) -> str:
+    """Return a muted (low-saturation, midtone-lightness) variant of a stage accent."""
+    hex_value = stage_accent(key).lstrip("#")
+    r = int(hex_value[0:2], 16) / 255.0
+    g = int(hex_value[2:4], 16) / 255.0
+    b = int(hex_value[4:6], 16) / 255.0
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    s_muted = s * 0.35
+    l_muted = 0.5 + (l - 0.5) * 0.6
+    r_out, g_out, b_out = colorsys.hls_to_rgb(h, l_muted, s_muted)
+    return "#{:02x}{:02x}{:02x}".format(
+        round(r_out * 255), round(g_out * 255), round(b_out * 255)
+    )
 
 
 def status_indicator_style(status: str) -> str:

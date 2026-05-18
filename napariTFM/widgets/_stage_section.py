@@ -5,8 +5,8 @@ from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QStyle, QVBoxLayout
 
 from napariTFM.widgets._ui_style import (
     COMPACT_SPACING,
-    STAGE_ACCENTS,
     make_icon_button,
+    stage_accent,
     status_indicator_style,
 )
 
@@ -52,7 +52,7 @@ class StageSection(QWidget):
         self._status = status
         self.status_panel = status_panel
         self.parameter_panel = parameter_panel
-        self._accent = accent or STAGE_ACCENTS.get(self._slug, STAGE_ACCENTS["inputs"])
+        self._accent = accent or stage_accent(self._slug)
         self._action_state_syncs: list[_ActionStateSync] = []
 
         layout = QVBoxLayout()
