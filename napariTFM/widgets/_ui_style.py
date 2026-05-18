@@ -28,6 +28,21 @@ STATUS_COLORS = {
     "error": "#d62828",
 }
 
+STATUS_GLYPHS = {
+    "available": "✓",
+    "missing_required": "✗",
+    "missing_optional": "○",
+    "running": "⟳",
+    "stale": "⚠",
+    "error": "⚠",
+}
+
+ACTION_GLYPHS = {
+    "view": "👁",
+    "save": "💾",
+    "load": "↑",
+}
+
 
 def make_icon_button(
     owner: QWidget,

@@ -1,9 +1,20 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
-from qtpy.QtWidgets import QGridLayout, QLabel, QWidget
+from qtpy.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
-from napariTFM.widgets._ui_style import COMPACT_SPACING
+from napariTFM.widgets._ui_style import (
+    ACTION_GLYPHS,
+    COMPACT_SPACING,
+    STATUS_GLYPHS,
+)
 
 
 @dataclass(frozen=True)
@@ -13,6 +24,69 @@ class DataArtifactSpec:
     attr: str | None
     role: str = "input"
     required: bool = True
+    on_view: Callable[[], None] | None = None
+    on_action: Callable[[], None] | None = None
+
+
+class _ArtifactRow(QWidget):
+    """Single CellFlow-style artifact row."""
+
+    def __init__(self, spec: DataArtifactSpec):
+        super().__init__()
+        self.spec = spec
+        self.view_btn: QToolButton | None = None
+        self.action_btn: QToolButton | None = None
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.setLayout(layout)
+
+        self.glyph_label = QLabel("○")
+        self.glyph_label.setFixedWidth(14)
+        layout.addWidget(self.glyph_label)
+
+        self.name_label = QLabel(spec.label)
+        self.name_label.setMinimumWidth(135)
+        layout.addWidget(self.name_label)
+
+        self.info_label = QLabel("")
+        self.info_label.setWordWrap(True)
+        self.info_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        layout.addWidget(self.info_label, stretch=1)
+
+        if spec.on_view is not None:
+            self.view_btn = QToolButton()
+            self.view_btn.setText(ACTION_GLYPHS["view"])
+            self.view_btn.setObjectName(f"stage_artifact_{spec.key}_view_btn")
+            self.view_btn.setToolTip(f"View {spec.label} in viewer")
+            self.view_btn.clicked.connect(spec.on_view)
+            layout.addWidget(self.view_btn)
+
+        if spec.on_action is not None:
+            self.action_btn = QToolButton()
+            glyph = ACTION_GLYPHS["save"] if spec.role == "output" else ACTION_GLYPHS["load"]
+            self.action_btn.setText(glyph)
+            self.action_btn.setObjectName(f"stage_artifact_{spec.key}_action_btn")
+            action_label = "Save" if spec.role == "output" else "Load"
+            self.action_btn.setToolTip(f"{action_label} {spec.label}")
+            self.action_btn.clicked.connect(spec.on_action)
+            layout.addWidget(self.action_btn)
+
+    def refresh(self, available: bool, info_text: str) -> None:
+        if available:
+            self.glyph_label.setText(STATUS_GLYPHS["available"])
+        elif self.spec.required:
+            self.glyph_label.setText(STATUS_GLYPHS["missing_required"])
+        else:
+            self.glyph_label.setText(STATUS_GLYPHS["missing_optional"])
+
+        self.info_label.setText(info_text)
+
+        if self.view_btn is not None:
+            self.view_btn.setVisible(available)
+        if self.action_btn is not None and self.spec.role == "output":
+            self.action_btn.setEnabled(available)
 
 
 class StageDataStatusPanel(QWidget):
@@ -23,24 +97,43 @@ class StageDataStatusPanel(QWidget):
         self.stage_key = stage_key
         self.data_manager = data_manager
         self.artifacts = artifacts
-        self.artifact_labels: dict[str, QLabel] = {}
+        self.artifact_rows: dict[str, _ArtifactRow] = {}
         self.setObjectName(f"stage_{stage_key}_data_status_panel")
         self._setup_ui()
         self.refresh()
 
     def _setup_ui(self):
-        layout = QGridLayout()
+        layout = QVBoxLayout()
         layout.setContentsMargins(18, 0, 0, 2)
-        layout.setHorizontalSpacing(12)
-        layout.setVerticalSpacing(COMPACT_SPACING)
-
-        for index, artifact in enumerate(self.artifacts):
-            label = QLabel()
-            label.setObjectName(f"stage_{self.stage_key}_{artifact.key}_status_label")
-            self.artifact_labels[artifact.key] = label
-            layout.addWidget(label, index // 2, index % 2)
-
+        layout.setSpacing(COMPACT_SPACING)
         self.setLayout(layout)
+
+        input_artifacts = [artifact for artifact in self.artifacts if artifact.role == "input"]
+        output_artifacts = [artifact for artifact in self.artifacts if artifact.role == "output"]
+
+        if input_artifacts:
+            inputs_header = QLabel("Inputs")
+            inputs_header.setStyleSheet("color: #999; font-size: 9pt;")
+            layout.addWidget(inputs_header)
+            for artifact in input_artifacts:
+                self._add_row(layout, artifact)
+
+        if output_artifacts:
+            outputs_header = QLabel("Outputs")
+            outputs_header.setStyleSheet("color: #999; font-size: 9pt;")
+            layout.addWidget(outputs_header)
+            for artifact in output_artifacts:
+                self._add_row(layout, artifact)
+
+        # Legacy compatibility: existing tests and call sites read info labels.
+        self.artifact_labels = {
+            key: row.info_label for key, row in self.artifact_rows.items()
+        }
+
+    def _add_row(self, layout: QVBoxLayout, artifact: DataArtifactSpec):
+        row = _ArtifactRow(artifact)
+        self.artifact_rows[artifact.key] = row
+        layout.addWidget(row)
 
     def refresh(self) -> str:
         required_inputs_available = True
@@ -53,15 +146,35 @@ class StageDataStatusPanel(QWidget):
                 required_inputs_available = False
             if artifact.role == "output" and available:
                 output_available = True
-            self.artifact_labels[artifact.key].setText(
-                f"{artifact.label}: {'available' if available else 'missing'}"
-            )
+
+            info_text = self._info_text(artifact, value, available)
+            self.artifact_rows[artifact.key].refresh(available=available, info_text=info_text)
 
         if output_available:
             return "done"
         if required_inputs_available:
             return "ready"
         return "not_started"
+
+    def _info_text(self, artifact: DataArtifactSpec, value: Any, available: bool) -> str:
+        if available:
+            return self._shape_text(value) or "Loaded"
+        return "Missing" if artifact.required else "Optional"
+
+    @staticmethod
+    def _shape_text(value: Any) -> str:
+        try:
+            shape = getattr(value, "shape", None)
+            if shape is not None:
+                return "×".join(str(size) for size in shape)
+        except Exception:
+            pass
+
+        for attr in ("displacement_field", "force_field", "stress_tensor"):
+            array = getattr(value, attr, None)
+            if array is not None and hasattr(array, "shape"):
+                return "×".join(str(size) for size in array.shape)
+        return ""
 
     def _artifact_value(self, artifact: DataArtifactSpec):
         if artifact.attr is None:

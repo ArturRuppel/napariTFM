@@ -121,19 +121,6 @@ class _StubStageWidget(QWidget):
         self.update_count += 1
 
 
-class _StubPipelineDataWidget(QWidget):
-    data_changed = Signal()
-
-    def __init__(self, viewer, data_manager):
-        super().__init__()
-        self.viewer = viewer
-        self.data_manager = data_manager
-        self.setObjectName("pipeline_data_widget")
-
-    def refresh(self):
-        self.data_changed.emit()
-
-
 def _stub_module(name, **attrs):
     module = types.ModuleType(name)
     for attr_name, value in attrs.items():
@@ -160,10 +147,6 @@ _stub_module("napariTFM.widgets.msm_widget", MSMWidget=_StubStageWidget)
 _stub_module(
     "napariTFM.widgets.batch_analysis_widget",
     BatchAnalysisWidget=_StubStageWidget,
-)
-_stub_module(
-    "napariTFM.widgets._pipeline_data_widget",
-    PipelineDataWidget=_StubPipelineDataWidget,
 )
 
 from napariTFM.widgets import _widget
@@ -354,8 +337,6 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
-
     widget = _widget.napariTFMWidget(object())
     widget.show()
     app.processEvents()
@@ -368,24 +349,6 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     assert not widget.batch_widget.isVisible()
 
 
-def test_main_widget_mounts_pipeline_data_widget(monkeypatch, app):
-    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
-
-    widget = _widget.napariTFMWidget(object())
-
-    assert isinstance(widget.pipeline_data_widget, _StubPipelineDataWidget)
-    assert widget.pipeline_data_widget.objectName() == "pipeline_data_widget"
-    assert widget.pipeline_data_widget.data_manager is widget.data_manager
-
-
 def test_data_manager_change_callback_refreshes_stage_widgets(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
@@ -395,7 +358,6 @@ def test_data_manager_change_callback_refreshes_stage_widgets(monkeypatch, app):
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
 
@@ -417,7 +379,6 @@ def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -480,7 +441,6 @@ def test_main_widget_keeps_legacy_parameter_panel_attribute(monkeypatch, app):
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
 
@@ -497,7 +457,6 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -540,7 +499,6 @@ def test_main_widget_exposes_collapsed_stage_data_status_panels(monkeypatch, app
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -562,28 +520,33 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "PipelineDataWidget", _StubPipelineDataWidget)
 
     widget = _widget.napariTFMWidget(object())
     section = widget._stage_sections_by_key["preprocessing"]
     panel = widget._stage_status_panels_by_key["preprocessing"]
 
     assert section.status_indicator.toolTip() == "Preprocessing status: not_started"
-    assert panel.artifact_labels["reference"].text() == "Reference image: missing"
+    assert panel.artifact_labels["reference"].text() == "Missing"
 
     widget.data_manager.reference = object()
     widget.data_manager.bead_stack = object()
     widget.refresh_stage_statuses()
 
     assert section.status_indicator.toolTip() == "Preprocessing status: ready"
-    assert panel.artifact_labels["reference"].text() == "Reference image: available"
+    assert (
+        "×" in panel.artifact_labels["reference"].text()
+        or panel.artifact_labels["reference"].text() == "Loaded"
+    )
 
     widget.data_manager.preprocessed_reference = object()
     widget.data_manager.preprocessed_bead_stack = object()
     widget.refresh_stage_statuses()
 
     assert section.status_indicator.toolTip() == "Preprocessing status: done"
-    assert panel.artifact_labels["preprocessed_bead_stack"].text() == "Preprocessed beads: available"
+    assert (
+        "×" in panel.artifact_labels["preprocessed_bead_stack"].text()
+        or panel.artifact_labels["preprocessed_bead_stack"].text() == "Loaded"
+    )
 
 
 def test_workflow_parameter_panel_labels_farneback_controls(app):

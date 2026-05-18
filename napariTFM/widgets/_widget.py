@@ -18,7 +18,6 @@ from napariTFM.widgets.displacement_analysis_widget import DisplacementAnalysisW
 from napariTFM.widgets.fttc_widget import FTTCWidget
 from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
-from napariTFM.widgets._pipeline_data_widget import PipelineDataWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStatusPanel
 from napariTFM.widgets._stage_section import StageSection
 from napariTFM.widgets._project_section import ProjectSection
@@ -251,10 +250,6 @@ class napariTFMWidget(QWidget):
         self.project_section = ProjectSection(self.parameter_manager)
         container_layout.addWidget(self.project_section)
 
-        # Keep PipelineDataWidget alive for now; deleted in Task 5.
-        self.pipeline_data_widget = PipelineDataWidget(self.viewer, self.data_manager)
-        container_layout.addWidget(self.pipeline_data_widget)
-
         # parameter_panel kept as a backwards-compat attribute pointing at the
         # project section's body so existing tests that reference it via
         # widget.parameter_panel still work; removed in Task 6.
@@ -410,7 +405,6 @@ class napariTFMWidget(QWidget):
 
         self.connect_signals()
         self.data_manager.add_change_callback(self._on_pipeline_data_changed)
-        self.pipeline_data_widget.data_changed.connect(self.refresh_stage_statuses)
         self.refresh_stage_statuses()
 
     def _hide_embedded_parameter_panels(self):
@@ -606,8 +600,6 @@ class napariTFMWidget(QWidget):
                 # Clear data manager
                 self.data_manager.__init__()
                 self.data_manager.add_change_callback(self._on_pipeline_data_changed)
-                self.pipeline_data_widget.data_manager = self.data_manager
-                self.pipeline_data_widget.refresh()
 
                 # Update UI state in all widgets
                 self.preprocessing_widget._update_ui_state()

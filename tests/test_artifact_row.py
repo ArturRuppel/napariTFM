@@ -1,0 +1,77 @@
+import pytest
+from qtpy.QtWidgets import QApplication
+
+from napariTFM.widgets._stage_data_status import DataArtifactSpec, _ArtifactRow
+
+
+@pytest.fixture
+def app():
+    return QApplication.instance() or QApplication([])
+
+
+def test_row_shows_check_glyph_when_available(app):
+    spec = DataArtifactSpec("foo", "Foo artifact", "foo", "output")
+    row = _ArtifactRow(spec)
+
+    row.refresh(available=True, info_text="512x512")
+
+    assert row.glyph_label.text() == "✓"
+    assert row.info_label.text() == "512x512"
+
+
+def test_row_shows_cross_glyph_when_required_missing(app):
+    spec = DataArtifactSpec("foo", "Foo", "foo", "input", required=True)
+    row = _ArtifactRow(spec)
+
+    row.refresh(available=False, info_text="Missing")
+
+    assert row.glyph_label.text() == "✗"
+
+
+def test_row_shows_circle_glyph_when_optional_missing(app):
+    spec = DataArtifactSpec("foo", "Foo", "foo", "input", required=False)
+    row = _ArtifactRow(spec)
+
+    row.refresh(available=False, info_text="Optional")
+
+    assert row.glyph_label.text() == "○"
+
+
+def test_output_row_with_on_view_and_on_action_shows_both_buttons(app):
+    views = []
+    actions = []
+    spec = DataArtifactSpec(
+        "foo",
+        "Foo",
+        "foo",
+        "output",
+        on_view=lambda: views.append(True),
+        on_action=lambda: actions.append(True),
+    )
+    row = _ArtifactRow(spec)
+    row.refresh(available=True, info_text="ok")
+
+    assert row.view_btn is not None
+    assert row.action_btn is not None
+    row.view_btn.click()
+    row.action_btn.click()
+    assert views == [True]
+    assert actions == [True]
+
+
+def test_input_row_missing_hides_view_button(app):
+    spec = DataArtifactSpec("foo", "Foo", "foo", "input", on_action=lambda: None)
+    row = _ArtifactRow(spec)
+    row.refresh(available=False, info_text="Missing")
+
+    assert row.view_btn is None or not row.view_btn.isVisible()
+    assert row.action_btn is not None
+
+
+def test_row_with_no_callables_has_no_action_buttons(app):
+    spec = DataArtifactSpec("foo", "Foo", "foo", "output")
+    row = _ArtifactRow(spec)
+    row.refresh(available=True, info_text="ok")
+
+    assert row.view_btn is None
+    assert row.action_btn is None
