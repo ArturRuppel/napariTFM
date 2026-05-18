@@ -115,10 +115,14 @@ class _StubStageWidget(QWidget):
         self.process_btn = QPushButton("Run")
         self.cancel_btn = QPushButton("Cancel")
         self.save_btn = QPushButton("Save")
+        self.loaded_active_layers = []
         self.update_count = 0
 
     def _update_ui_state(self):
         self.update_count += 1
+
+    def load_active_layer(self, role):
+        self.loaded_active_layers.append(role)
 
 
 def _stub_module(name, **attrs):
@@ -301,7 +305,7 @@ def test_stage_section_disables_unsupported_actions_and_params_toggles(app):
     assert section._content.isVisible()
 
 
-def test_stage_section_config_toggles_inline_parameter_panel_when_provided(app):
+def test_stage_section_params_toggles_inline_parameter_panel_when_provided(app):
     child = QWidget()
     parameter_panel = QWidget()
 
@@ -347,6 +351,21 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     assert not widget.force_widget.isVisible()
     assert not widget.msm_widget.isVisible()
     assert not widget.batch_widget.isVisible()
+
+
+def test_main_widget_lets_dock_determine_width(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+
+    assert widget.maximumWidth() > 500
 
 
 def test_data_manager_change_callback_refreshes_stage_widgets(monkeypatch, app):
@@ -432,7 +451,7 @@ def test_workflow_parameter_panel_syncs_from_parameter_manager(app):
     assert panel.parameter_controls["nscales"].value() == 6
 
 
-def test_main_widget_keeps_legacy_parameter_panel_attribute(monkeypatch, app):
+def test_main_widget_does_not_expose_legacy_parameter_panel(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
@@ -444,8 +463,32 @@ def test_main_widget_keeps_legacy_parameter_panel_attribute(monkeypatch, app):
 
     widget = _widget.napariTFMWidget(object())
 
-    assert widget.parameter_panel is widget.project_section.body
-    assert widget.parameter_panel.isVisibleTo(widget)
+    assert not hasattr(widget, "parameter_panel")
+    assert widget.project_section is not None
+
+
+def test_preprocessing_data_rows_route_assignment_actions(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    rows = widget._stage_status_panels_by_key["preprocessing"].artifact_rows
+
+    rows["reference"].action_btn.click()
+    rows["bead_stack"].action_btn.click()
+    rows["cell_stack"].action_btn.click()
+
+    assert widget.preprocessing_widget.loaded_active_layers == [
+        "reference",
+        "beads",
+        "cells",
+    ]
 
 
 def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):

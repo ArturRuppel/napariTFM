@@ -86,13 +86,6 @@ class StageSection(QWidget):
         self.run_cancel_btn = self._create_run_cancel_button()
         self.preview_button = self._create_action_button("preview", QStyle.SP_FileDialogContentsView)
 
-        # Deprecated alias kept for the duration of this commit; removed in Task 6.
-        self.config_button = self.params_btn
-        # Compatibility aliases for existing call sites; removed in Task 6.
-        self.run_button = self.run_cancel_btn
-        self.cancel_button = self.run_cancel_btn
-        self.save_button = None
-
         self._toggle_button = self.params_btn
 
         for button in [self.params_btn, self.run_cancel_btn, self.preview_button]:

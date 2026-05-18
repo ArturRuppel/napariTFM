@@ -27,8 +27,7 @@ def test_section_no_longer_exposes_save_button(app):
 
     section = StageSection("Preprocessing", QWidget())
 
-    # save_button attribute is None per the migration plan
-    assert section.save_button is None
+    assert not hasattr(section, "save_button")
 
     # No QToolButton in the header is labeled or named like a save button
     header_buttons = section.findChildren(QToolButton)
@@ -36,10 +35,11 @@ def test_section_no_longer_exposes_save_button(app):
     assert save_buttons == []
 
 
-def test_config_button_is_alias_of_params_btn(app):
+def test_section_no_longer_exposes_deprecated_header_aliases(app):
     section = StageSection("Preprocessing", QWidget())
 
-    assert section.config_button is section.params_btn
+    for name in ["config_button", "run_button", "cancel_button"]:
+        assert not hasattr(section, name)
 
 
 def test_run_cancel_btn_tooltip_swaps_on_status_running(app):

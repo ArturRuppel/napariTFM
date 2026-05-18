@@ -53,6 +53,66 @@ STAGE_DATA_ARTIFACTS = {
 }
 
 
+def _build_preprocessing_specs(preprocessing_widget, visualization_manager):
+    def assign(role: str):
+        return lambda: preprocessing_widget.load_active_layer(role)
+
+    def view(key: str):
+        def _show():
+            show_artifact = getattr(visualization_manager, "show_artifact", None)
+            if show_artifact is not None:
+                show_artifact(key)
+                return
+            if key.startswith("preprocessed_") and hasattr(
+                visualization_manager, "update_preprocessing_visualization"
+            ):
+                visualization_manager.update_preprocessing_visualization()
+
+        return _show
+
+    return [
+        DataArtifactSpec(
+            "reference",
+            "Reference image",
+            "reference",
+            "input",
+            on_view=view("reference"),
+            on_action=assign("reference"),
+        ),
+        DataArtifactSpec(
+            "bead_stack",
+            "Bead stack",
+            "bead_stack",
+            "input",
+            on_view=view("bead_stack"),
+            on_action=assign("beads"),
+        ),
+        DataArtifactSpec(
+            "cell_stack",
+            "Cell stack",
+            "cell_stack",
+            "input",
+            required=False,
+            on_view=view("cell_stack"),
+            on_action=assign("cells"),
+        ),
+        DataArtifactSpec(
+            "preprocessed_reference",
+            "Preprocessed reference",
+            "preprocessed_reference",
+            "output",
+            on_view=view("preprocessed_reference"),
+        ),
+        DataArtifactSpec(
+            "preprocessed_bead_stack",
+            "Preprocessed beads",
+            "preprocessed_bead_stack",
+            "output",
+            on_view=view("preprocessed_bead_stack"),
+        ),
+    ]
+
+
 class WorkflowParameterPanel(QWidget):
     """Single visible parameter editor for the workflow shell."""
 
@@ -223,8 +283,7 @@ class napariTFMWidget(QWidget):
         from qtpy.QtCore import QTimer
         QTimer.singleShot(0, install_filter_on_inputs)
 
-        # Set fixed width for entire widget
-        self.setFixedWidth(500)
+        # Width is determined by the host dock; no fixed width.
 
         # Create scroll area for widgets
         scroll = QScrollArea()
@@ -250,10 +309,6 @@ class napariTFMWidget(QWidget):
         self.project_section = ProjectSection(self.parameter_manager)
         container_layout.addWidget(self.project_section)
 
-        # parameter_panel kept as a backwards-compat attribute pointing at the
-        # project section's body so existing tests that reference it via
-        # widget.parameter_panel still work; removed in Task 6.
-        self.parameter_panel = self.project_section.body
         self._stage_parameter_panels_by_key = self._create_stage_parameter_panels()
 
         # Wire up the Project section's I/O buttons (replaces _create_general_group).
@@ -305,9 +360,14 @@ class napariTFMWidget(QWidget):
         )
         self._hide_embedded_parameter_panels()
 
+        stage_data_artifacts = dict(STAGE_DATA_ARTIFACTS)
+        stage_data_artifacts["preprocessing"] = _build_preprocessing_specs(
+            self.preprocessing_widget,
+            self.visualization_manager,
+        )
         self._stage_status_panels_by_key = {
             key: StageDataStatusPanel(key, self.data_manager, artifacts)
-            for key, artifacts in STAGE_DATA_ARTIFACTS.items()
+            for key, artifacts in stage_data_artifacts.items()
         }
 
         self._stage_sections_by_key = {
