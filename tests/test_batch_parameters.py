@@ -166,6 +166,45 @@ def test_generate_config_uses_parameter_manager_values():
     assert config["parameters"]["mesh_algorithm"] == "Frontal-Del."
 
 
+def test_batch_keeps_batch_specific_controls_visible_after_parameter_slimdown():
+    app = _app()
+    widget = BatchAnalysisWidget(None, object(), ParameterManager(), object())
+    widget.show()
+    app.processEvents()
+
+    assert widget.save_config_btn.isVisibleTo(widget)
+    assert widget.load_config_btn.isVisibleTo(widget)
+    assert widget.run_analysis_btn.isVisibleTo(widget)
+    assert widget.folder_list_widget.isVisibleTo(widget)
+
+
+def test_batch_config_generation_does_not_read_duplicate_parameter_widgets():
+    fake = SimpleNamespace(
+        folder_list_widget=_List(),
+        file_inputs={"beads": _Text("beads.tif"), "reference": _Text("ref.tif"), "cells": _Text("")},
+        analysis_checkboxes={"preprocess": _Check(True)},
+        visualization_checkboxes={
+            "bead_overlay": _Check(False),
+            "displacement_map": _Check(False),
+            "force_map": _Check(False),
+            "force_cell_overlay": _Check(False),
+            "sigma_xx": _Check(False),
+            "sigma_yy": _Check(False),
+            "normal_stress": _Check(False),
+            "mesh": _Check(False),
+        },
+        parameter_manager=_Manager(),
+        parameter_spins={"young_modulus": object()},
+        parameter_combos={"mesh_algorithm": object()},
+        parameter_checks={"auto_gcv": object()},
+    )
+
+    config = BatchAnalysisWidget._generate_config(fake)
+
+    assert config["parameters"]["young_modulus"] == 9000
+    assert config["parameters"]["mesh_algorithm"] == "Frontal-Del."
+
+
 def test_batch_fttc_parameters_honor_auto_gcv():
     analysis = BatchAnalysis.__new__(BatchAnalysis)
     analysis.config = {
