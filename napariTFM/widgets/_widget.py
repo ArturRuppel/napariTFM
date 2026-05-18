@@ -436,6 +436,7 @@ class napariTFMWidget(QWidget):
             self.visualization_manager
         )
         self._hide_embedded_parameter_panels()
+        self._hide_redundant_stage_shell_controls()
 
         stage_data_artifacts = dict(STAGE_DATA_ARTIFACTS)
         stage_data_artifacts["preprocessing"] = _build_preprocessing_specs(
@@ -578,6 +579,14 @@ class napariTFMWidget(QWidget):
                 "Stress Parameters",
             }:
                 group.setVisible(False)
+
+    def _hide_redundant_stage_shell_controls(self):
+        """Keep controller-owned controls alive while removing duplicated shell surfaces."""
+        for widget in [self.displacement_widget, self.force_widget, self.msm_widget]:
+            for attr in ("data_panel", "action_panel"):
+                panel = getattr(widget, attr, None)
+                if panel is not None:
+                    panel.setVisible(False)
 
     def _create_stage_parameter_panels(self) -> dict[str, WorkflowParameterPanel]:
         """Create inline workflow parameter editors grouped by pipeline stage."""
