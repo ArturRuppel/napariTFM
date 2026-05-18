@@ -21,6 +21,7 @@ from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
 from napariTFM.widgets._pipeline_data_widget import PipelineDataWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStatusPanel
 from napariTFM.widgets._stage_section import StageSection
+from napariTFM.widgets._project_section import ProjectSection
 
 logger = logging.getLogger(__name__)
 
@@ -247,18 +248,30 @@ class napariTFMWidget(QWidget):
         self.parameter_manager = ParameterManager()
         self.visualization_manager = VisualizationManager(self.viewer, self.data_manager)
 
-        # Create calibration group
-        calibration_group = self._create_general_group()
-        container_layout.addWidget(calibration_group)
+        self.project_section = ProjectSection(self.parameter_manager)
+        container_layout.addWidget(self.project_section)
+
+        # Keep PipelineDataWidget alive for now; deleted in Task 5.
         self.pipeline_data_widget = PipelineDataWidget(self.viewer, self.data_manager)
         container_layout.addWidget(self.pipeline_data_widget)
-        self.parameter_panel = WorkflowParameterPanel(self.parameter_manager)
-        self.parameter_panel.setObjectName("workflow_parameter_panel")
-        self.parameter_panel.setParent(self)
-        self.parameter_panel.hide()
+
+        # parameter_panel kept as a backwards-compat attribute pointing at the
+        # project section's body so existing tests that reference it via
+        # widget.parameter_panel still work; removed in Task 6.
+        self.parameter_panel = self.project_section.body
         self._stage_parameter_panels_by_key = self._create_stage_parameter_panels()
 
-        # # Initialize all widgets with parameter_manager
+        # Wire up the Project section's I/O buttons (replaces _create_general_group).
+        self.save_params_btn = self.project_section.save_params_btn
+        self.load_params_btn = self.project_section.load_params_btn
+        self.reset_params_btn = self.project_section.reset_params_btn
+        self.clear_data_btn = self.project_section.clear_data_btn
+        self.save_params_btn.clicked.connect(self._save_parameters)
+        self.load_params_btn.clicked.connect(self._load_parameters)
+        self.reset_params_btn.clicked.connect(self._reset_parameters)
+        self.clear_data_btn.clicked.connect(self._clear_all_data)
+
+        # Initialize all widgets with parameter_manager
         self.preprocessing_widget = PreprocessingWidget(
             self.viewer,
             self.data_manager,
@@ -308,7 +321,6 @@ class napariTFMWidget(QWidget):
                 self.preprocessing_widget,
                 expanded=True,
                 status_panel=self._stage_status_panels_by_key["preprocessing"],
-                parameter_panel=self._stage_parameter_panels_by_key["preprocessing"],
                 action_targets=self._find_stage_action_targets(
                     self.preprocessing_widget,
                     run=["process_btn"],
@@ -320,7 +332,6 @@ class napariTFMWidget(QWidget):
                 "Displacement",
                 self.displacement_widget,
                 status_panel=self._stage_status_panels_by_key["displacement"],
-                parameter_panel=self._stage_parameter_panels_by_key["displacement"],
                 action_targets=self._find_stage_action_targets(
                     self.displacement_widget,
                     run=["process_btn", "action_panel.calculate_btn"],
@@ -332,7 +343,6 @@ class napariTFMWidget(QWidget):
                 "Force Analysis",
                 self.force_widget,
                 status_panel=self._stage_status_panels_by_key["force"],
-                parameter_panel=self._stage_parameter_panels_by_key["force"],
                 action_targets=self._find_stage_action_targets(
                     self.force_widget,
                     run=["action_panel.calculate_btn", "calculate_btn"],
@@ -344,7 +354,6 @@ class napariTFMWidget(QWidget):
                 "Stress Analysis",
                 self.msm_widget,
                 status_panel=self._stage_status_panels_by_key["stress"],
-                parameter_panel=self._stage_parameter_panels_by_key["stress"],
                 action_targets=self._find_stage_action_targets(
                     self.msm_widget,
                     run=["action_panel.analyze_btn", "analyze_btn"],
@@ -365,6 +374,27 @@ class napariTFMWidget(QWidget):
             ),
         }
         self._stage_sections = list(self._stage_sections_by_key.values())
+
+        # Mount per-stage parameter panels as nested "Parameters" sub-sections.
+        self._stage_inner_param_sections_by_key = {}
+        for key, section in self._stage_sections_by_key.items():
+            panel = self._stage_parameter_panels_by_key.get(key)
+            if panel is None:
+                continue
+            inner = section.add_inner_section("Parameters", panel, expanded=False)
+            self._stage_inner_param_sections_by_key[key] = inner
+            # Reroute the outer section's params_btn to toggle the inner section
+            # instead of the legacy overlay parameter content.
+            try:
+                section.params_btn.toggled.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            section.params_btn.toggled.connect(
+                lambda checked, s=section, i=inner: (
+                    s._set_expanded(checked),
+                    i._toggle_button.setChecked(checked),
+                )
+            )
 
         for section in self._stage_sections:
             container_layout.addWidget(section)
@@ -454,44 +484,6 @@ class napariTFMWidget(QWidget):
             if hasattr(widget, '_update_ui_state'):
                 widget._update_ui_state()
         self.refresh_stage_statuses()
-
-    def _create_general_group(self) -> QGroupBox:
-        """Create global file and reset controls."""
-        calibration_group = QGroupBox("")
-        calibration_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        calibration_layout = QVBoxLayout()
-
-        # Create 2x2 button grid
-        button_grid = QVBoxLayout()
-
-        # First row of buttons
-        button_row1 = QHBoxLayout()
-        self.save_params_btn = QPushButton("Save Parameters")
-        self.load_params_btn = QPushButton("Load Parameters")
-        button_row1.addWidget(self.save_params_btn)
-        button_row1.addWidget(self.load_params_btn)
-
-        # Second row of buttons
-        button_row2 = QHBoxLayout()
-        self.reset_params_btn = QPushButton("Reset Parameters")
-        self.clear_data_btn = QPushButton("Clear All Data")
-        self.clear_data_btn.setStyleSheet("color: red;")
-        button_row2.addWidget(self.reset_params_btn)
-        button_row2.addWidget(self.clear_data_btn)
-
-        # Add button rows to grid
-        button_grid.addLayout(button_row1)
-        button_grid.addLayout(button_row2)
-
-        # Connect button signals
-        self.save_params_btn.clicked.connect(self._save_parameters)
-        self.load_params_btn.clicked.connect(self._load_parameters)
-        self.reset_params_btn.clicked.connect(self._reset_parameters)
-        self.clear_data_btn.clicked.connect(self._clear_all_data)
-
-        calibration_layout.addLayout(button_grid)
-        calibration_group.setLayout(calibration_layout)
-        return calibration_group
 
     def _reset_parameters(self):
         """Reset parameters to default values and notify all widgets."""

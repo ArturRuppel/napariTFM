@@ -471,7 +471,7 @@ def test_workflow_parameter_panel_syncs_from_parameter_manager(app):
     assert panel.parameter_controls["nscales"].value() == 6
 
 
-def test_main_widget_hides_stage_parameter_panels(monkeypatch, app):
+def test_main_widget_keeps_legacy_parameter_panel_attribute(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
@@ -484,9 +484,8 @@ def test_main_widget_hides_stage_parameter_panels(monkeypatch, app):
 
     widget = _widget.napariTFMWidget(object())
 
-    assert isinstance(widget.parameter_panel, _widget.WorkflowParameterPanel)
-    assert not widget.parameter_panel.isVisibleTo(widget)
-    assert not widget.displacement_widget.parameter_panel.isVisibleTo(widget)
+    assert widget.parameter_panel is widget.project_section.body
+    assert widget.parameter_panel.isVisibleTo(widget)
 
 
 def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
@@ -525,11 +524,11 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     assert {"threshold", "mesh_algorithm"}.issubset(stress_panel.parameter_controls)
 
     displacement_section = widget._stage_sections_by_key["displacement"]
+    assert "displacement" in widget._stage_inner_param_sections_by_key
     assert not displacement_panel.isVisibleTo(widget)
     displacement_section.params_btn.click()
     app.processEvents()
     assert displacement_panel.isVisibleTo(widget)
-    assert not widget.displacement_widget.isVisibleTo(widget)
 
 
 def test_main_widget_exposes_collapsed_stage_data_status_panels(monkeypatch, app):
