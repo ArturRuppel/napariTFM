@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from qtpy.QtWidgets import (
@@ -88,6 +89,34 @@ class _ArtifactRow(QWidget):
         if self.action_btn is not None and self.spec.role == "output":
             self.action_btn.setEnabled(available)
 
+    def refresh_state(self, state, info_text: str) -> None:
+        available = getattr(state, "value", None) is not None
+        error = getattr(state, "error", "")
+        path = getattr(state, "path", None)
+        dirty = bool(getattr(state, "dirty", False))
+
+        if error:
+            self.glyph_label.setText(STATUS_GLYPHS["error"])
+            self.info_label.setText(str(error))
+            self.info_label.setToolTip(str(error))
+            if self.view_btn is not None:
+                self.view_btn.setVisible(available)
+            if self.action_btn is not None and self.spec.role == "output":
+                self.action_btn.setEnabled(available)
+            return
+
+        self.refresh(available=available, info_text=info_text)
+        hints = []
+        if available and dirty:
+            hints.append("Unsaved")
+        if available and path is not None and not dirty:
+            hints.append(Path(path).name)
+            self.info_label.setToolTip(str(path))
+        else:
+            self.info_label.setToolTip("")
+        if hints:
+            self.info_label.setText(f"{self.info_label.text()} · {' · '.join(hints)}")
+
 
 class StageDataStatusPanel(QWidget):
     """Compact, always-visible summary of a stage's data dependencies."""
@@ -140,7 +169,8 @@ class StageDataStatusPanel(QWidget):
         output_available = False
 
         for artifact in self.artifacts:
-            value = self._artifact_value(artifact)
+            state = self._artifact_state(artifact)
+            value = state.value if state is not None else self._artifact_value(artifact)
             available = value is not None
             if artifact.role == "input" and artifact.required and not available:
                 required_inputs_available = False
@@ -148,7 +178,10 @@ class StageDataStatusPanel(QWidget):
                 output_available = True
 
             info_text = self._info_text(artifact, value, available)
-            self.artifact_rows[artifact.key].refresh(available=available, info_text=info_text)
+            if state is not None:
+                self.artifact_rows[artifact.key].refresh_state(state, info_text=info_text)
+            else:
+                self.artifact_rows[artifact.key].refresh(available=available, info_text=info_text)
 
         if output_available:
             return "done"
@@ -180,3 +213,12 @@ class StageDataStatusPanel(QWidget):
         if artifact.attr is None:
             return None
         return getattr(self.data_manager, artifact.attr, None)
+
+    def _artifact_state(self, artifact: DataArtifactSpec):
+        get_artifact = getattr(self.data_manager, "get_artifact", None)
+        if get_artifact is None:
+            return None
+        try:
+            return get_artifact(artifact.key)
+        except (KeyError, AttributeError):
+            return None

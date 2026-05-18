@@ -1,3 +1,6 @@
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 from qtpy.QtWidgets import QApplication
 
@@ -75,3 +78,37 @@ def test_row_with_no_callables_has_no_action_buttons(app):
 
     assert row.view_btn is None
     assert row.action_btn is None
+
+
+def test_row_appends_unsaved_when_artifact_is_dirty(app):
+    spec = DataArtifactSpec("foo", "Foo", "foo", "output")
+    row = _ArtifactRow(spec)
+    state = SimpleNamespace(value=object(), dirty=True, path=None, error="")
+
+    row.refresh_state(state, info_text="Loaded")
+
+    assert row.glyph_label.text() == "✓"
+    assert row.info_label.text() == "Loaded · Unsaved"
+
+
+def test_row_appends_saved_filename_when_path_exists(app, tmp_path):
+    spec = DataArtifactSpec("foo", "Foo", "foo", "output")
+    row = _ArtifactRow(spec)
+    path = tmp_path / "foo.npy"
+    state = SimpleNamespace(value=object(), dirty=False, path=path, error="")
+
+    row.refresh_state(state, info_text="Loaded")
+
+    assert row.info_label.text() == "Loaded · foo.npy"
+    assert row.info_label.toolTip() == str(path)
+
+
+def test_row_shows_error_glyph_and_message(app):
+    spec = DataArtifactSpec("foo", "Foo", "foo", "output")
+    row = _ArtifactRow(spec)
+    state = SimpleNamespace(value=object(), dirty=True, path=None, error="save failed")
+
+    row.refresh_state(state, info_text="Loaded")
+
+    assert row.glyph_label.text() == "⚠"
+    assert row.info_label.text() == "save failed"
