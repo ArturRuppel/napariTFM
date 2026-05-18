@@ -209,22 +209,17 @@ def test_stage_section_exposes_header_actions_with_stable_names(app):
             "run": child.process_btn,
             "preview": child.preview_btn,
             "cancel": child.cancel_btn,
-            "save": child.save_btn,
         },
         expanded=False,
     )
 
-    assert section.run_button.objectName() == "stage_preprocessing_run_button"
+    assert section.params_btn.objectName() == "stage_preprocessing_params_button"
+    assert section.run_cancel_btn.objectName() == "stage_preprocessing_run_cancel_button"
     assert section.preview_button.objectName() == "stage_preprocessing_preview_button"
-    assert section.cancel_button.objectName() == "stage_preprocessing_cancel_button"
-    assert section.save_button.objectName() == "stage_preprocessing_save_button"
-    assert section.config_button.objectName() == "stage_preprocessing_config_button"
 
-    assert section.run_button.toolTip() == "Run Preprocessing"
+    assert "Run" in section.run_cancel_btn.toolTip()
     assert section.preview_button.toolTip() == "Preview Preprocessing"
-    assert section.cancel_button.toolTip() == "Cancel Preprocessing"
-    assert section.save_button.toolTip() == "Save Preprocessing"
-    assert section.config_button.toolTip() == "Configure Preprocessing"
+    assert "Toggle" in section.params_btn.toolTip()
 
 
 def test_stage_section_exposes_status_indicator_with_stable_name(app):
@@ -258,12 +253,12 @@ def test_stage_section_header_action_state_follows_child_button(app):
         action_targets={"run": child.process_btn},
     )
 
-    assert not section.run_button.isEnabled()
+    assert not section.run_cancel_btn.isEnabled()
 
     child.process_btn.setEnabled(True)
     app.processEvents()
 
-    assert section.run_button.isEnabled()
+    assert section.run_cancel_btn.isEnabled()
 
 
 def test_stage_section_status_indicator_remains_visible_when_collapsed(app):
@@ -273,7 +268,7 @@ def test_stage_section_status_indicator_remains_visible_when_collapsed(app):
     section.show()
     app.processEvents()
 
-    section.config_button.click()
+    section.params_btn.click()
     app.processEvents()
 
     assert not section._content.isVisible()
@@ -282,11 +277,10 @@ def test_stage_section_status_indicator_remains_visible_when_collapsed(app):
 
 def test_stage_section_header_actions_proxy_child_buttons(app):
     child = _StubStageWidget()
-    clicks = {"run": 0, "preview": 0, "cancel": 0, "save": 0}
+    clicks = {"run": 0, "preview": 0, "cancel": 0}
     child.process_btn.clicked.connect(lambda: clicks.__setitem__("run", clicks["run"] + 1))
     child.preview_btn.clicked.connect(lambda: clicks.__setitem__("preview", clicks["preview"] + 1))
     child.cancel_btn.clicked.connect(lambda: clicks.__setitem__("cancel", clicks["cancel"] + 1))
-    child.save_btn.clicked.connect(lambda: clicks.__setitem__("save", clicks["save"] + 1))
 
     section = _widget._StageSection(
         "Preprocessing",
@@ -295,31 +289,29 @@ def test_stage_section_header_actions_proxy_child_buttons(app):
             "run": child.process_btn,
             "preview": child.preview_btn,
             "cancel": child.cancel_btn,
-            "save": child.save_btn,
         },
         expanded=False,
     )
 
-    section.run_button.click()
+    section.run_cancel_btn.click()
     section.preview_button.click()
-    section.cancel_button.click()
-    section.save_button.click()
+    section.set_status("running")
+    section.run_cancel_btn.click()
 
-    assert clicks == {"run": 1, "preview": 1, "cancel": 1, "save": 1}
+    assert clicks == {"run": 1, "preview": 1, "cancel": 1}
 
 
-def test_stage_section_disables_unsupported_actions_and_config_toggles(app):
+def test_stage_section_disables_unsupported_actions_and_params_toggles(app):
     child = QWidget()
 
     section = _widget._StageSection("Batch Analysis", child, expanded=False)
     section.show()
     app.processEvents()
 
-    assert not section.run_button.isEnabled()
+    assert not section.run_cancel_btn.isEnabled()
     assert not section.preview_button.isEnabled()
-    assert not section.cancel_button.isEnabled()
 
-    section.config_button.click()
+    section.params_btn.click()
     app.processEvents()
 
     assert child.isVisible()
@@ -344,7 +336,7 @@ def test_stage_section_config_toggles_inline_parameter_panel_when_provided(app):
     assert not parameter_panel.isVisible()
     assert not section._parameter_content.isVisible()
 
-    section.config_button.click()
+    section.params_btn.click()
     app.processEvents()
 
     assert not child.isVisible()
@@ -437,7 +429,7 @@ def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app)
         lambda: clicks.__setitem__("run", clicks["run"] + 1)
     )
 
-    displacement_section.run_button.click()
+    displacement_section.run_cancel_btn.click()
 
     assert clicks["run"] == 1
 
@@ -534,7 +526,7 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
 
     displacement_section = widget._stage_sections_by_key["displacement"]
     assert not displacement_panel.isVisibleTo(widget)
-    displacement_section.config_button.click()
+    displacement_section.params_btn.click()
     app.processEvents()
     assert displacement_panel.isVisibleTo(widget)
     assert not widget.displacement_widget.isVisibleTo(widget)

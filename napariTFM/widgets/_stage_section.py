@@ -82,25 +82,20 @@ class StageSection(QWidget):
         header_layout.addWidget(self.header_label)
         header_layout.addStretch()
 
-        self.run_button = self._create_action_button("run", QStyle.SP_MediaPlay)
+        self.params_btn = self._create_params_button()
+        self.run_cancel_btn = self._create_run_cancel_button()
         self.preview_button = self._create_action_button("preview", QStyle.SP_FileDialogContentsView)
-        self.cancel_button = self._create_action_button("cancel", QStyle.SP_DialogCancelButton)
-        self.save_button = self._create_action_button("save", QStyle.SP_DialogSaveButton)
-        self.config_button = self._create_action_button("config", QStyle.SP_FileDialogDetailedView)
-        self.config_button.setCheckable(True)
-        if self.parameter_panel is None:
-            self.config_button.toggled.connect(self._set_expanded)
-        else:
-            self.config_button.toggled.connect(self._set_parameter_panel_expanded)
-        self._toggle_button = self.config_button
 
-        for button in [
-            self.run_button,
-            self.preview_button,
-            self.cancel_button,
-            self.save_button,
-            self.config_button,
-        ]:
+        # Deprecated alias kept for the duration of this commit; removed in Task 6.
+        self.config_button = self.params_btn
+        # Compatibility aliases for existing call sites; removed in Task 6.
+        self.run_button = self.run_cancel_btn
+        self.cancel_button = self.run_cancel_btn
+        self.save_button = None
+
+        self._toggle_button = self.params_btn
+
+        for button in [self.params_btn, self.run_cancel_btn, self.preview_button]:
             header_layout.addWidget(button)
 
         self._parameter_content = QWidget()
@@ -129,9 +124,9 @@ class StageSection(QWidget):
         self.set_status(status)
         self._set_expanded(expanded)
         if self.parameter_panel is None:
-            self.config_button.setChecked(expanded)
+            self.params_btn.setChecked(expanded)
         else:
-            self.config_button.setChecked(parameters_expanded)
+            self.params_btn.setChecked(parameters_expanded)
             self._set_parameter_panel_expanded(parameters_expanded)
 
     @property
@@ -166,6 +161,16 @@ class StageSection(QWidget):
         self._status = status
         self.status_indicator.setStyleSheet(status_indicator_style(status))
         self.status_indicator.setToolTip(f"{self._title} status: {status}")
+        if status == "running":
+            self.run_cancel_btn.setIcon(
+                self.style().standardIcon(QStyle.SP_DialogCancelButton)
+            )
+            self.run_cancel_btn.setToolTip(f"Cancel {self._title}")
+        else:
+            self.run_cancel_btn.setIcon(
+                self.style().standardIcon(QStyle.SP_MediaPlay)
+            )
+            self.run_cancel_btn.setToolTip(f"Run {self._title}")
 
     def _create_action_button(self, action: str, standard_icon: QStyle.StandardPixmap):
         button = make_icon_button(
@@ -176,10 +181,6 @@ class StageSection(QWidget):
             standard_icon,
         )
 
-        if action == "config":
-            button.setToolTip(f"Configure {self._title}")
-            return button
-
         target = self._action_targets.get(action)
         button.setEnabled(target is not None and target.isEnabled())
         if target is not None:
@@ -187,13 +188,51 @@ class StageSection(QWidget):
             self._action_state_syncs.append(_ActionStateSync(target, button))
         return button
 
+    def _create_params_button(self):
+        button = make_icon_button(
+            self,
+            "params",
+            f"stage_{self._slug}_params_button",
+            f"Toggle {self._title} parameters",
+            QStyle.SP_FileDialogDetailedView,
+        )
+        button.setCheckable(True)
+        if self.parameter_panel is None:
+            button.toggled.connect(self._set_expanded)
+        else:
+            button.toggled.connect(self._set_parameter_panel_expanded)
+        return button
+
+    def _create_run_cancel_button(self):
+        button = make_icon_button(
+            self,
+            "run_cancel",
+            f"stage_{self._slug}_run_cancel_button",
+            f"Run {self._title}",
+            QStyle.SP_MediaPlay,
+        )
+        run_target = self._action_targets.get("run")
+        button.setEnabled(run_target is not None and run_target.isEnabled())
+        if run_target is not None:
+            self._action_state_syncs.append(_ActionStateSync(run_target, button))
+        button.clicked.connect(self._on_run_cancel_clicked)
+        return button
+
+    def _on_run_cancel_clicked(self):
+        if self._status == "running":
+            target = self._action_targets.get("cancel")
+        else:
+            target = self._action_targets.get("run")
+        if target is not None:
+            target.click()
+
     def _set_expanded(self, expanded: bool):
-        self.config_button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self.params_btn.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self._content.setVisible(expanded)
         self._child.setVisible(expanded)
 
     def _set_parameter_panel_expanded(self, expanded: bool):
-        self.config_button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self.params_btn.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self._parameter_content.setVisible(expanded)
         if self.parameter_panel is not None:
             self.parameter_panel.setVisible(expanded)
