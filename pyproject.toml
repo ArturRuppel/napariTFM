@@ -47,8 +47,12 @@ dependencies = [
 [project.entry-points."napari.manifest"]
 napariTFM = "napariTFM:napari.yaml"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["_dev", "_validation", "_documentation", "docs"]
+
 [tool.setuptools]
-packages = {find = {}}
+packages = {find = {exclude = ["_dev*", "_validation*"]}}
 
 [tool.setuptools.package-data]
 "napariTFM" = ["*.py", "*.yaml"]

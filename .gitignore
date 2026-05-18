@@ -86,5 +86,5 @@ Thumbs.db
 !_validation/**/*.png
 !_validation/**/*.gif
 
-# Optical flow comparison outputs
-_dev/optical_flow_comparison/output/
+# Experimentation / scratch work — not part of the package
+_dev/
