@@ -84,6 +84,9 @@ class _StubDataManager:
         self.displacement_results = None
         self.force_results = None
         self.stress_results = None
+        self.auto_save_calls = []
+        self.artifact_errors = []
+        self.raise_on_save = None
 
     def add_change_callback(self, callback):
         if callback not in self._callbacks:
@@ -100,6 +103,17 @@ class _StubDataManager:
     def set_output_dir(self, path):
         self.output_dir = Path(path).expanduser() if path else None
         self.notify_changed()
+
+    def auto_save_artifact(self, key, pixel_size=None, frame_interval=None):
+        if self.raise_on_save is not None:
+            raise self.raise_on_save
+        self.auto_save_calls.append(
+            {"key": key, "pixel_size": pixel_size, "frame_interval": frame_interval}
+        )
+        return None
+
+    def mark_artifact_error(self, key, error):
+        self.artifact_errors.append((key, error))
 
 
 class _StubVisualizationManager:
@@ -511,6 +525,52 @@ def test_preprocessing_data_rows_route_assignment_actions(monkeypatch, app):
         "beads",
         "cells",
     ]
+
+
+def test_generated_output_row_save_calls_data_manager_with_calibration(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    widget.data_manager.preprocessed_bead_stack = object()
+    widget.refresh_stage_statuses()
+
+    row = widget._stage_status_panels_by_key["preprocessing"].artifact_rows["preprocessed_bead_stack"]
+    row.action_btn.click()
+
+    assert widget.data_manager.auto_save_calls[-1] == {
+        "key": "preprocessed_bead_stack",
+        "pixel_size": 1.0,
+        "frame_interval": 1.0,
+    }
+
+
+def test_failed_generated_output_save_marks_artifact_error(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget.QMessageBox, "warning", lambda *args: None)
+
+    widget = _widget.napariTFMWidget(object())
+    widget.data_manager.raise_on_save = RuntimeError("disk full")
+    widget.data_manager.preprocessed_reference = object()
+    widget.refresh_stage_statuses()
+
+    row = widget._stage_status_panels_by_key["preprocessing"].artifact_rows["preprocessed_reference"]
+    row.action_btn.click()
+
+    assert widget.data_manager.artifact_errors[-1] == ("preprocessed_reference", "disk full")
 
 
 def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
