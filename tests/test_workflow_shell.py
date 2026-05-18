@@ -1,5 +1,6 @@
 import sys
 import types
+from pathlib import Path
 
 import pytest
 from qtpy.QtCore import QObject, Signal
@@ -72,6 +73,7 @@ class _StubParameterManager(QObject):
 class _StubDataManager:
     def __init__(self):
         self._callbacks = []
+        self.output_dir = None
         self.bead_stack = None
         self.reference = None
         self.cell_stack = None
@@ -94,6 +96,10 @@ class _StubDataManager:
     def notify_changed(self):
         for callback in list(self._callbacks):
             callback()
+
+    def set_output_dir(self, path):
+        self.output_dir = Path(path).expanduser() if path else None
+        self.notify_changed()
 
 
 class _StubVisualizationManager:
@@ -465,6 +471,22 @@ def test_main_widget_does_not_expose_legacy_parameter_panel(monkeypatch, app):
 
     assert not hasattr(widget, "parameter_panel")
     assert widget.project_section is not None
+
+
+def test_main_widget_project_section_tracks_output_directory(monkeypatch, app, tmp_path):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    widget.data_manager.set_output_dir(tmp_path)
+
+    assert widget.project_section.output_dir_label.text() == str(tmp_path)
 
 
 def test_preprocessing_data_rows_route_assignment_actions(monkeypatch, app):

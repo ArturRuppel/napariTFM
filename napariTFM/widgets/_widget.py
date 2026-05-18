@@ -306,7 +306,7 @@ class napariTFMWidget(QWidget):
         self.parameter_manager = ParameterManager()
         self.visualization_manager = VisualizationManager(self.viewer, self.data_manager)
 
-        self.project_section = ProjectSection(self.parameter_manager)
+        self.project_section = ProjectSection(self.parameter_manager, self.data_manager)
         container_layout.addWidget(self.project_section)
 
         self._stage_parameter_panels_by_key = self._create_stage_parameter_panels()

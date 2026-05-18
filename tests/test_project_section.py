@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from qtpy.QtCore import QObject, Signal
 from qtpy.QtWidgets import QApplication, QPushButton
@@ -26,6 +28,22 @@ class _StubParameterManager(QObject):
 
     def reset_all_parameters(self):
         self._values = {"pixel_size": 1.0, "frame_interval": 1.0}
+
+
+class _StubDataManager:
+    def __init__(self):
+        self.output_dir = None
+        self.set_calls = []
+        self._callbacks = []
+
+    def set_output_dir(self, path):
+        self.output_dir = Path(path).expanduser() if path else None
+        self.set_calls.append(self.output_dir)
+        for callback in list(self._callbacks):
+            callback()
+
+    def add_change_callback(self, callback):
+        self._callbacks.append(callback)
 
 
 @pytest.fixture
@@ -63,3 +81,27 @@ def test_project_section_starts_expanded(app):
     app.processEvents()
 
     assert section._content.isVisible()
+
+
+def test_project_section_shows_unset_output_directory(app):
+    section = ProjectSection(_StubParameterManager(), _StubDataManager())
+
+    assert section.output_dir_label.text() == "No output directory"
+    assert section.output_dir_label.toolTip() == ""
+
+
+def test_project_section_syncs_output_directory_from_data_manager(app, tmp_path):
+    data_manager = _StubDataManager()
+    section = ProjectSection(_StubParameterManager(), data_manager)
+
+    data_manager.set_output_dir(tmp_path)
+
+    assert section.output_dir_label.text() == str(tmp_path)
+    assert section.output_dir_label.toolTip() == str(tmp_path)
+
+
+def test_project_section_exposes_output_directory_button(app):
+    section = ProjectSection(_StubParameterManager(), _StubDataManager())
+
+    assert isinstance(section.choose_output_dir_btn, QPushButton)
+    assert section.choose_output_dir_btn.objectName() == "project_choose_output_dir_button"
