@@ -742,6 +742,26 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     )
 
 
+def test_hide_embedded_parameter_panels_tolerates_missing_attribute(monkeypatch, app):
+    class _NoPanelStage(_StubStageWidget):
+        def __init__(self, *args):
+            super().__init__(*args)
+            del self.parameter_panel  # simulate a fully-inverted stage widget
+
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _NoPanelStage)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())  # must not raise
+
+    assert not hasattr(widget.preprocessing_widget, "parameter_panel")
+
+
 def test_workflow_parameter_panel_labels_farneback_controls(app):
     manager = _StubParameterManager()
     panel = _widget.WorkflowParameterPanel(manager)

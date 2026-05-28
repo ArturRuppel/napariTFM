@@ -244,7 +244,7 @@ def test_preprocessing_widget_does_not_mount_stage_local_data_panel(app):
     widget.show()
     app.processEvents()
 
-    assert widget.data_panel is None
+    assert not hasattr(widget, "data_panel")
     assert widget.findChild(QPushButton, "preprocessing_reference_assign_button") is None
     assert widget.findChild(QPushButton, "preprocessing_beads_assign_button") is None
     assert widget.findChild(QPushButton, "preprocessing_cells_assign_button") is None
@@ -281,8 +281,7 @@ def test_preprocessing_widget_keeps_parameter_content_in_scroll_area(app):
     scroll_area = widget.findChild(QScrollArea)
 
     assert scroll_area is not None
-    assert widget.parameter_panel.isVisibleTo(widget)
-    assert widget.data_panel is None
+    assert not hasattr(widget, "data_panel")
 
 
 def test_preprocessing_preview_renders_all_loaded_inputs(monkeypatch, app):
