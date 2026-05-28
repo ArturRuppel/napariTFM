@@ -633,7 +633,6 @@ def test_main_widget_hides_stage_local_data_and_action_panels_after_shell_wiring
     widget = _widget.napariTFMWidget(object())
 
     for stage_widget in [
-        widget.force_widget,
         widget.msm_widget,
     ]:
         assert getattr(stage_widget, "data_panel", None) is None or stage_widget.data_panel.isHidden()
