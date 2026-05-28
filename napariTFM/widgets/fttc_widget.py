@@ -834,16 +834,45 @@ class FTTCWidget(BaseAnalysisWidget):
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Add panels
-        layout.addWidget(self.parameter_panel)
-        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-        layout.addWidget(self.action_panel)
+        layout.addWidget(self._create_action_row())
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
 
         container.setLayout(layout)
         scroll.setWidget(container)
         return scroll
+
+    def _create_action_row(self) -> QWidget:
+        """Build widget-owned action buttons (run/preview/cancel proxied by the stage header)."""
+        container = QWidget()
+        layout = QVBoxLayout()
+
+        row = QHBoxLayout()
+        self.preview_btn = QPushButton("Preview Current Frame")
+        self.preview_btn.setToolTip(
+            "Calculate and visualize forces for the current frame only"
+        )
+        self.process_btn = QPushButton("Calculate Forces")
+        self.process_btn.setToolTip(
+            "Calculate forces for all frames in the dataset"
+        )
+        row.addWidget(self.preview_btn)
+        row.addWidget(self.process_btn)
+        layout.addLayout(row)
+
+        self.gcv_btn = QPushButton("Auto-select Regularization (GCV)")
+        self.gcv_btn.setToolTip(
+            "Calculate the optimal regularization parameter for the current frame\n"
+            "using Generalized Cross-Validation"
+        )
+        layout.addWidget(self.gcv_btn)
+
+        self.cancel_btn = QPushButton("Cancel Operation")
+        self.cancel_btn.setToolTip("Cancel the current operation")
+        layout.addWidget(self.cancel_btn)
+
+        container.setLayout(layout)
+        return container
 
     def _create_status_frame(self) -> QFrame:
         """Create the status display frame."""
@@ -867,9 +896,13 @@ class FTTCWidget(BaseAnalysisWidget):
         self.controller.analysis_completed.connect(self._on_analysis_completed)
         self.controller.analysis_failed.connect(self._on_analysis_failed)
         self.controller.data_updated.connect(self._update_ui_state)
+        self.controller.ui_frozen.connect(self._handle_ui_freeze)
 
-        # Connect parameter panel signals
-        self.parameter_panel.parameters_reset.connect(self._on_parameters_reset)
+        # Wire widget-owned action buttons to controller operations
+        self.preview_btn.clicked.connect(self.controller.preview_force)
+        self.process_btn.clicked.connect(self.controller.calculate_forces)
+        self.gcv_btn.clicked.connect(self.controller.calculate_optimal_regularization)
+        self.cancel_btn.clicked.connect(self.controller.cancel_operation)
 
         # Connect to layer selection changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
@@ -881,17 +914,20 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
-        # Update action panel
         has_displacement = self.data_manager.displacement_results is not None
-        has_results = self.data_manager.force_results is not None
-        self.action_panel.update_button_states(
-            has_displacement=has_displacement,
-            has_results=has_results
-        )
 
-    def _on_parameters_reset(self):
-        """Handle parameter reset."""
-        self._update_status(0, "Force parameters reset to default values")
+        self.preview_btn.setEnabled(has_displacement)
+        self.process_btn.setEnabled(has_displacement)
+        self.gcv_btn.setEnabled(has_displacement)
+        self.cancel_btn.setEnabled(True)
+
+    def _handle_ui_freeze(self, frozen: bool):
+        """Handle UI freeze/unfreeze during processing."""
+        self.preview_btn.setEnabled(not frozen)
+        self.process_btn.setEnabled(not frozen)
+        self.gcv_btn.setEnabled(not frozen)
+        # Cancel button always enabled
+        self.cancel_btn.setEnabled(True)
 
     def _on_analysis_completed(self, results: FTTCResult):
         """Handle completed analysis."""
@@ -904,10 +940,12 @@ class FTTCWidget(BaseAnalysisWidget):
 
         # Emit results
         self.force_calculated.emit(results)
+        self._update_ui_state()
 
     def _on_analysis_failed(self, error_msg: str):
         """Handle analysis failure."""
         self._update_status(0, f"Error: {error_msg}")
+        self._update_ui_state()
 
     def _on_frame_changed(self, event=None):
         """Handle frame change events."""
