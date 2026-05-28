@@ -783,6 +783,40 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     )
 
 
+def test_stage_status_is_done_when_output_files_exist_on_disk(monkeypatch, app, tmp_path):
+    import importlib.util as _ilu
+
+    _spec = _ilu.spec_from_file_location(
+        "napariTFM.utilities.data_manager_real",
+        Path(__file__).parent.parent / "napariTFM" / "utilities" / "data_manager.py",
+    )
+    _dm_mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_dm_mod)
+    DataManager = _dm_mod.DataManager
+
+    monkeypatch.setattr(_widget, "DataManager", DataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    widget.data_manager.set_output_dir(tmp_path)
+    section = widget._stage_sections_by_key["preprocessing"]
+
+    widget.refresh_stage_statuses()
+    assert section.status_indicator.toolTip() != "Preprocessing status: done"
+
+    (tmp_path / "preprocessed_beads.tif").write_bytes(b"x")
+    (tmp_path / "preprocessed_reference.tif").write_bytes(b"x")
+    widget.refresh_stage_statuses()
+
+    assert section.status_indicator.toolTip() == "Preprocessing status: done"
+
+
 def test_hide_embedded_parameter_panels_tolerates_missing_attribute(monkeypatch, app):
     class _NoPanelStage(_StubStageWidget):
         def __init__(self, *args):

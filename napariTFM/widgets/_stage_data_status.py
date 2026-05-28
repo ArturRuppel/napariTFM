@@ -90,8 +90,9 @@ class _ArtifactRow(QWidget):
         if self.action_btn is not None and self.spec.role == "output":
             self.action_btn.setEnabled(available)
 
-    def refresh_state(self, state, info_text: str) -> None:
-        available = getattr(state, "value", None) is not None
+    def refresh_state(self, state, info_text: str, available: bool | None = None) -> None:
+        if available is None:
+            available = getattr(state, "value", None) is not None
         error = getattr(state, "error", "")
         path = getattr(state, "path", None)
         dirty = bool(getattr(state, "dirty", False))
@@ -170,9 +171,9 @@ class StageDataStatusPanel(QWidget):
         output_available = False
 
         for artifact in self.artifacts:
+            available = self._artifact_available(artifact)
             state = self._artifact_state(artifact)
             value = state.value if state is not None else self._artifact_value(artifact)
-            available = value is not None
             if artifact.role == "input" and artifact.required and not available:
                 required_inputs_available = False
             if artifact.role == "output" and available:
@@ -180,7 +181,9 @@ class StageDataStatusPanel(QWidget):
 
             info_text = self._info_text(artifact, value, available)
             if state is not None:
-                self.artifact_rows[artifact.key].refresh_state(state, info_text=info_text)
+                self.artifact_rows[artifact.key].refresh_state(
+                    state, info_text=info_text, available=available
+                )
             else:
                 self.artifact_rows[artifact.key].refresh(available=available, info_text=info_text)
 
@@ -191,8 +194,10 @@ class StageDataStatusPanel(QWidget):
         return "not_started"
 
     def _info_text(self, artifact: DataArtifactSpec, value: Any, available: bool) -> str:
-        if available:
+        if value is not None:
             return self._shape_text(value) or "Loaded"
+        if available:
+            return "Saved"
         return "Missing" if artifact.required else "Optional"
 
     @staticmethod
@@ -209,6 +214,15 @@ class StageDataStatusPanel(QWidget):
             if array is not None and hasattr(array, "shape"):
                 return "×".join(str(size) for size in array.shape)
         return ""
+
+    def _artifact_available(self, artifact: DataArtifactSpec) -> bool:
+        checker = getattr(self.data_manager, "artifact_available", None)
+        if checker is not None:
+            try:
+                return bool(checker(artifact.key))
+            except (KeyError, AttributeError):
+                pass
+        return self._artifact_value(artifact) is not None
 
     def _artifact_value(self, artifact: DataArtifactSpec):
         if artifact.attr is None:
