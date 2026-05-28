@@ -837,6 +837,24 @@ def test_hide_embedded_parameter_panels_tolerates_missing_attribute(monkeypatch,
     assert not hasattr(widget.preprocessing_widget, "parameter_panel")
 
 
+def test_each_stage_has_single_inline_parameter_editor(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    for name in (
+        "PreprocessingWidget", "DisplacementAnalysisWidget",
+        "FTTCWidget", "MSMWidget", "BatchAnalysisWidget",
+    ):
+        monkeypatch.setattr(_widget, name, _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+
+    assert set(widget._stage_inner_param_sections_by_key) == {
+        "preprocessing", "displacement", "force", "stress",
+    }
+    assert not hasattr(widget, "_hide_embedded_parameter_panels")
+
+
 def test_workflow_parameter_panel_labels_farneback_controls(app):
     manager = _StubParameterManager()
     panel = _widget.WorkflowParameterPanel(manager)

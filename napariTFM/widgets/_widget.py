@@ -433,7 +433,6 @@ class napariTFMWidget(QWidget):
             self.parameter_manager,
             self.visualization_manager
         )
-        self._hide_embedded_parameter_panels()
 
         stage_data_artifacts = dict(STAGE_DATA_ARTIFACTS)
         stage_data_artifacts["preprocessing"] = _build_preprocessing_specs(
@@ -547,27 +546,6 @@ class napariTFMWidget(QWidget):
         self.connect_signals()
         self.data_manager.add_change_callback(self._on_pipeline_data_changed)
         self.refresh_stage_statuses()
-
-    def _hide_embedded_parameter_panels(self):
-        """Keep stage-local panels alive for controllers while removing duplicate visible editors."""
-        for widget in [
-            self.preprocessing_widget,
-            self.displacement_widget,
-            self.force_widget,
-        ]:
-            panel = getattr(widget, "parameter_panel", None)
-            if panel is not None:
-                panel.setVisible(False)
-
-        for group in self.batch_widget.findChildren(QGroupBox):
-            if group.title() in {
-                "General Parameters",
-                "Preprocessing Parameters",
-                "Farneback Displacement Parameters",
-                "Force Parameters",
-                "Stress Parameters",
-            }:
-                group.setVisible(False)
 
     def _create_stage_parameter_panels(self) -> dict[str, WorkflowParameterPanel]:
         """Create inline workflow parameter editors grouped by pipeline stage."""
