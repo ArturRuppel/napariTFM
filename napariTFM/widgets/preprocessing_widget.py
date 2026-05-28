@@ -1071,10 +1071,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Initialize managers
         self.parameter_manager = parameter_manager
 
-        # Initialize panels
-        self.parameter_panel = PreprocessingParameterPanel(parameter_manager)
-        self.data_panel = None
-
         # Initialize controller
         self.controller = PreprocessingController(
             viewer=viewer,
@@ -1116,8 +1112,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Add components
-        layout.addWidget(self.parameter_panel)
         self.preview_frame = self._create_preview_frame()
         self.preview_frame.setVisible(False)
         layout.addWidget(self.preview_frame)
@@ -1193,18 +1187,11 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.controller.preprocessing_failed.connect(self._on_preprocessing_failed)
         self.controller.data_updated.connect(self._update_ui_state)
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
-        # Connect parameter panel changes
-        self.parameter_panel.parameter_changed.connect(self._on_parameter_changed)
-        self.parameter_manager.parameter_changed.connect(self._sync_parameter)
-        self.parameter_panel.parameters_reset.connect(self._on_parameters_reset)
+        # Parameter-change-driven preview is handled by the controller via
+        # ParameterManager.parameter_changed; no panel wiring needed here.
 
         # Add layer selection monitoring
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
-
-    def _sync_parameter(self, param_name: str, value: Any):
-        """Sync a single parameter change from parameter manager"""
-        if self.parameter_panel:
-            self.parameter_panel.update_parameter(param_name, value)
 
     def _on_preview_toggled(self, enabled: bool):
         """Handle preview toggle."""
@@ -1218,15 +1205,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
             self.controller.run_preprocessing()
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
-
-    def _on_parameter_changed(self):
-        """Handle parameter changes."""
-        if self.preview_check.isChecked():
-            self.controller._update_preview()
-
-    def _on_parameters_reset(self):
-        """Handle parameter reset and update status."""
-        self._update_status(0, "Preprocessing parameters reset to default values.")
 
     # endregion
 
