@@ -871,3 +871,42 @@ def test_workflow_parameter_panel_labels_farneback_controls(app):
     assert "Farneback Iterations" in labels
     assert "Window Size" in labels
     assert "Refinement Iterations" not in labels
+
+
+def test_refresh_updates_every_stage_widget_once(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    for name in (
+        "PreprocessingWidget", "DisplacementAnalysisWidget",
+        "FTTCWidget", "MSMWidget", "BatchAnalysisWidget",
+    ):
+        monkeypatch.setattr(_widget, name, _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    stage_widgets = widget._stage_widgets()
+    assert len(stage_widgets) == 5
+
+    before = [w.update_count for w in stage_widgets]
+    widget.refresh()
+    after = [w.update_count for w in stage_widgets]
+    assert all(a == b + 1 for a, b in zip(after, before))
+
+
+def test_completion_signal_triggers_single_refresh(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    for name in (
+        "PreprocessingWidget", "DisplacementAnalysisWidget",
+        "FTTCWidget", "MSMWidget", "BatchAnalysisWidget",
+    ):
+        monkeypatch.setattr(_widget, name, _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    calls = {"n": 0}
+    original = widget.refresh
+    widget.refresh = lambda: (calls.__setitem__("n", calls["n"] + 1), original())[1]
+
+    widget.force_widget.force_calculated.emit(object())
+    assert calls["n"] == 1

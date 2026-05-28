@@ -544,7 +544,7 @@ class napariTFMWidget(QWidget):
         self.setLayout(main_layout)
 
         self.connect_signals()
-        self.data_manager.add_change_callback(self._on_pipeline_data_changed)
+        self.data_manager.add_change_callback(self.refresh)
         self.refresh_stage_statuses()
 
     def _create_stage_parameter_panels(self) -> dict[str, WorkflowParameterPanel]:
@@ -559,6 +559,23 @@ class napariTFMWidget(QWidget):
             key: WorkflowParameterPanel(self.parameter_manager, section_titles=titles)
             for key, titles in stage_sections.items()
         }
+
+    def _stage_widgets(self):
+        return [
+            self.preprocessing_widget,
+            self.displacement_widget,
+            self.force_widget,
+            self.msm_widget,
+            self.batch_widget,
+        ]
+
+    def refresh(self):
+        """Single reconcile pass: update every stage widget, then statuses."""
+        for widget in self._stage_widgets():
+            update = getattr(widget, "_update_ui_state", None)
+            if callable(update):
+                update()
+        self.refresh_stage_statuses()
 
     def refresh_stage_statuses(self):
         for key, panel in self._stage_status_panels_by_key.items():
@@ -580,18 +597,6 @@ class napariTFMWidget(QWidget):
         finally:
             self.refresh_stage_statuses()
 
-    def _on_pipeline_data_changed(self):
-        for widget in [
-            self.preprocessing_widget,
-            self.displacement_widget,
-            self.force_widget,
-            self.msm_widget,
-            self.batch_widget,
-        ]:
-            if hasattr(widget, '_update_ui_state'):
-                widget._update_ui_state()
-        self.refresh_stage_statuses()
-
     def _reset_parameters(self):
         """Reset parameters to default values and notify all widgets."""
         try:
@@ -605,17 +610,7 @@ class napariTFMWidget(QWidget):
             if reply == QMessageBox.Yes:
                 # Reset parameters
                 self.parameter_manager.reset_all_parameters()
-
-                # Update all widget states
-                for widget in [
-                    self.preprocessing_widget,
-                    self.displacement_widget,
-                    self.force_widget,
-                    self.msm_widget,
-                    self.batch_widget
-                ]:
-                    if hasattr(widget, '_update_ui_state'):
-                        widget._update_ui_state()
+                self.refresh()
 
         except Exception as e:
             logger.error(f"Error resetting parameters: {str(e)}")
@@ -657,10 +652,10 @@ class napariTFMWidget(QWidget):
 
     def connect_signals(self):
         """Connect signals between components"""
-        self.preprocessing_widget.preprocessing_completed.connect(self._on_preprocessing_completed)
-        self.displacement_widget.displacement_calculated.connect(self._on_displacement_completed)
-        self.force_widget.force_calculated.connect(self._on_force_completed)
-        self.msm_widget.stress_calculated.connect(self._on_stress_completed)
+        self.preprocessing_widget.preprocessing_completed.connect(lambda *_: self.refresh())
+        self.displacement_widget.displacement_calculated.connect(lambda *_: self.refresh())
+        self.force_widget.force_calculated.connect(lambda *_: self.refresh())
+        self.msm_widget.stress_calculated.connect(lambda *_: self.refresh())
 
         # Connect parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
@@ -712,15 +707,8 @@ class napariTFMWidget(QWidget):
             try:
                 # Clear data manager
                 self.data_manager.__init__()
-                self.data_manager.add_change_callback(self._on_pipeline_data_changed)
-
-                # Update UI state in all widgets
-                self.preprocessing_widget._update_ui_state()
-                self.displacement_widget._update_ui_state()
-                self.force_widget._update_ui_state()
-                self.msm_widget._update_ui_state()
-                self.batch_widget._update_ui_state()
-                self.refresh_stage_statuses()
+                self.data_manager.add_change_callback(self.refresh)
+                self.refresh()
 
                 logger.info("All data cleared successfully")
 
@@ -728,43 +716,3 @@ class napariTFMWidget(QWidget):
                 logger.error(f"Error clearing data: {str(e)}")
                 QMessageBox.critical(self, "Error", f"Failed to clear data: {str(e)}")
 
-    def _on_preprocessing_completed(self, results):
-        """Handle completion of preprocessing"""
-        logger.info("Preprocessing completed successfully")
-
-        self.preprocessing_widget._update_ui_state()
-        self.displacement_widget._update_ui_state()
-        self.force_widget._update_ui_state()
-        self.msm_widget._update_ui_state()
-        self.batch_widget._update_ui_state()
-        self.refresh_stage_statuses()
-
-    def _on_displacement_completed(self, results):
-        """Handle completion of displacement analysis"""
-        logger.info("Displacement analysis completed successfully")
-        self.preprocessing_widget._update_ui_state()
-        self.displacement_widget._update_ui_state()
-        self.force_widget._update_ui_state()
-        self.msm_widget._update_ui_state()
-        self.batch_widget._update_ui_state()
-        self.refresh_stage_statuses()
-
-    def _on_force_completed(self, results):
-        """Handle completion of force calculation"""
-        logger.info("Force calculation completed successfully")
-        self.preprocessing_widget._update_ui_state()
-        self.displacement_widget._update_ui_state()
-        self.force_widget._update_ui_state()
-        self.msm_widget._update_ui_state()
-        self.batch_widget._update_ui_state()
-        self.refresh_stage_statuses()
-
-    def _on_stress_completed(self, results):
-        """Handle completion of stress calculation"""
-        logger.info("Stress calculation completed successfully")
-        self.preprocessing_widget._update_ui_state()
-        self.displacement_widget._update_ui_state()
-        self.force_widget._update_ui_state()
-        self.msm_widget._update_ui_state()
-        self.batch_widget._update_ui_state()
-        self.refresh_stage_statuses()
