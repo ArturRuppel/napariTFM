@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from qtpy.QtCore import QObject, Signal
-from qtpy.QtWidgets import QApplication, QPushButton, QTabWidget, QWidget
+from qtpy.QtWidgets import QApplication, QCheckBox, QPushButton, QTabWidget, QWidget
 
 
 class _StubParameterManager(QObject):
@@ -135,6 +135,11 @@ class _StubStageWidget(QWidget):
         self.process_btn = QPushButton("Run")
         self.cancel_btn = QPushButton("Cancel")
         self.save_btn = QPushButton("Save")
+        self.preview_check = QCheckBox("Show Preview")
+        self.analyze_btn = QPushButton("Analyze")
+        self.preview_frame_btn = QPushButton("Preview Frame")
+        self.preview_mesh_btn = QPushButton("Preview Mesh")
+        self.run_analysis_btn = QPushButton("Run Analysis")
         self.data_panel = QWidget()
         self.action_panel = QWidget()
         self.data_panel.setVisible(True)
@@ -440,6 +445,61 @@ def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app)
     displacement_section.run_cancel_btn.click()
 
     assert clicks["run"] == 1
+
+
+def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    widget.show()
+    app.processEvents()
+
+    cases = [
+        ("preprocessing", widget.preprocessing_widget.process_btn),
+        ("force", widget.force_widget.process_btn),
+        ("stress", widget.msm_widget.analyze_btn),
+        ("batch", widget.batch_widget.run_analysis_btn),
+    ]
+    for key, run_target in cases:
+        clicks = {"n": 0}
+        run_target.clicked.connect(lambda *_, c=clicks: c.__setitem__("n", c["n"] + 1))
+        widget._stage_sections_by_key[key].run_cancel_btn.click()
+        assert clicks["n"] == 1, f"{key} header run button did not trigger its widget action"
+
+
+def test_main_widget_stress_header_preview_wires_to_frame_preview(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    widget.show()
+    app.processEvents()
+
+    clicks = {"n": 0}
+    widget.msm_widget.preview_frame_btn.clicked.connect(
+        lambda *_: clicks.__setitem__("n", clicks["n"] + 1)
+    )
+    widget._stage_sections_by_key["stress"].preview_button.click()
+
+    assert clicks["n"] == 1
+
+
+def test_main_widget_does_not_use_action_target_reflection(app):
+    assert not hasattr(_widget.napariTFMWidget, "_find_stage_action_targets")
+    assert not hasattr(_widget.napariTFMWidget, "_first_existing_widget")
 
 
 def test_workflow_parameter_panel_exposes_one_control_per_managed_parameter(app):

@@ -463,56 +463,49 @@ class napariTFMWidget(QWidget):
                 self.preprocessing_widget,
                 expanded=True,
                 status_panel=self._stage_status_panels_by_key["preprocessing"],
-                action_targets=self._find_stage_action_targets(
-                    self.preprocessing_widget,
-                    run=["process_btn"],
-                    preview=["preview_check"],
-                    cancel=["cancel_btn"],
-                ),
+                action_targets={
+                    "run": self.preprocessing_widget.process_btn,
+                    "preview": self.preprocessing_widget.preview_check,
+                    "cancel": self.preprocessing_widget.cancel_btn,
+                },
             ),
             "displacement": _StageSection(
                 "Displacement",
                 self.displacement_widget,
                 status_panel=self._stage_status_panels_by_key["displacement"],
-                action_targets=self._find_stage_action_targets(
-                    self.displacement_widget,
-                    run=["process_btn"],
-                    preview=["preview_btn"],
-                    cancel=["cancel_btn"],
-                ),
+                action_targets={
+                    "run": self.displacement_widget.process_btn,
+                    "preview": self.displacement_widget.preview_btn,
+                    "cancel": self.displacement_widget.cancel_btn,
+                },
             ),
             "force": _StageSection(
                 "Force Analysis",
                 self.force_widget,
                 status_panel=self._stage_status_panels_by_key["force"],
-                action_targets=self._find_stage_action_targets(
-                    self.force_widget,
-                    run=["process_btn"],
-                    preview=["preview_btn"],
-                    cancel=["cancel_btn"],
-                ),
+                action_targets={
+                    "run": self.force_widget.process_btn,
+                    "preview": self.force_widget.preview_btn,
+                    "cancel": self.force_widget.cancel_btn,
+                },
             ),
             "stress": _StageSection(
                 "Stress Analysis",
                 self.msm_widget,
                 status_panel=self._stage_status_panels_by_key["stress"],
-                action_targets=self._find_stage_action_targets(
-                    self.msm_widget,
-                    run=["analyze_btn"],
-                    preview=["preview_frame_btn", "preview_mesh_btn"],
-                    cancel=["cancel_btn"],
-                ),
+                action_targets={
+                    "run": self.msm_widget.analyze_btn,
+                    "preview": self.msm_widget.preview_frame_btn,
+                    "cancel": self.msm_widget.cancel_btn,
+                },
             ),
             "batch": _StageSection(
                 "Batch Analysis",
                 self.batch_widget,
                 status_panel=self._stage_status_panels_by_key["batch"],
-                action_targets=self._find_stage_action_targets(
-                    self.batch_widget,
-                    run=["run_analysis_btn"],
-                    preview=[],
-                    cancel=[],
-                ),
+                action_targets={
+                    "run": self.batch_widget.run_analysis_btn,
+                },
             ),
         }
         self._stage_sections = list(self._stage_sections_by_key.values())
@@ -587,26 +580,6 @@ class napariTFMWidget(QWidget):
             key: WorkflowParameterPanel(self.parameter_manager, section_titles=titles)
             for key, titles in stage_sections.items()
         }
-
-    def _find_stage_action_targets(self, widget: QWidget, **action_paths: list[str]) -> dict[str, QWidget]:
-        """Find existing child controls that can be triggered from the stage header."""
-        targets = {}
-        for action, paths in action_paths.items():
-            target = self._first_existing_widget(widget, paths)
-            if target is not None and hasattr(target, "click"):
-                targets[action] = target
-        return targets
-
-    def _first_existing_widget(self, widget: QWidget, paths: list[str]) -> QWidget | None:
-        for path in paths:
-            target = widget
-            for attr in path.split("."):
-                target = getattr(target, attr, None)
-                if target is None:
-                    break
-            if target is not None:
-                return target
-        return None
 
     def refresh_stage_statuses(self):
         for key, panel in self._stage_status_panels_by_key.items():
