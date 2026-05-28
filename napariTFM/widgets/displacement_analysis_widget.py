@@ -434,28 +434,18 @@ class DisplacementController(QObject):
 
     # region === Initialization
     def __init__(self, viewer, data_manager, parameter_manager,
-                 visualization_manager, data_panel):
+                 visualization_manager):
         super().__init__()
         self.viewer = viewer
         self.data_manager = data_manager
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
-        self.data_panel = data_panel
         self.active_workers = []
-
-        # Initialize panel attributes
-        self.parameter_panel = None
-        self.action_panel = None
         self.preview_enabled = False
 
         # Connect to parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
         self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
-
-    def set_panels(self, parameter_panel, action_panel):
-        """Set the parameter and action panels."""
-        self.parameter_panel = parameter_panel
-        self.action_panel = action_panel
 
     # endregion === Initialization
 
@@ -768,23 +758,11 @@ class DisplacementController(QObject):
 
     # region === State Management
     def freeze_ui(self):
-        """Disable all interactive UI elements."""
-        if self.data_panel:
-            self.data_panel.freeze_ui(True)
-        if self.parameter_panel:
-            self.parameter_panel.freeze_ui(True)
-        if self.action_panel:
-            self.action_panel.freeze_ui(True)
+        """Signal the owning widget to disable interactive controls."""
         self.ui_frozen.emit(True)
 
     def unfreeze_ui(self):
-        """Re-enable UI elements and refresh state."""
-        if self.data_panel:
-            self.data_panel.freeze_ui(False)
-        if self.parameter_panel:
-            self.parameter_panel.freeze_ui(False)
-        if self.action_panel:
-            self.action_panel.freeze_ui(False)
+        """Signal the owning widget to re-enable controls."""
         self.ui_frozen.emit(False)
 
     # endregion === State Management
@@ -807,24 +785,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         self.parameter_manager = parameter_manager
 
-        # Initialize panels
-        self.parameter_panel = DisplacementParameterPanel(parameter_manager)
-        self.data_panel = None
-
         # Initialize controller
         self.controller = DisplacementController(
             viewer=viewer,
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,
-            data_panel=None
         )
-
-        # Initialize action panel with controller
-        self.action_panel = DisplacementActionPanel(self.controller)
-
-        # Set controller in panels
-        self.controller.set_panels(self.parameter_panel, self.action_panel)
 
         # Set up the UI
         self._setup_ui()
