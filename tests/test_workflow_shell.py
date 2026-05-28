@@ -620,24 +620,6 @@ def test_force_and_stress_input_rows_route_load_actions(monkeypatch, app):
     assert widget.msm_widget.loaded_files == ["force_results", "mask_stack"]
 
 
-def test_main_widget_hides_stage_local_data_and_action_panels_after_shell_wiring(monkeypatch, app):
-    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
-
-    widget = _widget.napariTFMWidget(object())
-
-    for stage_widget in [
-        widget.msm_widget,
-    ]:
-        assert getattr(stage_widget, "data_panel", None) is None or stage_widget.data_panel.isHidden()
-        assert getattr(stage_widget, "action_panel", None) is None or stage_widget.action_panel.isHidden()
-
 
 def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)

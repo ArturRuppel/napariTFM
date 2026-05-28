@@ -433,7 +433,6 @@ class napariTFMWidget(QWidget):
             self.visualization_manager
         )
         self._hide_embedded_parameter_panels()
-        self._hide_redundant_stage_shell_controls()
 
         stage_data_artifacts = dict(STAGE_DATA_ARTIFACTS)
         stage_data_artifacts["preprocessing"] = _build_preprocessing_specs(
@@ -499,9 +498,9 @@ class napariTFMWidget(QWidget):
                 status_panel=self._stage_status_panels_by_key["stress"],
                 action_targets=self._find_stage_action_targets(
                     self.msm_widget,
-                    run=["action_panel.analyze_btn", "analyze_btn"],
-                    preview=["action_panel.preview_frame_btn", "action_panel.preview_mesh_btn"],
-                    cancel=["action_panel.cancel_btn", "cancel_btn"],
+                    run=["analyze_btn"],
+                    preview=["preview_frame_btn", "preview_mesh_btn"],
+                    cancel=["cancel_btn"],
                 ),
             ),
             "batch": _StageSection(
@@ -561,7 +560,6 @@ class napariTFMWidget(QWidget):
             self.preprocessing_widget,
             self.displacement_widget,
             self.force_widget,
-            self.msm_widget,
         ]:
             panel = getattr(widget, "parameter_panel", None)
             if panel is not None:
@@ -576,14 +574,6 @@ class napariTFMWidget(QWidget):
                 "Stress Parameters",
             }:
                 group.setVisible(False)
-
-    def _hide_redundant_stage_shell_controls(self):
-        """Keep controller-owned controls alive while removing duplicated shell surfaces."""
-        for widget in [self.msm_widget]:
-            for attr in ("data_panel", "action_panel"):
-                panel = getattr(widget, attr, None)
-                if panel is not None:
-                    panel.setVisible(False)
 
     def _create_stage_parameter_panels(self) -> dict[str, WorkflowParameterPanel]:
         """Create inline workflow parameter editors grouped by pipeline stage."""
