@@ -817,7 +817,7 @@ def test_stage_status_is_done_when_output_files_exist_on_disk(monkeypatch, app, 
     assert section.status_indicator.toolTip() == "Preprocessing status: done"
 
 
-def test_hide_embedded_parameter_panels_tolerates_missing_attribute(monkeypatch, app):
+def test_main_widget_constructs_when_stage_widget_lacks_parameter_panel(monkeypatch, app):
     class _NoPanelStage(_StubStageWidget):
         def __init__(self, *args):
             super().__init__(*args)
