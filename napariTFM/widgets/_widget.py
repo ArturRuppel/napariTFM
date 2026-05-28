@@ -480,9 +480,9 @@ class napariTFMWidget(QWidget):
                 status_panel=self._stage_status_panels_by_key["displacement"],
                 action_targets=self._find_stage_action_targets(
                     self.displacement_widget,
-                    run=["process_btn", "action_panel.calculate_btn"],
-                    preview=["preview_btn", "action_panel.preview_btn"],
-                    cancel=["cancel_btn", "action_panel.cancel_btn"],
+                    run=["process_btn"],
+                    preview=["preview_btn"],
+                    cancel=["cancel_btn"],
                 ),
             ),
             "force": _StageSection(
@@ -582,7 +582,7 @@ class napariTFMWidget(QWidget):
 
     def _hide_redundant_stage_shell_controls(self):
         """Keep controller-owned controls alive while removing duplicated shell surfaces."""
-        for widget in [self.displacement_widget, self.force_widget, self.msm_widget]:
+        for widget in [self.force_widget, self.msm_widget]:
             for attr in ("data_panel", "action_panel"):
                 panel = getattr(widget, attr, None)
                 if panel is not None:
