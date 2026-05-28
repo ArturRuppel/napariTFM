@@ -1,5 +1,3 @@
-from typing import Any
-
 import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
@@ -38,11 +36,6 @@ class DisplacementController(QObject):
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
         self.active_workers = []
-        self.preview_enabled = False
-
-        # Connect to parameter manager signals
-        self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
-        self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
 
     # endregion === Initialization
 
@@ -221,29 +214,6 @@ class DisplacementController(QObject):
         self.data_updated.emit('displacement')
     # endregion === Processing Execution
 
-    # region === Parameter Handling
-    def _on_parameter_changed(self, param_name: str, value: Any):
-        """Handle parameter changes."""
-        if self.preview_enabled:
-            self._update_preview()
-
-    def _on_parameters_reset(self, category):
-        """Handle parameter reset events."""
-        if self.preview_enabled:
-            self._update_preview()
-
-    def _sync_parameters_with_results(self, result):
-        """Sync parameters from loaded results."""
-        if not hasattr(result, 'parameters'):
-            return
-
-        params = result.parameters
-        for param_name, value in vars(params).items():
-            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
-                self.parameter_manager.set_parameter(param_name, value)
-
-    # endregion === Parameter Handling
-
     # region === Data Management
     def load_active_layer(self, data_type: str):
         """Load the currently active layer as the specified data type."""
@@ -273,8 +243,6 @@ class DisplacementController(QObject):
 
             # Update UI state and emit signal
             self.data_updated.emit(data_type)
-            if self.preview_enabled:
-                self._update_preview()
 
         except Exception as e:
             QMessageBox.warning(None, "Error", str(e))
