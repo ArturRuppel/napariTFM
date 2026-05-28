@@ -184,9 +184,8 @@ class ParameterManager(QObject):
                 'force_vector_stride', 'force_arrow_scale', 'f_max'
             ],
             ParameterCategory.STRESS: [
-                'threshold', 'dilation', 'smoothing_sigma', 'density_factor',
-                'mesh_algorithm', 'use_optimization', 'poisson_ratio_cells',
-                'max_stress'
+                'density_factor', 'mesh_algorithm', 'use_optimization',
+                'poisson_ratio_cells', 'max_stress'
             ],
             ParameterCategory.VISUALIZATION: [
                 'save_bead_overlay', 'save_displacement_map', 'save_force_map',

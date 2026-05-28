@@ -130,3 +130,16 @@ def test_validation_helpers_return_compatible_results():
     assert validate_msm_parameters(
         MSMParameters(density_factor=0.001)
     ) == (False, "Density factor is too low (< 0.005). This may lead to numerical instabilities.")
+
+
+def test_msm_parameters_have_no_mask_fields():
+    import dataclasses
+    field_names = {f.name for f in dataclasses.fields(MSMParameters)}
+    assert "threshold" not in field_names
+    assert "dilation" not in field_names
+    assert "smoothing_sigma" not in field_names
+
+
+def test_validate_msm_ignores_mask_params():
+    ok, _ = validate_msm_parameters(MSMParameters(density_factor=0.01))
+    assert ok is True

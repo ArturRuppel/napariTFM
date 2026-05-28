@@ -108,15 +108,6 @@ def validate_msm_parameters(params: MSMParameters) -> Tuple[bool, str]:
     if not 0 <= params.poisson_ratio_cells <= 0.5:
         return False, "Poisson ratio must be between 0 and 0.5"
 
-    if params.threshold < 0 or params.threshold > 100:
-        return False, "Threshold percentile must be between 0 and 100"
-
-    if params.dilation < 0:
-        return False, "Dilation must be non-negative"
-
-    if params.smoothing_sigma < 0:
-        return False, "Smoothing sigma must be non-negative"
-
     if params.max_stress <= 0:
         return False, "Maximum stress must be positive"
 

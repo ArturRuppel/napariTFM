@@ -75,11 +75,6 @@ class MeshParameters:
 @dataclass
 class MSMParameters:
     """Parameters for MSM calculations"""
-    # Mask creation parameters
-    threshold: float = 0.0
-    dilation: int = 10
-    smoothing_sigma: float = 10.0
-
     # Mesh parameters
     density_factor: float = 0.01
     mesh_algorithm: str = 'Frontal-Del.'
@@ -139,9 +134,6 @@ class UnifiedParameters:
     f_max: float = 500.0  # Pa
 
     # Stress parameters
-    threshold: float = 0.0
-    dilation: int = 10
-    smoothing_sigma: float = 10.0
     density_factor: float = 0.01
     mesh_algorithm: str = 'Frontal-Del.'
     use_optimization: bool = True
@@ -196,9 +188,6 @@ class UnifiedParameters:
     def to_msm_parameters(self) -> MSMParameters:
         """Create MSMParameters from unified parameters"""
         return MSMParameters(
-            threshold=self.threshold,
-            dilation=self.dilation,
-            smoothing_sigma=self.smoothing_sigma,
             density_factor=self.density_factor,
             mesh_algorithm=self.mesh_algorithm,
             use_optimization=self.use_optimization,
