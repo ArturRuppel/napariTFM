@@ -1083,8 +1083,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
             visualization_manager=visualization_manager
         )
 
-        self.controller.set_panels(self.parameter_panel, None)
-
         # Set up UI and connections
         self._setup_ui()
         self.controller.preview_check = self.preview_check
