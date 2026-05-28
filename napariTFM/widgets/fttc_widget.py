@@ -437,29 +437,17 @@ class FTTCController(QObject):
     ui_frozen = Signal(bool)
 
     def __init__(self, viewer, data_manager, parameter_manager,
-                 visualization_manager, data_panel):
+                 visualization_manager):
         super().__init__()
         self.viewer = viewer
         self.data_manager = data_manager
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
-        self.data_panel = data_panel
         self.active_workers = []
-
-        # Initialize panel attributes
-        self.parameter_panel = None
-        self.action_panel = None
 
         # Connect to parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
         self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
-
-    def set_panels(self, parameter_panel, action_panel):
-        """Set the parameter and action panels."""
-        self.parameter_panel = parameter_panel
-        self.action_panel = action_panel
-        self.parameter_panel.set_controller(self)
-        self._update_ui_state()
 
     def preview_force(self):
         """Preview force calculation for current frame."""
@@ -575,23 +563,6 @@ class FTTCController(QObject):
                 else:
                     self.parameter_manager.set_parameter(param_name, value)
 
-    def _update_ui_state(self, event=None):
-        """Update UI state based on current data and selection."""
-        # Update data panel
-        if self.data_panel:
-            self.data_panel.update_data_status()
-
-        # Get current data state
-        has_displacement = self.data_manager.displacement_results is not None
-        has_results = self.data_manager.force_results is not None
-
-        # Update action panel button states
-        if self.action_panel:
-            self.action_panel.update_button_states(
-                has_displacement=has_displacement,
-                has_results=has_results
-            )
-
     def cancel_operation(self):
         """Cancel any running operations."""
         for worker in self.active_workers:
@@ -604,9 +575,6 @@ class FTTCController(QObject):
         self.active_workers.clear()
         self.progress_updated.emit(0, "Operation cancelled")
         self.unfreeze_ui()
-        # Ensure cancel button stays enabled
-        if self.action_panel:
-            self.action_panel.cancel_btn.setEnabled(True)
 
     @thread_worker
     def _create_preview_worker(self, displacement_field, params):
@@ -751,7 +719,6 @@ class FTTCController(QObject):
 
             self.progress_updated.emit(100, "Analysis completed successfully")
             self.analysis_completed.emit(result)
-            self._update_ui_state()
 
 
         except Exception as e:
@@ -802,30 +769,11 @@ class FTTCController(QObject):
         pass
 
     def freeze_ui(self):
-        """Disable all interactive UI elements."""
-        if self.data_panel:
-            self.data_panel.freeze_ui(True)
-        if self.parameter_panel:
-            self.parameter_panel.freeze_ui(True)
-        if self.action_panel:
-            self.action_panel.freeze_ui(True)
+        """Signal the owning widget to disable interactive controls."""
         self.ui_frozen.emit(True)
 
     def unfreeze_ui(self):
-        """Re-enable UI elements and refresh state."""
-        if self.data_panel:
-            self.data_panel.freeze_ui(False)
-        if self.parameter_panel:
-            self.parameter_panel.freeze_ui(False)
-        if self.action_panel:
-            # Get current state
-            has_displacement = self.data_manager.displacement_results is not None
-            has_results = self.data_manager.force_results is not None
-            # Update button states instead of just unfreezing
-            self.action_panel.update_button_states(
-                has_displacement=has_displacement,
-                has_results=has_results
-            )
+        """Signal the owning widget to re-enable controls."""
         self.ui_frozen.emit(False)
 
 
@@ -846,24 +794,13 @@ class FTTCWidget(BaseAnalysisWidget):
         # Store managers
         self.parameter_manager = parameter_manager
 
-        # Initialize panels
-        self.data_panel = None
-        self.parameter_panel = FTTCParameterPanel(parameter_manager)
-
         # Initialize controller
         self.controller = FTTCController(
             viewer=viewer,
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,
-            data_panel=None
         )
-
-        # Initialize action panel with controller
-        self.action_panel = FTTCActionPanel(self.controller)
-
-        # Connect controller
-        self.controller.set_panels(self.parameter_panel, self.action_panel)
 
         # Set up UI
         self._setup_ui()
