@@ -15,6 +15,7 @@ from napariTFM.widgets._ui_style import (
     ACTION_GLYPHS,
     COMPACT_SPACING,
     STATUS_GLYPHS,
+    caption_style,
 )
 
 
@@ -142,14 +143,14 @@ class StageDataStatusPanel(QWidget):
 
         if input_artifacts:
             inputs_header = QLabel("Inputs")
-            inputs_header.setStyleSheet("color: #999; font-size: 9pt;")
+            inputs_header.setStyleSheet(caption_style())
             layout.addWidget(inputs_header)
             for artifact in input_artifacts:
                 self._add_row(layout, artifact)
 
         if output_artifacts:
             outputs_header = QLabel("Outputs")
-            outputs_header.setStyleSheet("color: #999; font-size: 9pt;")
+            outputs_header.setStyleSheet(caption_style())
             layout.addWidget(outputs_header)
             for artifact in output_artifacts:
                 self._add_row(layout, artifact)

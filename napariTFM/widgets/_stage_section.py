@@ -8,6 +8,7 @@ from napariTFM.widgets._ui_style import (
     make_icon_button,
     muted_stage_accent,
     stage_accent,
+    stage_header_style,
     status_indicator_style,
 )
 
@@ -89,7 +90,7 @@ class StageSection(QWidget):
         header_layout.addWidget(self.status_indicator)
 
         self.header_label = QLabel(title)
-        self.header_label.setStyleSheet(self._header_stylesheet(self._accent))
+        self.header_label.setStyleSheet(stage_header_style(self._accent))
         header_layout.addWidget(self.header_label)
         header_layout.addStretch()
 
@@ -153,13 +154,6 @@ class StageSection(QWidget):
                 return muted_stage_accent(parent._slug)
             parent = parent.parent()
         return None
-
-    @staticmethod
-    def _header_stylesheet(accent: str) -> str:
-        return (
-            f"font-weight: bold; color: {accent}; "
-            f"border-left: 3px solid {accent}; padding-left: 6px;"
-        )
 
     def set_status(self, status: str):
         self._status = status

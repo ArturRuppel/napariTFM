@@ -1,7 +1,13 @@
 from napariTFM.widgets._ui_style import (
+    MUTED_TEXT_COLOR,
     STAGE_ACCENTS,
+    caption_style,
+    danger_text_style,
     muted_stage_accent,
+    section_label_style,
     stage_accent,
+    stage_header_style,
+    title_style,
 )
 
 
@@ -30,3 +36,28 @@ def test_muted_stage_accent_preserves_hue_family():
 
 def test_muted_stage_accent_falls_back_for_unknown_key():
     assert muted_stage_accent("nonexistent") == muted_stage_accent("inputs")
+
+
+def test_caption_style_uses_muted_text_color():
+    style = caption_style()
+    assert MUTED_TEXT_COLOR in style
+    assert "9pt" in style
+
+
+def test_title_style_is_bold_and_sized():
+    assert title_style() == "font-weight: bold; font-size: 14px;"
+
+
+def test_section_label_style_is_bold():
+    assert section_label_style() == "font-weight: bold;"
+
+
+def test_danger_text_style_is_red():
+    assert danger_text_style() == "color: red;"
+
+
+def test_stage_header_style_embeds_accent():
+    accent = stage_accent("preprocessing")
+    style = stage_header_style(accent)
+    assert accent in style
+    assert "font-weight: bold" in style

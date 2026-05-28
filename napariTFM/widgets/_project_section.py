@@ -12,6 +12,7 @@ from qtpy.QtWidgets import (
 )
 
 from napariTFM.widgets._stage_section import StageSection
+from napariTFM.widgets._ui_style import danger_text_style
 
 
 _GENERAL_SPECS = [
@@ -63,7 +64,7 @@ class _GeneralBody(QWidget):
         self.load_params_btn = QPushButton("Load Parameters")
         self.reset_params_btn = QPushButton("Reset Parameters")
         self.clear_data_btn = QPushButton("Clear All Data")
-        self.clear_data_btn.setStyleSheet("color: red;")
+        self.clear_data_btn.setStyleSheet(danger_text_style())
 
         button_row1 = QHBoxLayout()
         button_row1.addWidget(self.save_params_btn)

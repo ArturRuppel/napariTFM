@@ -14,6 +14,7 @@ from qtpy.QtWidgets import (
 
 from napariTFM.backend.batch_analysis import BatchAnalysis
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.widgets._ui_style import section_label_style
 from napariTFM.utilities.parameter_manager import ParameterManager
 
 
@@ -123,7 +124,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         # Input files section
         input_label = QLabel("Input Files:")
-        input_label.setStyleSheet("font-weight: bold;")
+        input_label.setStyleSheet(section_label_style())
         layout.addWidget(input_label)
 
         input_files = [

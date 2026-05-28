@@ -7,6 +7,8 @@ from qtpy.QtWidgets import QStyle, QToolButton, QWidget
 COMPACT_SPACING = 4
 ICON_BUTTON_SIZE = 24
 
+MUTED_TEXT_COLOR = "#999"
+
 STAGE_ACCENTS = {
     "inputs": "#6c757d",
     "preprocessing": "#2f80ed",
@@ -79,6 +81,34 @@ def muted_stage_accent(key: str) -> str:
     return "#{:02x}{:02x}{:02x}".format(
         round(r_out * 255), round(g_out * 255), round(b_out * 255)
     )
+
+
+def stage_header_style(accent: str) -> str:
+    """Stylesheet for a stage section's accented header label."""
+    return (
+        f"font-weight: bold; color: {accent}; "
+        f"border-left: 3px solid {accent}; padding-left: 6px;"
+    )
+
+
+def title_style() -> str:
+    """Stylesheet for the top-level shell title label."""
+    return "font-weight: bold; font-size: 14px;"
+
+
+def section_label_style() -> str:
+    """Stylesheet for a bold section label (e.g. a form group heading)."""
+    return "font-weight: bold;"
+
+
+def caption_style() -> str:
+    """Stylesheet for a small, muted caption label."""
+    return f"color: {MUTED_TEXT_COLOR}; font-size: 9pt;"
+
+
+def danger_text_style() -> str:
+    """Stylesheet for text on a destructive action control."""
+    return "color: red;"
 
 
 def status_indicator_style(status: str) -> str:

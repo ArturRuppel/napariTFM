@@ -20,6 +20,7 @@ from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStatusPanel
 from napariTFM.widgets._stage_section import StageSection
+from napariTFM.widgets._ui_style import title_style
 from napariTFM.widgets._project_section import ProjectSection
 
 logger = logging.getLogger(__name__)
@@ -372,7 +373,7 @@ class napariTFMWidget(QWidget):
 
         # Add title
         title = QLabel("napariTFM")
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        title.setStyleSheet(title_style())
         container_layout.addWidget(title)
 
         # Initialize managers
