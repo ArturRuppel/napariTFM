@@ -9,41 +9,11 @@ from napariTFM.backend.parameter_dataclasses import MSMParameters
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_backend_creates_mask_stack_with_progress(monkeypatch):
-    params = MSMParameters(threshold=25, dilation=2, smoothing_sigma=1)
-    images = np.array(
-        [
-            [[0, 1], [2, 0]],
-            [[3, 0], [0, 4]],
-        ],
-        dtype=np.float32,
-    )
-
-    def fake_create_mask_from_image(image, threshold_percentile, dilation, smoothing_sigma):
-        assert threshold_percentile == params.threshold
-        assert dilation == params.dilation
-        assert smoothing_sigma == params.smoothing_sigma
-        return image > 0
-
-    monkeypatch.setattr(
-        msm.MonolayerStressMicroscopy,
-        "create_mask_from_image",
-        staticmethod(fake_create_mask_from_image),
-    )
-
-    generator = msm.create_mask_stack(images, params)
-    progress = []
-    try:
-        while True:
-            progress.append(next(generator))
-    except StopIteration as exc:
-        masks = exc.value
-
-    assert [(frame, total) for _, frame, total in progress] == [(0, 2), (1, 2)]
-    assert masks.shape == (2, 2, 2)
-    assert masks.dtype == bool
-    assert masks[0, 0, 1]
-    assert masks[1, 1, 1]
+def test_mask_creation_helpers_are_removed():
+    assert not hasattr(msm, "create_mask_stack")
+    assert not hasattr(msm, "create_preview_mask")
+    assert not hasattr(msm.MonolayerStressMicroscopy, "create_mask_from_image")
+    assert not hasattr(msm.MonolayerStressMicroscopy, "create_mask_stack")
 
 
 def test_backend_processes_mask_data_and_resizes_to_force_field():

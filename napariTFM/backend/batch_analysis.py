@@ -24,7 +24,7 @@ from napariTFM.backend.displacement_analysis import (
     calculate_displacement_field,
 )
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
-from napariTFM.backend.msm import MSMResult, calculate_stresses, create_mask_stack, generate_mesh_stack
+from napariTFM.backend.msm import MSMResult, calculate_stresses, generate_mesh_stack
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy, \

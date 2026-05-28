@@ -15,8 +15,6 @@ from napariTFM.backend.parameter_dataclasses import MSMParameters
 from napariTFM.backend.msm import (
     MSMResult,
     calculate_stresses,
-    create_mask_stack,
-    create_preview_mask,
     generate_mesh_stack,
     process_mask_data,
 )
