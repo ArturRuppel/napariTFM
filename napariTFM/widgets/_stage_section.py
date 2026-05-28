@@ -13,10 +13,17 @@ from napariTFM.widgets._ui_style import (
 
 
 class _ActionStateSync(QObject):
-    """Keep a header proxy button aligned with its delegated child button."""
+    """Keep a header proxy button aligned with its delegated child button.
+
+    Parented to ``target`` (the object it installs an event filter on) so the
+    filter can never outlive that object: when ``target`` is destroyed Qt
+    destroys this filter and removes it cleanly, avoiding a dangling event
+    filter dispatched to a deleted object. ``sync`` is guarded so a proxy that
+    was destroyed first (e.g. during teardown) is a no-op rather than a crash.
+    """
 
     def __init__(self, target: QWidget, proxy: QWidget):
-        super().__init__(proxy)
+        super().__init__(target)
         self._target = target
         self._proxy = proxy
         target.installEventFilter(self)
@@ -28,7 +35,11 @@ class _ActionStateSync(QObject):
         return super().eventFilter(obj, event)
 
     def sync(self):
-        self._proxy.setEnabled(self._target.isEnabled())
+        try:
+            self._proxy.setEnabled(self._target.isEnabled())
+        except RuntimeError:
+            # proxy (or target) C++ object already deleted during teardown.
+            pass
 
 
 class StageSection(QWidget):
