@@ -751,8 +751,6 @@ class PreprocessingController(QObject):
         self.visualization_manager = visualization_manager
         self.active_workers = []
 
-        self.parameter_panel = None
-        self.data_panel = None
         self.preview_enabled = False
 
         # Connect to parameter manager signals
@@ -761,11 +759,6 @@ class PreprocessingController(QObject):
 
         # Connect to viewer events for frame changes
         self.connect_viewer_events()
-
-    def set_panels(self, parameter_panel, data_panel):
-        """Set the parameter and data panels."""
-        self.parameter_panel = parameter_panel
-        self.data_panel = data_panel
 
     def connect_viewer_events(self):
         """Connect to viewer dimension events for frame changes."""
@@ -927,8 +920,6 @@ class PreprocessingController(QObject):
         except Exception as e:
             QMessageBox.warning(None, "Error", str(e))
             preview_check = getattr(self, "preview_check", None)
-            if preview_check is None and self.parameter_panel is not None:
-                preview_check = getattr(self.parameter_panel, "preview_check", None)
             if preview_check is not None:
                 preview_check.setChecked(False)
             self.preview_enabled = False
@@ -1052,19 +1043,11 @@ class PreprocessingController(QObject):
 
     # region === State Management
     def freeze_ui(self):
-        """Disable all interactive UI elements except cancel button."""
-        if self.data_panel is not None:
-            self.data_panel.freeze_ui(True)
-        if self.parameter_panel is not None:
-            self.parameter_panel.freeze_ui(True)
+        """Signal that interactive UI elements should be disabled."""
         self.ui_frozen.emit(True)
 
     def unfreeze_ui(self):
-        """Re-enable UI elements and refresh state."""
-        if self.data_panel is not None:
-            self.data_panel.freeze_ui(False)
-        if self.parameter_panel is not None:
-            self.parameter_panel.freeze_ui(False)
+        """Signal that interactive UI elements should be re-enabled."""
         self.ui_frozen.emit(False)
 
     # endregion === State Management
