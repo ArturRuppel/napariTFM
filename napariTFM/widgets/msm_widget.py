@@ -1173,20 +1173,41 @@ class MSMWidget(BaseAnalysisWidget):
         container = QWidget()
         container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QVBoxLayout()
-
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Add panels
-        layout.addWidget(self.parameter_panel)
-        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-        layout.addWidget(self.action_panel)
+        layout.addWidget(self._create_action_row())
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
 
         container.setLayout(layout)
         scroll.setWidget(container)
         return scroll
+
+    def _create_action_row(self) -> QWidget:
+        """Build widget-owned action buttons (run/preview/cancel proxied by the stage header)."""
+        container = QWidget()
+        layout = QVBoxLayout()
+
+        row1 = QHBoxLayout()
+        self.preview_mesh_btn = QPushButton("Preview Mesh")
+        self.preview_mesh_btn.setToolTip("Generate and display a mesh preview for the current frame")
+        self.preview_frame_btn = QPushButton("Preview Current Frame")
+        self.preview_frame_btn.setToolTip("Calculate and visualize stress for the current frame only")
+        row1.addWidget(self.preview_mesh_btn)
+        row1.addWidget(self.preview_frame_btn)
+        layout.addLayout(row1)
+
+        self.analyze_btn = QPushButton("Calculate Stress Tensors")
+        self.analyze_btn.setToolTip("Calculate stress for all frames in the dataset")
+        layout.addWidget(self.analyze_btn)
+
+        self.cancel_btn = QPushButton("Cancel All Operations")
+        self.cancel_btn.setToolTip("Cancel the current operation")
+        layout.addWidget(self.cancel_btn)
+
+        container.setLayout(layout)
+        return container
 
     def _create_status_frame(self) -> QFrame:
         """Create the status display frame."""
@@ -1205,42 +1226,20 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _connect_signals(self):
         """Connect all widget signals."""
-        # Connect progress updates from controller to status panel
         self.controller.progress_updated.connect(self._update_status)
-
-        # Connect mask loading/creation signals
-        self.controller.mask_creation_progress.connect(self._update_status)
-        self.controller.mask_creation_completed.connect(self._on_mask_creation_completed)
-        self.controller.mask_creation_failed.connect(self._on_mask_creation_failed)
-
-        # Connect parameter panel changes
-        self.parameter_panel.parameter_changed.connect(self._on_parameter_changed)
-
-        # Connect controller signals
         self.controller.analysis_started.connect(self._on_analysis_started)
         self.controller.analysis_completed.connect(self._on_analysis_completed)
         self.controller.analysis_failed.connect(self._on_analysis_failed)
-
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
 
-        # Connect to layer selection changes
+        # Wire widget-owned action buttons to controller operations
+        self.preview_mesh_btn.clicked.connect(self.controller.preview_mesh)
+        self.preview_frame_btn.clicked.connect(self.controller.preview_current_frame)
+        self.analyze_btn.clicked.connect(self.controller.start_analysis)
+        self.cancel_btn.clicked.connect(self.controller.cancel_all_operations)
+
+        # Update enablement when the active layer changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
-
-        # Connect parameter changes to preview update
-        for param_name in ['threshold', 'dilation', 'smoothing_sigma']:
-            self.parameter_panel.parameter_widgets[param_name].valueChanged.connect(
-                self.controller._update_mask_preview
-            )
-
-        # Connect preview checkbox
-        self.parameter_panel.preview_checkbox.stateChanged.connect(
-            self.controller._handle_preview_toggle
-        )
-
-        # Connect frame change event from viewer
-        self.viewer.dims.events.current_step.connect(
-            self.controller._update_mask_preview
-        )
 
     def _update_status(self, progress: int, message: str):
         """Update status display."""
@@ -1309,39 +1308,30 @@ class MSMWidget(BaseAnalysisWidget):
             self.msm_params = self.parameter_manager.get_msm_parameters()
 
     def _update_ui_state(self, event=None):
-        """Update UI state based on current data and selection."""
-        active_layer = self.viewer.layers.selection.active
-
+        """Update action button enablement based on available data."""
         has_force = self.data_manager.force_results is not None
         has_mask = self.data_manager.mask_stack is not None
-        has_stress = self.data_manager.stress_results is not None
 
-        self.action_panel.update_button_states(
-            active_layer=active_layer,
-            force_data=has_force,
-            mask_data=has_mask,
-            stress_data=has_stress
-        )
+        self.preview_mesh_btn.setEnabled(has_mask)
+        self.preview_frame_btn.setEnabled(has_force and has_mask)
+        self.analyze_btn.setEnabled(has_force and has_mask)
+        self.cancel_btn.setEnabled(True)
+
+    def _handle_ui_freeze(self, frozen: bool):
+        """Handle UI freeze/unfreeze during processing."""
+        if frozen:
+            self.preview_mesh_btn.setEnabled(False)
+            self.preview_frame_btn.setEnabled(False)
+            self.analyze_btn.setEnabled(False)
+            self.cancel_btn.setEnabled(True)
+        else:
+            self._update_ui_state()
 
     def cleanup(self):
         """Clean up resources."""
         if hasattr(self, 'viewer') and self.viewer is not None:
             self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
         super().cleanup()
-
-    def _handle_ui_freeze(self, frozen: bool):
-        """Handle UI freeze/unfreeze events."""
-        if not frozen:
-            self._update_ui_state()
-
-    def _on_data_loaded(self, data_type: str):
-        """Handle data loading events."""
-        self._update_ui_state()
-
-    def _on_parameter_changed(self):
-        """Handle parameter change events."""
-        if hasattr(self, 'preview_active') and self.preview_active:
-            self.controller.preview_current_frame()
 
     def _on_analysis_started(self):
         """Handle analysis start event."""
@@ -1363,28 +1353,4 @@ class MSMWidget(BaseAnalysisWidget):
     def _on_analysis_failed(self, error_msg: str):
         """Handle analysis failure."""
         self._update_status(0, f"Analysis failed: {error_msg}")
-        self._update_ui_state()
-
-    def _on_mask_creation_completed(self):
-        """Handle mask creation completion."""
-        masks = self.data_manager.mask_stack
-        if masks is not None:
-            if self.data_panel is not None:
-                self.data_panel.update_mask_status(f"Loaded: {masks.shape}")
-
-            downscale_factor = 1
-            if self.data_manager.force_results is not None:
-                downscale_factor = self.data_manager.force_results.parameters.downscale_factor
-
-            self.visualization_manager.visualize_masks(
-                masks=masks,
-                downscale_factor=downscale_factor
-            )
-        self._update_ui_state()
-
-    def _on_mask_creation_failed(self, error_msg: str):
-        """Handle mask creation failure."""
-        if self.data_panel is not None:
-            self.data_panel.update_mask_status("Mask creation failed")
-        QMessageBox.critical(self, "Error", error_msg)
         self._update_ui_state()
