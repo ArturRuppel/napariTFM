@@ -1,5 +1,3 @@
-from typing import Any
-
 import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
@@ -35,10 +33,6 @@ class FTTCController(QObject):
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
         self.active_workers = []
-
-        # Connect to parameter manager signals
-        self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
-        self.parameter_manager.parameters_reset.connect(self._on_parameters_reset)
 
     def preview_force(self):
         """Preview force calculation for current frame."""
@@ -131,28 +125,6 @@ class FTTCController(QObject):
         except Exception as e:
             self._handle_error(str(e))
             self.unfreeze_ui()
-
-    def _sync_parameters_with_results(self, result):
-        """Sync parameters from loaded results."""
-        if not hasattr(result, 'parameters'):
-            return
-
-        params = result.parameters
-        for param_name, value in vars(params).items():
-            if param_name != '_sa_instance_state':  # Skip SQLAlchemy state
-                if param_name == 'young_modulus':
-                    # Store in Pa, UI will convert to kPa
-                    self.parameter_manager.set_parameter(param_name, value)
-                elif param_name == 'regularization':
-                    # Store actual value, UI will convert to log10
-                    self.parameter_manager.set_parameter(param_name, value)
-                elif param_name == 'gel_height':
-                    # Handle infinity case
-                    if value == 0:
-                        value = float('inf')
-                    self.parameter_manager.set_parameter(param_name, value)
-                else:
-                    self.parameter_manager.set_parameter(param_name, value)
 
     def cancel_operation(self):
         """Cancel any running operations."""
@@ -350,14 +322,6 @@ class FTTCController(QObject):
             QMessageBox.warning(None, "Warning", "No displacement data loaded")
             return False
         return True
-
-    def _on_parameter_changed(self, param_name: str, value: Any):
-        """Handle parameter changes from parameter manager."""
-        pass
-
-    def _on_parameters_reset(self, category):
-        """Handle parameter reset events."""
-        pass
 
     def freeze_ui(self):
         """Signal the owning widget to disable interactive controls."""
