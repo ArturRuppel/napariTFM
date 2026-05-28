@@ -735,102 +735,17 @@ class MSMController(QObject):
     analysis_started = Signal()
     analysis_completed = Signal(object)  # Results object
     analysis_failed = Signal(str)  # Error message
-    mask_creation_progress = Signal(int, str)  # (progress, message)
-    mask_creation_completed = Signal()
-    mask_creation_failed = Signal(str)
     ui_frozen = Signal(bool)
 
     def __init__(self, viewer: Viewer,
                  data_manager: DataManager, parameter_manager: ParameterManager,
-                 visualization_manager: VisualizationManager, data_panel: MSMDataPanel):
+                 visualization_manager: VisualizationManager):
         super().__init__()
         self.viewer = viewer
         self.data_manager = data_manager
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
-        self.data_panel = data_panel
         self.active_workers = []
-
-    def _update_mask_preview(self):
-        """Update the mask preview based on current parameters."""
-        try:
-            # Check if preview is enabled
-            if not self.parameter_panel.preview_checkbox.isChecked():
-                if 'Mask Preview' in self.viewer.layers:
-                    self.viewer.layers.remove('Mask Preview')
-                return
-
-            # Get active layer
-            active_layer = self.viewer.layers.selection.active
-            if active_layer is None or not hasattr(active_layer, 'data'):
-                return
-
-            # Get current frame data
-            current_frame = self.viewer.dims.current_step[0]
-            image = active_layer.data
-            if image.ndim == 3:
-                image = image[current_frame]
-            elif image.ndim != 2:
-                return
-
-            # Get current parameters
-            params = self._get_current_parameters()
-
-            # Get target shape and downscale factor if force data exists
-            target_shape = None
-            downscale_factor = 1
-            if self.data_manager.force_results is not None:
-                force_field = self.data_manager.force_results.force_field
-                target_shape = force_field[0].shape[:2]
-                downscale_factor = self.data_manager.force_results.parameters.downscale_factor
-
-            preview_mask = create_preview_mask(
-                image,
-                threshold_percentile=params.threshold,
-                dilation=params.dilation,
-                smoothing_sigma=params.smoothing_sigma,
-                target_shape=target_shape,
-                downscale_factor=downscale_factor
-            )
-
-            # Update or create preview layer
-            if 'Mask Preview' in self.viewer.layers:
-                self.viewer.layers['Mask Preview'].data = preview_mask
-            else:
-                # Create layer first
-                preview_layer = self.viewer.add_labels(
-                    data=preview_mask.astype(np.uint8),
-                    name='Mask Preview',
-                    opacity=0.5
-                )
-                # Then set the color mapping
-                preview_layer.color = {
-                    0: 'transparent',
-                    1: [1, 1, 0, 0.5]  # Yellow with 0.5 opacity
-                }
-
-            self.progress_updated.emit(100, f"Preview updated (Frame {current_frame})")
-
-        except Exception as e:
-            self.progress_updated.emit(0, f"Preview error: {str(e)}")
-            # Remove preview layer if there's an error
-            if 'Mask Preview' in self.viewer.layers:
-                self.viewer.layers.remove('Mask Preview')
-
-    def _handle_preview_toggle(self, state):
-        """Handle preview checkbox state changes."""
-        # Store currently active layer
-        active_layer = self.viewer.layers.selection.active
-
-        if not state:  # If unchecked
-            if 'Mask Preview' in self.viewer.layers:
-                self.viewer.layers.remove('Mask Preview')
-        else:  # If checked
-            self._update_mask_preview()
-
-        # Restore the previously active layer
-        if active_layer is not None:
-            self.viewer.layers.selection.active = active_layer
 
     def _validate_prerequisites(self) -> bool:
         """Check if required data is available."""
@@ -1105,184 +1020,17 @@ class MSMController(QObject):
         """Get current MSM parameters from parameter manager."""
         return self.parameter_manager.get_msm_parameters()
 
-    def _start_stress_calculation(self, mesh_results, params):
-        """Start thread worker for stress calculation."""
-
-        @thread_worker
-        def stress_calculation_worker():
-            # Get masks and force field from displacement results
-            masks = self.data_manager.masks
-            force_results = self.data_manager.force_results
-            if force_results is None:
-                raise ValueError("No force results available")
-
-            force_field = force_results.force_field
-            total_frames = force_field.shape[0]
-
-            # Initialize stress generator with explicit mask passing
-            stress_generator = calculate_stresses(
-                force_field=force_field,
-                masks=masks,
-                params=params,
-                mesh_data=mesh_results
-            )
-
-            try:
-                while True:
-                    result, current_frame, total_frames = next(stress_generator)
-                    progress = int(current_frame / total_frames * 100)
-                    yield (progress, f"Calculating stress: Frame {current_frame}/{total_frames}")
-            except StopIteration as e:
-                return e.value
-
-        worker = stress_calculation_worker()
-        worker.running = True
-        self.active_workers.append(worker)
-
-        def on_returned(results):
-            # Update data manager with results
-            self.data_manager.set_stress_results(results, source="generated", dirty=True)
-
-            # Update visualization
-            self.visualization_manager.visualize_stress_results(
-                results,
-                max_stress=params.max_stress
-            )
-
-            self._update_progress(100, "Analysis completed successfully")
-            self.analysis_completed.emit(results)
-            self.active_workers.remove(worker)
-            if not self.active_workers:
-                self.unfreeze_ui()
-
-        # Connect worker signals...
-        worker.yielded.connect(lambda x: self._update_progress(*x))
-        worker.returned.connect(on_returned)
-        worker.errored.connect(self._handle_worker_error)
-        worker.start()
-
-    def set_panels(self, parameter_panel: 'MSMParameterPanel', action_panel: 'MSMActionPanel'):
-        """Set the parameter and action panels after initialization."""
-        self.parameter_panel = parameter_panel
-        self.action_panel = action_panel
-
     def freeze_ui(self):
-        """Disable all interactive UI elements"""
-        if self.data_panel:
-            self.data_panel.freeze_ui(True)
-        if self.parameter_panel:
-            self.parameter_panel.freeze_ui(True)
-        if self.action_panel:
-            self.action_panel.freeze_ui(True)
+        """Signal the owning widget to disable interactive controls."""
         self.ui_frozen.emit(True)
 
     def unfreeze_ui(self):
-        """Re-enable UI elements and refresh state"""
-        if self.data_panel:
-            self.data_panel.freeze_ui(False)
-        if self.parameter_panel:
-            self.parameter_panel.freeze_ui(False)
-        if self.action_panel:
-            self.action_panel.freeze_ui(False)
+        """Signal the owning widget to re-enable controls."""
         self.ui_frozen.emit(False)
 
     def _update_progress(self, progress: int, status: str):
         """Update progress and emit signal."""
         self.progress_updated.emit(progress, status)
-
-    def create_masks_from_images(self):
-        """Handle mask creation from the active image layer."""
-        try:
-            active_layer = self.viewer.layers.selection.active
-            if not active_layer or not isinstance(active_layer.data, np.ndarray):
-                raise ValueError("No valid image layer selected.")
-
-            image_data = active_layer.data
-            params = self._get_current_parameters()
-
-            @thread_worker
-            def mask_creation_worker():
-                mask_generator = create_mask_stack(image_data, params)
-                total_frames = image_data.shape[0] if image_data.ndim > 2 else 1
-
-                try:
-                    while True:
-                        _, current_frame, total_frames = next(mask_generator)
-                        progress = int((current_frame + 1) / total_frames * 100)
-                        yield (progress, f"Creating masks: Frame {current_frame + 1}/{total_frames}")
-                except StopIteration as e:
-                    analysis_stack = e.value
-                    return analysis_stack
-
-            worker = mask_creation_worker()
-            worker.running = True
-            self.active_workers.append(worker)
-            if len(self.active_workers) >= 1:
-                self.freeze_ui()
-
-            def on_yielded(progress_data):
-                progress, message = progress_data
-                self.mask_creation_progress.emit(progress, message)
-
-            def on_returned(analysis_stack):
-                masks = process_mask_data(analysis_stack)
-                self.data_manager.set_mask_stack(masks, source="generated")
-                self.mask_creation_completed.emit()
-                self.active_workers.remove(worker)
-                if not self.active_workers:
-                    self.unfreeze_ui()
-
-            def on_errored(exc):
-                error_msg = f"Mask creation failed: {str(exc)}"
-                self.mask_creation_progress.emit(0, error_msg)
-                self.mask_creation_failed.emit(error_msg)
-                QMessageBox.critical(None, "Error", error_msg)
-                self.active_workers.remove(worker)
-                if not self.active_workers:
-                    self.unfreeze_ui()
-
-            worker.yielded.connect(on_yielded)
-            worker.returned.connect(on_returned)
-            worker.errored.connect(on_errored)
-            worker.start()
-
-        except Exception as e:
-            error_msg = f"Failed to start mask creation: {str(e)}"
-            self.mask_creation_progress.emit(0, error_msg)
-            self.mask_creation_failed.emit(error_msg)
-            QMessageBox.critical(None, "Error", error_msg)
-
-    def _generate_mesh_stack(self, masks, params):
-        """Generate mesh stack in the main thread."""
-        try:
-            mesh_generator = generate_mesh_stack(masks, params)
-            total_frames = masks.shape[0]
-            mesh_results = []
-
-            while True:
-                try:
-                    # Process next mesh
-                    mesh_result, _, _, current_frame, total_frames = next(mesh_generator)
-                    mesh_results.append(mesh_result)
-
-                    # Update progress
-                    progress = int((current_frame + 1) / total_frames * 100)
-                    self._update_progress(progress, f"Generating mesh: Frame {current_frame + 1}/{total_frames}")
-
-                    # Process UI events to keep the interface responsive
-                    QApplication.processEvents()
-
-                except StopIteration as e:
-                    # Generator completed, return final results
-                    return e.value
-
-        except Exception as e:
-            raise Exception(f"Mesh generation failed: {str(e)}")
-
-    def _handle_progress(self, current: int, total: int, status: str):
-        """Handle progress updates during analysis."""
-        progress = int((current + 1) / total * 100)
-        self._update_progress(progress, status)
 
     def preview_mesh(self):
         """Generate and display mesh preview for the current frame."""
@@ -1360,7 +1108,6 @@ class MSMController(QObject):
                 pass
         self.active_workers.clear()
         # Update UI status
-        self.mask_creation_progress.emit(0, "Operations cancelled")
         self.progress_updated.emit(0, "Operations cancelled")
         QApplication.processEvents()
         self.unfreeze_ui()
@@ -1385,24 +1132,14 @@ class MSMWidget(BaseAnalysisWidget):
         # Get initial parameters from parameter manager
         self.msm_params = parameter_manager.get_msm_parameters()
 
-        # Initialize panels
-        self.data_panel = None
-        self.parameter_panel = MSMParameterPanel(parameter_manager)
-
-        # Initialize controller
+        # Initialize controller (owns no panels; emits ui_frozen)
         self.controller = MSMController(
             viewer=viewer,
             data_manager=data_manager,
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,
-            data_panel=None
         )
 
-        # Initialize action panel with controller
-        self.action_panel = MSMActionPanel(self.controller)
-
-        # Set panels in controller
-        self.controller.set_panels(self.parameter_panel, self.action_panel)
         # Setup UI and connect signals
         self._setup_ui()
         self._connect_signals()
@@ -1410,7 +1147,7 @@ class MSMWidget(BaseAnalysisWidget):
         # Monitor frame changes
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
 
-        # Connect parameter manager to update service parameters when they change
+        # Keep service parameters synced with the shared parameter manager
         parameter_manager.parameters_reset.connect(self._update_service_parameters)
         parameter_manager.parameter_changed.connect(self._handle_parameter_change)
 
