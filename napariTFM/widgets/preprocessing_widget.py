@@ -1,8 +1,6 @@
-from pathlib import Path
 from typing import Any
 
 import numpy as np
-import tifffile
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import QObject
