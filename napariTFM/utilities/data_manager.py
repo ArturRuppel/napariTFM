@@ -92,7 +92,17 @@ class DataManager:
     def get_artifact(self, key: str) -> ArtifactState:
         return self._artifacts[key]
 
+    def artifact_disk_path(self, key: str):
+        """Expected on-disk path for a generated artifact, or None if N/A."""
+        filename = self.GENERATED_FILENAMES.get(key)
+        if filename is None or self._output_dir is None:
+            return None
+        return self._output_dir / filename
+
     def artifact_available(self, key: str) -> bool:
+        if key in self.GENERATED_FILENAMES:
+            path = self.artifact_disk_path(key)
+            return path is not None and path.exists()
         return self.get_artifact(key).available
 
     def set_artifact(self, key: str, value, path=None, source: str = "", dirty: bool = False) -> None:
