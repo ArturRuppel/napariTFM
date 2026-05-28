@@ -671,7 +671,8 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     assert {"nscales", "inner_iterations"}.issubset(displacement_panel.parameter_controls)
     assert "young_modulus" not in displacement_panel.parameter_controls
     assert {"young_modulus", "auto_gcv"}.issubset(force_panel.parameter_controls)
-    assert {"threshold", "mesh_algorithm"}.issubset(stress_panel.parameter_controls)
+    assert {"density_factor", "mesh_algorithm"}.issubset(stress_panel.parameter_controls)
+    assert "threshold" not in stress_panel.parameter_controls
 
     displacement_section = widget._stage_sections_by_key["displacement"]
     assert "displacement" in widget._stage_inner_param_sections_by_key

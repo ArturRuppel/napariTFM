@@ -230,9 +230,6 @@ class WorkflowParameterPanel(QWidget):
             ("f_max", "Max Force (Pa)", "float", 0.1, 10000.0, 1.0, 1, None),
         ]),
         ("Stress", [
-            ("threshold", "Threshold Percentile (%)", "float", 0.0, 100.0, 0.1, 1, None),
-            ("dilation", "Mask Dilation (px)", "int", 0, 50, 1, 0, None),
-            ("smoothing_sigma", "Boundary Smoothing", "float", 0.0, 40.0, 0.1, 1, None),
             ("density_factor", "Density Factor", "float", 0.005, 0.1, 0.001, 3, None),
             ("mesh_algorithm", "Mesh Algorithm", "choice", None, None, None, None,
              ["Frontal-Del.", "Delaunay", "MeshAdapt", "BAMG", "FD Quads", "Para. Pack"]),
