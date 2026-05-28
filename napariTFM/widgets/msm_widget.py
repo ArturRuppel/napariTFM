@@ -598,9 +598,8 @@ class MSMWidget(BaseAnalysisWidget):
     def _handle_parameter_change(self, param_name: str, value: Any):
         """Update service parameters when individual parameters change."""
         stress_params = {
-            'threshold', 'dilation', 'smoothing_sigma', 'density_factor',
-            'mesh_algorithm', 'use_optimization', 'poisson_ratio_cells',
-            'max_stress'
+            'density_factor', 'mesh_algorithm', 'use_optimization',
+            'poisson_ratio_cells', 'max_stress'
         }
         if param_name in stress_params:
             self.msm_params = self.parameter_manager.get_msm_parameters()
