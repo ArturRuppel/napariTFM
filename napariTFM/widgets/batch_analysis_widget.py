@@ -153,7 +153,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             ("preprocessing", "Preprocessing"),
             ("displacement", "Displacement"),
             ("force", "Force"),
-            ("create_masks", "Create Masks"),
             ("stress", "Stress"),
             ("calculate_metrics", "Calculate Metrics (Strain Energy & Polarization)")
         ]
