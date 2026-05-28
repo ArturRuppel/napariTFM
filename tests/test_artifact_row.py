@@ -112,3 +112,21 @@ def test_row_shows_error_glyph_and_message(app):
 
     assert row.glyph_label.text() == "⚠"
     assert row.info_label.text() == "save failed"
+
+
+def test_row_shows_available_glyph_when_on_disk_without_value(app):
+    from napariTFM.widgets._ui_style import STATUS_GLYPHS
+
+    spec = DataArtifactSpec("foo", "Foo", "foo", "output")
+    row = _ArtifactRow(spec)
+
+    class _State:
+        value = None
+        error = ""
+        path = None
+        dirty = False
+
+    row.refresh_state(_State(), info_text="Saved", available=True)
+
+    assert row.glyph_label.text() == STATUS_GLYPHS["available"]
+    assert "Saved" in row.info_label.text()
