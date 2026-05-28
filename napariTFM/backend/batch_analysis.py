@@ -280,8 +280,8 @@ class BatchAnalysis:
             force_data = self._handle_force_execution(tfm_folder, displacement_data)
             self._handle_visualization(tfm_folder, viz_saver, 'force', force_data)
 
-            # Handle mask creation
-            mask_data = self._handle_mask_creation(tfm_folder)
+            # Masks are supplied externally (loaded from masks.tif by downstream steps)
+            mask_data = None
 
             # Handle stress analysis
             stress_data = self._handle_stress_execution(tfm_folder, force_data, mask_data)
@@ -348,24 +348,6 @@ class BatchAnalysis:
             return self._execute_force_analysis(tfm_folder, displacement_data)
         except Exception as e:
             print(f"Force analysis failed: {str(e)}")
-            return None
-
-    def _handle_mask_creation(self, tfm_folder: Path) -> Optional[dict]:
-        """Handle mask creation execution. Always runs if enabled."""
-        if not self.config['analysis_steps']['create_masks']:
-            return None
-
-        try:
-            try:
-                cell_images = tifffile.imread(str(tfm_folder / "preprocessed_cells.tif"))
-            except Exception as e:
-                print(f"Could not load cell images: {str(e)}")
-                return None
-
-            return self._execute_mask_creation(tfm_folder, cell_images)
-
-        except Exception as e:
-            print(f"Mask creation failed: {str(e)}")
             return None
 
     def _handle_stress_execution(self, tfm_folder: Path, force_data: Optional[dict], mask_data: Optional[np.ndarray]) -> Optional[dict]:
@@ -793,73 +775,6 @@ class BatchAnalysis:
         print(f"Force analysis completed in {self._format_duration(time() - start_time)}")
         return force_result
 
-    def _execute_mask_creation(self, tfm_folder: Path, cell_images: np.ndarray) -> Optional[np.ndarray]:
-        """
-        Execute the mask creation step of the TFM analysis pipeline.
-
-        This method generates binary masks from cell images for use in
-        stress analysis.
-
-        Parameters
-        ----------
-        tfm_folder : Path
-            Path to the output folder where results will be saved
-        cell_images : np.ndarray
-            Stack of preprocessed cell images
-
-        Returns
-        -------
-        Optional[np.ndarray]
-            Binary masks for each frame
-            Returns None if mask creation fails
-
-        Processing Steps
-        ---------------
-        1. Processes each frame in the cell image stack
-        2. For each frame:
-            - Applies thresholding
-            - Performs morphological operations
-            - Identifies cell regions
-            - Creates binary mask
-        3. Saves results as TIFF stack
-
-        The mask creation parameters are taken from the config:
-            - threshold
-            - dilation
-            - smoothing_sigma
-            And other mask generation parameters
-
-        Notes
-        -----
-        Progress updates are logged during processing, including:
-            - Frame-by-frame completion status
-            - Mask metrics (area, centroid)
-            - Processing time
-
-        Raises
-        ------
-        RuntimeError
-            If mask creation fails
-        ValueError
-            If input images are invalid
-        """
-        print("Starting Mask Creation...")
-        start_time = time()
-        params = self._create_msm_parameters()
-        masks = []
-
-        # Create masks at full resolution (resizing to match force field happens in stress analysis)
-        for mask, frame, total in create_mask_stack(cell_images, params):
-            masks.append(mask)
-            self._log_mask_progress(mask, frame, total)
-
-        masks = np.array(masks)
-
-        tifffile.imwrite(str(tfm_folder / "masks.tif"), masks.astype("uint8"))
-
-        print(f"Mask creation completed in {self._format_duration(time() - start_time)}")
-        return masks
-
     def _execute_stress_analysis(self, tfm_folder: Path, mask_data: np.ndarray, force_data: FTTCResult) -> Optional[dict]:
         """
         Execute the stress analysis step of the TFM analysis pipeline.
@@ -1056,9 +971,6 @@ class BatchAnalysis:
             use_optimization=self.config['parameters']['use_optimization'],
             poisson_ratio_cells=self.config['parameters']['poisson_ratio_cells'],
             young_modulus=1.0,
-            threshold=self.config['parameters']['threshold'],
-            dilation=self.config['parameters']['dilation'],
-            smoothing_sigma=self.config['parameters']['smoothing_sigma'],
             max_stress=self.config['parameters']['max_stress'],
             pixel_size=self.config['parameters']['pixel_size'],
             downscale_factor=self.config['parameters']['downscale_factor'],
@@ -1076,21 +988,6 @@ class BatchAnalysis:
         print(f"Frame {frame}/{total}: "
               f"Mean force: {np.mean(force_magnitude):.2f} Pa, "
               f"Max force: {np.max(force_magnitude):.2f} Pa")
-
-    def _log_mask_progress(self, mask, frame, total):
-        # Calculate surface area (sum of all True/1 pixels)
-        surface_area = np.sum(mask)
-
-        # Calculate centroid coordinates
-        y_coords, x_coords = np.where(mask)
-        if len(x_coords) > 0:  # Check if mask is not empty
-            centroid_x = np.mean(x_coords)
-            centroid_y = np.mean(y_coords)
-            print(f"Frame {frame}/{total}: "
-                  f"Centroid: ({centroid_x:.1f}, {centroid_y:.1f}), "
-                  f"Area: {surface_area:.0f} px²")
-        else:
-            print(f"Frame {frame}/{total}: Empty mask")
 
     def _log_mesh_progress(self, quality, frame, total):
         print(f"Frame {frame}/{total}: "
