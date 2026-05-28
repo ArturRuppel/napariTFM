@@ -834,16 +834,40 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Add panels
-        layout.addWidget(self.parameter_panel)
-        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-        layout.addWidget(self.action_panel)
+        layout.addWidget(self._create_action_row())
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
         layout.addWidget(self._create_status_frame())
 
         container.setLayout(layout)
         scroll.setWidget(container)
         return scroll
+
+    def _create_action_row(self) -> QWidget:
+        """Build widget-owned action buttons (proxied by the stage header)."""
+        container = QWidget()
+        layout = QVBoxLayout()
+
+        row = QHBoxLayout()
+        self.preview_btn = QPushButton("Preview Current Frame")
+        self.preview_btn.setToolTip(
+            "Calculate and visualize displacement for the current frame only"
+        )
+        self.process_btn = QPushButton("Calculate All Frames")
+        self.process_btn.setToolTip(
+            "Calculate displacements for all frames in the dataset"
+        )
+        self.preview_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.process_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        row.addWidget(self.preview_btn)
+        row.addWidget(self.process_btn)
+        layout.addLayout(row)
+
+        self.cancel_btn = QPushButton("Cancel Operation")
+        self.cancel_btn.setToolTip("Cancel the current operation")
+        layout.addWidget(self.cancel_btn)
+
+        container.setLayout(layout)
+        return container
 
     def _create_status_frame(self) -> QFrame:
         """Create the status display frame."""
@@ -873,20 +897,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.controller.data_updated.connect(self._update_ui_state)
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
 
-        # Connect parameter panel signals
-        self.parameter_panel.parameter_changed.connect(self._on_parameter_changed)
-        self.parameter_panel.parameters_reset.connect(self._on_parameters_reset)
+        # Wire widget-owned action buttons to controller operations
+        self.preview_btn.clicked.connect(self.controller.preview_displacement)
+        self.process_btn.clicked.connect(self.controller.calculate_all_frames)
+        self.cancel_btn.clicked.connect(self.controller.cancel_operation)
 
         # Add layer selection monitoring
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
-
-    def _on_parameter_changed(self, param_name: str, value: Any):
-        """Handle parameter changes."""
-        pass
-
-    def _on_parameters_reset(self):
-        """Handle parameter reset and update status."""
-        self._update_status(0, "Displacement parameters reset to default values.")
 
     # endregion
 
@@ -898,32 +915,24 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
-        # Get current data state
         has_reference = self.data_manager.preprocessed_reference is not None
         has_beads = self.data_manager.preprocessed_bead_stack is not None
-        has_results = self.data_manager.displacement_results is not None  # Full results, not preview
 
-        # Update action panel button states based on data availability
-        if hasattr(self, 'action_panel'):
-            # Analysis buttons require both reference and beads
-            can_analyze = has_reference and has_beads
-            self.action_panel.preview_btn.setEnabled(can_analyze)
-            self.action_panel.calculate_btn.setEnabled(can_analyze)
-
-            # Cancel is always enabled
-            self.action_panel.cancel_btn.setEnabled(True)
+        can_analyze = has_reference and has_beads
+        self.preview_btn.setEnabled(can_analyze)
+        self.process_btn.setEnabled(can_analyze)
+        self.cancel_btn.setEnabled(True)
 
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze during processing."""
-        if hasattr(self, 'parameter_panel'):
-            self.parameter_panel.freeze_ui(frozen)
+        self.preview_btn.setEnabled(not frozen)
+        self.process_btn.setEnabled(not frozen)
+        # Cancel button always enabled
+        self.cancel_btn.setEnabled(True)
 
-        if hasattr(self, 'action_panel'):
-            # During processing, disable all buttons except cancel
-            self.action_panel.preview_btn.setEnabled(not frozen)
-            self.action_panel.calculate_btn.setEnabled(not frozen)
-            # Cancel button always enabled
-            self.action_panel.cancel_btn.setEnabled(True)
+    def load_active_layer(self, data_type: str):
+        """Delegate input-layer loading to the controller (called by the shell)."""
+        self.controller.load_active_layer(data_type)
 
     def _has_required_data(self) -> bool:
         """Check if required data for processing is available."""
@@ -938,13 +947,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _on_analysis_completed(self, results):
         """Handle completed analysis."""
-        # Update action panel button states
-        if self.action_panel:
-            self.action_panel.update_button_states(
-                has_reference=self.data_manager.preprocessed_reference is not None,
-                has_beads=self.data_manager.preprocessed_bead_stack is not None,
-                has_results=True
-            )
+        self._update_ui_state()
 
         if ensure_output_dir_for_generated_artifacts(self, self.data_manager):
             try:
@@ -957,12 +960,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _on_analysis_failed(self, error_msg: str):
         """Handle analysis failure."""
-        if self.action_panel:
-            self.action_panel.update_button_states(
-                has_reference=self.data_manager.preprocessed_reference is not None,
-                has_beads=self.data_manager.preprocessed_bead_stack is not None,
-                has_results=False
-            )
+        self._update_ui_state()
         QMessageBox.critical(self, "Error", error_msg)
 
     def _on_frame_changed(self, event=None):
