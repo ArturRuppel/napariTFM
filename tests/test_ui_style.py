@@ -12,12 +12,13 @@ from napariTFM.widgets._ui_style import (
 
 
 def test_stage_accent_returns_palette_color_for_known_key():
-    assert stage_accent("preprocessing") == STAGE_ACCENTS["preprocessing"]
-    assert stage_accent("displacement") == STAGE_ACCENTS["displacement"]
+    from napariTFM.widgets._ui_style import ACTIVE_PALETTE
+    assert stage_accent("preprocessing") == ACTIVE_PALETTE[STAGE_ACCENTS["preprocessing"]]
+    assert stage_accent("displacement") == ACTIVE_PALETTE[STAGE_ACCENTS["displacement"]]
 
 
 def test_stage_accent_falls_back_to_inputs_for_unknown_key():
-    assert stage_accent("nonexistent_stage") == STAGE_ACCENTS["inputs"]
+    assert stage_accent("nonexistent_stage") == stage_accent("inputs")
 
 
 def test_muted_stage_accent_reduces_saturation():
