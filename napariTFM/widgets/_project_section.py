@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (
     QFileDialog,
     QDoubleSpinBox,
@@ -22,6 +23,8 @@ _GENERAL_SPECS = [
 
 
 class _GeneralBody(QWidget):
+    output_dir_changed = Signal()
+
     def __init__(self, parameter_manager, data_manager=None):
         super().__init__()
         self.parameter_manager = parameter_manager
@@ -102,6 +105,7 @@ class _GeneralBody(QWidget):
         )
         if path:
             self.data_manager.set_output_dir(path)
+            self.output_dir_changed.emit()
 
     def _sync_output_dir(self):
         path = getattr(self.data_manager, "output_dir", None)

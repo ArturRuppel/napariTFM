@@ -400,6 +400,7 @@ class napariTFMWidget(QWidget):
         self.load_params_btn.clicked.connect(self._load_parameters)
         self.reset_params_btn.clicked.connect(self._reset_parameters)
         self.clear_data_btn.clicked.connect(self._clear_all_data)
+        self.project_section.body.output_dir_changed.connect(self._reconcile_to_output_dir)
 
         # Initialize all widgets with parameter_manager
         self.preprocessing_widget = PreprocessingWidget(
@@ -618,6 +619,43 @@ class napariTFMWidget(QWidget):
             self._applying_state = False
         self.refresh()
 
+    def _config_path(self):
+        output_dir = self.data_manager.output_dir
+        return (output_dir / CONFIG_FILENAME) if output_dir else None
+
+    def _read_config(self):
+        path = self._config_path()
+        if path is None or not path.exists():
+            return None
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except Exception as exc:
+            logger.warning("Failed to read config %s: %s", path, exc)
+            return None
+
+    def _write_config(self):
+        if self._applying_state:
+            return
+        path = self._config_path()
+        if path is None:
+            return
+        try:
+            self.data_manager.ensure_output_dir()
+            with open(path, "w") as f:
+                json.dump(self.get_state(), f, indent=2)
+        except Exception as exc:
+            logger.warning("Failed to write config %s: %s", path, exc)
+
+    def _reconcile_to_output_dir(self):
+        """On a new output dir: load its config if present, else claim it."""
+        state = self._read_config()
+        if state is not None:
+            self.set_state(state)   # set_state() calls refresh()
+        else:
+            self._write_config()
+            self.refresh()
+
     def _save_generated_artifact(self, key: str):
         try:
             kwargs = {}
@@ -632,6 +670,7 @@ class napariTFMWidget(QWidget):
             QMessageBox.warning(self, "Save Failed", str(exc))
         finally:
             self.refresh_stage_statuses()
+            self._write_config()
 
     def _reset_parameters(self):
         """Reset parameters to default values and notify all widgets."""
