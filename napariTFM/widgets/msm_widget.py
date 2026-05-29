@@ -5,7 +5,7 @@ from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, QObject
 from qtpy.QtWidgets import (
-    QLabel, QSizePolicy, QFrame, QScrollArea, QApplication, QSpacerItem,
+    QLabel, QSizePolicy, QFrame, QApplication, QSpacerItem,
     QPushButton, QProgressBar, QFileDialog
 )
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
@@ -464,10 +464,6 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _create_content_container(self) -> QWidget:
         """Create the main content container."""
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(360)
-
         container = QWidget()
         container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QVBoxLayout()
@@ -479,8 +475,7 @@ class MSMWidget(BaseAnalysisWidget):
         layout.addWidget(self._create_status_frame())
 
         container.setLayout(layout)
-        scroll.setWidget(container)
-        return scroll
+        return container
 
     def _create_action_row(self) -> QWidget:
         """Build widget-owned action buttons (run/preview/cancel proxied by the stage header)."""
