@@ -345,6 +345,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
     """Main preprocessing widget integrating all components."""
 
     preprocessing_completed = Signal(dict)  # Emits processed data
+    action_states_changed = Signal()
 
     # region === Initialization
     def __init__(
@@ -358,6 +359,9 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Initialize managers
         self.parameter_manager = parameter_manager
+
+        # Per-action enablement consumed by the header (StageSection)
+        self._action_enabled = {"run": False, "preview": False, "cancel": True}
 
         # Initialize controller
         self.controller = PreprocessingController(
@@ -423,21 +427,14 @@ class PreprocessingWidget(BaseAnalysisWidget):
         return frame
 
     def _create_action_frame(self) -> QFrame:
-        """Create action buttons frame."""
+        """Create the (hidden) action frame.
+
+        Run/cancel are now driven by the header (StageSection) via the
+        signal-driven action contract; this frame intentionally holds no
+        buttons of its own.
+        """
         frame = QFrame()
-        layout = QVBoxLayout()  # Changed to VBoxLayout for stacked buttons
-
-        # Create button row
-        button_layout = QHBoxLayout()
-        self.process_btn = QPushButton("Run Preprocessing")
-        self.process_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        button_layout.addWidget(self.process_btn)
-        layout.addLayout(button_layout)
-
-        # Add cancel button (full width)
-        self.cancel_btn = QPushButton("Cancel Operation")
-        layout.addWidget(self.cancel_btn)
-
+        layout = QVBoxLayout()
         frame.setLayout(layout)
         return frame
 
@@ -464,9 +461,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Connect preview controls
         self.preview_check.toggled.connect(self._on_preview_toggled)
 
-        # Connect action buttons
-        self.process_btn.clicked.connect(self._on_process_clicked)
-        self.cancel_btn.clicked.connect(self.controller.cancel_all_operations)
+        # Run/cancel are driven by the header via the action contract
+        # (run_action / cancel_action); no body button wiring here.
 
         # Connect controller signals
         self.controller.progress_updated.connect(self._update_status)
@@ -495,6 +491,21 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
     # endregion
 
+    # region === Action Contract
+    def action_states(self):
+        return dict(self._action_enabled)
+
+    def run_action(self):
+        self._on_process_clicked()
+
+    def preview_action(self):
+        self.preview_check.setChecked(not self.preview_check.isChecked())
+
+    def cancel_action(self):
+        self.controller.cancel_all_operations()
+
+    # endregion
+
     # region === State Management
     def _update_status(self, progress: int, message: str):
         """Update status display."""
@@ -515,22 +526,26 @@ class PreprocessingWidget(BaseAnalysisWidget):
                 self.data_manager.cell_stack is not None
         )
         self.preview_check.setEnabled(has_any_data)
+        self._action_enabled["preview"] = has_any_data
 
         # Uncheck preview if no data
         if not has_any_data and self.preview_check.isChecked():
             self.preview_check.setChecked(False)
 
-        # Update action buttons - now uses _has_required_data()
-        self.process_btn.setEnabled(self._has_required_data())
+        # Update action enablement - now uses _has_required_data()
+        self._action_enabled["run"] = self._has_required_data()
+        self.action_states_changed.emit()
 
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze."""
-        # Disable preview and process buttons during processing
+        # Disable preview and run action during processing
         self.preview_check.setEnabled(not frozen)
-        self.process_btn.setEnabled(not frozen and self._has_required_data())
+        self._action_enabled["preview"] = not frozen
+        self._action_enabled["run"] = not frozen and self._has_required_data()
 
-        # Cancel button is always enabled
-        self.cancel_btn.setEnabled(True)
+        # Cancel action is always enabled
+        self._action_enabled["cancel"] = True
+        self.action_states_changed.emit()
 
     def _check_preprocessed_data(self) -> bool:
         """Check availability of preprocessed data."""

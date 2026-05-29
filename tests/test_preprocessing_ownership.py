@@ -67,6 +67,26 @@ class _FakeParameterManager:
         return object()
 
 
+@pytest.fixture
+def preprocessing_widget(app):
+    return pw.PreprocessingWidget(
+        _FakeViewer(),
+        _FakeDataManager(),
+        _FakeParameterManager(),
+        object(),
+    )
+
+
+def test_preprocessing_exposes_action_contract(app, preprocessing_widget):
+    w = preprocessing_widget
+    assert hasattr(w, "action_states_changed")
+    states = w.action_states()
+    assert set(states) >= {"run", "preview", "cancel"}
+    assert callable(w.run_action)
+    assert callable(w.preview_action)
+    assert callable(w.cancel_action)
+
+
 def test_parameter_panel_class_is_removed():
     assert not hasattr(pw, "PreprocessingParameterPanel")
 

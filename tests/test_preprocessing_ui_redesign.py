@@ -313,20 +313,23 @@ def test_preprocessing_run_enablement_tracks_required_inputs(app):
         _FakeVisualizationManager(),
     )
 
-    assert not widget.process_btn.isEnabled()
+    # Run/cancel are no longer body buttons; enablement lives in action_states.
+    assert not hasattr(widget, "process_btn")
+    assert not hasattr(widget, "cancel_btn")
+    assert not widget.action_states()["run"]
     assert not hasattr(widget, "save_btn")
 
     data_manager.set_bead_stack(np.ones((1, 2, 2), dtype=np.float32))
     widget._update_ui_state()
-    assert not widget.process_btn.isEnabled()
+    assert not widget.action_states()["run"]
 
     data_manager.set_reference(np.ones((2, 2), dtype=np.float32))
     widget._update_ui_state()
-    assert widget.process_btn.isEnabled()
+    assert widget.action_states()["run"]
 
     data_manager.set_preprocessed_reference(np.ones((2, 2), dtype=np.float32))
     widget._update_ui_state()
-    assert widget.process_btn.isEnabled()
+    assert widget.action_states()["run"]
 
 
 def test_preprocessing_preview_error_unchecks_widget_preview_control(monkeypatch, app):
