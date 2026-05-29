@@ -7,7 +7,7 @@ from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox, QGroupBox,
     QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog, QCheckBox,
-    QFormLayout
+    QFormLayout, QMenu, QToolButton
 )
 
 from napariTFM.utilities.parameter_manager import ParameterManager
@@ -21,7 +21,7 @@ from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStatusPanel
 from napariTFM.widgets._stage_section import StageSection
-from napariTFM.widgets._ui_style import title_style
+from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme
 from napariTFM.widgets._project_section import ProjectSection
 
 logger = logging.getLogger(__name__)
@@ -547,11 +547,50 @@ class napariTFMWidget(QWidget):
         # Add scroll area to main layout
         main_layout = QVBoxLayout()
         main_layout.addWidget(scroll)
+        self._setup_theme_selector(main_layout)
         self.setLayout(main_layout)
 
         self.connect_signals()
         self.data_manager.add_change_callback(self.refresh)
         self.refresh_stage_statuses()
+
+    def _setup_theme_selector(self, layout):
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.addStretch()
+
+        self.theme_btn = QToolButton()
+        self.theme_btn.setText("◐")
+        self.theme_btn.setObjectName("theme_selector_button")
+        self.theme_btn.setPopupMode(QToolButton.InstantPopup)
+
+        self.theme_menu = QMenu(self.theme_btn)
+        self._theme_actions = {}
+        for name in theme_names():
+            action = self.theme_menu.addAction(name)
+            action.setCheckable(True)
+            action.triggered.connect(
+                lambda _checked=False, theme_name=name: self._on_theme_selected(theme_name)
+            )
+            self._theme_actions[name] = action
+        self.theme_btn.setMenu(self.theme_menu)
+        self._sync_theme_menu_state()
+
+        footer.addWidget(self.theme_btn)
+        layout.addLayout(footer)
+
+    def _on_theme_selected(self, name: str):
+        set_active_theme(name)
+        for key, section in self._stage_sections_by_key.items():
+            section.set_accent(stage_accent(key))
+        self.project_section.set_accent(stage_accent("project"))
+        self._sync_theme_menu_state()
+
+    def _sync_theme_menu_state(self):
+        current = active_theme_name()
+        for name, action in self._theme_actions.items():
+            action.setChecked(name == current)
+        self.theme_btn.setToolTip(f"Theme: {current}")
 
     def _create_stage_parameter_panels(self) -> dict[str, WorkflowParameterPanel]:
         """Create inline workflow parameter editors grouped by pipeline stage."""

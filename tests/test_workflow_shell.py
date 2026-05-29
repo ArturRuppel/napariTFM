@@ -1082,3 +1082,28 @@ def test_reconcile_writes_config_when_absent(monkeypatch, app, tmp_path):
     widget.project_section.body.output_dir_changed.emit()
 
     assert (tmp_path / "napariTFM_config.json").exists()
+
+
+def test_shell_theme_button_switches_palette(monkeypatch, app):
+    from napariTFM.widgets import _widget
+    from napariTFM.widgets import _ui_style
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    original = _ui_style.active_theme_name()
+    try:
+        widget = _widget.napariTFMWidget(object())
+        assert hasattr(widget, "theme_btn")
+        other = next(n for n in _ui_style.theme_names() if n != original)
+        widget._on_theme_selected(other)
+        assert _ui_style.active_theme_name() == other
+        accent = _ui_style.stage_accent("preprocessing")
+        assert accent in widget._stage_sections_by_key["preprocessing"].header_label.styleSheet()
+    finally:
+        _ui_style.set_active_theme(original)
