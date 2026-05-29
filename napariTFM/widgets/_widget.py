@@ -5,9 +5,9 @@ from typing import Any
 import napari
 from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox, QGroupBox,
+    QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox,
     QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog, QCheckBox,
-    QFormLayout, QMenu, QToolButton
+    QMenu, QToolButton
 )
 
 from napariTFM.utilities.parameter_manager import ParameterManager
