@@ -1107,3 +1107,34 @@ def test_shell_theme_button_switches_palette(monkeypatch, app):
         assert accent in widget._stage_sections_by_key["preprocessing"].header_label.styleSheet()
     finally:
         _ui_style.set_active_theme(original)
+
+
+def _real_parameter_manager():
+    import importlib.util as _ilu
+
+    _pm_spec = _ilu.spec_from_file_location(
+        "napariTFM.utilities.parameter_manager_real",
+        Path(__file__).parent.parent / "napariTFM" / "utilities" / "parameter_manager.py",
+    )
+    _pm_mod = _ilu.module_from_spec(_pm_spec)
+    _pm_spec.loader.exec_module(_pm_mod)
+    return _pm_mod.ParameterManager()
+
+
+def test_workflow_parameter_panel_uses_sliders_for_numeric(app):
+    from napariTFM.widgets._widget import WorkflowParameterPanel
+
+    pm = _real_parameter_manager()
+    panel = WorkflowParameterPanel(pm, section_titles=("Displacement",))
+    # nscales is an int param -> islider; disp_arrow_scale is float -> dslider.
+    assert type(panel.parameter_controls["nscales"]).__name__ == "QLabeledSlider"
+    assert type(panel.parameter_controls["disp_arrow_scale"]).__name__ == "QLabeledDoubleSlider"
+
+
+def test_workflow_parameter_panel_slider_writes_through(app):
+    from napariTFM.widgets._widget import WorkflowParameterPanel
+
+    pm = _real_parameter_manager()
+    panel = WorkflowParameterPanel(pm, section_titles=("Displacement",))
+    panel.parameter_controls["nscales"].setValue(7)
+    assert pm.get_ui_parameter("nscales") == 7

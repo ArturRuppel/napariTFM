@@ -22,6 +22,7 @@ from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStatusPanel
 from napariTFM.widgets._stage_section import StageSection
 from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme
+from napariTFM.widgets._param_controls import dslider, islider
 from napariTFM.widgets._project_section import ProjectSection
 
 logger = logging.getLogger(__name__)
@@ -278,17 +279,10 @@ class WorkflowParameterPanel(QWidget):
 
     def _create_control(self, name, kind, min_val, max_val, step, decimals, choices):
         if kind == "int":
-            control = QSpinBox()
-            control.setRange(min_val, max_val)
-            control.setSingleStep(step)
+            control = islider(min_val, max_val, self.parameter_manager.get_ui_parameter(name), step=step)
             control.valueChanged.connect(lambda value, n=name: self.parameter_manager.set_ui_parameter(n, value))
         elif kind == "float":
-            control = QDoubleSpinBox()
-            control.setRange(min_val, max_val)
-            control.setSingleStep(step)
-            control.setDecimals(decimals)
-            if name == "gel_height":
-                control.setSpecialValueText("∞")
+            control = dslider(min_val, max_val, self.parameter_manager.get_ui_parameter(name), step=step, decimals=decimals)
             control.valueChanged.connect(lambda value, n=name: self.parameter_manager.set_ui_parameter(n, value))
         elif kind == "choice":
             control = QComboBox()
