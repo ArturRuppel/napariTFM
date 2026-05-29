@@ -574,7 +574,7 @@ class napariTFMWidget(QWidget):
     def _create_stage_parameter_panels(self) -> dict[str, WorkflowParameterPanel]:
         """Create inline workflow parameter editors grouped by pipeline stage."""
         stage_sections = {
-            "preprocessing": ("General", "Preprocessing"),
+            "preprocessing": ("Preprocessing",),
             "displacement": ("Displacement",),
             "force": ("Force",),
             "stress": ("Stress",),

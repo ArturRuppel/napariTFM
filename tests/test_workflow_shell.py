@@ -711,7 +711,9 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     force_panel = widget._stage_parameter_panels_by_key["force"]
     stress_panel = widget._stage_parameter_panels_by_key["stress"]
 
-    assert {"pixel_size", "rolling_ball_radius"}.issubset(preprocessing_panel.parameter_controls)
+    assert "rolling_ball_radius" in preprocessing_panel.parameter_controls
+    # Calibration lives only in the Project section, not the preprocessing panel.
+    assert "pixel_size" not in preprocessing_panel.parameter_controls
     assert "nscales" not in preprocessing_panel.parameter_controls
     assert {"nscales", "inner_iterations"}.issubset(displacement_panel.parameter_controls)
     assert "young_modulus" not in displacement_panel.parameter_controls
@@ -1181,3 +1183,31 @@ def test_shell_mounts_param_panels_as_section_parameter_panel(monkeypatch, app):
     # The panel is the section's first-class parameter_panel, not a nested section.
     assert section.parameter_panel is widget._stage_parameter_panels_by_key["displacement"]
     assert not hasattr(section, "add_inner_section")
+
+
+def test_preprocessing_panel_excludes_general_calibration(app):
+    from napariTFM.widgets._widget import WorkflowParameterPanel
+
+    pm = _real_parameter_manager()
+    panel = WorkflowParameterPanel(pm, section_titles=("Preprocessing",))
+    assert "pixel_size" not in panel.parameter_controls
+    assert "frame_interval" not in panel.parameter_controls
+    # Preprocessing-specific params still present.
+    assert "rolling_ball_radius" in panel.parameter_controls
+
+
+def test_shell_preprocessing_panel_has_no_calibration_controls(monkeypatch, app):
+    from napariTFM.widgets import _widget
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    panel = widget._stage_parameter_panels_by_key["preprocessing"]
+    assert "pixel_size" not in panel.parameter_controls
+    assert "frame_interval" not in panel.parameter_controls
