@@ -21,7 +21,7 @@ from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStatusPanel
 from napariTFM.widgets._stage_section import StageSection
-from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme
+from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, section_label_style, TIGHT_SPACING
 from napariTFM.widgets._param_controls import dslider, islider
 from superqt import QLabeledDoubleSlider, QLabeledSlider
 from napariTFM.widgets._project_section import ProjectSection
@@ -258,25 +258,37 @@ class WorkflowParameterPanel(QWidget):
     def _setup_ui(self):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(TIGHT_SPACING)
 
         for title, specs in self.PARAMETER_SECTIONS:
             if self._section_titles is not None and title not in self._section_titles:
                 continue
-            group = QGroupBox(title)
-            form = QFormLayout()
-            form.setContentsMargins(8, 8, 8, 8)
-            form.setSpacing(4)
 
-            for spec in specs:
-                name, label, kind, min_val, max_val, step, decimals, choices = spec
-                control = self._create_control(name, kind, min_val, max_val, step, decimals, choices)
-                form.addRow(label, control)
+            grid = section_grid()
+            header = QLabel(title)
+            header.setStyleSheet(section_label_style())
+            add_section_header(grid, 0, header)
 
-            group.setLayout(form)
-            layout.addWidget(group)
+            row = 1
+            index = 0
+            while index < len(specs):
+                left_label, left_control = self._control_for_spec(specs[index])
+                if index + 1 < len(specs):
+                    right_label, right_control = self._control_for_spec(specs[index + 1])
+                    add_section_pair_row(grid, row, left_label, left_control, right_label, right_control)
+                else:
+                    add_section_pair_row(grid, row, left_label, left_control)
+                row += 1
+                index += 2
+
+            layout.addLayout(grid)
 
         self.setLayout(layout)
+
+    def _control_for_spec(self, spec):
+        name, label, kind, min_val, max_val, step, decimals, choices = spec
+        control = self._create_control(name, kind, min_val, max_val, step, decimals, choices)
+        return label, control
 
     def _create_control(self, name, kind, min_val, max_val, step, decimals, choices):
         if kind == "int":

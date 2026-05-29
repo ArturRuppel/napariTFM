@@ -395,3 +395,37 @@ def test_visualization_manager_preprocessing_preview_layers_are_separate():
     manager.handle_preprocessing_preview({}, enable=False)
 
     assert viewer.layers == []
+
+
+def test_param_panel_uses_section_grid_not_groupbox(app):
+    from qtpy.QtWidgets import QGridLayout, QGroupBox
+    from napariTFM.utilities.parameter_manager import ParameterManager
+    from napariTFM.widgets._widget import WorkflowParameterPanel
+
+    panel = WorkflowParameterPanel(ParameterManager(), section_titles=("Displacement",))
+
+    assert panel.findChildren(QGroupBox) == []
+    assert panel.findChild(QGridLayout) is not None
+
+
+def test_param_panel_packs_two_pairs_per_row(app):
+    from qtpy.QtWidgets import QGridLayout
+    from napariTFM.utilities.parameter_manager import ParameterManager
+    from napariTFM.widgets._widget import WorkflowParameterPanel
+
+    # Displacement has 7 params; row 0 is the header, row 1 holds the first two.
+    panel = WorkflowParameterPanel(ParameterManager(), section_titles=("Displacement",))
+    grid = panel.findChild(QGridLayout)
+
+    assert grid.itemAtPosition(1, 0) is not None
+    assert grid.itemAtPosition(1, 2) is not None
+
+
+def test_param_panel_still_registers_controls(app):
+    from napariTFM.utilities.parameter_manager import ParameterManager
+    from napariTFM.widgets._widget import WorkflowParameterPanel
+
+    panel = WorkflowParameterPanel(ParameterManager(), section_titles=("Displacement",))
+
+    assert "nscales" in panel.parameter_controls
+    assert "d_max" in panel.parameter_controls
