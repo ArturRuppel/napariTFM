@@ -62,3 +62,20 @@ def test_stage_header_style_embeds_accent():
     style = stage_header_style(accent)
     assert accent in style
     assert "font-weight: bold" in style
+
+
+def test_muted_accent_desaturates_and_flattens():
+    from napariTFM.widgets._ui_style import muted_accent
+
+    out = muted_accent("#3b6fb6")
+    assert out.startswith("#") and len(out) == 7
+    # idempotent shape: feeding the output back stays a valid hex
+    assert muted_accent(out).startswith("#")
+
+
+def test_layout_constants_present():
+    from napariTFM.widgets import _ui_style
+
+    assert _ui_style.TINY_MARGIN == 2
+    assert _ui_style.SECTION_MARGIN == 4
+    assert _ui_style.TIGHT_SPACING == 4

@@ -6,6 +6,9 @@ from qtpy.QtWidgets import QStyle, QToolButton, QWidget
 
 COMPACT_SPACING = 4
 ICON_BUTTON_SIZE = 24
+TINY_MARGIN = 2
+SECTION_MARGIN = 4
+TIGHT_SPACING = 4
 
 MUTED_TEXT_COLOR = "#999"
 
@@ -118,9 +121,9 @@ def stage_accent(key: str) -> str:
     return ACTIVE_PALETTE[semantic]
 
 
-def muted_stage_accent(key: str) -> str:
-    """Return a muted (low-saturation, midtone-lightness) variant of a stage accent."""
-    hex_value = stage_accent(key).lstrip("#")
+def muted_accent(hex_value: str) -> str:
+    """Return a muted (low-saturation, midtone-lightness) variant of a hex color."""
+    hex_value = hex_value.lstrip("#")
     r = int(hex_value[0:2], 16) / 255.0
     g = int(hex_value[2:4], 16) / 255.0
     b = int(hex_value[4:6], 16) / 255.0
@@ -131,6 +134,11 @@ def muted_stage_accent(key: str) -> str:
     return "#{:02x}{:02x}{:02x}".format(
         round(r_out * 255), round(g_out * 255), round(b_out * 255)
     )
+
+
+def muted_stage_accent(key: str) -> str:
+    """Return a muted variant of a stage accent."""
+    return muted_accent(stage_accent(key))
 
 
 def stage_header_style(accent: str) -> str:
