@@ -1,6 +1,7 @@
 import re
+from typing import Callable
 
-from qtpy.QtCore import QEvent, QObject, Qt
+from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QStyle, QVBoxLayout, QWidget
 
 from napariTFM.widgets._ui_style import (
@@ -13,36 +14,6 @@ from napariTFM.widgets._ui_style import (
 from napariTFM.widgets._collapsible_section import CollapsibleSection
 
 
-class _ActionStateSync(QObject):
-    """Keep a header proxy button aligned with its delegated child button.
-
-    Parented to ``target`` (the object it installs an event filter on) so the
-    filter can never outlive that object: when ``target`` is destroyed Qt
-    destroys this filter and removes it cleanly, avoiding a dangling event
-    filter dispatched to a deleted object. ``sync`` is guarded so a proxy that
-    was destroyed first (e.g. during teardown) is a no-op rather than a crash.
-    """
-
-    def __init__(self, target: QWidget, proxy: QWidget):
-        super().__init__(target)
-        self._target = target
-        self._proxy = proxy
-        target.installEventFilter(self)
-        self.sync()
-
-    def eventFilter(self, obj, event):
-        if obj is self._target and event.type() == QEvent.EnabledChange:
-            self.sync()
-        return super().eventFilter(obj, event)
-
-    def sync(self):
-        try:
-            self._proxy.setEnabled(self._target.isEnabled())
-        except RuntimeError:
-            # proxy (or target) C++ object already deleted during teardown.
-            pass
-
-
 class StageSection(QWidget):
     """Reusable workflow stage section with stable header actions and status."""
 
@@ -50,7 +21,9 @@ class StageSection(QWidget):
         self,
         title: str,
         child: QWidget,
-        action_targets: dict[str, QWidget] | None = None,
+        actions: dict[str, Callable] | None = None,
+        action_states: Callable[[], dict[str, bool]] | None = None,
+        action_states_changed=None,
         status: str = "not_started",
         accent: str | None = None,
         status_panel: QWidget | None = None,
@@ -60,7 +33,8 @@ class StageSection(QWidget):
         super().__init__()
         self._title = title
         self._child = child
-        self._action_targets = action_targets or {}
+        self._actions = actions or {}
+        self._action_states = action_states
         self._status = status
         self.status_panel = status_panel
         self.parameter_panel = parameter_panel
@@ -68,7 +42,6 @@ class StageSection(QWidget):
             self._accent = accent
         else:
             self._accent = stage_accent(self._slug)
-        self._action_state_syncs: list[_ActionStateSync] = []
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -137,6 +110,10 @@ class StageSection(QWidget):
         if has_panel:
             self._set_parameter_panel_expanded(parameters_expanded)
 
+        if action_states_changed is not None:
+            action_states_changed.connect(self._refresh_action_states)
+        self._refresh_action_states()
+
     @property
     def _slug(self) -> str:
         slug = re.sub(r"[^a-z0-9]+", "_", self._title.lower()).strip("_")
@@ -156,6 +133,14 @@ class StageSection(QWidget):
                 self.style().standardIcon(QStyle.SP_MediaPlay)
             )
             self.run_cancel_btn.setToolTip(f"Run {self._title}")
+        self._refresh_action_states()
+
+    def _refresh_action_states(self):
+        states = self._action_states() if self._action_states is not None else {}
+        running = self._status == "running"
+        # While running, the run/cancel button is always live (it cancels).
+        self.run_cancel_btn.setEnabled(running or states.get("run", False))
+        self.preview_button.setEnabled(states.get("preview", False))
 
     def set_accent(self, accent: str) -> None:
         """Re-accent this section's header (used by the theme picker)."""
@@ -172,12 +157,10 @@ class StageSection(QWidget):
             f"{action.capitalize()} {self._title}",
             standard_icon,
         )
-
-        target = self._action_targets.get(action)
-        button.setEnabled(target is not None and target.isEnabled())
-        if target is not None:
-            button.clicked.connect(target.click)
-            self._action_state_syncs.append(_ActionStateSync(target, button))
+        handler = self._actions.get(action)
+        if handler is not None:
+            button.clicked.connect(lambda _checked=False, fn=handler: fn())
+        button.setEnabled(False)
         return button
 
     def _create_params_button(self):
@@ -200,20 +183,15 @@ class StageSection(QWidget):
             f"Run {self._title}",
             QStyle.SP_MediaPlay,
         )
-        run_target = self._action_targets.get("run")
-        button.setEnabled(run_target is not None and run_target.isEnabled())
-        if run_target is not None:
-            self._action_state_syncs.append(_ActionStateSync(run_target, button))
+        button.setEnabled(False)
         button.clicked.connect(self._on_run_cancel_clicked)
         return button
 
     def _on_run_cancel_clicked(self):
-        if self._status == "running":
-            target = self._action_targets.get("cancel")
-        else:
-            target = self._action_targets.get("run")
-        if target is not None:
-            target.click()
+        key = "cancel" if self._status == "running" else "run"
+        handler = self._actions.get(key)
+        if handler is not None:
+            handler()
 
     def _set_parameter_panel_expanded(self, expanded: bool):
         self.params_btn.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)

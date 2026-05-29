@@ -1,5 +1,5 @@
 import pytest
-from qtpy.QtWidgets import QApplication, QPushButton, QWidget
+from qtpy.QtWidgets import QApplication, QWidget
 
 from napariTFM.widgets._stage_section import StageSection
 
@@ -53,17 +53,17 @@ def test_run_cancel_btn_tooltip_swaps_on_status_running(app):
     assert "Run" in section.run_cancel_btn.toolTip()
 
 
-def test_run_cancel_btn_clicks_run_target_when_not_running(app):
-    run_target = QPushButton()
-    cancel_target = QPushButton()
+def test_run_cancel_btn_invokes_run_handler_when_not_running(app):
     clicks = {"run": 0, "cancel": 0}
-    run_target.clicked.connect(lambda: clicks.__setitem__("run", clicks["run"] + 1))
-    cancel_target.clicked.connect(lambda: clicks.__setitem__("cancel", clicks["cancel"] + 1))
 
     section = StageSection(
         "Preprocessing",
         QWidget(),
-        action_targets={"run": run_target, "cancel": cancel_target},
+        actions={
+            "run": lambda: clicks.__setitem__("run", clicks["run"] + 1),
+            "cancel": lambda: clicks.__setitem__("cancel", clicks["cancel"] + 1),
+        },
+        action_states=lambda: {"run": True},
         status="ready",
     )
 
