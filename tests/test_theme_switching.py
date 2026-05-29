@@ -38,3 +38,12 @@ def test_set_active_theme_changes_resolved_accent():
         for k in ("preprocessing", "displacement", "force", "stress", "batch")
     ) or after != before
     assert differs
+
+
+def test_status_states_trimmed_to_computed():
+    # 'stale' is never produced by StageDataStatusPanel.refresh(); drop it.
+    assert "stale" not in _ui_style.STATUS_COLORS
+    assert "stale" not in _ui_style.STATUS_GLYPHS
+    # The states that ARE produced/used must remain.
+    for s in ("not_started", "ready", "running", "done", "error"):
+        assert s in _ui_style.STATUS_COLORS

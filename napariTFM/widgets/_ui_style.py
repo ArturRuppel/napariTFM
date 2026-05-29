@@ -63,7 +63,6 @@ STATUS_COLORS = {
     "ready": "#2f80ed",
     "running": "#f4a261",
     "done": "#2a9d8f",
-    "stale": "#e9c46a",
     "error": "#d62828",
 }
 
@@ -72,7 +71,6 @@ STATUS_GLYPHS = {
     "missing_required": "✗",
     "missing_optional": "○",
     "running": "⟳",
-    "stale": "⚠",
     "error": "⚠",
 }
 
