@@ -1,3 +1,6 @@
+import pytest
+from qtpy.QtWidgets import QApplication, QGridLayout, QLabel
+
 from napariTFM.widgets._ui_style import (
     MUTED_TEXT_COLOR,
     STAGE_ACCENTS,
@@ -9,6 +12,11 @@ from napariTFM.widgets._ui_style import (
     stage_header_style,
     title_style,
 )
+
+
+@pytest.fixture
+def app():
+    return QApplication.instance() or QApplication([])
 
 
 def test_stage_accent_returns_palette_color_for_known_key():
@@ -79,3 +87,44 @@ def test_layout_constants_present():
     assert _ui_style.TINY_MARGIN == 2
     assert _ui_style.SECTION_MARGIN == 4
     assert _ui_style.TIGHT_SPACING == 4
+
+
+def test_section_grid_has_four_columns_with_stretchy_fields(app):
+    from napariTFM.widgets._ui_style import section_grid
+
+    grid = section_grid()
+    assert isinstance(grid, QGridLayout)
+    assert grid.columnStretch(0) == 0
+    assert grid.columnStretch(1) == 1
+    assert grid.columnStretch(2) == 0
+    assert grid.columnStretch(3) == 1
+
+
+def test_add_section_pair_row_places_both_pairs(app):
+    from napariTFM.widgets._ui_style import section_grid, add_section_pair_row
+
+    grid = section_grid()
+    add_section_pair_row(grid, 0, "Left", QLabel("L"), "Right", QLabel("R"))
+
+    assert grid.itemAtPosition(0, 0) is not None
+    assert grid.itemAtPosition(0, 2) is not None
+
+
+def test_add_section_pair_row_left_only_leaves_right_empty(app):
+    from napariTFM.widgets._ui_style import section_grid, add_section_pair_row
+
+    grid = section_grid()
+    add_section_pair_row(grid, 0, "Left", QLabel("L"))
+
+    assert grid.itemAtPosition(0, 0) is not None
+    assert grid.itemAtPosition(0, 2) is None
+
+
+def test_add_section_header_spans_all_four_columns(app):
+    from napariTFM.widgets._ui_style import section_grid, add_section_header
+
+    grid = section_grid()
+    header = add_section_header(grid, 0, QLabel("Title"))
+
+    assert header is not None
+    assert grid.itemAtPosition(0, 0) is grid.itemAtPosition(0, 3)

@@ -1,7 +1,7 @@
 import colorsys
 
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QStyle, QToolButton, QWidget
+from qtpy.QtWidgets import QGridLayout, QLabel, QStyle, QToolButton, QVBoxLayout, QWidget
 
 
 COMPACT_SPACING = 4
@@ -9,6 +9,8 @@ ICON_BUTTON_SIZE = 24
 TINY_MARGIN = 2
 SECTION_MARGIN = 4
 TIGHT_SPACING = 4
+DEFAULT_FIELD_SPACING = 8
+DEFAULT_ROW_SPACING = 4
 
 MUTED_TEXT_COLOR = "#999"
 
@@ -181,3 +183,60 @@ def status_indicator_style(status: str) -> str:
         " min-height: 10px;"
         " max-height: 10px;"
     )
+
+
+def section_grid() -> QGridLayout:
+    """A 4-column grid (label, field, label, field) where field columns
+    stretch — so sliders, combos, and labels fill the available width and
+    label columns stay aligned across all sections that share the grid."""
+    layout = QGridLayout()
+    layout.setHorizontalSpacing(DEFAULT_FIELD_SPACING)
+    layout.setVerticalSpacing(DEFAULT_ROW_SPACING)
+    layout.setColumnStretch(0, 0)
+    layout.setColumnStretch(1, 1)
+    layout.setColumnStretch(2, 0)
+    layout.setColumnStretch(3, 1)
+    return layout
+
+
+def add_section_header(grid, row, widget):
+    """Add a heading widget spanning all 4 columns of a section_grid."""
+    grid.addWidget(widget, row, 0, 1, 4)
+    return widget
+
+
+def add_section_full_row(grid, row, widget):
+    """Add a widget (separator, button row, …) spanning all 4 columns."""
+    grid.addWidget(widget, row, 0, 1, 4)
+    return widget
+
+
+def add_section_pair_row(grid, row, left_label, left_widget, right_label=None, right_widget=None):
+    """Add a row with up to two [label][widget] pairs. Widgets keep their
+    natural size policy (no fixed-width wrap) so sliders/combos can stretch."""
+    left_label_widget = _block_label(left_label)
+    _add_section_pair_cell(grid, row, 0, left_label_widget, left_widget)
+
+    right_label_widget = None
+    if right_widget is not None:
+        right_label_widget = _block_label(right_label or "")
+        _add_section_pair_cell(grid, row, 2, right_label_widget, right_widget)
+    return left_label_widget, left_widget, right_label_widget, right_widget
+
+
+def _add_section_pair_cell(grid, row, column, label_widget, widget):
+    container = QWidget()
+    layout = QVBoxLayout(container)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(1)
+    label_widget.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+    layout.addWidget(label_widget)
+    layout.addWidget(widget)
+    grid.addWidget(container, row, column, 1, 2)
+    return container
+
+
+def _block_label(text):
+    label = QLabel(text)
+    label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    return label
