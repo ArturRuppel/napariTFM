@@ -414,6 +414,7 @@ class MSMController(QObject):
 class MSMWidget(BaseAnalysisWidget):
     """Widget for Monolayer Stress Microscopy analysis."""
     stress_calculated = Signal(object)  # Emits stress analysis results
+    action_states_changed = Signal()  # Emitted when action enablement changes
 
     def __init__(
             self,
@@ -426,6 +427,9 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Store managers
         self.parameter_manager = parameter_manager
+
+        # Action enablement consumed by the stage header via the action contract
+        self._action_enabled = {"run": False, "preview": False, "cancel": True}
 
         # Get initial parameters from parameter manager
         self.msm_params = parameter_manager.get_msm_parameters()
@@ -485,19 +489,8 @@ class MSMWidget(BaseAnalysisWidget):
         row1 = QHBoxLayout()
         self.preview_mesh_btn = QPushButton("Preview Mesh")
         self.preview_mesh_btn.setToolTip("Generate and display a mesh preview for the current frame")
-        self.preview_frame_btn = QPushButton("Preview Current Frame")
-        self.preview_frame_btn.setToolTip("Calculate and visualize stress for the current frame only")
         row1.addWidget(self.preview_mesh_btn)
-        row1.addWidget(self.preview_frame_btn)
         layout.addLayout(row1)
-
-        self.analyze_btn = QPushButton("Calculate Stress Tensors")
-        self.analyze_btn.setToolTip("Calculate stress for all frames in the dataset")
-        layout.addWidget(self.analyze_btn)
-
-        self.cancel_btn = QPushButton("Cancel All Operations")
-        self.cancel_btn.setToolTip("Cancel the current operation")
-        layout.addWidget(self.cancel_btn)
 
         container.setLayout(layout)
         return container
@@ -527,9 +520,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Wire widget-owned action buttons to controller operations
         self.preview_mesh_btn.clicked.connect(self.controller.preview_mesh)
-        self.preview_frame_btn.clicked.connect(self.controller.preview_current_frame)
-        self.analyze_btn.clicked.connect(self.controller.start_analysis)
-        self.cancel_btn.clicked.connect(self.controller.cancel_all_operations)
 
         # Update enablement when the active layer changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
@@ -599,23 +589,37 @@ class MSMWidget(BaseAnalysisWidget):
         if param_name in stress_params:
             self.msm_params = self.parameter_manager.get_msm_parameters()
 
+    def action_states(self):
+        return dict(self._action_enabled)
+
+    def run_action(self):
+        self.controller.start_analysis()
+
+    def preview_action(self):
+        self.controller.preview_current_frame()
+
+    def cancel_action(self):
+        self.controller.cancel_all_operations()
+
     def _update_ui_state(self, event=None):
         """Update action button enablement based on available data."""
         has_force = self.data_manager.force_results is not None
         has_mask = self.data_manager.mask_stack is not None
 
         self.preview_mesh_btn.setEnabled(has_mask)
-        self.preview_frame_btn.setEnabled(has_force and has_mask)
-        self.analyze_btn.setEnabled(has_force and has_mask)
-        self.cancel_btn.setEnabled(True)
+        self._action_enabled["preview"] = has_force and has_mask
+        self._action_enabled["run"] = has_force and has_mask
+        self._action_enabled["cancel"] = True
+        self.action_states_changed.emit()
 
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze during processing."""
         if frozen:
             self.preview_mesh_btn.setEnabled(False)
-            self.preview_frame_btn.setEnabled(False)
-            self.analyze_btn.setEnabled(False)
-            self.cancel_btn.setEnabled(True)
+            self._action_enabled["preview"] = False
+            self._action_enabled["run"] = False
+            self._action_enabled["cancel"] = True
+            self.action_states_changed.emit()
         else:
             self._update_ui_state()
 
