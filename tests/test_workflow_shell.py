@@ -910,3 +910,44 @@ def test_completion_signal_triggers_single_refresh(monkeypatch, app):
 
     widget.force_widget.force_calculated.emit(object())
     assert calls["n"] == 1
+
+
+def test_get_set_state_round_trips_parameters(monkeypatch, app, tmp_path):
+    import importlib.util as _ilu
+
+    _pm_spec = _ilu.spec_from_file_location(
+        "napariTFM.utilities.parameter_manager_real",
+        Path(__file__).parent.parent / "napariTFM" / "utilities" / "parameter_manager.py",
+    )
+    _pm_mod = _ilu.module_from_spec(_pm_spec)
+    _pm_spec.loader.exec_module(_pm_mod)
+    ParameterManager = _pm_mod.ParameterManager
+
+    _dm_spec = _ilu.spec_from_file_location(
+        "napariTFM.utilities.data_manager_real",
+        Path(__file__).parent.parent / "napariTFM" / "utilities" / "data_manager.py",
+    )
+    _dm_mod = _ilu.module_from_spec(_dm_spec)
+    _dm_spec.loader.exec_module(_dm_mod)
+    DataManager = _dm_mod.DataManager
+
+    monkeypatch.setattr(_widget, "DataManager", DataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", ParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    for name in (
+        "PreprocessingWidget", "DisplacementAnalysisWidget",
+        "FTTCWidget", "MSMWidget", "BatchAnalysisWidget",
+    ):
+        monkeypatch.setattr(_widget, name, _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    widget.data_manager.set_output_dir(tmp_path)
+
+    widget.parameter_manager.set_parameter("rolling_ball_radius", 7)
+    state = widget.get_state()
+    assert state["parameters"]["rolling_ball_radius"] == 7
+    assert state["output_dir"] == str(tmp_path)
+
+    widget.parameter_manager.set_parameter("rolling_ball_radius", 0)
+    widget.set_state(state)
+    assert widget.parameter_manager.get_parameter("rolling_ball_radius") == 7

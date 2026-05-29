@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any
 
@@ -24,6 +25,9 @@ from napariTFM.widgets._ui_style import title_style
 from napariTFM.widgets._project_section import ProjectSection
 
 logger = logging.getLogger(__name__)
+
+CONFIG_FILENAME = "napariTFM_config.json"
+STATE_VERSION = 1
 
 
 STAGE_DATA_ARTIFACTS = {
@@ -343,6 +347,7 @@ class SpinBoxEventFilter(QObject):
 class napariTFMWidget(QWidget):
     def __init__(self, napari_viewer: "napari.Viewer"):
         super().__init__()
+        self._applying_state = False
         self.viewer = napari_viewer
 
         # Create and install event filter
@@ -581,6 +586,37 @@ class napariTFMWidget(QWidget):
         for key, panel in self._stage_status_panels_by_key.items():
             status = panel.refresh()
             self._stage_sections_by_key[key].set_status(status)
+
+    def get_state(self) -> dict:
+        output_dir = self.data_manager.output_dir
+        return {
+            "version": STATE_VERSION,
+            "parameters": self.parameter_manager.get_all_parameters(),
+            "output_dir": str(output_dir) if output_dir else None,
+        }
+
+    def set_state(self, state: dict) -> None:
+        if not isinstance(state, dict):
+            return
+        self._applying_state = True
+        try:
+            params = state.get("parameters", {})
+            if isinstance(params, dict):
+                valid = set(self.parameter_manager.get_all_parameters())
+                for name, value in params.items():
+                    if name not in valid:
+                        continue
+                    try:
+                        if name == "registration_mode" and isinstance(value, str):
+                            value = value.lower()
+                        self.parameter_manager.set_parameter(name, value)
+                    except Exception as exc:
+                        logger.warning("Skipped parameter %s: %s", name, exc)
+            # output_dir is intentionally NOT re-applied: the config lives
+            # inside output_dir, so the dir is already known when we load it.
+        finally:
+            self._applying_state = False
+        self.refresh()
 
     def _save_generated_artifact(self, key: str):
         try:
