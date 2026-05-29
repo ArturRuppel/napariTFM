@@ -10,6 +10,7 @@ from napariTFM.widgets._ui_style import (
     stage_header_style,
     status_indicator_style,
 )
+from napariTFM.widgets._collapsible_section import CollapsibleSection
 
 
 class _ActionStateSync(QObject):
@@ -97,13 +98,16 @@ class StageSection(QWidget):
         for button in [self.params_btn, self.run_cancel_btn, self.preview_button]:
             header_layout.addWidget(button)
 
-        self._parameter_content = QWidget()
-        parameter_layout = QVBoxLayout()
-        parameter_layout.setContentsMargins(0, 0, 0, 0)
-        parameter_layout.setSpacing(COMPACT_SPACING)
-        self._parameter_content.setLayout(parameter_layout)
         if self.parameter_panel is not None:
-            parameter_layout.addWidget(self.parameter_panel)
+            self._param_section = CollapsibleSection(
+                self._title,
+                self.parameter_panel,
+                expanded=False,
+                accent_color=self._accent,
+            )
+            self._param_section.set_header_visible(False)
+        else:
+            self._param_section = None
 
         self._content = QWidget()
         content_layout = QVBoxLayout()
@@ -115,7 +119,8 @@ class StageSection(QWidget):
         layout.addLayout(header_layout)
         if self.status_panel is not None:
             layout.addWidget(self.status_panel)
-        layout.addWidget(self._parameter_content)
+        if self._param_section is not None:
+            layout.addWidget(self._param_section)
         layout.addWidget(self._content)
 
         # Body (action buttons / status) is always visible.
@@ -125,10 +130,9 @@ class StageSection(QWidget):
         self.set_status(status)
 
         # The params button is the ONLY collapsible: it toggles the parameter
-        # panel. Sections without a panel simply have no params affordance.
-        has_panel = self.parameter_panel is not None
+        # section. Sections without a panel simply have no params affordance.
+        has_panel = self._param_section is not None
         self.params_btn.setVisible(has_panel)
-        self._parameter_content.setVisible(False)
         self.params_btn.setChecked(parameters_expanded if has_panel else False)
         if has_panel:
             self._set_parameter_panel_expanded(parameters_expanded)
@@ -157,6 +161,8 @@ class StageSection(QWidget):
         """Re-accent this section's header (used by the theme picker)."""
         self._accent = accent
         self.header_label.setStyleSheet(stage_header_style(accent))
+        if self._param_section is not None:
+            self._param_section.set_accent_color(accent)
 
     def _create_action_button(self, action: str, standard_icon: QStyle.StandardPixmap):
         button = make_icon_button(
@@ -211,6 +217,5 @@ class StageSection(QWidget):
 
     def _set_parameter_panel_expanded(self, expanded: bool):
         self.params_btn.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
-        self._parameter_content.setVisible(expanded)
-        if self.parameter_panel is not None:
-            self.parameter_panel.setVisible(expanded)
+        if self._param_section is not None:
+            self._param_section._toggle.setChecked(expanded)
