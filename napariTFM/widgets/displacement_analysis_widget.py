@@ -337,6 +337,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     """Widget for analyzing bead displacements using optical flow."""
 
     displacement_calculated = Signal(object)
+    action_states_changed = Signal()
 
     # region === Initialization
     def __init__(
@@ -357,6 +358,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             parameter_manager=parameter_manager,
             visualization_manager=visualization_manager,
         )
+
+        self._action_enabled = {"run": False, "preview": False, "cancel": True}
 
         # Set up the UI
         self._setup_ui()
@@ -403,29 +406,9 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         return container
 
     def _create_action_row(self) -> QWidget:
-        """Build widget-owned action buttons (proxied by the stage header)."""
+        """Action buttons live on the stage header; this container is empty."""
         container = QWidget()
         layout = QVBoxLayout()
-
-        row = QHBoxLayout()
-        self.preview_btn = QPushButton("Preview Current Frame")
-        self.preview_btn.setToolTip(
-            "Calculate and visualize displacement for the current frame only"
-        )
-        self.process_btn = QPushButton("Calculate All Frames")
-        self.process_btn.setToolTip(
-            "Calculate displacements for all frames in the dataset"
-        )
-        self.preview_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        self.process_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        row.addWidget(self.preview_btn)
-        row.addWidget(self.process_btn)
-        layout.addLayout(row)
-
-        self.cancel_btn = QPushButton("Cancel Operation")
-        self.cancel_btn.setToolTip("Cancel the current operation")
-        layout.addWidget(self.cancel_btn)
-
         container.setLayout(layout)
         return container
 
@@ -457,17 +440,24 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.controller.data_updated.connect(self._update_ui_state)
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
 
-        # Wire widget-owned action buttons to controller operations
-        self.preview_btn.clicked.connect(self.controller.preview_displacement)
-        self.process_btn.clicked.connect(self.controller.calculate_all_frames)
-        self.cancel_btn.clicked.connect(self.controller.cancel_operation)
-
         # Add layer selection monitoring
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
 
     # endregion
 
     # region === State Management
+    def action_states(self):
+        return dict(self._action_enabled)
+
+    def run_action(self):
+        self.controller.calculate_all_frames()
+
+    def preview_action(self):
+        self.controller.preview_displacement()
+
+    def cancel_action(self):
+        self.controller.cancel_operation()
+
     def _update_status(self, progress: int, message: str):
         """Update status display."""
         self.progress_bar.setValue(progress)
@@ -479,16 +469,18 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         has_beads = self.data_manager.preprocessed_bead_stack is not None
 
         can_analyze = has_reference and has_beads
-        self.preview_btn.setEnabled(can_analyze)
-        self.process_btn.setEnabled(can_analyze)
-        self.cancel_btn.setEnabled(True)
+        self._action_enabled["preview"] = can_analyze
+        self._action_enabled["run"] = can_analyze
+        self._action_enabled["cancel"] = True
+        self.action_states_changed.emit()
 
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze during processing."""
-        self.preview_btn.setEnabled(not frozen)
-        self.process_btn.setEnabled(not frozen)
+        self._action_enabled["preview"] = not frozen
+        self._action_enabled["run"] = not frozen
         # Cancel button always enabled
-        self.cancel_btn.setEnabled(True)
+        self._action_enabled["cancel"] = True
+        self.action_states_changed.emit()
 
     def load_active_layer(self, data_type: str):
         """Delegate input-layer loading to the controller (called by the shell)."""
