@@ -1,11 +1,12 @@
 import colorsys
 
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QGridLayout, QLabel, QStyle, QToolButton, QVBoxLayout, QWidget
+from qtpy.QtWidgets import QGridLayout, QLabel, QSizePolicy, QStyle, QToolButton, QVBoxLayout, QWidget
 
 
 COMPACT_SPACING = 4
 ICON_BUTTON_SIZE = 24
+STAGE_ACTION_BUTTON_SIZE = 22
 TINY_MARGIN = 2
 SECTION_MARGIN = 4
 TIGHT_SPACING = 4
@@ -138,17 +139,87 @@ def muted_accent(hex_value: str) -> str:
     )
 
 
+def _hex_to_rgb(hex_value: str) -> tuple[int, int, int]:
+    hex_value = hex_value.lstrip("#")
+    return (
+        int(hex_value[0:2], 16),
+        int(hex_value[2:4], 16),
+        int(hex_value[4:6], 16),
+    )
+
+
 def muted_stage_accent(key: str) -> str:
     """Return a muted variant of a stage accent."""
     return muted_accent(stage_accent(key))
 
 
 def stage_header_style(accent: str) -> str:
-    """Stylesheet for a stage section's accented header label."""
+    """Accent-tinted pill style for a stage section's header title."""
     return (
-        f"font-weight: bold; color: {accent}; "
-        f"border-left: 3px solid {accent}; padding-left: 6px;"
+        "font-weight: bold; "
+        "font-size: 9pt; "
+        f"color: {muted_accent(accent)}; "
+        f"background-color: {stage_header_pill_background(accent)}; "
+        "border-radius: 4px; "
+        "padding: 1px 6px;"
     )
+
+
+def stage_header_pill_background(accent: str, alpha: int = 38) -> str:
+    """Translucent rgba background for a stage header pill, from the muted accent."""
+    r, g, b = _hex_to_rgb(muted_accent(accent))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+def stage_header_disabled_action_color(accent: str) -> str:
+    """Dimmed glyph color for a disabled stage action button."""
+    r, g, b = _hex_to_rgb(muted_accent(accent))
+    h, l, s = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
+    s *= 0.55
+    l = max(0.0, l * 0.62)
+    r_out, g_out, b_out = colorsys.hls_to_rgb(h, l, s)
+    return "#{:02x}{:02x}{:02x}".format(
+        round(r_out * 255), round(g_out * 255), round(b_out * 255)
+    )
+
+
+def stage_header_action_button_style(accent: str) -> str:
+    """Pill stylesheet for a glyph QToolButton in a stage header."""
+    color = muted_accent(accent)
+    disabled = stage_header_disabled_action_color(accent)
+    return (
+        "QToolButton { "
+        "font-weight: bold; font-size: 9pt; "
+        f"color: {color}; "
+        f"background-color: {stage_header_pill_background(accent)}; "
+        "border: none; border-radius: 4px; padding: 0; margin: 0; "
+        "text-align: center; } "
+        "QToolButton:hover { "
+        f"background-color: {stage_header_pill_background(accent, alpha=58)}; }} "
+        "QToolButton:checked { "
+        f"background-color: {stage_header_pill_background(accent, alpha=82)}; }} "
+        "QToolButton:disabled { "
+        f"color: {disabled}; "
+        f"background-color: {stage_header_pill_background(accent, alpha=28)}; }} "
+        "QToolButton:disabled:checked { "
+        f"color: {disabled}; "
+        f"background-color: {stage_header_pill_background(accent, alpha=44)}; }}"
+    )
+
+
+def make_stage_action_button(
+    owner, object_name: str, tooltip: str, glyph: str, accent: str, checkable: bool = False
+) -> QToolButton:
+    """Build a glyph QToolButton styled as a CellFlow-style accent pill."""
+    button = QToolButton(owner)
+    button.setText(glyph)
+    button.setObjectName(object_name)
+    button.setToolTip(tooltip)
+    button.setCheckable(checkable)
+    button.setFixedSize(STAGE_ACTION_BUTTON_SIZE, STAGE_ACTION_BUTTON_SIZE)
+    button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+    button.setStyleSheet(stage_header_action_button_style(accent))
+    return button
 
 
 def title_style() -> str:
