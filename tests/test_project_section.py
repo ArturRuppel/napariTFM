@@ -105,3 +105,16 @@ def test_project_section_exposes_output_directory_button(app):
 
     assert isinstance(section.choose_output_dir_btn, QPushButton)
     assert section.choose_output_dir_btn.objectName() == "project_choose_output_dir_button"
+
+
+def test_general_body_uses_section_grid_not_groupbox(app):
+    from qtpy.QtWidgets import QGridLayout, QGroupBox
+
+    section = ProjectSection(_StubParameterManager())
+
+    assert section.body.findChildren(QGroupBox) == []
+    grid = section.body.findChild(QGridLayout)
+    assert grid is not None
+    # pixel_size (col 0) and frame_interval (col 2) share the first row
+    assert grid.itemAtPosition(0, 0) is not None
+    assert grid.itemAtPosition(0, 2) is not None

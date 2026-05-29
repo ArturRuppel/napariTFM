@@ -8,12 +8,11 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QVBoxLayout,
     QWidget,
 )
 
 from napariTFM.widgets._stage_section import StageSection
-from napariTFM.widgets._ui_style import danger_text_style
+from napariTFM.widgets._ui_style import danger_text_style, section_grid, add_section_pair_row, add_section_full_row
 
 
 _GENERAL_SPECS = [
@@ -31,14 +30,12 @@ class _GeneralBody(QWidget):
         self.data_manager = data_manager
         self.parameter_controls: dict[str, QDoubleSpinBox] = {}
 
-        layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-        self.setLayout(layout)
+        grid = section_grid()
+        grid.setContentsMargins(8, 8, 8, 8)
+        self.setLayout(grid)
 
+        controls = []
         for name, label, min_val, max_val, step, decimals in _GENERAL_SPECS:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(label))
             control = QDoubleSpinBox()
             control.setRange(min_val, max_val)
             control.setSingleStep(step)
@@ -49,8 +46,13 @@ class _GeneralBody(QWidget):
                 lambda value, n=name: parameter_manager.set_ui_parameter(n, value)
             )
             self.parameter_controls[name] = control
-            row.addWidget(control)
-            layout.addLayout(row)
+            controls.append((label, control))
+
+        add_section_pair_row(
+            grid, 0,
+            controls[0][0], controls[0][1],
+            controls[1][0], controls[1][1],
+        )
 
         self.output_dir_label = QLabel("No output directory")
         self.output_dir_label.setObjectName("project_output_dir_label")
@@ -58,10 +60,12 @@ class _GeneralBody(QWidget):
         self.choose_output_dir_btn.setObjectName("project_choose_output_dir_button")
         self.choose_output_dir_btn.clicked.connect(self._choose_output_dir)
 
-        output_row = QHBoxLayout()
+        output_container = QWidget()
+        output_row = QHBoxLayout(output_container)
+        output_row.setContentsMargins(0, 0, 0, 0)
         output_row.addWidget(self.choose_output_dir_btn)
         output_row.addWidget(self.output_dir_label, stretch=1)
-        layout.addLayout(output_row)
+        add_section_full_row(grid, 1, output_container)
 
         self.save_params_btn = QPushButton("Save Parameters")
         self.load_params_btn = QPushButton("Load Parameters")
@@ -69,15 +73,19 @@ class _GeneralBody(QWidget):
         self.clear_data_btn = QPushButton("Clear All Data")
         self.clear_data_btn.setStyleSheet(danger_text_style())
 
-        button_row1 = QHBoxLayout()
+        button_container1 = QWidget()
+        button_row1 = QHBoxLayout(button_container1)
+        button_row1.setContentsMargins(0, 0, 0, 0)
         button_row1.addWidget(self.save_params_btn)
         button_row1.addWidget(self.load_params_btn)
-        layout.addLayout(button_row1)
+        add_section_full_row(grid, 2, button_container1)
 
-        button_row2 = QHBoxLayout()
+        button_container2 = QWidget()
+        button_row2 = QHBoxLayout(button_container2)
+        button_row2.setContentsMargins(0, 0, 0, 0)
         button_row2.addWidget(self.reset_params_btn)
         button_row2.addWidget(self.clear_data_btn)
-        layout.addLayout(button_row2)
+        add_section_full_row(grid, 3, button_container2)
 
         parameter_manager.parameter_changed.connect(self._sync_parameter)
         if self.data_manager is not None:
