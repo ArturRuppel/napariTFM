@@ -47,3 +47,20 @@ def test_status_states_trimmed_to_computed():
     # The states that ARE produced/used must remain.
     for s in ("not_started", "ready", "running", "done", "error"):
         assert s in _ui_style.STATUS_COLORS
+
+
+@pytest.fixture
+def app():
+    from qtpy.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+def test_stage_section_set_accent_restyles_header(app):
+    from qtpy.QtWidgets import QWidget
+    from napariTFM.widgets._stage_section import StageSection
+
+    section = StageSection("Force Analysis", QWidget(), accent="#111111")
+    assert "#111111" in section.header_label.styleSheet()
+    section.set_accent("#abcdef")
+    assert "#abcdef" in section.header_label.styleSheet()

@@ -170,6 +170,11 @@ class StageSection(QWidget):
             )
             self.run_cancel_btn.setToolTip(f"Run {self._title}")
 
+    def set_accent(self, accent: str) -> None:
+        """Re-accent this section's header (used by the theme picker)."""
+        self._accent = accent
+        self.header_label.setStyleSheet(stage_header_style(accent))
+
     def _create_action_button(self, action: str, standard_icon: QStyle.StandardPixmap):
         button = make_icon_button(
             self,
