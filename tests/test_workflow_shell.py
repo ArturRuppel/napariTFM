@@ -127,6 +127,7 @@ class _StubStageWidget(QWidget):
     displacement_calculated = Signal(object)
     force_calculated = Signal(object)
     stress_calculated = Signal(object)
+    action_states_changed = Signal()
 
     def __init__(self, *args):
         super().__init__()
@@ -147,9 +148,27 @@ class _StubStageWidget(QWidget):
         self.loaded_active_layers = []
         self.loaded_files = []
         self.update_count = 0
+        self.action_calls = {"run": 0, "preview": 0, "cancel": 0}
+        self._action_states = {"run": False, "preview": False}
 
     def _update_ui_state(self):
         self.update_count += 1
+
+    def run_action(self):
+        self.action_calls["run"] += 1
+
+    def preview_action(self):
+        self.action_calls["preview"] += 1
+
+    def cancel_action(self):
+        self.action_calls["cancel"] += 1
+
+    def action_states(self):
+        return dict(self._action_states)
+
+    def set_action_states(self, **states):
+        self._action_states.update(states)
+        self.action_states_changed.emit()
 
     def load_active_layer(self, role):
         self.loaded_active_layers.append(role)
@@ -229,11 +248,13 @@ def test_stage_section_exposes_header_actions_with_stable_names(app):
     section = _widget._StageSection(
         "Preprocessing",
         child,
-        action_targets={
-            "run": child.process_btn,
-            "preview": child.preview_btn,
-            "cancel": child.cancel_btn,
+        actions={
+            "run": child.run_action,
+            "preview": child.preview_action,
+            "cancel": child.cancel_action,
         },
+        action_states=child.action_states,
+        action_states_changed=child.action_states_changed,
     )
 
     assert section.params_btn.objectName() == "stage_preprocessing_params_button"
@@ -266,19 +287,22 @@ def test_stage_section_applies_stage_accent_to_header(app):
     assert "#2a9d8f" in section.header_label.styleSheet()
 
 
-def test_stage_section_header_action_state_follows_child_button(app):
+def test_stage_section_header_action_state_follows_action_states(app):
     child = _StubStageWidget()
-    child.process_btn.setEnabled(False)
 
     section = _widget._StageSection(
         "Preprocessing",
         child,
-        action_targets={"run": child.process_btn},
+        actions={"run": child.run_action},
+        action_states=child.action_states,
+        action_states_changed=child.action_states_changed,
     )
 
+    # Run starts disabled (action_states reports run=False).
     assert not section.run_cancel_btn.isEnabled()
 
-    child.process_btn.setEnabled(True)
+    # Emitting the contract signal with run enabled lights up the header button.
+    child.set_action_states(run=True)
     app.processEvents()
 
     assert section.run_cancel_btn.isEnabled()
@@ -299,29 +323,32 @@ def test_stage_section_status_indicator_remains_visible_when_collapsed(app):
     assert section.status_indicator.isVisible()
 
 
-def test_stage_section_header_actions_proxy_child_buttons(app):
+def test_stage_section_header_actions_invoke_contract_handlers(app):
     child = _StubStageWidget()
-    clicks = {"run": 0, "preview": 0, "cancel": 0}
-    child.process_btn.clicked.connect(lambda: clicks.__setitem__("run", clicks["run"] + 1))
-    child.preview_btn.clicked.connect(lambda: clicks.__setitem__("preview", clicks["preview"] + 1))
-    child.cancel_btn.clicked.connect(lambda: clicks.__setitem__("cancel", clicks["cancel"] + 1))
 
     section = _widget._StageSection(
         "Preprocessing",
         child,
-        action_targets={
-            "run": child.process_btn,
-            "preview": child.preview_btn,
-            "cancel": child.cancel_btn,
+        actions={
+            "run": child.run_action,
+            "preview": child.preview_action,
+            "cancel": child.cancel_action,
         },
+        action_states=child.action_states,
+        action_states_changed=child.action_states_changed,
     )
+
+    # Enable run + preview so the header buttons accept clicks.
+    child.set_action_states(run=True, preview=True)
+    app.processEvents()
 
     section.run_cancel_btn.click()
     section.preview_button.click()
+    # While running, the run/cancel button invokes the cancel handler.
     section.set_status("running")
     section.run_cancel_btn.click()
 
-    assert clicks == {"run": 1, "preview": 1, "cancel": 1}
+    assert child.action_calls == {"run": 1, "preview": 1, "cancel": 1}
 
 
 def test_stage_section_disables_unsupported_actions_and_params_toggles(app):
@@ -355,7 +382,7 @@ def test_stage_section_params_toggles_inline_parameter_panel_when_provided(app):
     assert child.isVisible()
     assert section._content.isVisible()
     assert not parameter_panel.isVisible()
-    assert not section._parameter_content.isVisible()
+    assert not section._param_section.is_expanded
 
     section.params_btn.click()
     app.processEvents()
@@ -364,7 +391,7 @@ def test_stage_section_params_toggles_inline_parameter_panel_when_provided(app):
     assert child.isVisible()
     assert section._content.isVisible()
     assert parameter_panel.isVisible()
-    assert section._parameter_content.isVisible()
+    assert section._param_section.is_expanded
 
 
 def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
@@ -440,14 +467,13 @@ def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app)
     app.processEvents()
 
     displacement_section = widget._stage_sections_by_key["displacement"]
-    clicks = {"run": 0}
-    widget.displacement_widget.process_btn.clicked.connect(
-        lambda: clicks.__setitem__("run", clicks["run"] + 1)
-    )
+    # Header run drives the widget's run_action via the signal contract.
+    widget.displacement_widget.set_action_states(run=True)
+    app.processEvents()
 
     displacement_section.run_cancel_btn.click()
 
-    assert clicks["run"] == 1
+    assert widget.displacement_widget.action_calls["run"] == 1
 
 
 def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, app):
@@ -464,17 +490,27 @@ def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, 
     widget.show()
     app.processEvents()
 
-    cases = [
-        ("preprocessing", widget.preprocessing_widget.process_btn),
-        ("force", widget.force_widget.process_btn),
-        ("stress", widget.msm_widget.analyze_btn),
-        ("batch", widget.batch_widget.run_analysis_btn),
+    # Contract stages: header run invokes the widget's run_action handler.
+    contract_cases = [
+        ("preprocessing", widget.preprocessing_widget),
+        ("force", widget.force_widget),
+        ("stress", widget.msm_widget),
     ]
-    for key, run_target in cases:
-        clicks = {"n": 0}
-        run_target.clicked.connect(lambda *_, c=clicks: c.__setitem__("n", c["n"] + 1))
+    for key, stage_widget in contract_cases:
+        stage_widget.set_action_states(run=True)
+        app.processEvents()
         widget._stage_sections_by_key[key].run_cancel_btn.click()
-        assert clicks["n"] == 1, f"{key} header run button did not trigger its widget action"
+        assert stage_widget.action_calls["run"] == 1, (
+            f"{key} header run button did not trigger its widget run_action"
+        )
+
+    # Batch keeps its own run button; header run clicks it (always enabled).
+    batch_clicks = {"n": 0}
+    widget.batch_widget.run_analysis_btn.clicked.connect(
+        lambda *_: batch_clicks.__setitem__("n", batch_clicks["n"] + 1)
+    )
+    widget._stage_sections_by_key["batch"].run_cancel_btn.click()
+    assert batch_clicks["n"] == 1, "batch header run button did not click its run button"
 
 
 def test_main_widget_stress_header_preview_wires_to_frame_preview(monkeypatch, app):
@@ -491,18 +527,35 @@ def test_main_widget_stress_header_preview_wires_to_frame_preview(monkeypatch, a
     widget.show()
     app.processEvents()
 
-    clicks = {"n": 0}
-    widget.msm_widget.preview_frame_btn.clicked.connect(
-        lambda *_: clicks.__setitem__("n", clicks["n"] + 1)
-    )
+    # Header preview invokes the stress widget's preview_action via the contract.
+    widget.msm_widget.set_action_states(preview=True)
+    app.processEvents()
     widget._stage_sections_by_key["stress"].preview_button.click()
 
-    assert clicks["n"] == 1
+    assert widget.msm_widget.action_calls["preview"] == 1
 
 
 def test_main_widget_does_not_use_action_target_reflection(app):
     assert not hasattr(_widget.napariTFMWidget, "_find_stage_action_targets")
     assert not hasattr(_widget.napariTFMWidget, "_first_existing_widget")
+
+
+def test_stage_sections_use_signal_action_contract(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    main_widget = _widget.napariTFMWidget(object())
+
+    sec = main_widget._stage_sections_by_key["displacement"]
+    assert "run" in sec._actions and "preview" in sec._actions
+    assert sec._action_states is not None
+    assert not hasattr(sec, "_action_state_syncs")
 
 
 def test_workflow_parameter_panel_exposes_one_control_per_managed_parameter(app):

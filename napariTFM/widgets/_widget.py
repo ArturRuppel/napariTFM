@@ -466,52 +466,59 @@ class napariTFMWidget(QWidget):
                 self.preprocessing_widget,
                 status_panel=self._stage_status_panels_by_key["preprocessing"],
                 parameter_panel=self._stage_parameter_panels_by_key.get("preprocessing"),
-                action_targets={
-                    "run": self.preprocessing_widget.process_btn,
-                    "preview": self.preprocessing_widget.preview_check,
-                    "cancel": self.preprocessing_widget.cancel_btn,
+                actions={
+                    "run": self.preprocessing_widget.run_action,
+                    "preview": self.preprocessing_widget.preview_action,
+                    "cancel": self.preprocessing_widget.cancel_action,
                 },
+                action_states=self.preprocessing_widget.action_states,
+                action_states_changed=self.preprocessing_widget.action_states_changed,
             ),
             "displacement": _StageSection(
                 "Displacement",
                 self.displacement_widget,
                 status_panel=self._stage_status_panels_by_key["displacement"],
                 parameter_panel=self._stage_parameter_panels_by_key.get("displacement"),
-                action_targets={
-                    "run": self.displacement_widget.process_btn,
-                    "preview": self.displacement_widget.preview_btn,
-                    "cancel": self.displacement_widget.cancel_btn,
+                actions={
+                    "run": self.displacement_widget.run_action,
+                    "preview": self.displacement_widget.preview_action,
+                    "cancel": self.displacement_widget.cancel_action,
                 },
+                action_states=self.displacement_widget.action_states,
+                action_states_changed=self.displacement_widget.action_states_changed,
             ),
             "force": _StageSection(
                 "Force Analysis",
                 self.force_widget,
                 status_panel=self._stage_status_panels_by_key["force"],
                 parameter_panel=self._stage_parameter_panels_by_key.get("force"),
-                action_targets={
-                    "run": self.force_widget.process_btn,
-                    "preview": self.force_widget.preview_btn,
-                    "cancel": self.force_widget.cancel_btn,
+                actions={
+                    "run": self.force_widget.run_action,
+                    "preview": self.force_widget.preview_action,
+                    "cancel": self.force_widget.cancel_action,
                 },
+                action_states=self.force_widget.action_states,
+                action_states_changed=self.force_widget.action_states_changed,
             ),
             "stress": _StageSection(
                 "Stress Analysis",
                 self.msm_widget,
                 status_panel=self._stage_status_panels_by_key["stress"],
                 parameter_panel=self._stage_parameter_panels_by_key.get("stress"),
-                action_targets={
-                    "run": self.msm_widget.analyze_btn,
-                    "preview": self.msm_widget.preview_frame_btn,
-                    "cancel": self.msm_widget.cancel_btn,
+                actions={
+                    "run": self.msm_widget.run_action,
+                    "preview": self.msm_widget.preview_action,
+                    "cancel": self.msm_widget.cancel_action,
                 },
+                action_states=self.msm_widget.action_states,
+                action_states_changed=self.msm_widget.action_states_changed,
             ),
             "batch": _StageSection(
                 "Batch Analysis",
                 self.batch_widget,
                 status_panel=self._stage_status_panels_by_key["batch"],
-                action_targets={
-                    "run": self.batch_widget.run_analysis_btn,
-                },
+                actions={"run": self.batch_widget.run_analysis_btn.click},
+                action_states=lambda: {"run": True},
             ),
         }
         self._stage_sections = list(self._stage_sections_by_key.values())
