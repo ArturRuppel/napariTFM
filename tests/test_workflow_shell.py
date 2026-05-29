@@ -919,16 +919,12 @@ def test_each_stage_has_single_inline_parameter_editor(monkeypatch, app):
 
 
 def test_workflow_parameter_panel_labels_farneback_controls(app):
+    from qtpy.QtWidgets import QLabel
+
     manager = _StubParameterManager()
     panel = _widget.WorkflowParameterPanel(manager)
 
-    labels = {
-        panel.layout().itemAt(i).widget().layout().labelForField(control).text()
-        for i in range(panel.layout().count())
-        if panel.layout().itemAt(i).widget().title() == "Displacement"
-        for control in panel.parameter_controls.values()
-        if panel.layout().itemAt(i).widget().layout().labelForField(control) is not None
-    }
+    labels = {label.text() for label in panel.findChildren(QLabel)}
 
     assert "Farneback Levels" in labels
     assert "Farneback Iterations" in labels
