@@ -123,7 +123,7 @@ class ProjectSection(StageSection):
 
     def __init__(self, parameter_manager, data_manager=None):
         body = _GeneralBody(parameter_manager, data_manager)
-        super().__init__("Project", body, expanded=True, accent=None)
+        super().__init__("Project", body, accent=None)
         self.body = body
         # Project is not a workflow stage; hide the run/preview action buttons.
         self.run_cancel_btn.setVisible(False)

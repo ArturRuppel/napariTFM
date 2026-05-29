@@ -6,7 +6,6 @@ from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QStyle, QVBoxLayout
 from napariTFM.widgets._ui_style import (
     COMPACT_SPACING,
     make_icon_button,
-    muted_stage_accent,
     stage_accent,
     stage_header_style,
     status_indicator_style,
@@ -50,7 +49,6 @@ class StageSection(QWidget):
         self,
         title: str,
         child: QWidget,
-        expanded: bool = False,
         action_targets: dict[str, QWidget] | None = None,
         status: str = "not_started",
         accent: str | None = None,
@@ -68,11 +66,7 @@ class StageSection(QWidget):
         if accent is not None:
             self._accent = accent
         else:
-            inherited = self._find_ancestor_accent()
-            if inherited is not None:
-                self._accent = inherited
-            else:
-                self._accent = stage_accent(self._slug)
+            self._accent = stage_accent(self._slug)
         self._action_state_syncs: list[_ActionStateSync] = []
 
         layout = QVBoxLayout()
@@ -123,37 +117,26 @@ class StageSection(QWidget):
             layout.addWidget(self.status_panel)
         layout.addWidget(self._parameter_content)
         layout.addWidget(self._content)
-        if self.parameter_panel is None:
-            self._parameter_content.setVisible(False)
+
+        # Body (action buttons / status) is always visible.
+        self._content.setVisible(True)
+        self._child.setVisible(True)
 
         self.set_status(status)
-        self._set_expanded(expanded)
-        if self.parameter_panel is None:
-            self.params_btn.setChecked(expanded)
-        else:
-            self.params_btn.setChecked(parameters_expanded)
+
+        # The params button is the ONLY collapsible: it toggles the parameter
+        # panel. Sections without a panel simply have no params affordance.
+        has_panel = self.parameter_panel is not None
+        self.params_btn.setVisible(has_panel)
+        self._parameter_content.setVisible(False)
+        self.params_btn.setChecked(parameters_expanded if has_panel else False)
+        if has_panel:
             self._set_parameter_panel_expanded(parameters_expanded)
 
     @property
     def _slug(self) -> str:
         slug = re.sub(r"[^a-z0-9]+", "_", self._title.lower()).strip("_")
         return slug or "stage"
-
-    def _find_ancestor_accent(self) -> str | None:
-        """Walk up the Qt parent chain for a StageSection ancestor's muted accent.
-
-        Currently dormant: StageSection is always constructed before being
-        reparented, so self.parent() is None at __init__. The method is kept
-        for callers that re-resolve the accent after reparenting (e.g., a
-        future move-section-to-new-parent API). add_inner_section bypasses
-        this by passing accent= directly to the inner constructor.
-        """
-        parent = self.parent()
-        while parent is not None:
-            if isinstance(parent, StageSection):
-                return muted_stage_accent(parent._slug)
-            parent = parent.parent()
-        return None
 
     def set_status(self, status: str):
         self._status = status
@@ -200,10 +183,7 @@ class StageSection(QWidget):
             QStyle.SP_FileDialogDetailedView,
         )
         button.setCheckable(True)
-        if self.parameter_panel is None:
-            button.toggled.connect(self._set_expanded)
-        else:
-            button.toggled.connect(self._set_parameter_panel_expanded)
+        button.toggled.connect(self._set_parameter_panel_expanded)
         return button
 
     def _create_run_cancel_button(self):
@@ -229,33 +209,8 @@ class StageSection(QWidget):
         if target is not None:
             target.click()
 
-    def _set_expanded(self, expanded: bool):
-        self.params_btn.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
-        self._content.setVisible(expanded)
-        self._child.setVisible(expanded)
-
     def _set_parameter_panel_expanded(self, expanded: bool):
         self.params_btn.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self._parameter_content.setVisible(expanded)
         if self.parameter_panel is not None:
             self.parameter_panel.setVisible(expanded)
-
-    def add_inner_section(
-        self,
-        title: str,
-        child: QWidget,
-        expanded: bool = False,
-    ) -> "StageSection":
-        """Create a nested StageSection inside this section's content area.
-
-        The inner section is rendered with a muted variant of this section's
-        accent (CellFlow-style accent inheritance).
-        """
-        inner = StageSection(
-            title,
-            child,
-            expanded=expanded,
-            accent=muted_stage_accent(self._slug),
-        )
-        self._content.layout().addWidget(inner)
-        return inner
