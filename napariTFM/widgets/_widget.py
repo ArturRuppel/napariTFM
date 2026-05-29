@@ -23,6 +23,7 @@ from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStat
 from napariTFM.widgets._stage_section import StageSection
 from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme
 from napariTFM.widgets._param_controls import dslider, islider
+from superqt import QLabeledDoubleSlider, QLabeledSlider
 from napariTFM.widgets._project_section import ProjectSection
 
 logger = logging.getLogger(__name__)
@@ -330,7 +331,7 @@ _StageSection = StageSection
 class SpinBoxEventFilter(QObject):
     def eventFilter(self, obj, event):
         # Check for all spinnable input widgets
-        if (isinstance(obj, (QSpinBox, QDoubleSpinBox, QComboBox)) and
+        if (isinstance(obj, (QSpinBox, QDoubleSpinBox, QComboBox, QLabeledSlider, QLabeledDoubleSlider)) and
                 event.type() == event.Wheel):
             if not obj.hasFocus():
                 event.ignore()
@@ -349,7 +350,9 @@ class napariTFMWidget(QWidget):
 
         # Find and filter all spinboxes in the application
         def install_filter_on_inputs():
-            for widget in self.window().findChildren((QSpinBox, QDoubleSpinBox, QComboBox)):
+            for widget in self.window().findChildren(
+                (QSpinBox, QDoubleSpinBox, QComboBox, QLabeledSlider, QLabeledDoubleSlider)
+            ):
                 widget.installEventFilter(self.spinbox_filter)
                 widget.setFocusPolicy(Qt.StrongFocus)
 

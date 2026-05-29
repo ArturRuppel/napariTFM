@@ -1138,3 +1138,20 @@ def test_workflow_parameter_panel_slider_writes_through(app):
     panel = WorkflowParameterPanel(pm, section_titles=("Displacement",))
     panel.parameter_controls["nscales"].setValue(7)
     assert pm.get_ui_parameter("nscales") == 7
+
+
+def test_wheel_guard_consumes_scroll_on_unfocused_slider(app):
+    from qtpy.QtCore import QPoint, QPointF, Qt
+    from qtpy.QtGui import QWheelEvent
+
+    from napariTFM.widgets._param_controls import islider
+    from napariTFM.widgets._widget import SpinBoxEventFilter
+
+    slider = islider(0, 10, 5)
+    filt = SpinBoxEventFilter()
+    event = QWheelEvent(
+        QPointF(0, 0), QPointF(0, 0), QPoint(0, 0), QPoint(0, -120),
+        Qt.NoButton, Qt.NoModifier, Qt.ScrollPhase.NoScrollPhase, False,
+    )
+    # Unfocused slider: the wheel event must be swallowed.
+    assert filt.eventFilter(slider, event) is True
