@@ -9,16 +9,53 @@ ICON_BUTTON_SIZE = 24
 
 MUTED_TEXT_COLOR = "#999"
 
+# ── Theme palettes ───────────────────────────────────────────────────────
+# Each palette maps semantic color names to hex. Stage keys reference these
+# names via STAGE_ACCENTS, so switching ACTIVE_PALETTE re-accents the whole UI.
+CIVIDIS = {
+    "rosewater": "#d6c35d", "pink": "#555c6d", "mauve": "#243c6e",
+    "red": "#555c6d", "peach": "#a79d73", "yellow": "#d6c35d",
+    "green": "#7d7c78", "teal": "#7d7c78", "sapphire": "#d6c35d",
+    "blue": "#555c6d",
+}
+VIRIDIS = {
+    "rosewater": "#9bd93c", "pink": "#31668e", "mauve": "#463480",
+    "red": "#31668e", "peach": "#38b977", "yellow": "#9bd93c",
+    "green": "#21918c", "teal": "#21918c", "sapphire": "#9bd93c",
+    "blue": "#31668e",
+}
+NORD = {
+    "rosewater": "#bf616a", "pink": "#b48ead", "mauve": "#b48ead",
+    "red": "#bf616a", "peach": "#d08770", "yellow": "#ebcb8b",
+    "green": "#a3be8c", "teal": "#8fbcbb", "sapphire": "#81a1c1",
+    "blue": "#5e81ac",
+}
+DRACULA = {
+    "rosewater": "#ffb86c", "pink": "#ff79c6", "mauve": "#bd93f9",
+    "red": "#ff5555", "peach": "#ffb86c", "yellow": "#f1fa8c",
+    "green": "#50fa7b", "teal": "#8be9fd", "sapphire": "#8be9fd",
+    "blue": "#6272a4",
+}
+
+THEME_PALETTES = {
+    "Cividis": CIVIDIS,
+    "Viridis": VIRIDIS,
+    "Nord": NORD,
+    "Dracula": DRACULA,
+}
+ACTIVE_THEME_NAME = "Cividis"
+ACTIVE_PALETTE = THEME_PALETTES[ACTIVE_THEME_NAME]
+
+# Stage key -> semantic palette color name. Each visible stage gets a
+# distinct accent so the workflow reads as ordered, themeable bands.
 STAGE_ACCENTS = {
-    "inputs": "#6c757d",
-    "preprocessing": "#2f80ed",
-    "displacement": "#9b5de5",
-    "force": "#2a9d8f",
-    "force_analysis": "#2a9d8f",
-    "stress": "#e76f51",
-    "stress_analysis": "#e76f51",
-    "batch": "#f4a261",
-    "batch_analysis": "#f4a261",
+    "inputs": "sapphire",
+    "project": "sapphire",
+    "preprocessing": "blue",
+    "displacement": "mauve",
+    "force": "teal",
+    "stress": "peach",
+    "batch": "yellow",
 }
 
 STATUS_COLORS = {
@@ -63,9 +100,24 @@ def make_icon_button(
     return button
 
 
+def theme_names() -> tuple[str, ...]:
+    return tuple(THEME_PALETTES)
+
+
+def active_theme_name() -> str:
+    return ACTIVE_THEME_NAME
+
+
+def set_active_theme(name: str) -> None:
+    global ACTIVE_PALETTE, ACTIVE_THEME_NAME
+    ACTIVE_THEME_NAME = name
+    ACTIVE_PALETTE = THEME_PALETTES[name]
+
+
 def stage_accent(key: str) -> str:
-    """Return the accent hex color for a stage key, falling back to inputs."""
-    return STAGE_ACCENTS.get(key, STAGE_ACCENTS["inputs"])
+    """Resolve a stage key to its accent hex via the active palette."""
+    semantic = STAGE_ACCENTS.get(key, STAGE_ACCENTS["inputs"])
+    return ACTIVE_PALETTE[semantic]
 
 
 def muted_stage_accent(key: str) -> str:
