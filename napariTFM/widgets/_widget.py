@@ -464,8 +464,8 @@ class napariTFMWidget(QWidget):
             "preprocessing": _StageSection(
                 "Preprocessing",
                 self.preprocessing_widget,
-                expanded=True,
                 status_panel=self._stage_status_panels_by_key["preprocessing"],
+                parameter_panel=self._stage_parameter_panels_by_key.get("preprocessing"),
                 action_targets={
                     "run": self.preprocessing_widget.process_btn,
                     "preview": self.preprocessing_widget.preview_check,
@@ -476,6 +476,7 @@ class napariTFMWidget(QWidget):
                 "Displacement",
                 self.displacement_widget,
                 status_panel=self._stage_status_panels_by_key["displacement"],
+                parameter_panel=self._stage_parameter_panels_by_key.get("displacement"),
                 action_targets={
                     "run": self.displacement_widget.process_btn,
                     "preview": self.displacement_widget.preview_btn,
@@ -486,6 +487,7 @@ class napariTFMWidget(QWidget):
                 "Force Analysis",
                 self.force_widget,
                 status_panel=self._stage_status_panels_by_key["force"],
+                parameter_panel=self._stage_parameter_panels_by_key.get("force"),
                 action_targets={
                     "run": self.force_widget.process_btn,
                     "preview": self.force_widget.preview_btn,
@@ -496,6 +498,7 @@ class napariTFMWidget(QWidget):
                 "Stress Analysis",
                 self.msm_widget,
                 status_panel=self._stage_status_panels_by_key["stress"],
+                parameter_panel=self._stage_parameter_panels_by_key.get("stress"),
                 action_targets={
                     "run": self.msm_widget.analyze_btn,
                     "preview": self.msm_widget.preview_frame_btn,
@@ -512,27 +515,6 @@ class napariTFMWidget(QWidget):
             ),
         }
         self._stage_sections = list(self._stage_sections_by_key.values())
-
-        # Mount per-stage parameter panels as nested "Parameters" sub-sections.
-        self._stage_inner_param_sections_by_key = {}
-        for key, section in self._stage_sections_by_key.items():
-            panel = self._stage_parameter_panels_by_key.get(key)
-            if panel is None:
-                continue
-            inner = section.add_inner_section("Parameters", panel, expanded=False)
-            self._stage_inner_param_sections_by_key[key] = inner
-            # Reroute the outer section's params_btn to toggle the inner section
-            # instead of the legacy overlay parameter content.
-            try:
-                section.params_btn.toggled.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-            section.params_btn.toggled.connect(
-                lambda checked, s=section, i=inner: (
-                    s._set_expanded(checked),
-                    i._toggle_button.setChecked(checked),
-                )
-            )
 
         for section in self._stage_sections:
             container_layout.addWidget(section)

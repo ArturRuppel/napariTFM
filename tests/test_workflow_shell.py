@@ -196,22 +196,26 @@ def app():
 
 def test_stage_section_toggles_child_without_destroying_it(app):
     child = QWidget()
+    panel = QWidget()
 
-    section = _widget._StageSection("Preprocessing", child, expanded=True)
+    section = _widget._StageSection("Preprocessing", child, parameter_panel=panel)
     section.show()
     app.processEvents()
 
+    # Body is always visible and parented to _content.
+    assert child.parent() is section._content
     assert child.isVisible()
     assert section._content.isVisible()
 
-    section._toggle_button.setChecked(False)
+    # Toggling the params panel never reparents or hides the body.
+    section.params_btn.setChecked(True)
     app.processEvents()
 
     assert child.parent() is section._content
-    assert not child.isVisible()
-    assert not section._content.isVisible()
+    assert child.isVisible()
+    assert section._content.isVisible()
 
-    section._toggle_button.setChecked(True)
+    section.params_btn.setChecked(False)
     app.processEvents()
 
     assert child.parent() is section._content
@@ -230,7 +234,6 @@ def test_stage_section_exposes_header_actions_with_stable_names(app):
             "preview": child.preview_btn,
             "cancel": child.cancel_btn,
         },
-        expanded=False,
     )
 
     assert section.params_btn.objectName() == "stage_preprocessing_params_button"
@@ -283,15 +286,16 @@ def test_stage_section_header_action_state_follows_child_button(app):
 
 def test_stage_section_status_indicator_remains_visible_when_collapsed(app):
     child = QWidget()
+    panel = QWidget()
 
-    section = _widget._StageSection("Preprocessing", child, expanded=True, status="ready")
+    section = _widget._StageSection(
+        "Preprocessing", child, parameter_panel=panel, status="ready"
+    )
     section.show()
     app.processEvents()
 
-    section.params_btn.click()
-    app.processEvents()
-
-    assert not section._content.isVisible()
+    # Params panel collapsed by default; status indicator stays visible.
+    assert not panel.isVisible()
     assert section.status_indicator.isVisible()
 
 
@@ -310,7 +314,6 @@ def test_stage_section_header_actions_proxy_child_buttons(app):
             "preview": child.preview_btn,
             "cancel": child.cancel_btn,
         },
-        expanded=False,
     )
 
     section.run_cancel_btn.click()
@@ -324,16 +327,14 @@ def test_stage_section_header_actions_proxy_child_buttons(app):
 def test_stage_section_disables_unsupported_actions_and_params_toggles(app):
     child = QWidget()
 
-    section = _widget._StageSection("Batch Analysis", child, expanded=False)
+    section = _widget._StageSection("Batch Analysis", child)
     section.show()
     app.processEvents()
 
     assert not section.run_cancel_btn.isEnabled()
     assert not section.preview_button.isEnabled()
-
-    section.params_btn.click()
-    app.processEvents()
-
+    # No parameter panel -> no params affordance; body is always visible.
+    assert not section.params_btn.isVisible()
     assert child.isVisible()
     assert section._content.isVisible()
 
@@ -346,21 +347,22 @@ def test_stage_section_params_toggles_inline_parameter_panel_when_provided(app):
         "Displacement",
         child,
         parameter_panel=parameter_panel,
-        expanded=False,
     )
     section.show()
     app.processEvents()
 
-    assert not child.isVisible()
-    assert not section._content.isVisible()
+    # Body always visible; parameter panel collapsed by default.
+    assert child.isVisible()
+    assert section._content.isVisible()
     assert not parameter_panel.isVisible()
     assert not section._parameter_content.isVisible()
 
     section.params_btn.click()
     app.processEvents()
 
-    assert not child.isVisible()
-    assert not section._content.isVisible()
+    # Toggling params reveals only the parameter panel; body stays visible.
+    assert child.isVisible()
+    assert section._content.isVisible()
     assert parameter_panel.isVisible()
     assert section._parameter_content.isVisible()
 
@@ -379,11 +381,12 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     app.processEvents()
 
     assert widget.findChildren(QTabWidget) == []
+    # Every stage body is always visible; only parameter panels collapse.
     assert widget.preprocessing_widget.isVisible()
-    assert not widget.displacement_widget.isVisible()
-    assert not widget.force_widget.isVisible()
-    assert not widget.msm_widget.isVisible()
-    assert not widget.batch_widget.isVisible()
+    assert widget.displacement_widget.isVisible()
+    assert widget.force_widget.isVisible()
+    assert widget.msm_widget.isVisible()
+    assert widget.batch_widget.isVisible()
 
 
 def test_main_widget_lets_dock_determine_width(monkeypatch, app):
@@ -717,7 +720,7 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     assert "threshold" not in stress_panel.parameter_controls
 
     displacement_section = widget._stage_sections_by_key["displacement"]
-    assert "displacement" in widget._stage_inner_param_sections_by_key
+    assert displacement_section.parameter_panel is displacement_panel
     assert not displacement_panel.isVisibleTo(widget)
     displacement_section.params_btn.click()
     app.processEvents()
@@ -742,7 +745,8 @@ def test_main_widget_exposes_collapsed_stage_data_status_panels(monkeypatch, app
 
     assert displacement_panel.objectName() == "stage_displacement_data_status_panel"
     assert displacement_panel.isVisibleTo(widget)
-    assert not widget.displacement_widget.isVisible()
+    # Stage body is always visible alongside its status panel.
+    assert widget.displacement_widget.isVisible()
 
 
 def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
@@ -849,9 +853,13 @@ def test_each_stage_has_single_inline_parameter_editor(monkeypatch, app):
 
     widget = _widget.napariTFMWidget(object())
 
-    assert set(widget._stage_inner_param_sections_by_key) == {
-        "preprocessing", "displacement", "force", "stress",
-    }
+    # Each stage with parameters mounts exactly one editor: the section's
+    # first-class parameter_panel (no nested faux-stage duplication).
+    for key in ("preprocessing", "displacement", "force", "stress"):
+        section = widget._stage_sections_by_key[key]
+        assert section.parameter_panel is widget._stage_parameter_panels_by_key[key]
+    assert widget._stage_sections_by_key["batch"].parameter_panel is None
+    assert "batch" not in widget._stage_parameter_panels_by_key
     assert not hasattr(widget, "_hide_embedded_parameter_panels")
 
 
@@ -1155,3 +1163,21 @@ def test_wheel_guard_consumes_scroll_on_unfocused_slider(app):
     )
     # Unfocused slider: the wheel event must be swallowed.
     assert filt.eventFilter(slider, event) is True
+
+
+def test_shell_mounts_param_panels_as_section_parameter_panel(monkeypatch, app):
+    from napariTFM.widgets import _widget
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    section = widget._stage_sections_by_key["displacement"]
+    # The panel is the section's first-class parameter_panel, not a nested section.
+    assert section.parameter_panel is widget._stage_parameter_panels_by_key["displacement"]
+    assert not hasattr(section, "add_inner_section")
