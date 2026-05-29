@@ -63,6 +63,26 @@ class _FakeParameterManager:
         return object()
 
 
+@pytest.fixture
+def force_widget(app):
+    return fw.FTTCWidget(
+        viewer=_FakeViewer(),
+        data_manager=_FakeDataManager(),
+        parameter_manager=_FakeParameterManager(),
+        visualization_manager=object(),
+    )
+
+
+def test_force_exposes_action_contract(app, force_widget):
+    w = force_widget
+    assert hasattr(w, "action_states_changed")
+    states = w.action_states()
+    assert set(states) >= {"run", "preview", "cancel"}
+    assert callable(w.run_action)
+    assert callable(w.preview_action)
+    assert callable(w.cancel_action)
+
+
 def test_parameter_panel_class_is_removed():
     assert not hasattr(fw, "FTTCParameterPanel")
 

@@ -336,6 +336,7 @@ class FTTCWidget(BaseAnalysisWidget):
     """Widget for calculating traction forces using FTTC method."""
 
     force_calculated = Signal(FTTCResult)
+    action_states_changed = Signal()
 
     def __init__(
             self,
@@ -348,6 +349,9 @@ class FTTCWidget(BaseAnalysisWidget):
 
         # Store managers
         self.parameter_manager = parameter_manager
+
+        # Header-proxied action enablement state
+        self._action_enabled = {"run": False, "preview": False, "cancel": True}
 
         # Initialize controller
         self.controller = FTTCController(
@@ -397,29 +401,12 @@ class FTTCWidget(BaseAnalysisWidget):
         container = QWidget()
         layout = QVBoxLayout()
 
-        row = QHBoxLayout()
-        self.preview_btn = QPushButton("Preview Current Frame")
-        self.preview_btn.setToolTip(
-            "Calculate and visualize forces for the current frame only"
-        )
-        self.process_btn = QPushButton("Calculate Forces")
-        self.process_btn.setToolTip(
-            "Calculate forces for all frames in the dataset"
-        )
-        row.addWidget(self.preview_btn)
-        row.addWidget(self.process_btn)
-        layout.addLayout(row)
-
         self.gcv_btn = QPushButton("Auto-select Regularization (GCV)")
         self.gcv_btn.setToolTip(
             "Calculate the optimal regularization parameter for the current frame\n"
             "using Generalized Cross-Validation"
         )
         layout.addWidget(self.gcv_btn)
-
-        self.cancel_btn = QPushButton("Cancel Operation")
-        self.cancel_btn.setToolTip("Cancel the current operation")
-        layout.addWidget(self.cancel_btn)
 
         container.setLayout(layout)
         return container
@@ -448,11 +435,8 @@ class FTTCWidget(BaseAnalysisWidget):
         self.controller.data_updated.connect(self._update_ui_state)
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
 
-        # Wire widget-owned action buttons to controller operations
-        self.preview_btn.clicked.connect(self.controller.preview_force)
-        self.process_btn.clicked.connect(self.controller.calculate_forces)
+        # Wire widget-owned action button to controller operation
         self.gcv_btn.clicked.connect(self.controller.calculate_optimal_regularization)
-        self.cancel_btn.clicked.connect(self.controller.cancel_operation)
 
         # Connect to layer selection changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
@@ -462,22 +446,36 @@ class FTTCWidget(BaseAnalysisWidget):
         self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
+    def action_states(self):
+        return dict(self._action_enabled)
+
+    def run_action(self):
+        self.controller.calculate_forces()
+
+    def preview_action(self):
+        self.controller.preview_force()
+
+    def cancel_action(self):
+        self.controller.cancel_operation()
+
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
         has_displacement = self.data_manager.displacement_results is not None
 
-        self.preview_btn.setEnabled(has_displacement)
-        self.process_btn.setEnabled(has_displacement)
+        self._action_enabled["preview"] = has_displacement
+        self._action_enabled["run"] = has_displacement
         self.gcv_btn.setEnabled(has_displacement)
-        self.cancel_btn.setEnabled(True)
+        self._action_enabled["cancel"] = True
+        self.action_states_changed.emit()
 
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze during processing."""
-        self.preview_btn.setEnabled(not frozen)
-        self.process_btn.setEnabled(not frozen)
+        self._action_enabled["preview"] = not frozen
+        self._action_enabled["run"] = not frozen
         self.gcv_btn.setEnabled(not frozen)
-        # Cancel button always enabled
-        self.cancel_btn.setEnabled(True)
+        # Cancel action always enabled
+        self._action_enabled["cancel"] = True
+        self.action_states_changed.emit()
 
     def _on_analysis_completed(self, results: FTTCResult):
         """Handle completed analysis."""
