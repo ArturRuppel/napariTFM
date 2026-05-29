@@ -994,6 +994,61 @@ def test_reconcile_loads_existing_config_from_output_dir(monkeypatch, app, tmp_p
     assert widget.parameter_manager.get_parameter("rolling_ball_radius") == 9
 
 
+def test_calibration_change_updates_all_stage_widgets(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    stage = widget._stage_widgets()
+    before = [w.update_count for w in stage]
+    widget.parameter_manager.set_parameter("pixel_size", 2.0)
+    after = [w.update_count for w in stage]
+    assert all(a == b + 1 for a, b in zip(after, before))
+
+
+def test_force_param_change_updates_only_force_widget(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    before = {id(w): w.update_count for w in widget._stage_widgets()}
+    widget.parameter_manager.set_parameter("force_vector_stride", 30)
+    assert widget.force_widget.update_count == before[id(widget.force_widget)] + 1
+    for w in widget._stage_widgets():
+        if w is widget.force_widget:
+            continue
+        assert w.update_count == before[id(w)]
+
+
+def test_unrouted_param_change_updates_no_stage_widget(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+
+    widget = _widget.napariTFMWidget(object())
+    before = [w.update_count for w in widget._stage_widgets()]
+    widget.parameter_manager.set_parameter("rolling_ball_radius", 5)
+    after = [w.update_count for w in widget._stage_widgets()]
+    assert after == before
+
+
 def test_reconcile_writes_config_when_absent(monkeypatch, app, tmp_path):
     import importlib.util as _ilu
 

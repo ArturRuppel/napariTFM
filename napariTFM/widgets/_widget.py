@@ -736,35 +736,15 @@ class napariTFMWidget(QWidget):
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
 
     def _on_parameter_changed(self, param_name: str, value: Any):
-        """Handle parameter changes from parameter manager"""
-        # For calibration parameters, we need to update all widgets
-        if param_name in ['pixel_size', 'frame_interval']:
-            for widget in [
-                self.preprocessing_widget,
-                self.displacement_widget,
-                self.force_widget,
-                self.msm_widget,
-                self.batch_widget
-            ]:
-                # Use _update_calibration instead of _update_parameters
-                if hasattr(widget, '_update_calibration'):
-                    widget._update_calibration()
-                # Or just update the UI state if _update_calibration doesn't exist
-                elif hasattr(widget, '_update_ui_state'):
-                    widget._update_ui_state()
-
-        # Let individual widgets handle their specific parameters if needed
-        try:
-            if param_name.startswith('preprocessing_'):
-                self.preprocessing_widget._update_ui_state()
-            elif param_name.startswith('displacement_'):
-                self.displacement_widget._update_ui_state()
-            elif param_name.startswith('force_'):
-                self.force_widget._update_ui_state()
-            elif param_name.startswith('stress_'):
-                self.msm_widget._update_ui_state()
-        except AttributeError:
-            pass
+        """Propagate parameter edits to the widgets that display them."""
+        if param_name in ("pixel_size", "frame_interval"):
+            # Calibration affects every stage's displayed/derived values.
+            for widget in self._stage_widgets():
+                update = getattr(widget, "_update_ui_state", None)
+                if callable(update):
+                    update()
+        elif param_name.startswith("force_"):
+            self.force_widget._update_ui_state()
 
     def _clear_all_data(self):
         """
