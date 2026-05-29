@@ -4,9 +4,9 @@ import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import QObject
-from qtpy.QtCore import Qt, Signal
+from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (
-    QFrame, QScrollArea, QCheckBox, QApplication,
+    QFrame, QCheckBox, QApplication,
     QProgressBar, QMessageBox, QSizePolicy
 )
 from qtpy.QtWidgets import (
@@ -387,14 +387,14 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.setLayout(main_layout)
 
     def _create_content_container(self) -> QWidget:
-        """Create the main content container with scroll area."""
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        scroll.setFixedWidth(360)
+        """Create the main content container.
 
+        The stage widget no longer owns a scroll area or a fixed width — the
+        shell's single scroll area owns layout, so the body reflows to the dock
+        width (CellFlow model).
+        """
         container = QWidget()
+        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QVBoxLayout()
 
         layout.setSpacing(0)
@@ -409,8 +409,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         layout.addWidget(self._create_status_frame())
 
         container.setLayout(layout)
-        scroll.setWidget(container)
-        return scroll
+        return container
 
     def _create_preview_frame(self) -> QFrame:
         """Create compatibility preview control frame."""

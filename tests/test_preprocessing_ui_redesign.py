@@ -267,7 +267,7 @@ def test_preprocessing_widget_hides_large_body_actions_and_radio_buttons(app):
     assert not hasattr(widget, "cell_radio")
 
 
-def test_preprocessing_widget_keeps_parameter_content_in_scroll_area(app):
+def test_preprocessing_widget_has_no_inner_scroll_area(app):
     widget = PreprocessingWidget(
         _FakeViewer(),
         DataManager(),
@@ -278,9 +278,9 @@ def test_preprocessing_widget_keeps_parameter_content_in_scroll_area(app):
     widget.show()
     app.processEvents()
 
-    scroll_area = widget.findChild(QScrollArea)
-
-    assert scroll_area is not None
+    # The stage widget no longer owns a scroll area or a fixed width; the
+    # shell's single scroll area owns layout, so the body reflows to the dock.
+    assert widget.findChild(QScrollArea) is None
     assert not hasattr(widget, "data_panel")
 
 
