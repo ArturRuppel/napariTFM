@@ -1,5 +1,11 @@
 # napariTFM User Manual
 
+> **📦 Download the latest stable release**
+>
+> The `master` branch is under active development and may be unstable or untested. For analysis work, download the latest stable release rather than cloning this branch:
+>
+> **➡️ [Download the latest release](https://github.com/ArturRuppel/napariTFM/releases/latest)** — grab the "Source code (zip)" asset, extract it, then follow the [Installation](#installation) steps below.
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Installation](#installation)
@@ -38,6 +44,8 @@ The core algorithms implemented in napariTFM are based on established methods de
 - Results export for further analysis
 
 ## Installation
+
+First, [download the latest release](https://github.com/ArturRuppel/napariTFM/releases/latest) ("Source code (zip)") and extract it. The extracted folder is referred to as the package directory below.
 
 napariTFM requires specific system dependencies. Choose the appropriate installation method for your operating system:
 
