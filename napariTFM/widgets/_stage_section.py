@@ -1,21 +1,20 @@
 import re
 from typing import Callable
 
-from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QStyle, QVBoxLayout, QWidget
+from qtpy.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from napariTFM.widgets._ui_style import (
     COMPACT_SPACING,
-    make_icon_button,
+    make_stage_action_button,
     stage_accent,
+    stage_header_action_button_style,
     stage_header_style,
-    status_indicator_style,
 )
 from napariTFM.widgets._collapsible_section import CollapsibleSection
 
 
 class StageSection(QWidget):
-    """Reusable workflow stage section with stable header actions and status."""
+    """Workflow stage section with a CellFlow-style glyph-pill header."""
 
     def __init__(
         self,
@@ -52,31 +51,54 @@ class StageSection(QWidget):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(COMPACT_SPACING)
 
-        self.status_indicator = QLabel()
-        self.status_indicator.setObjectName(f"stage_{self._slug}_status_indicator")
-        self.status_indicator.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        header_layout.addWidget(self.status_indicator)
-
         self.header_label = QLabel(title)
         self.header_label.setStyleSheet(stage_header_style(self._accent))
         header_layout.addWidget(self.header_label)
         header_layout.addStretch()
 
-        self.params_btn = self._create_params_button()
-        self.run_cancel_btn = self._create_run_cancel_button()
-        self.preview_button = self._create_action_button("preview", QStyle.SP_FileDialogContentsView)
+        self.files_btn = self._create_glyph_button(
+            "files", "🔍", f"Show {title} data", checkable=True
+        )
+        self.files_btn.toggled.connect(self._set_status_panel_expanded)
+
+        self.params_btn = self._create_glyph_button(
+            "params", "⚙", f"Toggle {title} parameters", checkable=True
+        )
+        self.params_btn.toggled.connect(self._set_parameter_panel_expanded)
+
+        self.preview_button = self._create_glyph_button("preview", "▷", f"Preview {title}")
+        preview_handler = self._actions.get("preview")
+        if preview_handler is not None:
+            self.preview_button.clicked.connect(
+                lambda _checked=False, fn=preview_handler: fn()
+            )
+        self.preview_button.setEnabled(False)
+
+        self.run_cancel_btn = self._create_glyph_button("run_cancel", "▶", f"Run {title}")
+        self.run_cancel_btn.clicked.connect(self._on_run_cancel_clicked)
+        self.run_cancel_btn.setEnabled(False)
 
         self._toggle_button = self.params_btn
-
-        for button in [self.params_btn, self.run_cancel_btn, self.preview_button]:
+        self._action_buttons = [
+            self.files_btn,
+            self.params_btn,
+            self.preview_button,
+            self.run_cancel_btn,
+        ]
+        for button in self._action_buttons:
             header_layout.addWidget(button)
+
+        if self.status_panel is not None:
+            self._status_section = CollapsibleSection(
+                "Data", self.status_panel, expanded=False, accent_color=self._accent
+            )
+            self._status_section.set_header_visible(False)
+        else:
+            self._status_section = None
 
         if self.parameter_panel is not None:
             self._param_section = CollapsibleSection(
-                self._title,
-                self.parameter_panel,
-                expanded=False,
-                accent_color=self._accent,
+                self._title, self.parameter_panel, expanded=False, accent_color=self._accent
             )
             self._param_section.set_header_visible(False)
         else:
@@ -90,20 +112,19 @@ class StageSection(QWidget):
         content_layout.addWidget(child)
 
         layout.addLayout(header_layout)
-        if self.status_panel is not None:
-            layout.addWidget(self.status_panel)
+        if self._status_section is not None:
+            layout.addWidget(self._status_section)
         if self._param_section is not None:
             layout.addWidget(self._param_section)
         layout.addWidget(self._content)
 
-        # Body (action buttons / status) is always visible.
+        # Body is always visible; only the params/data sections collapse.
         self._content.setVisible(True)
         self._child.setVisible(True)
 
         self.set_status(status)
 
-        # The params button is the ONLY collapsible: it toggles the parameter
-        # section. Sections without a panel simply have no params affordance.
+        self.files_btn.setVisible(self.status_panel is not None)
         has_panel = self._param_section is not None
         self.params_btn.setVisible(has_panel)
         self.params_btn.setChecked(parameters_expanded if has_panel else False)
@@ -119,73 +140,46 @@ class StageSection(QWidget):
         slug = re.sub(r"[^a-z0-9]+", "_", self._title.lower()).strip("_")
         return slug or "stage"
 
+    @property
+    def status(self) -> str:
+        return self._status
+
     def set_status(self, status: str):
         self._status = status
-        self.status_indicator.setStyleSheet(status_indicator_style(status))
-        self.status_indicator.setToolTip(f"{self._title} status: {status}")
         if status == "running":
-            self.run_cancel_btn.setIcon(
-                self.style().standardIcon(QStyle.SP_DialogCancelButton)
-            )
+            self.run_cancel_btn.setText("■")
             self.run_cancel_btn.setToolTip(f"Cancel {self._title}")
         else:
-            self.run_cancel_btn.setIcon(
-                self.style().standardIcon(QStyle.SP_MediaPlay)
-            )
+            self.run_cancel_btn.setText("▶")
             self.run_cancel_btn.setToolTip(f"Run {self._title}")
         self._refresh_action_states()
 
     def _refresh_action_states(self):
         states = self._action_states() if self._action_states is not None else {}
         running = self._status == "running"
-        # While running, the run/cancel button is always live (it cancels).
         self.run_cancel_btn.setEnabled(running or states.get("run", False))
         self.preview_button.setEnabled(states.get("preview", False))
 
     def set_accent(self, accent: str) -> None:
-        """Re-accent this section's header (used by the theme picker)."""
+        """Re-accent the header pill + action buttons (used by the theme picker)."""
         self._accent = accent
         self.header_label.setStyleSheet(stage_header_style(accent))
+        for button in self._action_buttons:
+            button.setStyleSheet(stage_header_action_button_style(accent))
         if self._param_section is not None:
             self._param_section.set_accent_color(accent)
+        if self._status_section is not None:
+            self._status_section.set_accent_color(accent)
 
-    def _create_action_button(self, action: str, standard_icon: QStyle.StandardPixmap):
-        button = make_icon_button(
+    def _create_glyph_button(self, action: str, glyph: str, tooltip: str, checkable: bool = False):
+        return make_stage_action_button(
             self,
-            action,
             f"stage_{self._slug}_{action}_button",
-            f"{action.capitalize()} {self._title}",
-            standard_icon,
+            tooltip,
+            glyph,
+            self._accent,
+            checkable=checkable,
         )
-        handler = self._actions.get(action)
-        if handler is not None:
-            button.clicked.connect(lambda _checked=False, fn=handler: fn())
-        button.setEnabled(False)
-        return button
-
-    def _create_params_button(self):
-        button = make_icon_button(
-            self,
-            "params",
-            f"stage_{self._slug}_params_button",
-            f"Toggle {self._title} parameters",
-            QStyle.SP_FileDialogDetailedView,
-        )
-        button.setCheckable(True)
-        button.toggled.connect(self._set_parameter_panel_expanded)
-        return button
-
-    def _create_run_cancel_button(self):
-        button = make_icon_button(
-            self,
-            "run_cancel",
-            f"stage_{self._slug}_run_cancel_button",
-            f"Run {self._title}",
-            QStyle.SP_MediaPlay,
-        )
-        button.setEnabled(False)
-        button.clicked.connect(self._on_run_cancel_clicked)
-        return button
 
     def _on_run_cancel_clicked(self):
         key = "cancel" if self._status == "running" else "run"
@@ -194,6 +188,12 @@ class StageSection(QWidget):
             handler()
 
     def _set_parameter_panel_expanded(self, expanded: bool):
-        self.params_btn.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         if self._param_section is not None:
             self._param_section._toggle.setChecked(expanded)
+
+    def _set_status_panel_expanded(self, expanded: bool):
+        if self._status_section is not None:
+            self._status_section._toggle.setChecked(expanded)
+        self.files_btn.setToolTip(
+            f"{'Hide' if expanded else 'Show'} {self._title} data"
+        )

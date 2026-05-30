@@ -73,3 +73,52 @@ def test_run_cancel_btn_invokes_run_handler_when_not_running(app):
     section.set_status("running")
     section.run_cancel_btn.click()
     assert clicks == {"run": 1, "cancel": 1}
+
+
+def test_action_buttons_use_glyphs(app):
+    section = StageSection("Preprocessing", QWidget())
+
+    assert section.run_cancel_btn.text() == "▶"
+    assert section.preview_button.text() == "▷"
+    assert section.params_btn.text() == "⚙"
+
+
+def test_run_cancel_glyph_swaps_on_running(app):
+    section = StageSection("Preprocessing", QWidget(), status="ready")
+    assert section.run_cancel_btn.text() == "▶"
+
+    section.set_status("running")
+    assert section.run_cancel_btn.text() == "■"
+
+    section.set_status("done")
+    assert section.run_cancel_btn.text() == "▶"
+
+
+def test_no_status_indicator_dot(app):
+    section = StageSection("Preprocessing", QWidget())
+    assert not hasattr(section, "status_indicator")
+
+
+def test_status_is_readable_via_property(app):
+    section = StageSection("Preprocessing", QWidget(), status="ready")
+    assert section.status == "ready"
+    section.set_status("done")
+    assert section.status == "done"
+
+
+def test_files_button_present_only_with_status_panel(app):
+    with_panel = StageSection("Preprocessing", QWidget(), status_panel=QWidget())
+    assert with_panel.files_btn.isVisibleTo(with_panel) is True
+
+    without_panel = StageSection("Preprocessing", QWidget())
+    assert without_panel.files_btn.isVisibleTo(without_panel) is False
+
+
+def test_files_button_toggles_status_section(app):
+    section = StageSection("Preprocessing", QWidget(), status_panel=QWidget())
+    assert section._status_section.is_expanded is False
+
+    section.files_btn.setChecked(True)
+    assert section._status_section.is_expanded is True
+    section.files_btn.setChecked(False)
+    assert section._status_section.is_expanded is False

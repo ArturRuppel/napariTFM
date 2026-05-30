@@ -266,17 +266,11 @@ def test_stage_section_exposes_header_actions_with_stable_names(app):
     assert "Toggle" in section.params_btn.toolTip()
 
 
-def test_stage_section_exposes_status_indicator_with_stable_name(app):
-    child = QWidget()
-
-    section = _widget._StageSection("Preprocessing", child, status="ready")
-
-    assert section.status_indicator.objectName() == "stage_preprocessing_status_indicator"
-    assert section.status_indicator.toolTip() == "Preprocessing status: ready"
-
+def test_stage_section_tracks_status(app):
+    section = _widget._StageSection("Preprocessing", QWidget(), status="ready")
+    assert section.status == "ready"
     section.set_status("done")
-
-    assert section.status_indicator.toolTip() == "Preprocessing status: done"
+    assert section.status == "done"
 
 
 def test_stage_section_applies_stage_accent_to_header(app):
@@ -306,21 +300,6 @@ def test_stage_section_header_action_state_follows_action_states(app):
     app.processEvents()
 
     assert section.run_cancel_btn.isEnabled()
-
-
-def test_stage_section_status_indicator_remains_visible_when_collapsed(app):
-    child = QWidget()
-    panel = QWidget()
-
-    section = _widget._StageSection(
-        "Preprocessing", child, parameter_panel=panel, status="ready"
-    )
-    section.show()
-    app.processEvents()
-
-    # Params panel collapsed by default; status indicator stays visible.
-    assert not panel.isVisible()
-    assert section.status_indicator.isVisible()
 
 
 def test_stage_section_header_actions_invoke_contract_handlers(app):
@@ -818,14 +797,14 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     section = widget._stage_sections_by_key["preprocessing"]
     panel = widget._stage_status_panels_by_key["preprocessing"]
 
-    assert section.status_indicator.toolTip() == "Preprocessing status: not_started"
+    assert section.status == "not_started"
     assert panel.artifact_labels["reference"].text() == "Missing"
 
     widget.data_manager.reference = object()
     widget.data_manager.bead_stack = object()
     widget.refresh_stage_statuses()
 
-    assert section.status_indicator.toolTip() == "Preprocessing status: ready"
+    assert section.status == "ready"
     assert (
         "×" in panel.artifact_labels["reference"].text()
         or panel.artifact_labels["reference"].text() == "Loaded"
@@ -835,7 +814,7 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     widget.data_manager.preprocessed_bead_stack = object()
     widget.refresh_stage_statuses()
 
-    assert section.status_indicator.toolTip() == "Preprocessing status: done"
+    assert section.status == "done"
     assert (
         "×" in panel.artifact_labels["preprocessed_bead_stack"].text()
         or panel.artifact_labels["preprocessed_bead_stack"].text() == "Loaded"
@@ -867,13 +846,13 @@ def test_stage_status_is_done_when_output_files_exist_on_disk(monkeypatch, app, 
     section = widget._stage_sections_by_key["preprocessing"]
 
     widget.refresh_stage_statuses()
-    assert section.status_indicator.toolTip() != "Preprocessing status: done"
+    assert section.status != "done"
 
     (tmp_path / "preprocessed_beads.tif").write_bytes(b"x")
     (tmp_path / "preprocessed_reference.tif").write_bytes(b"x")
     widget.refresh_stage_statuses()
 
-    assert section.status_indicator.toolTip() == "Preprocessing status: done"
+    assert section.status == "done"
 
 
 def test_main_widget_constructs_when_stage_widget_lacks_parameter_panel(monkeypatch, app):
