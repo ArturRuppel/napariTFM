@@ -59,8 +59,10 @@ def app():
 def test_stage_section_set_accent_restyles_header(app):
     from qtpy.QtWidgets import QWidget
     from napariTFM.widgets._stage_section import StageSection
+    from napariTFM.widgets._ui_style import muted_accent
 
+    # The header title is an accent pill whose color is the muted accent.
     section = StageSection("Force Analysis", QWidget(), accent="#111111")
-    assert "#111111" in section.header_label.styleSheet()
+    assert muted_accent("#111111") in section.header_label.styleSheet()
     section.set_accent("#abcdef")
-    assert "#abcdef" in section.header_label.styleSheet()
+    assert muted_accent("#abcdef") in section.header_label.styleSheet()

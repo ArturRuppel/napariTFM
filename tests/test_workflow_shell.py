@@ -274,11 +274,13 @@ def test_stage_section_tracks_status(app):
 
 
 def test_stage_section_applies_stage_accent_to_header(app):
+    from napariTFM.widgets._ui_style import muted_accent
     child = QWidget()
 
     section = _widget._StageSection("Traction / FTTC", child, accent="#2a9d8f")
 
-    assert "#2a9d8f" in section.header_label.styleSheet()
+    # The header title is an accent pill whose color is the muted accent.
+    assert muted_accent("#2a9d8f") in section.header_label.styleSheet()
 
 
 def test_stage_section_header_action_state_follows_action_states(app):
@@ -776,11 +778,19 @@ def test_main_widget_exposes_collapsed_stage_data_status_panels(monkeypatch, app
     app.processEvents()
 
     displacement_panel = widget._stage_status_panels_by_key["displacement"]
+    section = widget._stage_sections_by_key["displacement"]
 
     assert displacement_panel.objectName() == "stage_displacement_data_status_panel"
-    assert displacement_panel.isVisibleTo(widget)
-    # Stage body is always visible alongside its status panel.
+    # Status panel starts collapsed behind the 🔍 toggle.
+    assert section._status_section.is_expanded is False
+    assert not displacement_panel.isVisibleTo(widget)
+    # Stage body stays visible regardless.
     assert widget.displacement_widget.isVisible()
+
+    # The 🔍 toggle reveals the status panel.
+    section.files_btn.setChecked(True)
+    app.processEvents()
+    assert displacement_panel.isVisibleTo(widget)
 
 
 def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
@@ -1142,7 +1152,7 @@ def test_shell_theme_button_switches_palette(monkeypatch, app):
         widget._on_theme_selected(other)
         assert _ui_style.active_theme_name() == other
         accent = _ui_style.stage_accent("preprocessing")
-        assert accent in widget._stage_sections_by_key["preprocessing"].header_label.styleSheet()
+        assert _ui_style.muted_accent(accent) in widget._stage_sections_by_key["preprocessing"].header_label.styleSheet()
     finally:
         _ui_style.set_active_theme(original)
 
