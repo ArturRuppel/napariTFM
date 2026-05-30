@@ -6,7 +6,6 @@ import cv2
 import napari
 import numpy as np
 from matplotlib import pyplot as plt
-from napari.layers import Layer
 
 from napariTFM.utilities.error_handling import ErrorSeverity, ErrorHandlingMixin
 from napariTFM.utilities.viewer_colorbar import ViewerColorbarManager

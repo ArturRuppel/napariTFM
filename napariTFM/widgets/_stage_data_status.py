@@ -156,11 +156,6 @@ class StageDataStatusPanel(QWidget):
             for artifact in output_artifacts:
                 self._add_row(layout, artifact)
 
-        # Legacy compatibility: existing tests and call sites read info labels.
-        self.artifact_labels = {
-            key: row.info_label for key, row in self.artifact_rows.items()
-        }
-
     def _add_row(self, layout: QVBoxLayout, artifact: DataArtifactSpec):
         row = _ArtifactRow(artifact)
         self.artifact_rows[artifact.key] = row

@@ -1,5 +1,5 @@
-from dataclasses import dataclass, asdict, fields
-from typing import Dict, Any, Callable, Set, Optional, Tuple
+from dataclasses import asdict, fields
+from typing import Dict, Any, Callable, Set, Tuple
 from enum import Enum, auto
 import math
 import yaml

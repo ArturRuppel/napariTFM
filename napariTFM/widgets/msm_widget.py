@@ -12,7 +12,6 @@ from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
 
 from napariTFM.backend.parameter_dataclasses import MSMParameters
 from napariTFM.backend.msm import (
-    MSMResult,
     calculate_stresses,
     generate_mesh_stack,
     process_mask_data,
@@ -402,7 +401,7 @@ class MSMController(QObject):
                 if worker.isRunning():
                     worker.terminate()
                 worker.deleteLater()
-            except Exception as e:
+            except Exception:
                 pass
         self.active_workers.clear()
         # Update UI status
@@ -450,7 +449,7 @@ class MSMWidget(BaseAnalysisWidget):
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
 
         # Keep service parameters synced with the shared parameter manager
-        parameter_manager.parameters_reset.connect(self._update_service_parameters)
+        parameter_manager.parameters_reset.connect(self._update_stress_parameters)
         parameter_manager.parameter_changed.connect(self._handle_parameter_change)
 
         self.controller.unfreeze_ui()
@@ -575,13 +574,13 @@ class MSMWidget(BaseAnalysisWidget):
         self.data_manager.set_mask_stack(processed_masks)
         self.visualization_manager.visualize_masks(processed_masks)
 
-    def _update_service_parameters(self, category: ParameterCategory):
-        """Update service parameters when parameters are reset."""
+    def _update_stress_parameters(self, category: ParameterCategory):
+        """Refresh cached MSM parameters when a parameter reset occurs."""
         if category == ParameterCategory.STRESS:
             self.msm_params = self.parameter_manager.get_msm_parameters()
 
     def _handle_parameter_change(self, param_name: str, value: Any):
-        """Update service parameters when individual parameters change."""
+        """Refresh cached MSM parameters when an individual parameter changes."""
         stress_params = {
             'density_factor', 'mesh_algorithm', 'use_optimization',
             'poisson_ratio_cells', 'max_stress'

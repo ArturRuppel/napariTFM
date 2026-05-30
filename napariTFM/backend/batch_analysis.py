@@ -14,7 +14,7 @@ from typing import Optional, Dict, List, Any
 import numpy as np
 import tifffile
 import yaml
-from skimage.transform import rescale, resize
+from skimage.transform import resize
 from scipy.ndimage import center_of_mass
 import pandas as pd
 
@@ -24,7 +24,7 @@ from napariTFM.backend.displacement_analysis import (
     calculate_displacement_field,
 )
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
-from napariTFM.backend.msm import MSMResult, calculate_stresses, generate_mesh_stack
+from napariTFM.backend.msm import calculate_stresses, generate_mesh_stack
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy, \
@@ -1074,9 +1074,6 @@ class BatchAnalysis:
                 elif step == 'stress':
                     try:
                         data = np.load(str(tfm_folder / "stress_results.npy"), allow_pickle=True).item()
-                        if self.config['visualizations']['mesh']:
-                            # Load masks for mesh visualization if needed
-                            masks = tifffile.imread(str(tfm_folder / "masks.tif"))
                     except Exception as e:
                         print(f"Could not load stress/mask data for visualization: {str(e)}")
                         return

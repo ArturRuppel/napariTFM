@@ -56,7 +56,7 @@ class _StepButtonStateSyncer(QObject):
         super().__init__()
         self._sync = sync
 
-    def eventFilter(self, watched, event) -> bool:
+    def eventFilter(self, _watched, event) -> bool:
         if event.type() == QEvent.Type.EnabledChange:
             self._sync()
         return False

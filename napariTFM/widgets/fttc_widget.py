@@ -293,8 +293,7 @@ class FTTCController(QObject):
     def _handle_gcv_results(self, regularization: float):
         """Handle GCV calculation results."""
         if regularization is not None:
-            # Update parameter in log scale
-            log_reg = np.log10(regularization)
+            # Store the actual optimal value; the UI converts it to the exponent for display.
             self.parameter_manager.set_parameter('regularization', regularization)
             self.progress_updated.emit(
                 100,

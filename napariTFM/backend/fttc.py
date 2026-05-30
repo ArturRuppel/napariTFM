@@ -366,7 +366,6 @@ class FTTC:
 
             # Calculate finite thickness components
             c = np.cosh(kh)
-            s = np.sinh(kh)
 
             # Correction factor
             gamma = ((3 - 4 * self.nu) +

@@ -10,8 +10,7 @@ from qtpy.QtWidgets import (
     QProgressBar, QMessageBox, QSizePolicy
 )
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QWidget,
-    QPushButton
+    QVBoxLayout, QHBoxLayout, QLabel, QWidget
 )
 
 from napariTFM.widgets._base_widget import BaseAnalysisWidget

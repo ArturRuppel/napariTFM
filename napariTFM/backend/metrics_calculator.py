@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.ndimage import center_of_mass
 
 
 def calculate_strain_energy_density(displacement_frame_m: np.ndarray, force_frame_pa: np.ndarray) -> np.ndarray:

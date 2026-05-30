@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from typing import Tuple, Dict
 
 import gmsh
@@ -187,45 +186,4 @@ class MeshGenerator:
             "mean_aspect_ratio": np.mean(aspect_ratios),
             "n_elements": len(triangles)
         }
-
-    # deprecated
-    def plot_mesh(self, points: np.ndarray, triangles: np.ndarray, ax=None):
-        """Plot the generated mesh for visualization.
-
-        Args:
-            points: Nx2 array of node coordinates
-            triangles: Mx3 array of triangle vertex indices
-            ax: Optional matplotlib axes for plotting
-        """
-        import matplotlib.pyplot as plt
-        from matplotlib.collections import LineCollection
-
-        if ax is None:
-            _, ax = plt.subplots()
-
-        # Create line segments for all triangle edges
-        edges = []
-        for triangle in triangles:
-            # Add all three edges of the triangle
-            edges.append(np.array([points[triangle[0]], points[triangle[1]]]))
-            edges.append(np.array([points[triangle[1]], points[triangle[2]]]))
-            edges.append(np.array([points[triangle[2]], points[triangle[0]]]))
-
-        # Create line collection
-        lc = LineCollection(edges, colors='b', alpha=0.5)
-        ax.add_collection(lc)
-
-        # Plot nodes
-        ax.plot(points[:, 0], points[:, 1], 'r.', markersize=2)
-
-        # Set equal aspect ratio and invert y-axis for image coordinates
-        ax.set_aspect('equal')
-        ax.invert_yaxis()
-
-        # Set limits slightly larger than the mesh
-        pad = 0.05 * (points.max() - points.min())
-        ax.set_xlim(points[:, 0].min() - pad, points[:, 0].max() + pad)
-        ax.set_ylim(points[:, 1].max() + pad, points[:, 1].min() - pad)
-
-        return ax
 

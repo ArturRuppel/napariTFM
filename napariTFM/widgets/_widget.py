@@ -6,7 +6,7 @@ import napari
 from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox,
-    QHBoxLayout, QPushButton, QSpinBox, QComboBox, QFileDialog, QCheckBox,
+    QHBoxLayout, QSpinBox, QComboBox, QFileDialog, QCheckBox,
     QMenu, QToolButton
 )
 
@@ -337,9 +337,6 @@ class WorkflowParameterPanel(QWidget):
             control.blockSignals(False)
 
 
-_StageSection = StageSection
-
-
 class SpinBoxEventFilter(QObject):
     def eventFilter(self, obj, event):
         # Check for all spinnable input widgets
@@ -473,7 +470,7 @@ class napariTFMWidget(QWidget):
         }
 
         self._stage_sections_by_key = {
-            "preprocessing": _StageSection(
+            "preprocessing": StageSection(
                 "Preprocessing",
                 self.preprocessing_widget,
                 status_panel=self._stage_status_panels_by_key["preprocessing"],
@@ -486,7 +483,7 @@ class napariTFMWidget(QWidget):
                 action_states=self.preprocessing_widget.action_states,
                 action_states_changed=self.preprocessing_widget.action_states_changed,
             ),
-            "displacement": _StageSection(
+            "displacement": StageSection(
                 "Displacement",
                 self.displacement_widget,
                 status_panel=self._stage_status_panels_by_key["displacement"],
@@ -499,7 +496,7 @@ class napariTFMWidget(QWidget):
                 action_states=self.displacement_widget.action_states,
                 action_states_changed=self.displacement_widget.action_states_changed,
             ),
-            "force": _StageSection(
+            "force": StageSection(
                 "Force Analysis",
                 self.force_widget,
                 status_panel=self._stage_status_panels_by_key["force"],
@@ -512,7 +509,7 @@ class napariTFMWidget(QWidget):
                 action_states=self.force_widget.action_states,
                 action_states_changed=self.force_widget.action_states_changed,
             ),
-            "stress": _StageSection(
+            "stress": StageSection(
                 "Stress Analysis",
                 self.msm_widget,
                 status_panel=self._stage_status_panels_by_key["stress"],
@@ -525,7 +522,7 @@ class napariTFMWidget(QWidget):
                 action_states=self.msm_widget.action_states,
                 action_states_changed=self.msm_widget.action_states_changed,
             ),
-            "batch": _StageSection(
+            "batch": StageSection(
                 "Batch Analysis",
                 self.batch_widget,
                 status_panel=self._stage_status_panels_by_key["batch"],

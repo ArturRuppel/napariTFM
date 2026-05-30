@@ -115,9 +115,6 @@ class BatchVisualizationSaver:
             x_points = np.arange(vector_stride_scaled // 2, w - vector_stride_scaled // 2, vector_stride_scaled)
             Y, X = np.meshgrid(y_points, x_points, indexing='ij')
 
-            # Get sampled magnitudes for coloring
-            sampled_magnitude = magnitude[Y, X]
-
             # Get displacement_field components and scale them
             U = displacement_field[Y, X, 0] * vector_scale
             V = displacement_field[Y, X, 1] * vector_scale
@@ -187,9 +184,6 @@ class BatchVisualizationSaver:
             y_points = np.arange(vector_stride_scaled // 2, h - vector_stride_scaled // 2, vector_stride_scaled)
             x_points = np.arange(vector_stride_scaled // 2, w - vector_stride_scaled // 2, vector_stride_scaled)
             Y, X = np.meshgrid(y_points, x_points, indexing='ij')
-
-            # Sample magnitude values at vector positions
-            sampled_magnitude = force_magnitude[Y, X]
 
             U = tx[frame_idx][Y, X] * vector_scale
             V = ty[frame_idx][Y, X] * vector_scale
@@ -493,7 +487,7 @@ class BatchVisualizationSaver:
             RGB image of the colorbar legend
         """
         fig, ax = plt.subplots(figsize=(6, 0.5))
-        cbar = plt.colorbar(
+        plt.colorbar(
             plt.cm.ScalarMappable(
                 norm=plt.Normalize(vmin=vmin, vmax=vmax),
                 cmap=cmap

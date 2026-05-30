@@ -217,7 +217,7 @@ def test_stage_section_toggles_child_without_destroying_it(app):
     child = QWidget()
     panel = QWidget()
 
-    section = _widget._StageSection("Preprocessing", child, parameter_panel=panel)
+    section = _widget.StageSection("Preprocessing", child, parameter_panel=panel)
     section.show()
     app.processEvents()
 
@@ -245,7 +245,7 @@ def test_stage_section_toggles_child_without_destroying_it(app):
 def test_stage_section_exposes_header_actions_with_stable_names(app):
     child = _StubStageWidget()
 
-    section = _widget._StageSection(
+    section = _widget.StageSection(
         "Preprocessing",
         child,
         actions={
@@ -267,7 +267,7 @@ def test_stage_section_exposes_header_actions_with_stable_names(app):
 
 
 def test_stage_section_tracks_status(app):
-    section = _widget._StageSection("Preprocessing", QWidget(), status="ready")
+    section = _widget.StageSection("Preprocessing", QWidget(), status="ready")
     assert section.status == "ready"
     section.set_status("done")
     assert section.status == "done"
@@ -277,7 +277,7 @@ def test_stage_section_applies_stage_accent_to_header(app):
     from napariTFM.widgets._ui_style import muted_accent
     child = QWidget()
 
-    section = _widget._StageSection("Traction / FTTC", child, accent="#2a9d8f")
+    section = _widget.StageSection("Traction / FTTC", child, accent="#2a9d8f")
 
     # The header title is an accent pill whose color is the muted accent.
     assert muted_accent("#2a9d8f") in section.header_label.styleSheet()
@@ -286,7 +286,7 @@ def test_stage_section_applies_stage_accent_to_header(app):
 def test_stage_section_header_action_state_follows_action_states(app):
     child = _StubStageWidget()
 
-    section = _widget._StageSection(
+    section = _widget.StageSection(
         "Preprocessing",
         child,
         actions={"run": child.run_action},
@@ -307,7 +307,7 @@ def test_stage_section_header_action_state_follows_action_states(app):
 def test_stage_section_header_actions_invoke_contract_handlers(app):
     child = _StubStageWidget()
 
-    section = _widget._StageSection(
+    section = _widget.StageSection(
         "Preprocessing",
         child,
         actions={
@@ -335,7 +335,7 @@ def test_stage_section_header_actions_invoke_contract_handlers(app):
 def test_stage_section_disables_unsupported_actions_and_params_toggles(app):
     child = QWidget()
 
-    section = _widget._StageSection("Batch Analysis", child)
+    section = _widget.StageSection("Batch Analysis", child)
     section.show()
     app.processEvents()
 
@@ -351,7 +351,7 @@ def test_stage_section_params_toggles_inline_parameter_panel_when_provided(app):
     child = QWidget()
     parameter_panel = QWidget()
 
-    section = _widget._StageSection(
+    section = _widget.StageSection(
         "Displacement",
         child,
         parameter_panel=parameter_panel,
@@ -808,7 +808,7 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     panel = widget._stage_status_panels_by_key["preprocessing"]
 
     assert section.status == "not_started"
-    assert panel.artifact_labels["reference"].text() == "Missing"
+    assert panel.artifact_rows["reference"].info_label.text() == "Missing"
 
     widget.data_manager.reference = object()
     widget.data_manager.bead_stack = object()
@@ -816,8 +816,8 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
 
     assert section.status == "ready"
     assert (
-        "×" in panel.artifact_labels["reference"].text()
-        or panel.artifact_labels["reference"].text() == "Loaded"
+        "×" in panel.artifact_rows["reference"].info_label.text()
+        or panel.artifact_rows["reference"].info_label.text() == "Loaded"
     )
 
     widget.data_manager.preprocessed_reference = object()
@@ -826,8 +826,8 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
 
     assert section.status == "done"
     assert (
-        "×" in panel.artifact_labels["preprocessed_bead_stack"].text()
-        or panel.artifact_labels["preprocessed_bead_stack"].text() == "Loaded"
+        "×" in panel.artifact_rows["preprocessed_bead_stack"].info_label.text()
+        or panel.artifact_rows["preprocessed_bead_stack"].info_label.text() == "Loaded"
     )
 
 

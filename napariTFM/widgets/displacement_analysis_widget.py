@@ -3,7 +3,7 @@ from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, QObject
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox, QSpacerItem,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMessageBox, QSpacerItem,
     QSizePolicy, QFrame, QProgressBar
 )
 
