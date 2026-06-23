@@ -72,6 +72,12 @@ class MeshParameters:
     use_optimization: bool = True
 
 
+# MSM stress is linear in Young's modulus, so its absolute value does not affect
+# the computed stress *distribution*. The cell monolayer modulus is therefore
+# fixed to a constant rather than exposed as a tunable parameter.
+MSM_YOUNG_MODULUS: float = 1.0
+
+
 @dataclass
 class MSMParameters:
     """Parameters for MSM calculations"""
@@ -82,7 +88,7 @@ class MSMParameters:
 
     # Material parameters
     poisson_ratio_cells: float = 0.5
-    young_modulus: float = 1.0
+    young_modulus: float = MSM_YOUNG_MODULUS
 
     # Scaling parameter
     pixel_size: float = 0.1  # in µm
@@ -192,7 +198,7 @@ class UnifiedParameters:
             mesh_algorithm=self.mesh_algorithm,
             use_optimization=self.use_optimization,
             poisson_ratio_cells=self.poisson_ratio_cells,
-            young_modulus=self.young_modulus,
+            young_modulus=MSM_YOUNG_MODULUS,
             pixel_size=self.pixel_size,
             downscale_factor=self.downscale_factor,
             frame_interval=self.frame_interval,

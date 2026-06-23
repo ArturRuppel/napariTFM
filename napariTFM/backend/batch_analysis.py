@@ -25,7 +25,7 @@ from napariTFM.backend.displacement_analysis import (
 )
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
 from napariTFM.backend.msm import calculate_stresses, generate_mesh_stack
-from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, MSM_YOUNG_MODULUS, PreprocessingParameters
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy, \
     calculate_moment_tensor, calculate_polarization
@@ -813,10 +813,10 @@ class BatchAnalysis:
         3. Saves results as NumPy array
 
         The stress analysis parameters are taken from the config:
-            - young_modulus
             - poisson_ratio_cells
             - density_factor
             And other MSM parameters
+        (The cell Young's modulus is fixed to MSM_YOUNG_MODULUS, not read from config.)
 
         Notes
         -----
@@ -970,7 +970,7 @@ class BatchAnalysis:
             mesh_algorithm=self.config['parameters']['mesh_algorithm'],
             use_optimization=self.config['parameters']['use_optimization'],
             poisson_ratio_cells=self.config['parameters']['poisson_ratio_cells'],
-            young_modulus=1.0,
+            young_modulus=MSM_YOUNG_MODULUS,
             max_stress=self.config['parameters']['max_stress'],
             pixel_size=self.config['parameters']['pixel_size'],
             downscale_factor=self.config['parameters']['downscale_factor'],
