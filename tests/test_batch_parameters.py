@@ -250,3 +250,30 @@ def test_batch_displacement_parameters_do_not_require_removed_tvl1_keys():
     assert params.nscales == 10
     assert params.inner_iterations == 10
     assert params.median_filtering == 9
+
+
+def test_batch_unified_parameters_ignore_unknown_keys_and_default_missing():
+    # Config from an older version carries retired keys and omits some current
+    # ones; the unifier must drop the strays and fall back to defaults.
+    analysis = BatchAnalysis.__new__(BatchAnalysis)
+    analysis.config = {
+        "parameters": {
+            "rolling_ball_radius": 7,
+            "density_factor": 0.02,
+            "outer_iterations": 99,   # retired field
+            "threshold": 0.5,         # never existed on UnifiedParameters
+        }
+    }
+
+    unified = analysis._unified_parameters()
+    assert unified.rolling_ball_radius == 7
+    assert unified.density_factor == 0.02
+    assert not hasattr(unified, "outer_iterations")
+    assert not hasattr(unified, "threshold")
+    # Missing keys default (UnifiedParameters default downscale_factor is 4).
+    assert unified.downscale_factor == 4
+
+    # The retired/unknown keys must not leak into any backend dataclass, and the
+    # otherwise-undertested preprocessing/MSM mappings flow through correctly.
+    assert analysis._create_preprocessing_parameters().rolling_ball_radius == 7
+    assert analysis._create_msm_parameters().density_factor == 0.02

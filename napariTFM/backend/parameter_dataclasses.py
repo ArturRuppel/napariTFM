@@ -28,7 +28,7 @@ class DisplacementParameters:
     median_filtering: int = 9
 
     # Analysis parameters
-    downscale_factor: int = 1
+    downscale_factor: int = 4
     pixel_size: float = 0.1
     frame_interval: float = 1
 
@@ -51,7 +51,7 @@ class FTTCParameters:
     regularization: float = 1e-4
     auto_gcv: bool = False
     pixel_size: float = 0.1  # in µm
-    downscale_factor: int = 1
+    downscale_factor: int = 4
 
     # Time parameters
     frame_interval: float = 1  # minutes
@@ -91,7 +91,7 @@ class MSMParameters:
 
     # Scaling parameter
     pixel_size: float = 0.1  # in µm
-    downscale_factor: int = 1
+    downscale_factor: int = 4
 
     # Time parameters
     frame_interval: float = 1  # minutes
