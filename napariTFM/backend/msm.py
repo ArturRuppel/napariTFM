@@ -730,9 +730,4 @@ class MonolayerStressMicroscopy:
         # Correct torque
         f_x, f_y = self._correct_torque(f_x, f_y, mask)
 
-        # Debug output for force magnitudes
-        # print(f"\nForce preparation:")
-        # print(f"Traction range x: [{np.nanmin(f_x):.2e}, {np.nanmax(f_x):.2e}] Pa")
-        # print(f"Traction range y: [{np.nanmin(f_y):.2e}, {np.nanmax(f_y):.2e}] Pa")
-
         return f_x, f_y
