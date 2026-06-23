@@ -7,8 +7,8 @@ from tempfile import NamedTemporaryFile
 import yaml
 from qtpy.QtCore import Qt, Signal, QSettings
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QWidget, QGridLayout, QButtonGroup, QRadioButton, QListView,
-    QPushButton, QFrame, QScrollArea, QTreeView, QDialog,
+    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QGridLayout, QButtonGroup, QRadioButton, QListView,
+    QPushButton, QFrame, QTreeView, QDialog,
     QProgressBar, QMessageBox, QListWidget, QCheckBox, QLineEdit, QFileDialog,
 )
 
@@ -22,6 +22,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
     """Widget for running batch analysis on multiple folders."""
 
     batch_completed = Signal(dict)  # Emits results when batch processing completes
+    action_states_changed = Signal()  # Emitted when the header run action's enablement changes
 
     MESH_ALGORITHMS = {
         "Frontal-Del.": "Frontal-Del.",
@@ -52,13 +53,13 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             self.blockSignals(False)
 
     def _setup_ui(self):
-        """Set up the user interface."""
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        """Set up the user interface.
 
-        container = QWidget()
+        The widget hosts its groups directly; the workflow shell owns the
+        single outer scroll area, so this stage no longer nests its own.
+        """
         main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
         # Add new file paths and metadata groups first
         main_layout.addWidget(self._create_file_paths_group())
@@ -71,12 +72,7 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         main_layout.addWidget(self._create_folder_management_group())
         main_layout.addWidget(self._create_status_frame())
 
-        container.setLayout(main_layout)
-        scroll.setWidget(container)
-
-        layout = QVBoxLayout()
-        layout.addWidget(scroll)
-        self.setLayout(layout)
+        self.setLayout(main_layout)
 
     def _connect_signals(self):
         """Connect widget signals."""
@@ -572,11 +568,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self.folder_list_widget.clear()
         self._update_ui_state()
 
-    def _validate_folder(self, folder: str) -> bool:
-        """Validate folder contains required files."""
-        required_files = ['beads.tif', 'reference.tif']
-        return all(os.path.exists(os.path.join(folder, f)) for f in required_files)
-
     def _check_folder_contents(self, folder: str) -> list:
         """
         Check folder for required files based on config input file names.
@@ -652,38 +643,16 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
     # endregion === Folder Management ===
 
     # region === State Management ===
+    def action_states(self) -> dict:
+        """Report the stage header's run-action enablement (run only)."""
+        return {"run": len(self.folder_list) > 0}
+
     def _update_ui_state(self):
         """Update UI element states."""
         has_folders = len(self.folder_list) > 0
         self.run_analysis_btn.setEnabled(has_folders)
         self.clear_folders_btn.setEnabled(has_folders)
-
-    def _update_metrics_controls(self):
-        """Enable/disable metrics controls based on checkbox state"""
-        enabled = self.metrics_check.isChecked()
-        self.mask_source_combo.setEnabled(enabled)
-        self.force_threshold_spin.setEnabled(enabled)
-        self.mask_erosion_spin.setEnabled(enabled)
-        self.mask_dilation_spin.setEnabled(enabled)
-        self.calc_strain_energy_check.setEnabled(enabled)
-        self.calc_polarization_check.setEnabled(enabled)
-        self.export_eigenvalues_check.setEnabled(enabled)
-
-        # Update mask controls based on mask source
-        if enabled:
-            self._update_mask_controls()
-
-    def _update_mask_controls(self):
-        """Enable/disable mask controls based on mask source selection"""
-        # Only enable force threshold if that option is selected
-        is_force_threshold = self.mask_source_combo.currentText() == 'force_threshold'
-        self.force_threshold_spin.setEnabled(
-            is_force_threshold and self.metrics_check.isChecked()
-        )
-
-    def _handle_error(self, error_message: str):
-        """Handle error by showing message box."""
-        QMessageBox.critical(self, "Error", error_message)
+        self.action_states_changed.emit()
 
     # endregion === State Management ===
 

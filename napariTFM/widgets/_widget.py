@@ -527,7 +527,8 @@ class napariTFMWidget(QWidget):
                 self.batch_widget,
                 status_panel=self._stage_status_panels_by_key["batch"],
                 actions={"run": self.batch_widget.run_analysis_btn.click},
-                action_states=lambda: {"run": True},
+                action_states=self.batch_widget.action_states,
+                action_states_changed=self.batch_widget.action_states_changed,
             ),
         }
         self._stage_sections = list(self._stage_sections_by_key.values())

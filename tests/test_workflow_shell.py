@@ -485,7 +485,10 @@ def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, 
             f"{key} header run button did not trigger its widget run_action"
         )
 
-    # Batch keeps its own run button; header run clicks it (always enabled).
+    # Batch keeps its own run button; the header run clicks it, and its
+    # enablement follows the widget's action_states (run enabled once folders exist).
+    widget.batch_widget.set_action_states(run=True)
+    app.processEvents()
     batch_clicks = {"n": 0}
     widget.batch_widget.run_analysis_btn.clicked.connect(
         lambda *_: batch_clicks.__setitem__("n", batch_clicks["n"] + 1)
