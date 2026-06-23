@@ -78,7 +78,7 @@ class DisplacementController(QObject):
                     displacement_field, frame, total = next(result)
                     self.progress_updated.emit(
                         int((frame + 1) / total * 100),
-                        f"Processing preview frame..."
+                        "Processing preview frame..."
                     )
             except StopIteration as e:
                 # Get final result from generator

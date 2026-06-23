@@ -32,26 +32,14 @@ class VisualizationManager(ErrorHandlingMixin):
         self._layers: Dict[str, Any] = {}
         self.colorbar_manager = ViewerColorbarManager(viewer)
         self._preview_config = PreviewConfig()
-        self._displacement_dims_callback = None  # Store callback reference
 
         # Connect to viewer events
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
 
-    def _clear_displacement_callback(self):
-        """Clear the existing displacement dims callback if it exists"""
-        if self._displacement_dims_callback is not None:
-            try:
-                self.viewer.dims.events.current_step.disconnect(self._displacement_dims_callback)
-            except Exception:
-                pass
-            self._displacement_dims_callback = None
-
     def cleanup(self) -> None:
         """Clean up resources."""
         try:
-            # Clear displacement callback
-            self._clear_displacement_callback()
             self.colorbar_manager.clear()
 
             # Disconnect other events
@@ -65,7 +53,11 @@ class VisualizationManager(ErrorHandlingMixin):
             self.viewer = None
 
         except Exception as e:
-            self.handle_error(f"Failed to cleanup visualization manager: {str(e)}")
+            self.handle_error(self.create_error(
+                "Failed to cleanup visualization manager",
+                details=str(e),
+                original_error=e,
+            ))
 
     # endregion
 
@@ -1006,60 +998,6 @@ class VisualizationManager(ErrorHandlingMixin):
                 source="visualization"
             )
             self.handle_error(error)
-
-    def create_bead_overlay(self) -> None:
-        """Create combined bead-reference overlay layer."""
-        # Validate data availability
-        if self.data_manager.preprocessed_bead_stack is None or self.data_manager.preprocessed_reference is None:
-            raise ValueError("Both preprocessed bead stack and reference image must be available")
-
-        # Remove existing overlay if present
-        if 'Bead Overlay' in self.viewer.layers:
-            self.viewer.layers.remove('Bead Overlay')
-
-        # Create RGB overlay stack
-        overlay_stack = self._create_overlay_stack()
-
-        # Add overlay layer
-        self.viewer.add_image(
-            overlay_stack,
-            name='Bead Overlay',
-            visible=True,
-            rgb=True
-        )
-
-    def _create_overlay_stack(self) -> np.ndarray:
-        """Create RGB overlay stack combining beads (green) and reference (magenta)."""
-        bead_stack = self.data_manager.preprocessed_bead_stack
-        reference = self.data_manager.preprocessed_reference
-
-        # Get dimensions
-        num_frames = len(bead_stack)
-        height, width = bead_stack.shape[1:]
-
-        # Create RGB stack
-        overlay_stack = np.zeros((num_frames, height, width, 3), dtype=float)
-
-        # Normalize reference image
-        reference = reference.astype(float)
-        ref_min = reference.min()
-        ref_max = reference.max()
-        if ref_max > ref_min:
-            reference = (reference - ref_min) / (ref_max - ref_min)
-
-        # Process each frame
-        for i in range(num_frames):
-            bead_frame = bead_stack[i].astype(float)
-            bead_min = bead_frame.min()
-            bead_max = bead_frame.max()
-            if bead_max > bead_min:
-                bead_frame = (bead_frame - bead_min) / (bead_max - bead_min)
-
-            overlay_stack[i, :, :, 0] = reference  # Red channel (for magenta)
-            overlay_stack[i, :, :, 1] = bead_frame  # Green channel
-            overlay_stack[i, :, :, 2] = reference  # Blue channel (for magenta)
-
-        return overlay_stack
 
     def handle_preprocessing_preview(self, frames: Dict[str, np.ndarray], enable: bool = True) -> None:
         """Render preprocessing preview inputs as separate additive layers."""

@@ -1,5 +1,4 @@
 import pytest
-from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QApplication, QLabel, QWidget
 
 from napariTFM.widgets._collapsible_section import CollapsibleSection

@@ -35,24 +35,6 @@ class ApplicationError(Exception):
         return error_str
 
 
-# class ProcessingError(ApplicationError):
-#     """Specific error class for processing-related errors."""
-#
-#     def __init__(
-#             self,
-#             message: str,
-#             details: str = "",
-#             severity: ErrorSeverity = ErrorSeverity.ERROR,
-#             recovery_hint: Optional[str] = None
-#     ):
-#         super().__init__(
-#             message=message,
-#             details=details,
-#             severity=severity,
-#             recovery_hint=recovery_hint
-#         )
-
-
 class ErrorHandlingMixin:
     """Mixin class providing error handling functionality."""
 

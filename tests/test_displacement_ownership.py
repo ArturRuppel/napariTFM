@@ -1,5 +1,5 @@
 import pytest
-from qtpy.QtWidgets import QApplication, QPushButton
+from qtpy.QtWidgets import QApplication
 
 import napariTFM.widgets.displacement_analysis_widget as dw
 

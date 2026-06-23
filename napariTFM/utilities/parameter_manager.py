@@ -1,5 +1,5 @@
 from dataclasses import asdict, fields
-from typing import Dict, Any, Callable, Set, Tuple
+from typing import Dict, Any, Tuple
 from enum import Enum, auto
 import math
 import yaml
@@ -33,25 +33,6 @@ class ParameterManager(QObject):
     def __init__(self):
         super().__init__()
         self._parameters = UnifiedParameters()
-        self._callbacks: Dict[str, Set[Callable]] = {}
-        self._initialize_callbacks()
-
-    def _initialize_callbacks(self):
-        """Initialize callback sets for all parameters"""
-        for field in fields(self._parameters):
-            self._callbacks[field.name] = set()
-
-    def register_callback(self, param_name: str, callback: Callable) -> None:
-        """Register a callback for parameter changes"""
-        if not hasattr(self._parameters, param_name):
-            raise ValueError(f"Unknown parameter: {param_name}")
-        self._callbacks[param_name].add(callback)
-
-    def unregister_callback(self, param_name: str, callback: Callable) -> None:
-        """Unregister a callback for parameter changes"""
-        if not hasattr(self._parameters, param_name):
-            raise ValueError(f"Unknown parameter: {param_name}")
-        self._callbacks[param_name].discard(callback)
 
     def get_parameter(self, name: str) -> Any:
         """Get a parameter value"""
@@ -78,7 +59,7 @@ class ParameterManager(QObject):
         return value
 
     def set_parameter(self, name: str, value: Any) -> None:
-        """Set a parameter value and trigger callbacks"""
+        """Set a parameter value and emit parameter_changed."""
         if not hasattr(self._parameters, name):
             raise ValueError(f"Unknown parameter: {name}")
 
@@ -91,12 +72,6 @@ class ParameterManager(QObject):
         current_value = getattr(self._parameters, name)
         if current_value != value:
             setattr(self._parameters, name, value)
-
-            # Trigger callbacks
-            for callback in self._callbacks[name]:
-                callback(value)
-
-            # Emit signal
             self.parameter_changed.emit(name, value)
 
     def set_ui_parameter(self, name: str, value: Any) -> None:
@@ -187,11 +162,6 @@ class ParameterManager(QObject):
                 'density_factor', 'mesh_algorithm', 'use_optimization',
                 'poisson_ratio_cells', 'max_stress'
             ],
-            ParameterCategory.VISUALIZATION: [
-                'save_bead_overlay', 'save_displacement_map', 'save_force_map',
-                'save_force_cell_overlay', 'save_sigma_xx', 'save_sigma_yy',
-                'save_normal_stress', 'save_mesh', 'show_vectors', 'show_colormap'
-            ]
         }
 
         # Get parameters for the requested category
@@ -220,34 +190,6 @@ class ParameterManager(QObject):
         self._update_all_parameters(new_params)
         for category in ParameterCategory:
             self.parameters_reset.emit(category)
-
-    def reset_preprocessing_parameters(self) -> None:
-        """Reset preprocessing parameters to defaults"""
-        defaults = UnifiedParameters()
-        for field in fields(PreprocessingParameters):
-            self.set_parameter(field.name, getattr(defaults, field.name))
-        self.parameters_reset.emit(ParameterCategory.PREPROCESSING)
-
-    def reset_displacement_parameters(self) -> None:
-        """Reset displacement parameters to defaults"""
-        defaults = UnifiedParameters()
-        for field in fields(DisplacementParameters):
-            self.set_parameter(field.name, getattr(defaults, field.name))
-        self.parameters_reset.emit(ParameterCategory.DISPLACEMENT)
-
-    def reset_force_parameters(self) -> None:
-        """Reset force parameters to defaults"""
-        defaults = UnifiedParameters()
-        for field in fields(FTTCParameters):
-            self.set_parameter(field.name, getattr(defaults, field.name))
-        self.parameters_reset.emit(ParameterCategory.FORCE)
-
-    def reset_stress_parameters(self) -> None:
-        """Reset stress parameters to defaults"""
-        defaults = UnifiedParameters()
-        for field in fields(MSMParameters):
-            self.set_parameter(field.name, getattr(defaults, field.name))
-        self.parameters_reset.emit(ParameterCategory.STRESS)
 
     def load_from_file(self, filepath: Path) -> None:
         """Load parameters from file"""

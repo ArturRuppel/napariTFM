@@ -1,5 +1,5 @@
 import pytest
-from qtpy.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+from qtpy.QtWidgets import QApplication, QLabel, QWidget
 
 from napariTFM.widgets._collapsible_section import CollapsibleSection
 from napariTFM.widgets._stage_section import StageSection

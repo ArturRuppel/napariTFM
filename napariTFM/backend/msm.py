@@ -283,19 +283,6 @@ class MonolayerStressMicroscopy:
             ... ))
         """
 
-        def _get_algorithm_code(algorithm_name: str) -> int:
-            """Convert algorithm name to corresponding code."""
-            algorithm_map = {
-                "frontal-del": 6,
-                "delaunay": 5,
-                "meshadapt": 1,
-                "bamg": 7,
-                "fd quads": 8,
-                "para pack": 9
-            }
-            normalized_name = algorithm_name.lower().replace(".", "").replace("-", " ")
-            return algorithm_map.get(normalized_name, 6)  # Default to Frontal-Delaunay
-
         self.poisson_ratio = params.poisson_ratio_cells
         self.E = params.young_modulus
         self.density_factor = params.density_factor
