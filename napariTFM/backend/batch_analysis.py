@@ -5,6 +5,7 @@ import sys
 if 'QT_QPA_PLATFORM' not in os.environ:
     os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
+from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
 from time import sleep
@@ -25,7 +26,7 @@ from napariTFM.backend.displacement_analysis import (
 )
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
 from napariTFM.backend.msm import calculate_stresses, generate_mesh_stack
-from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, MSM_YOUNG_MODULUS, PreprocessingParameters
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters, UnifiedParameters
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy, \
     calculate_moment_tensor, calculate_polarization
@@ -816,7 +817,7 @@ class BatchAnalysis:
             - poisson_ratio_cells
             - density_factor
             And other MSM parameters
-        (The cell Young's modulus is fixed to MSM_YOUNG_MODULUS, not read from config.)
+        (The cell Young's modulus is fixed to a constant, not read from config.)
 
         Notes
         -----
@@ -845,9 +846,6 @@ class BatchAnalysis:
         # Resize masks to exactly match force field shape
         force_shape = force_data.force_field.shape[1:3]  # (height, width)
         mask_shape = mask_data.shape[1:3]  # (height, width)
-        # print(f"Mask data shape: {mask_data.shape}, dtype: {mask_data.dtype}")
-        # print(f"Force field shape: {force_data.force_field.shape}")
-        # print(f"Mask pixels > 0: {np.sum(mask_data > 0)}")
 
         if mask_shape != force_shape:
             print(f"Resizing masks from {mask_shape} to {force_shape} to match force field...")
@@ -918,64 +916,32 @@ class BatchAnalysis:
             print(f"Error during stress analysis: {str(e)}")
             return None
 
+    def _unified_parameters(self) -> UnifiedParameters:
+        """Rebuild the unified parameter set from the config dict.
+
+        Reconstructing UnifiedParameters and delegating to its to_*_parameters
+        keeps a single source of truth for field mapping: unknown keys from
+        older configs are ignored and missing keys fall back to defaults.
+        """
+        valid = {field.name for field in fields(UnifiedParameters)}
+        raw = self.config.get('parameters', {})
+        return UnifiedParameters(**{k: v for k, v in raw.items() if k in valid})
+
     def _create_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create preprocessing parameters from config."""
-        return PreprocessingParameters(
-            rolling_ball_radius=self.config['parameters']['rolling_ball_radius'],
-            min_intensity_percentile=self.config['parameters']['min_intensity_percentile'],
-            max_intensity_percentile=self.config['parameters']['max_intensity_percentile'],
-            gaussian_sigma=self.config['parameters']['gaussian_sigma'],
-            cell_min_intensity_percentile=self.config['parameters']['cell_min_intensity_percentile'],
-            cell_max_intensity_percentile=self.config['parameters']['cell_max_intensity_percentile'],
-            cell_gaussian_sigma=self.config['parameters']['cell_gaussian_sigma'],
-            registration_mode=self.config['parameters']['registration_mode']
-        )
+        return self._unified_parameters().to_preprocessing_parameters()
 
     def _create_displacement_parameters(self) -> DisplacementParameters:
         """Create displacement parameters from config."""
-        return DisplacementParameters(
-            nscales=self.config['parameters']['nscales'],
-            inner_iterations=self.config['parameters']['inner_iterations'],
-            outer_iterations=self.config['parameters'].get('outer_iterations', 0),
-            median_filtering=self.config['parameters']['median_filtering'],
-            downscale_factor=self.config['parameters']['downscale_factor'],
-            pixel_size=self.config['parameters']['pixel_size'],
-            frame_interval=self.config['parameters']['frame_interval'],
-            d_max=self.config['parameters']['d_max'],
-            disp_vector_stride=self.config['parameters']['disp_vector_stride'],
-            disp_arrow_scale=self.config['parameters']['disp_arrow_scale']
-        )
+        return self._unified_parameters().to_displacement_parameters()
 
     def _create_fttc_parameters(self) -> FTTCParameters:
         """Create FTTC parameters from config."""
-        return FTTCParameters(
-            young_modulus=self.config['parameters']['young_modulus'],
-            poisson_ratio_substrate=self.config['parameters']['poisson_ratio_substrate'],
-            gel_height=self.config['parameters'].get('gel_height'),
-            lanczos_exp=self.config['parameters']['lanczos_exp'],
-            regularization=self.config['parameters']['regularization'],
-            auto_gcv=self.config['parameters'].get('auto_gcv', False),
-            force_vector_stride=self.config['parameters']['force_vector_stride'],
-            force_arrow_scale=self.config['parameters']['force_arrow_scale'],
-            f_max=self.config['parameters']['f_max'],
-            frame_interval=self.config['parameters']['frame_interval'],
-            pixel_size=self.config['parameters']['pixel_size'],
-            downscale_factor=self.config['parameters']['downscale_factor']
-        )
+        return self._unified_parameters().to_fttc_parameters()
 
     def _create_msm_parameters(self) -> MSMParameters:
         """Create MSM parameters from config."""
-        return MSMParameters(
-            density_factor=self.config['parameters']['density_factor'],
-            mesh_algorithm=self.config['parameters']['mesh_algorithm'],
-            use_optimization=self.config['parameters']['use_optimization'],
-            poisson_ratio_cells=self.config['parameters']['poisson_ratio_cells'],
-            young_modulus=MSM_YOUNG_MODULUS,
-            max_stress=self.config['parameters']['max_stress'],
-            pixel_size=self.config['parameters']['pixel_size'],
-            downscale_factor=self.config['parameters']['downscale_factor'],
-            frame_interval=self.config['parameters']['frame_interval']
-        )
+        return self._unified_parameters().to_msm_parameters()
 
     def _log_displacement_progress(self, result, frame, total):
         displacement_field_magnitude = np.sqrt(np.sum(result ** 2, axis=-1))
