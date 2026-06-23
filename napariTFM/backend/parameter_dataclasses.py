@@ -22,10 +22,9 @@ class DisplacementParameters:
     """Parameters for displacement analysis"""
     # Farneback optical flow parameters. Names are retained for compatibility
     # with existing saved configs: nscales=levels, inner_iterations=iterations,
-    # median_filtering=window size. outer_iterations is ignored.
+    # median_filtering=window size.
     nscales: int = 10
     inner_iterations: int = 10
-    outer_iterations: int = 0
     median_filtering: int = 9
 
     # Analysis parameters
@@ -121,7 +120,6 @@ class UnifiedParameters:
     # Displacement parameters
     nscales: int = 10
     inner_iterations: int = 10
-    outer_iterations: int = 0
     median_filtering: int = 9
     downscale_factor: int = 4
     disp_vector_stride: int = 20
@@ -164,7 +162,6 @@ class UnifiedParameters:
         return DisplacementParameters(
             nscales=self.nscales,
             inner_iterations=self.inner_iterations,
-            outer_iterations=self.outer_iterations,
             median_filtering=self.median_filtering,
             downscale_factor=self.downscale_factor,
             pixel_size=self.pixel_size,

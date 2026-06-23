@@ -249,5 +249,4 @@ def test_batch_displacement_parameters_do_not_require_removed_tvl1_keys():
 
     assert params.nscales == 10
     assert params.inner_iterations == 10
-    assert params.outer_iterations == 0
     assert params.median_filtering == 9

@@ -34,9 +34,6 @@ def validate_displacement_parameters(params: DisplacementParameters) -> Tuple[bo
     if params.inner_iterations < 1:
         return False, "inner_iterations must be at least 1"
 
-    if params.outer_iterations < 0:
-        return False, "outer_iterations must be non-negative"
-
     if params.median_filtering < 1:
         return False, "median_filtering must be at least 1"
 
