@@ -20,6 +20,7 @@ class StageSection(QWidget):
     """Workflow stage section with a CellFlow-style glyph-pill header."""
 
     enabled_changed = Signal(bool)
+    visualization_toggled = Signal(bool)
 
     def __init__(
         self,
@@ -98,6 +99,12 @@ class StageSection(QWidget):
             )
         self.preview_button.setEnabled(False)
 
+        self.viz_btn = self._create_glyph_button(
+            "viz", "◉", f"Hide {title} layers", "viz", checkable=True
+        )
+        self.viz_btn.setChecked(True)
+        self.viz_btn.toggled.connect(self._on_viz_toggled)
+
         self.run_cancel_btn = self._create_glyph_button(
             "run_cancel", "▶", f"Run {title}", "run"
         )
@@ -109,6 +116,7 @@ class StageSection(QWidget):
             self.files_btn,
             self.params_btn,
             self.preview_button,
+            self.viz_btn,
             self.run_cancel_btn,
         ]
         # Static-icon buttons re-tint on theme change; run/cancel re-tints by status.
@@ -116,6 +124,7 @@ class StageSection(QWidget):
             self.files_btn: "files",
             self.params_btn: "params",
             self.preview_button: "preview",
+            self.viz_btn: "viz",
         }
         for button in self._action_buttons:
             header_layout.addWidget(button)
@@ -212,6 +221,12 @@ class StageSection(QWidget):
 
     def _on_enable_toggled(self, checked: bool) -> None:
         self.set_enabled(checked)
+
+    def _on_viz_toggled(self, checked: bool) -> None:
+        self.viz_btn.setToolTip(
+            f"{'Hide' if checked else 'Show'} {self._title} layers"
+        )
+        self.visualization_toggled.emit(checked)
 
     def set_status(self, status: str):
         self._status = status
