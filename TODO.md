@@ -138,9 +138,20 @@ replacing the removed viz checkboxes.
 - **Deferred (cosmetic):** disabling the glyph when a stage has no layers yet, and
   persisting toggle state in `get_state`/`set_state` (polish, not required).
 
-### P6 — Free-text px-size & frame-length inputs
-Convert `_project_section.py:18-55` `pixel_size` / `frame_interval`
-`QDoubleSpinBox`es to free input fields.
+### P6 — Free-text px-size & frame-length inputs  ✅ DONE *(commit d111562; suite 353 green)*
+`_project_section.py` `pixel_size`/`frame_interval` are now `QLineEdit`
+free-text fields: a `QDoubleValidator` (range, 6 decimals) guards
+keystrokes; values commit on `editingFinished` via a `float()` parse,
+reverting to the last good value on junk; display uses `:g` (no
+trailing-zero noise). Controls live only in the Project section.
+
+### Add optional Masks file input  ✅ DONE *(commit f540493; suite 353 green)*
+The experiments-list config header now exposes a **"Masks file
+(optional)"** field (`masks.tif` default) alongside cells. It flows
+through `input_file_config()` into the batch config — the backend already
+read `config['input_files']['masks']` — and round-trips via
+`set_records`. Masks stays out of folder discovery (beads + reference
+remain the only requirements).
 
 ### P7 — Rationalize + glyph-ify remaining buttons  *(polish)*
 Audit remaining action buttons, dedupe redundant ones, replace text buttons with
