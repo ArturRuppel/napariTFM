@@ -124,10 +124,39 @@ def test_selecting_a_row_sets_single_active_and_emits(app):
     assert rows[0].is_selected() is False
 
 
+def test_set_active_ignores_unknown_path(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    seen = []
+    widget.active_changed.connect(seen.append)
+
+    widget.set_active("/data/not-in-list")
+
+    assert widget.active() is None
+    assert seen == []
+
+
+def test_set_experiments_clears_stale_active(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b"])
+    widget.set_active("/data/b")
+
+    widget.set_experiments(["/data/a", "/data/c"])  # /data/b is gone
+
+    assert widget.active() is None
+
+
 def test_meta_line_counts_experiments(app):
     widget = ExperimentsList()
     widget.set_experiments(["/data/a", "/data/b", "/data/c"])
     assert "3 experiments" in widget.meta_text()
+
+
+def test_meta_line_singular_for_one_experiment(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    assert "1 experiment" in widget.meta_text()
+    assert "experiments" not in widget.meta_text()
 
 
 def test_refresh_statuses_calls_status_fn_for_each_row(app):

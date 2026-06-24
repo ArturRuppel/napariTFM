@@ -17,9 +17,11 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from napariTFM.widgets._icons import stage_action_icon
 from napariTFM.widgets._stage_spine import _node_style
 from napariTFM.widgets._ui_style import (
     COMPACT_SPACING,
+    muted_accent,
     section_label_style,
     stage_accent,
 )
@@ -175,6 +177,7 @@ class ExperimentsList(QWidget):
         self.add_btn = QToolButton()
         self.add_btn.setObjectName("experiments_add_button")
         self.add_btn.setText("Add folders")
+        self.add_btn.setIcon(stage_action_icon("plus", muted_accent(stage_accent("displacement"))))
         self.add_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.add_btn.clicked.connect(self._on_add_clicked)
         header.addWidget(self.add_btn)
