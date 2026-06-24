@@ -1,6 +1,8 @@
 """Aggregator: reduce a ``.ntfm`` series to a summary table, export ``.iris``
 (ROADMAP §5)."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -285,6 +287,54 @@ def test_premade_strain_energy_time_course():
     assert spec["encodings"]["x"] == "frame"
     assert spec["encodings"]["y"] == "total_strain_energy"
     assert {layer["geom"] for layer in spec["layers"]} == {"line"}
+
+
+# ---------------------------------------------------------------------------
+# Slice 5 — CSV export of the summary table (.iris container deferred)
+# ---------------------------------------------------------------------------
+
+def test_aggregate_to_csv_writes_file(tmp_path):
+    a = tmp_path / "exp_a.ntfm"
+    _make_ntfm(a)
+    out = tmp_path / "series.csv"
+
+    result = iris.aggregate_to_csv([a], out)
+
+    assert Path(result) == out
+    assert out.exists()
+
+
+def test_aggregate_to_csv_round_trips_grain_and_labels(tmp_path):
+    import pandas as pd
+
+    a = tmp_path / "exp_a.ntfm"
+    b = tmp_path / "exp_b.ntfm"
+    _make_ntfm(a)
+    _make_ntfm(b)
+    out = tmp_path / "series.csv"
+
+    iris.aggregate_to_csv(
+        [a, b],
+        out,
+        labels={"exp_a": {"condition": "ctrl"}, "exp_b": {"condition": "drug"}},
+    )
+
+    loaded = pd.read_csv(out)
+    assert set(loaded["experiment_id"]) == {"exp_a", "exp_b"}
+    assert set(loaded["condition"]) == {"ctrl", "drug"}
+    assert {"region_id", "frame", "total_strain_energy"}.issubset(loaded.columns)
+    assert len(loaded) == 8  # 2 experiments x 2 regions x 2 frames
+
+
+def test_aggregate_to_csv_excludes_dataframe_index(tmp_path):
+    a = tmp_path / "exp_a.ntfm"
+    _make_ntfm(a)
+    out = tmp_path / "series.csv"
+
+    iris.aggregate_to_csv([a], out)
+
+    first_field = out.read_text(encoding="utf-8").splitlines()[0].split(",")[0]
+    assert first_field == "experiment_id"  # no leading unnamed index column
 
 
 def test_premade_analyses_are_json_serializable():

@@ -267,6 +267,24 @@ def premade_analyses() -> list:
     ]
 
 
+def aggregate_to_csv(
+    paths: Iterable,
+    out_path,
+    labels: Optional[Dict[str, Dict[str, object]]] = None,
+) -> Path:
+    """Reduce a ``.ntfm`` series and write the summary table as a CSV.
+
+    The eventual export target is a ``.iris`` document (ROADMAP §5), but for now
+    the aggregator emits the same ``(experiment_id, region_id, frame)`` summary
+    table as plain CSV — directly inspectable and trivially loadable downstream.
+    """
+    out_path = Path(out_path)
+    table = build_summary_table(paths, labels=labels)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(out_path, index=False)
+    return out_path
+
+
 def build_schema(table: pd.DataFrame) -> list:
     """Type every summary-table column into the Iris schema vocabulary.
 
