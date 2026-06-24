@@ -89,11 +89,16 @@ test-locked in two sub-slices (suite 317 green):
   emit `controller.progress_updated` so the shell hears start/fail. The batch
   widget's vestigial label rides with P4.
 
-### P3 — Auto-skip-when-output-present  *(the "don't recompute" path for mandatory stages)*
-Each mandatory stage checks for its existing output and skips, reporting via P2.
-(MSM is exempt — it's gated by its own on/off glyph per D1, not auto-skip.)
-Refine `_widget.py:_experiment_stage_status` from the Slice-5 *coarse* `.ntfm`
-check to **per-output truth**. (This is the data half of the old Slice 6.)
+### P3 — Auto-skip-when-output-present  ✅ DONE *(commits f235cef P3.1, 21eac8f P3.2)*
+Per-output truth replaces the Slice-5 coarse `.ntfm`-exists check (suite 327 green).
+- ✅ **P3.1** `ntfm.populated_measures(path)` returns which of
+  displacement/force/stress carry real (non-all-NaN) data; missing/unreadable
+  container → empty set.
+- ✅ **P3.2** `_widget.py:_experiment_stage_status` reads it: a stage is 'done'
+  only when *its* measure is present; preprocessing 'done' when its cache or any
+  downstream measure proves it ran; each stage whose predecessor is done reads
+  'ready' (single run-next frontier); disabled stress reads 'off' (D1, exempt
+  from auto-skip).
 
 ### P4 — Run-all walks the rail  *(was Slice 6; live)*
 "Run all" iterates the P0 table through the stages via
