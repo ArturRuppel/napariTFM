@@ -49,8 +49,28 @@ THEME_PALETTES = {
     "Nord": NORD,
     "Dracula": DRACULA,
 }
-ACTIVE_THEME_NAME = "Cividis"
+ACTIVE_THEME_NAME = "Viridis"
 ACTIVE_PALETTE = THEME_PALETTES[ACTIVE_THEME_NAME]
+
+# ── Ordered perceptual ramps ─────────────────────────────────────────────
+# Each theme is an ordered list of hex stops. Stages sample the ACTIVE ramp by
+# their pipeline position, so the workflow reads as one colormap sweep instead
+# of collapsing to a few muddy palette colors.
+THEME_RAMPS = {
+    "Viridis": ["#440154", "#414487", "#2a788e", "#22a884", "#7ad151", "#fde725"],
+    "Cividis": ["#00204d", "#31446b", "#666970", "#958f78", "#cab969", "#ffea46"],
+    "Nord":    ["#5e81ac", "#81a1c1", "#8fbcbb", "#a3be8c", "#ebcb8b", "#d08770"],
+    "Dracula": ["#6272a4", "#bd93f9", "#8be9fd", "#50fa7b", "#f1fa8c", "#ffb86c"],
+}
+ACTIVE_RAMP = THEME_RAMPS[ACTIVE_THEME_NAME]
+
+# Stage -> position along the ramp (0 = start, 1 = end). project/inputs anchor
+# the start; batch anchors the end; the four pipeline stages spread between.
+STAGE_RAMP_POSITION = {
+    "inputs": 0.0, "project": 0.0,
+    "preprocessing": 0.18, "displacement": 0.40,
+    "force": 0.62, "stress": 0.82, "batch": 1.0,
+}
 
 # Stage key -> semantic palette color name. Each visible stage gets a
 # distinct accent so the workflow reads as ordered, themeable bands.
@@ -113,15 +133,31 @@ def active_theme_name() -> str:
 
 
 def set_active_theme(name: str) -> None:
-    global ACTIVE_PALETTE, ACTIVE_THEME_NAME
+    global ACTIVE_PALETTE, ACTIVE_THEME_NAME, ACTIVE_RAMP
     ACTIVE_THEME_NAME = name
     ACTIVE_PALETTE = THEME_PALETTES[name]
+    ACTIVE_RAMP = THEME_RAMPS[name]
+
+
+def _sample_ramp(ramp: list[str], t: float) -> str:
+    """Linear-interpolate a hex color at position t in [0, 1] along an ordered ramp."""
+    t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+    if len(ramp) == 1:
+        return ramp[0]
+    span = t * (len(ramp) - 1)
+    i = int(span)
+    if i >= len(ramp) - 1:
+        return ramp[-1]
+    frac = span - i
+    a, b = _hex_to_rgb(ramp[i]), _hex_to_rgb(ramp[i + 1])
+    rgb = tuple(round(a[c] + (b[c] - a[c]) * frac) for c in range(3))
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
 
 
 def stage_accent(key: str) -> str:
-    """Resolve a stage key to its accent hex via the active palette."""
-    semantic = STAGE_ACCENTS.get(key, STAGE_ACCENTS["inputs"])
-    return ACTIVE_PALETTE[semantic]
+    """Resolve a stage key to its accent by sampling the active colormap ramp."""
+    position = STAGE_RAMP_POSITION.get(key, STAGE_RAMP_POSITION["inputs"])
+    return _sample_ramp(ACTIVE_RAMP, position)
 
 
 def muted_accent(hex_value: str) -> str:

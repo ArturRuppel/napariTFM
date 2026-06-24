@@ -19,10 +19,22 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-def test_stage_accent_returns_palette_color_for_known_key():
-    from napariTFM.widgets._ui_style import ACTIVE_PALETTE
-    assert stage_accent("preprocessing") == ACTIVE_PALETTE[STAGE_ACCENTS["preprocessing"]]
-    assert stage_accent("displacement") == ACTIVE_PALETTE[STAGE_ACCENTS["displacement"]]
+def test_stage_accent_returns_hex_for_known_keys():
+    assert stage_accent("preprocessing").startswith("#")
+    assert stage_accent("displacement").startswith("#")
+    assert stage_accent("preprocessing") != stage_accent("displacement")
+
+
+def test_stage_accent_samples_active_ramp_in_pipeline_order():
+    from napariTFM.widgets import _ui_style
+    _ui_style.set_active_theme("Viridis")
+    # project/inputs sit at the ramp start; batch at the end.
+    assert _ui_style.stage_accent("project") == _ui_style.THEME_RAMPS["Viridis"][0]
+    assert _ui_style.stage_accent("batch") == _ui_style.THEME_RAMPS["Viridis"][-1]
+    # adjacent pipeline stages are visibly distinct (the anti-mud guarantee).
+    order = ["preprocessing", "displacement", "force", "stress"]
+    accents = [_ui_style.stage_accent(k) for k in order]
+    assert len(set(accents)) == len(accents)
 
 
 def test_stage_accent_falls_back_to_inputs_for_unknown_key():
