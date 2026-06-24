@@ -29,7 +29,7 @@ physics): ``total_strain_energy``, ``polarization_index``, ``lambda1``,
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Iterable, Optional
 
 import numpy as np
 import pandas as pd
@@ -164,3 +164,40 @@ def summarize_ntfm(path) -> pd.DataFrame:
             )
 
     return pd.DataFrame(records, columns=ID_COLUMNS + METRIC_COLUMNS)
+
+
+def build_summary_table(
+    paths: Iterable,
+    labels: Optional[Dict[str, Dict[str, object]]] = None,
+) -> pd.DataFrame:
+    """Stack a ``.ntfm`` series into one summary table; promote label columns.
+
+    Each path is reduced via :func:`summarize_ntfm` and the per-experiment
+    summaries are concatenated to the fine ``(experiment_id, region_id, frame)``
+    grain — the inferential reduction across that grain is Iris's job, not ours.
+
+    ``labels`` maps ``experiment_id -> {label_key: value}``; these
+    experiment-design tags are **assigned in the aggregator**, not carried in the
+    ``.ntfm`` (ROADMAP §5). Every distinct key becomes one categorical column,
+    ordered by first appearance; an experiment with no value for a key gets
+    ``None`` in that column.
+    """
+    labels = labels or {}
+    frames = [summarize_ntfm(path) for path in paths]
+    if frames:
+        table = pd.concat(frames, ignore_index=True)
+    else:
+        table = pd.DataFrame(columns=ID_COLUMNS + METRIC_COLUMNS)
+
+    label_keys = []
+    for mapping in labels.values():
+        for key in mapping:
+            if key not in label_keys:
+                label_keys.append(key)
+
+    for key in label_keys:
+        table[key] = [
+            labels.get(exp, {}).get(key) for exp in table["experiment_id"]
+        ]
+
+    return table

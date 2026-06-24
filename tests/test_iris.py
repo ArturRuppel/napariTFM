@@ -131,3 +131,66 @@ def test_summarize_ntfm_force_absent_yields_nan_metrics(tmp_path):
 
     assert summary["total_strain_energy"].isna().all()
     assert summary["polarization_index"].isna().all()
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 — series reduction: stack + promote aggregator-assigned labels
+# ---------------------------------------------------------------------------
+
+def test_build_summary_table_stacks_experiments(tmp_path):
+    a = tmp_path / "exp_a.ntfm"
+    b = tmp_path / "exp_b.ntfm"
+    _make_ntfm(a)
+    _make_ntfm(b)
+
+    table = iris.build_summary_table([a, b])
+
+    assert set(table["experiment_id"]) == {"exp_a", "exp_b"}
+    assert len(table) == 8  # 2 experiments x 2 regions x 2 frames
+
+
+def test_build_summary_table_promotes_label_columns(tmp_path):
+    a = tmp_path / "exp_a.ntfm"
+    b = tmp_path / "exp_b.ntfm"
+    _make_ntfm(a)
+    _make_ntfm(b)
+
+    table = iris.build_summary_table(
+        [a, b],
+        labels={
+            "exp_a": {"condition": "ctrl", "replicate": "r1"},
+            "exp_b": {"condition": "drug", "replicate": "r1"},
+        },
+    )
+
+    assert "condition" in table.columns
+    assert "replicate" in table.columns
+    a_rows = table[table["experiment_id"] == "exp_a"]
+    b_rows = table[table["experiment_id"] == "exp_b"]
+    assert set(a_rows["condition"]) == {"ctrl"}
+    assert set(b_rows["condition"]) == {"drug"}
+    assert set(table["replicate"]) == {"r1"}
+
+
+def test_build_summary_table_missing_label_is_none(tmp_path):
+    a = tmp_path / "exp_a.ntfm"
+    b = tmp_path / "exp_b.ntfm"
+    _make_ntfm(a)
+    _make_ntfm(b)
+
+    table = iris.build_summary_table(
+        [a, b],
+        labels={"exp_a": {"condition": "ctrl"}},  # exp_b has no label
+    )
+
+    b_rows = table[table["experiment_id"] == "exp_b"]
+    assert b_rows["condition"].isna().all()
+
+
+def test_build_summary_table_no_labels_has_only_grain_and_metrics(tmp_path):
+    a = tmp_path / "exp_a.ntfm"
+    _make_ntfm(a)
+
+    table = iris.build_summary_table([a])
+
+    assert list(table.columns) == iris.ID_COLUMNS + iris.METRIC_COLUMNS
