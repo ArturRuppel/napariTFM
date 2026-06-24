@@ -69,3 +69,76 @@ class MiniRail(QWidget):
             painter.setBrush(QBrush(centre))
             painter.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
         painter.end()
+
+
+def overall_status(statuses: dict[str, str]) -> str:
+    """Collapse a stage-status map into a single chip label."""
+    values = [v for k, v in statuses.items() if v != "off"]
+    if any(v == "running" for v in values):
+        return "running"
+    if values and all(v == "done" for v in values):
+        return "done"
+    return "queued"
+
+
+_CHIP_TEXT = {"running": "run", "done": "done", "queued": "queued"}
+
+
+class ExperimentRow(QWidget):
+    """One experiment: accent select-bar, name, mini-rail, overall-status chip."""
+
+    selected = Signal(str)
+
+    def __init__(self, path: str, parent=None):
+        super().__init__(parent)
+        self._path = path
+        self._selected = False
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 1, 0, 1)
+        layout.setSpacing(COMPACT_SPACING)
+        self.setLayout(layout)
+
+        self._selbar = QFrame()
+        self._selbar.setFixedWidth(3)
+        self._selbar.setStyleSheet("background: transparent;")
+        layout.addWidget(self._selbar)
+
+        self._name_label = QLabel(self.name)
+        layout.addWidget(self._name_label, 1)
+
+        self.mini_rail = MiniRail()
+        layout.addWidget(self.mini_rail)
+
+        self._chip = QLabel("queued")
+        layout.addWidget(self._chip)
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+    @property
+    def name(self) -> str:
+        return Path(self._path).name
+
+    def is_selected(self) -> bool:
+        return self._selected
+
+    def set_selected(self, on: bool) -> None:
+        self._selected = on
+        accent = stage_accent("displacement")
+        self._selbar.setStyleSheet(
+            f"background: {accent};" if on else "background: transparent;"
+        )
+
+    def set_stage_statuses(self, statuses: dict[str, str]) -> None:
+        self.mini_rail.set_statuses(statuses)
+        label = overall_status(statuses)
+        self._chip.setText(_CHIP_TEXT[label])
+
+    def _emit_selected(self) -> None:
+        self.selected.emit(self._path)
+
+    def mousePressEvent(self, event) -> None:  # pragma: no cover - GUI event
+        self._emit_selected()
+        super().mousePressEvent(event)
