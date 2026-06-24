@@ -163,9 +163,13 @@ class TeeLogger:
 class BatchAnalysis:
     """Handles batch analysis of TFM data using service layer components."""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, progress_callback=None):
         self.config = config
         self._tee_logger = None
+        # Optional per-folder lifecycle hook (P4): called as
+        # ``callback(folder_path, status)`` with status in
+        # {"running", "done", "error"} so a live UI can walk the rail.
+        self._progress_callback = progress_callback
 
     def _format_duration(self, seconds: float) -> str:
         """Format duration in appropriate units (seconds or minutes)."""
@@ -204,7 +208,24 @@ class BatchAnalysis:
             print(f"WARNING: {warning}")
 
         for folder in self.config['root_folders']:
-            self.process_folder(folder, plan.output_dirs[folder])
+            self._report_progress(folder, "running")
+            try:
+                self.process_folder(folder, plan.output_dirs[folder])
+            except Exception as e:
+                print(f"Folder {folder} failed: {str(e)}")
+                self._report_progress(folder, "error")
+                continue
+            self._report_progress(folder, "done")
+
+    def _report_progress(self, folder: str, status: str) -> None:
+        """Notify the optional progress callback; never let it break a run."""
+        callback = getattr(self, "_progress_callback", None)
+        if callback is None:
+            return
+        try:
+            callback(folder, status)
+        except Exception as e:
+            print(f"Progress callback error: {str(e)}")
 
     def process_folder(self, folder_path: str, output_dir=None) -> None:
         """
