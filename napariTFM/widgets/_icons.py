@@ -30,6 +30,11 @@ _ICON_BODIES = {
     "run": '<path d="M8 5 L19 12 L8 19 Z" fill="{c}" stroke="none"/>',
     # stop square — "cancel the running stage"
     "cancel": '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="{c}" stroke="none"/>',
+    # power — "enable / disable this stage"
+    "power": (
+        '<path d="M12 3 L12 11"/>'
+        '<path d="M6.4 6.8 A8 8 0 1 0 17.6 6.8"/>'
+    ),
 }
 
 _SVG_TEMPLATE = (

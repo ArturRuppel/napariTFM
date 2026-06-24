@@ -11,6 +11,7 @@ from qtpy.QtWidgets import QSizePolicy, QWidget
 _RUNNING = "#e3b341"
 _ERROR = "#d62828"
 _DIM = "#6b7484"
+_OFF = "#3c424c"  # recessed: a stage deliberately turned off (not "missing")
 
 
 def _node_style(status: str, accent: str) -> Tuple[Optional[QColor], QColor]:
@@ -23,6 +24,8 @@ def _node_style(status: str, accent: str) -> Tuple[Optional[QColor], QColor]:
         return None, QColor(accent)
     if status == "error":
         return QColor(_ERROR), QColor(_ERROR)
+    if status == "off":
+        return None, QColor(_OFF)
     return None, QColor(_DIM)
 
 
@@ -65,13 +68,25 @@ class StageSpine(QWidget):
         gradient.setColorAt(1.0, QColor(self._accent_below))
         pen = QPen(QBrush(gradient), self.LINE_W)
         pen.setCapStyle(Qt.FlatCap)
+        # A disabled stage recedes: dim and dash its segment of the rail so the
+        # colormap visibly "skips" it rather than reading as a broken pipeline.
+        if self._status == "off":
+            painter.setOpacity(0.45)
+            pen.setStyle(Qt.DashLine)
         painter.setPen(pen)
         painter.drawLine(int(cx), 0, int(cx), int(h))
+        painter.setOpacity(1.0)
 
         fill, ring = _node_style(self._status, self._accent)
+        r = self.NODE_R
+        if self._status == "off":
+            # A short horizontal dash ("—") reads as a skipped/off stage.
+            painter.setPen(QPen(ring, 2, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(int(cx - r), self.NODE_Y, int(cx + r), self.NODE_Y)
+            painter.end()
+            return
         centre = fill if fill is not None else self.palette().color(self.backgroundRole())
         painter.setPen(QPen(ring, 2))
         painter.setBrush(QBrush(centre))
-        r = self.NODE_R
         painter.drawEllipse(QRectF(cx - r, self.NODE_Y - r, 2 * r, 2 * r))
         painter.end()
