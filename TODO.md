@@ -100,7 +100,7 @@ Per-output truth replaces the Slice-5 coarse `.ntfm`-exists check (suite 327 gre
   'ready' (single run-next frontier); disabled stress reads 'off' (D1, exempt
   from auto-skip).
 
-### P4 — Run-all walks the rail  *(was Slice 6; live)*  🚧 run path DONE, retirement pending
+### P4 — Run-all walks the rail  *(was Slice 6; live)*  ✅ DONE
 "Run all" iterates the P0 table through the stages via
 `BatchAnalysis.process_all_folders()`, with live mini-rail updates; **drives runs
 from the config table** and retires the old batch run button
@@ -115,13 +115,14 @@ from the config table** and retires the old batch run button
 - ✅ **P4.4** shell wires it: `run_all_requested` → `build_run_config` →
   `BatchAnalysis` with a callback that marks-running, refreshes-from-disk on
   done/error, and pumps events so the rail repaints live. (suite 349 green)
-- ⬜ **P4.5** retire `BatchAnalysisWidget`: (a) `ExperimentsList.set_records()`
-  rebuild table from records; (b) repoint shell `_save_config`/`_load_config`
-  off `batch_widget` to table-driven YAML (`build_run_config` for save; parse +
-  `set_records` for load); (c) remove the batch `StageSection`, delete the widget
-  + `test_batch_parameters.py`, drop `STAGE_DATA_ARTIFACTS["batch"]` and the
-  `set_experiment_records` syncing. **Reformats persisted config + deletes a
-  widget/tests — confirm before starting.**
+- ✅ **P4.5** retired `BatchAnalysisWidget`: (a) `ExperimentsList.set_records()`
+  rebuilds the table from records; (b) shell `_save_config`/`_load_config` are
+  table-driven YAML (`build_run_config` for save; parse + `set_records` for
+  load) — config I/O no longer touches the batch widget; (c) removed the batch
+  `StageSection`, deleted `batch_analysis_widget.py` + `test_batch_parameters.py`,
+  dropped `STAGE_DATA_ARTIFACTS["batch"]` and the `set_experiment_records`
+  syncing. The latent `"batch"` accent stays in `_ui_style` as colormap
+  vocabulary. (suite 340 green)
 
 ### P5 — Per-stage viz-toggle glyph  *(replaces the removed viz checkboxes)*
 Each stage header gains a single **viz-toggle glyph** that toggles that stage's
