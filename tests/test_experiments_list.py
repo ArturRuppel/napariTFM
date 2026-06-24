@@ -189,6 +189,41 @@ def test_meta_line_singular_for_one_experiment(app):
     assert "experiments" not in widget.meta_text()
 
 
+def test_experiment_records_default_to_empty_metadata(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    assert widget.experiment_records() == [
+        {"path": "/data/a", "input_files": {}, "columns": {}}
+    ]
+
+
+def test_add_folders_copies_column_config_onto_each_new_row(app):
+    widget = ExperimentsList()
+    widget.add_folders(
+        ["/data/a", "/data/b"],
+        input_files={"beads": "beads.tif", "reference": "reference.tif"},
+        columns={"condition": "WT"},
+    )
+    records = widget.experiment_records()
+    assert [r["path"] for r in records] == ["/data/a", "/data/b"]
+    assert all(r["columns"] == {"condition": "WT"} for r in records)
+    assert all(
+        r["input_files"] == {"beads": "beads.tif", "reference": "reference.tif"}
+        for r in records
+    )
+    # Each row owns a copy — mutating one returned record never leaks across rows.
+    records[0]["columns"]["condition"] = "KO"
+    assert widget.experiment_records()[1]["columns"]["condition"] == "WT"
+
+
+def test_existing_rows_keep_metadata_when_a_second_batch_is_added(app):
+    widget = ExperimentsList()
+    widget.add_folders(["/data/a"], columns={"condition": "WT"})
+    widget.add_folders(["/data/b"], columns={"condition": "KO"})
+    by_path = {r["path"]: r["columns"] for r in widget.experiment_records()}
+    assert by_path == {"/data/a": {"condition": "WT"}, "/data/b": {"condition": "KO"}}
+
+
 def test_refresh_statuses_calls_status_fn_for_each_row(app):
     calls = []
     def status_fn(path):

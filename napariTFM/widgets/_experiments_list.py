@@ -200,6 +200,9 @@ class ExperimentsList(QWidget):
         super().__init__(parent)
         self._status_fn = status_fn
         self._paths: list[str] = []
+        # path -> {"input_files": {...}, "columns": {...}} — the per-row metadata
+        # that makes the list the single config table (P0).
+        self._records: dict[str, dict] = {}
         self._rows: list[ExperimentRow] = []
         self._active: Optional[str] = None
 
@@ -236,6 +239,17 @@ class ExperimentsList(QWidget):
     def experiments(self) -> list[str]:
         return list(self._paths)
 
+    def experiment_records(self) -> list[dict]:
+        """Ordered per-row config records: path + input_files + free-form columns."""
+        return [
+            {
+                "path": path,
+                "input_files": dict(self._records[path]["input_files"]),
+                "columns": dict(self._records[path]["columns"]),
+            }
+            for path in self._paths
+        ]
+
     def active(self) -> Optional[str]:
         return self._active
 
@@ -245,6 +259,11 @@ class ExperimentsList(QWidget):
     # -- mutation --------------------------------------------------------
     def set_experiments(self, paths: list[str]) -> None:
         self._paths = list(dict.fromkeys(paths))  # de-dup, keep order
+        # Preserve metadata for surviving paths; seed empty for the rest.
+        self._records = {
+            path: self._records.get(path, {"input_files": {}, "columns": {}})
+            for path in self._paths
+        }
         self._rebuild_rows()
         if self._active not in self._paths:
             self._active = None
@@ -252,11 +271,29 @@ class ExperimentsList(QWidget):
         self._update_meta()
         self.experiments_changed.emit()
 
-    def add_folders(self, paths: list[str]) -> None:
-        merged = list(dict.fromkeys(self._paths + list(paths)))
-        if merged == self._paths:
+    def add_folders(
+        self,
+        paths: list[str],
+        *,
+        input_files: Optional[dict] = None,
+        columns: Optional[dict] = None,
+    ) -> None:
+        """Append new folders, copying the given column config onto each new row.
+
+        This is the *commit* half of the two-step Discover→Commit flow (D2): the
+        current column config (input file names + free-form name/value pairs) is
+        copied — not shared — onto every freshly added row. Existing rows keep
+        their own metadata.
+        """
+        new_paths = [p for p in dict.fromkeys(paths) if p not in self._paths]
+        if not new_paths:
             return
-        self.set_experiments(merged)
+        for path in new_paths:
+            self._records[path] = {
+                "input_files": dict(input_files or {}),
+                "columns": dict(columns or {}),
+            }
+        self.set_experiments(self._paths + new_paths)
 
     def set_active(self, path: Optional[str]) -> None:
         if path is not None and path not in self._paths:
