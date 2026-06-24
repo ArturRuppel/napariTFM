@@ -53,8 +53,12 @@ carries params **plus** the P0 table.
 
 ### P1 — Strip superseded scaffolding  *(deletions — low risk, parallelizable, do early)*
 Independent of P0 and safe to start first; **keep the batch run trigger until P4.**
+All removals here are behavior-preserving (each control already defaults to its
+"on"/"napari-console" state, hardcoded into `_generate_config`).
 - **Folder management** (list/add/clear): `batch_analysis_widget.py:201-245`,
-  `_add_folder:498`, `_clear_folders:573` — superseded by P0.
+  `_add_folder:498`, `_clear_folders:573` — **deferred to P0/P4**: the kept batch
+  run reads `folder_list` as its only source, and P0's table is its replacement.
+  Cannot remove without breaking the run we keep until P4.
 - **Run-in-napari vs run-in-console** radios: `batch_analysis_widget.py:223-235`
   (a headless CLI comes later, not a radio).
 - **Analysis-step checkboxes**: `batch_analysis_widget.py:144-172`

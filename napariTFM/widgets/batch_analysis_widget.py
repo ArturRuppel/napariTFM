@@ -1,13 +1,11 @@
 import os
-import subprocess
-import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import yaml
 from qtpy.QtCore import Qt, Signal, QSettings
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QGridLayout, QButtonGroup, QRadioButton, QListView,
+    QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QGridLayout, QListView,
     QPushButton, QFrame, QTreeView, QDialog,
     QProgressBar, QMessageBox, QListWidget, QCheckBox, QLineEdit, QFileDialog,
 )
@@ -220,23 +218,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         button_layout.addWidget(self.save_config_btn, 1, 0)
         button_layout.addWidget(self.load_config_btn, 1, 1)
 
-        # Add console selection radio buttons
-        console_group = QHBoxLayout()
-        self.console_group = QButtonGroup()
-
-        self.napari_console_radio = QRadioButton("Run in Napari Console")
-        self.new_console_radio = QRadioButton("Run in New Console")
-        self.napari_console_radio.setChecked(True)
-
-        self.console_group.addButton(self.napari_console_radio)
-        self.console_group.addButton(self.new_console_radio)
-
-        console_group.addWidget(self.napari_console_radio)
-        console_group.addWidget(self.new_console_radio)
-
-        layout.addLayout(console_group)
-
-        # Add run button
+        # Add run button — batch always runs in-process (a headless CLI is the
+        # future home for out-of-process runs).
         self.run_analysis_btn = QPushButton("Run Analysis")
         layout.addWidget(self.run_analysis_btn)
 
@@ -685,25 +668,20 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 yaml.safe_dump(config, temp_yaml, default_flow_style=False)
                 config_path = temp_yaml.name
 
-            if self.napari_console_radio.isChecked():
-                # Run directly in napari console
-                print("Starting batch analysis in napari console...")
+            # Run directly in the napari process.
+            print("Starting batch analysis...")
 
-                # Create output directories
-                for folder in config["root_folders"]:
-                    tfm_data_dir = Path(folder) / "TFM_data"
-                    tfm_data_dir.mkdir(exist_ok=True)
+            # Create output directories
+            for folder in config["root_folders"]:
+                tfm_data_dir = Path(folder) / "TFM_data"
+                tfm_data_dir.mkdir(exist_ok=True)
 
-                # Run analysis
-                analyzer = BatchAnalysis(config)
-                analyzer.process_all_folders()
+            # Run analysis
+            analyzer = BatchAnalysis(config)
+            analyzer.process_all_folders()
 
-                # Clean up config file
-                Path(config_path).unlink()
-
-            else:
-                # Run in new console - implementation remains the same
-                self._run_in_new_console(config_path)
+            # Clean up config file
+            Path(config_path).unlink()
 
         except Exception as e:
             QMessageBox.critical(
@@ -717,70 +695,5 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                     Path(config_path).unlink()
                 except:
                     pass
-
-    def _run_in_new_console(self, config_path: str):
-        """Run analysis in a new console window."""
-        # Determine the correct directory to add to sys.path in the new console.
-        # This should be the 'napariTFM' package directory that contains 'backend', 'widgets', etc.
-        # Path(__file__) in this context refers to batch_analysis_widget.py
-        # .parent is 'widgets', .parent.parent is the 'napariTFM' package directory.
-        napariTFM_package_dir = Path(__file__).resolve().parent.parent
-        config_path_forward = str(Path(config_path)).replace('\\', '/')
-
-        script_content = f'''
-import sys
-from pathlib import Path
-package_dir_to_add = r"{str(napariTFM_package_dir)}"
-if package_dir_to_add not in sys.path:
-    sys.path.insert(0, package_dir_to_add)
-
-from backend.batch_analysis import BatchAnalysis
-
-# Create analyzer instance and process folders
-config_path = "{config_path_forward}"
-analyzer = BatchAnalysis.from_yaml(config_path)
-analyzer.process_all_folders()
-
-# Clean up temporary config file
-Path(config_path).unlink()
-'''
-
-        # Create temporary Python script file
-        with NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_script:
-            temp_script.write(script_content)
-            script_path = temp_script.name
-
-        # Launch new Python console running the script
-        self._launch_console(script_path)
-
-    def _launch_console(self, script_path: str):
-        """Launch the appropriate console based on platform."""
-        python_executable = sys.executable
-
-        if sys.platform == 'win32':
-            subprocess.Popen(['start', 'cmd', '/k', python_executable, script_path],
-                             shell=True)
-        else:
-            if sys.platform == 'darwin':
-                subprocess.Popen(['open', '-a', 'Terminal',
-                                  python_executable, script_path])
-            else:
-                terminals = ['gnome-terminal', 'xterm', 'konsole']
-                for terminal in terminals:
-                    try:
-                        subprocess.Popen([terminal, '--', python_executable,
-                                          script_path])
-                        break
-                    except FileNotFoundError:
-                        continue
-                else:
-                    raise RuntimeError("No suitable terminal emulator found")
-
-        QMessageBox.information(
-            self,
-            "Analysis Started",
-            "Batch analysis has been started in a new console window.\n"
-            "The analysis will continue running even if you close napari."
-        )
 
     # endregion === Execution ===

@@ -207,6 +207,21 @@ def test_batch_config_generation_does_not_read_duplicate_parameter_widgets():
     assert config["parameters"]["mesh_algorithm"] == "Frontal-Del."
 
 
+def test_batch_widget_has_no_run_mode_radios():
+    """Run mode is always in-process; the napari/new-console radios are gone."""
+    app = _app()
+    widget = BatchAnalysisWidget(None, object(), ParameterManager(), object())
+    widget.show()
+    app.processEvents()
+
+    assert not hasattr(widget, "napari_console_radio")
+    assert not hasattr(widget, "new_console_radio")
+    assert not hasattr(widget, "console_group")
+    # The new-console subprocess machinery goes with the radios.
+    assert not hasattr(widget, "_run_in_new_console")
+    assert not hasattr(widget, "_launch_console")
+
+
 def test_batch_fttc_parameters_honor_auto_gcv():
     analysis = BatchAnalysis.__new__(BatchAnalysis)
     analysis.config = {
