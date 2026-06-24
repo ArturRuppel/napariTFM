@@ -11,6 +11,7 @@ from napariTFM.widgets._ui_style import (
     stage_header_style,
 )
 from napariTFM.widgets._collapsible_section import CollapsibleSection
+from napariTFM.widgets._stage_spine import StageSpine
 
 
 class StageSection(QWidget):
@@ -41,11 +42,24 @@ class StageSection(QWidget):
             self._accent = accent
         else:
             self._accent = stage_accent(self._slug)
+        self._accent_above = self._accent
+        self._accent_below = self._accent
 
+        self.spine = StageSpine(self._accent, status=status)
+
+        outer = QHBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.setLayout(outer)
+
+        body = QWidget()
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(COMPACT_SPACING)
-        self.setLayout(layout)
+        body.setLayout(layout)
+
+        outer.addWidget(self.spine)
+        outer.addWidget(body, 1)
 
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
@@ -152,6 +166,7 @@ class StageSection(QWidget):
         else:
             self.run_cancel_btn.setText("▶")
             self.run_cancel_btn.setToolTip(f"Run {self._title}")
+        self.spine.set_status(status)
         self._refresh_action_states()
 
     def _refresh_action_states(self):
@@ -170,6 +185,14 @@ class StageSection(QWidget):
             self._param_section.set_accent_color(accent)
         if self._status_section is not None:
             self._status_section.set_accent_color(accent)
+        self.spine.set_accents(accent, self._accent_above, self._accent_below)
+
+    def set_accents(self, accent: str, above: str | None = None, below: str | None = None) -> None:
+        """Set the stage accent plus its neighbours, for the gradient spine."""
+        self._accent = accent
+        self._accent_above = above or accent
+        self._accent_below = below or accent
+        self.set_accent(accent)
 
     def _create_glyph_button(self, action: str, glyph: str, tooltip: str, checkable: bool = False):
         return make_stage_action_button(

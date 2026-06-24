@@ -49,3 +49,22 @@ def test_spine_set_accents_stores_neighbours(app):
 def test_spine_has_fixed_gutter_width(app):
     spine = StageSpine("#2a788e")
     assert spine.width() == StageSpine.GUTTER_WIDTH
+
+
+def test_stage_section_owns_a_spine_and_forwards_status(app):
+    from napariTFM.widgets._stage_section import StageSection
+    from qtpy.QtWidgets import QLabel
+    section = StageSection("Force", QLabel("body"), status="ready")
+    assert isinstance(section.spine, StageSpine)
+    assert section.spine._status == "ready"
+    section.set_status("done")
+    assert section.spine._status == "done"
+
+
+def test_stage_section_set_accents_forwards_to_spine(app):
+    from napariTFM.widgets._stage_section import StageSection
+    from qtpy.QtWidgets import QLabel
+    section = StageSection("Force", QLabel("body"))
+    section.set_accents("#22a884", above="#2a788e", below="#7ad151")
+    assert section.spine._accent_above == "#2a788e"
+    assert section.spine._accent_below == "#7ad151"
