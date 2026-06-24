@@ -159,6 +159,10 @@ class _StubStageWidget(QWidget):
     def action_states(self):
         return dict(self._action_states)
 
+    def set_experiment_records(self, records):
+        # The batch widget consumes the config table (P0); the stub just records.
+        self.experiment_records = list(records)
+
     def set_action_states(self, **states):
         self._action_states.update(states)
         self.action_states_changed.emit()

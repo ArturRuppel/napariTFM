@@ -457,6 +457,12 @@ class napariTFMWidget(QWidget):
             self.parameter_manager,
             self.visualization_manager
         )
+        # The config table (top) is the single source of folders + metadata; feed
+        # it into the batch run (P0). The batch widget's own folder list is kept
+        # in sync until P4 retires it.
+        self.batch_widget.set_experiment_records(
+            self.experiments_list.experiment_records()
+        )
 
         stage_data_artifacts = dict(STAGE_DATA_ARTIFACTS)
         stage_data_artifacts["preprocessing"] = _build_preprocessing_specs(
@@ -700,6 +706,9 @@ class napariTFMWidget(QWidget):
         self._write_config()
 
     def _on_experiments_changed(self) -> None:
+        self.batch_widget.set_experiment_records(
+            self.experiments_list.experiment_records()
+        )
         self._write_config()
 
     def get_state(self) -> dict:

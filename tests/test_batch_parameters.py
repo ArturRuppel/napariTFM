@@ -263,6 +263,51 @@ def test_batch_widget_has_no_run_mode_radios():
     assert not hasattr(widget, "_launch_console")
 
 
+def test_set_experiment_records_drives_folders_and_input_files():
+    app = _app()
+    widget = BatchAnalysisWidget(None, object(), ParameterManager(), object())
+    widget.set_experiment_records(
+        [
+            {"path": "/data/a", "input_files": {"beads": "b.tif", "reference": "r.tif"}, "columns": {"condition": "WT"}},
+            {"path": "/data/b", "input_files": {"beads": "b.tif", "reference": "r.tif"}, "columns": {"condition": "KO"}},
+        ]
+    )
+    assert widget.folder_list == ["/data/a", "/data/b"]
+    assert widget.file_inputs["beads"].text() == "b.tif"
+    assert widget.file_inputs["reference"].text() == "r.tif"
+    assert widget.action_states() == {"run": True}
+
+
+def test_generate_config_carries_experiment_metadata_from_the_table():
+    app = _app()
+    widget = BatchAnalysisWidget(None, object(), ParameterManager(), object())
+    widget.set_experiment_records(
+        [
+            {"path": "/data/a", "input_files": {"beads": "b.tif", "reference": "r.tif"}, "columns": {"condition": "WT"}},
+        ]
+    )
+    config = widget._generate_config()
+    assert config["root_folders"] == ["/data/a"]
+    assert config["input_files"]["beads"] == "b.tif"
+    assert config["experiment_metadata"] == {"/data/a": {"condition": "WT"}}
+
+
+def test_generate_config_without_a_table_has_empty_metadata():
+    fake = SimpleNamespace(
+        folder_list_widget=_List(),
+        file_inputs={"beads": _Text("beads.tif"), "reference": _Text("ref.tif"), "cells": _Text("")},
+        parameter_manager=_Manager(),
+        parameter_spins={},
+        parameter_combos={},
+        parameter_checks={},
+        save_cache_checkbox=_Check(False),
+    )
+
+    config = BatchAnalysisWidget._generate_config(fake)
+
+    assert config["experiment_metadata"] == {}
+
+
 def test_batch_fttc_parameters_honor_auto_gcv():
     analysis = BatchAnalysis.__new__(BatchAnalysis)
     analysis.config = {

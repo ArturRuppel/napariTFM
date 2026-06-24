@@ -40,6 +40,9 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self.parameter_combos = {}
         self.parameter_checks = {}
         self.folder_list = []
+        # Per-folder free-form columns from the shared config table (P0); copied
+        # into the saved config as experiment_metadata.
+        self._experiment_metadata = {}
 
         self.blockSignals(True)
         try:
@@ -250,6 +253,9 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             'parameters': parameters,
             'metrics_parameters': metrics_parameters,  # New section
             'save_cache': self.save_cache_checkbox.isChecked(),
+            # Free-form per-folder metadata from the config table (P0). Empty when
+            # the run is driven by the legacy folder list rather than the table.
+            'experiment_metadata': getattr(self, '_experiment_metadata', {}),
         }
 
         return config
@@ -577,6 +583,28 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
     # endregion === Folder Management ===
 
     # region === State Management ===
+    def set_experiment_records(self, records: list) -> None:
+        """Drive the batch run from the shared config table (P0).
+
+        Mirrors the table's folders + input file names into this widget so the
+        existing run/validation path consumes the table, and keeps each row's
+        free-form columns as experiment_metadata for the saved config (and
+        aggregation, P9). The folder-management UI is retired with the rest of
+        this widget in P4.
+        """
+        self.folder_list = [record["path"] for record in records]
+        self.folder_list_widget.clear()
+        for path in self.folder_list:
+            self.folder_list_widget.addItem(path)
+        self._experiment_metadata = {
+            record["path"]: dict(record.get("columns", {})) for record in records
+        }
+        if records:
+            input_files = records[0].get("input_files", {})
+            for key, field in self.file_inputs.items():
+                field.setText(input_files.get(key, ""))
+        self._update_ui_state()
+
     def action_states(self) -> dict:
         """Report the stage header's run-action enablement (run only)."""
         return {"run": len(self.folder_list) > 0}
