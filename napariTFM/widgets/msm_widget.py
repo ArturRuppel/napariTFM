@@ -6,7 +6,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import Signal, QObject
 from qtpy.QtWidgets import (
     QLabel, QSizePolicy, QFrame, QApplication, QSpacerItem,
-    QPushButton, QProgressBar, QFileDialog
+    QPushButton, QProgressBar
 )
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
 
@@ -17,7 +17,6 @@ from napariTFM.backend.msm import (
     process_mask_data,
 )
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
-from napariTFM.widgets._output_directory import ensure_output_dir_for_generated_artifacts
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.utilities.visualization_manager import VisualizationManager
@@ -536,26 +535,12 @@ class MSMWidget(BaseAnalysisWidget):
             )
 
     def load_result_artifact(self, key: str):
+        """Load an external input layer. Only the mask is loadable (ROADMAP §2 —
+        masks are an external input); analysis results chain in-memory and are
+        never read from disk interactively (ROADMAP §4)."""
         if key == "mask_stack":
             self._load_mask_stack_from_active_layer()
-        else:
-            path = self._choose_result_path(key)
-            if not path:
-                return
-            self.data_manager.load_result_artifact(key, path)
-            show_force = getattr(self.visualization_manager, "visualize_force_results", None)
-            if key == "force_results" and show_force is not None:
-                show_force()
         self._update_ui_state()
-
-    def _choose_result_path(self, key: str):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            f"Load {key.replace('_', ' ')}",
-            "",
-            "NumPy Files (*.npy)",
-        )
-        return path
 
     def _load_mask_stack_from_active_layer(self):
         active_layer = self.viewer.layers.selection.active
@@ -634,14 +619,11 @@ class MSMWidget(BaseAnalysisWidget):
         self.status_label.setText("Analysis started...")
 
     def _on_analysis_completed(self, results):
-        """Handle analysis completion."""
-        if ensure_output_dir_for_generated_artifacts(self, self.data_manager):
-            try:
-                self.data_manager.auto_save_artifact("stress_results")
-            except Exception as exc:
-                self.data_manager.mark_artifact_error("stress_results", str(exc))
-                QMessageBox.warning(self, "Auto-save Failed", str(exc))
+        """Handle analysis completion.
 
+        Preview-only (ROADMAP §4): result held in memory and shown in napari;
+        nothing written to disk. Batch is the only path to persisted data.
+        """
         self.stress_calculated.emit(results)
         self._update_ui_state()
 

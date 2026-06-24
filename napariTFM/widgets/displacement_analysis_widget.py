@@ -8,7 +8,6 @@ from qtpy.QtWidgets import (
 )
 
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
-from napariTFM.widgets._output_directory import ensure_output_dir_for_generated_artifacts
 from napariTFM.backend.displacement_analysis import (
     DisplacementResult,
     calculate_displacement_field,
@@ -498,16 +497,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     # region === Results Handling
 
     def _on_analysis_completed(self, results):
-        """Handle completed analysis."""
+        """Handle completed analysis.
+
+        Preview-only (ROADMAP §4): the result is held in memory and shown in
+        napari for parameter tuning; nothing is written to disk. Batch is the
+        only path to persisted data.
+        """
         self._update_ui_state()
-
-        if ensure_output_dir_for_generated_artifacts(self, self.data_manager):
-            try:
-                self.data_manager.auto_save_artifact("displacement_results")
-            except Exception as exc:
-                self.data_manager.mark_artifact_error("displacement_results", str(exc))
-                QMessageBox.warning(self, "Auto-save Failed", str(exc))
-
         self.displacement_calculated.emit(results)
 
     def _on_analysis_failed(self, error_msg: str):

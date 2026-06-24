@@ -14,7 +14,6 @@ from qtpy.QtWidgets import (
 )
 
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
-from napariTFM.widgets._output_directory import ensure_output_dir_for_generated_artifacts
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 
@@ -300,23 +299,12 @@ class PreprocessingController(QObject):
             for layer in self.viewer.layers:
                 layer.visible = layer.name in preprocessing_layers
 
-            # Get current parameters for the completion signal
+            # Get current parameters for the completion signal.
+            # Preview-only (ROADMAP §4): preprocessed stacks are held in memory
+            # and shown in napari; nothing is written to disk. Batch is the only
+            # path to persisted data.
             current_params = self.parameter_manager.get_preprocessing_parameters()
-            saved_message = ""
-            if ensure_output_dir_for_generated_artifacts(None, self.data_manager):
-                try:
-                    saved = self.data_manager.auto_save_generated_artifacts(
-                        ["preprocessed_bead_stack", "preprocessed_reference", "preprocessed_cell_stack"],
-                        pixel_size=self.parameter_manager.get_parameter("pixel_size"),
-                        frame_interval=self.parameter_manager.get_parameter("frame_interval"),
-                    )
-                    if saved:
-                        saved_message = f"; saved {len(saved)} file(s)"
-                except Exception as exc:
-                    self.data_manager.mark_artifact_error("preprocessed_bead_stack", str(exc))
-                    QMessageBox.warning(None, "Auto-save Failed", str(exc))
-
-            self.progress_updated.emit(100, f"Preprocessing complete{saved_message}")
+            self.progress_updated.emit(100, "Preprocessing complete")
             self.preprocessing_completed.emit({'parameters': current_params.__dict__})
 
         except Exception as e:

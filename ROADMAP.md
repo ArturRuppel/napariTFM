@@ -18,7 +18,7 @@ The five decisions form a near-linear chain. Recommended sequence:
 |-------|-----------------------------------|----------------------------------------------------------------|--------|
 | **0** | §2 Drop mask creation             | Cheap deletion; de-scopes batch + the `.ntfm` mask column      | ✅ done |
 | **1** | §1 `.ntfm` + tidy converter       | Foundation — every data-shaped item below consumes it          | ✅ built |
-| **2** | §4 Batch-only data production      | Writes `.ntfm`; needs the container to exist                   | 🟡 backend wired; UI parts open |
+| **2** | §4 Batch-only data production      | Writes `.ntfm`; needs the container to exist                   | 🟡 backend + preview-only done; tune→commit bridge open |
 | **3** | §3 Toolbar UI                     | Final shape depends on which buttons §4 leaves behind          | 🔵 |
 | **4** | §5 Aggregator → `.iris`           | Consumes `.ntfm` series + structured batch output              | 🔵 designed |
 
@@ -159,9 +159,11 @@ the earlier `nN` label was a schema error.
 **Remaining open item** ⚪
 - **Migration.** One-shot `.npy` → `.ntfm` converter, or a transparent
   read-compat shim for existing projects? (Lower-stakes now the schema is fixed.)
-- **Wiring.** Batch now writes one `.ntfm` per experiment (§4 backend, done).
-  `data_manager.py`'s interactive path still writes the scattered `.npy` files;
-  making per-stage runs preview-only is §4's remaining UI part.
+- **Wiring.** ✅ Batch writes one `.ntfm` per experiment (§4 backend) and it is now
+  the *sole* persisted result: the interactive path is **preview-only** (writes
+  nothing; `DataManager` availability follows the in-memory value) and batch no
+  longer caches the scattered `.npy` files — stage-resume reads displacement/force
+  back from the `.ntfm`. Only the preprocessed `.tif` survives as an opt-in cache.
 
 ---
 
@@ -220,9 +222,16 @@ resolved per-experiment `config`, `inputs`, and per-experiment `labels`
 `metrics_results.csv` batch output is **retired** (derived metrics are §5's job).
 Tested in `tests/test_batch_output.py` + `tests/test_batch_ntfm_output.py`.
 
-**Still open (UI parts):** per-stage buttons going preview-only, and the
-tune→commit→run bridge below. Labels have no batch-UI entry point yet (read from
-`config['labels']` keyed by folder when present).
+**Preview-only — done.** Per-stage interactive buttons now write nothing to disk:
+results live in memory and chain displacement→force→stress in memory; the Save
+buttons and the prior-stage `.npy` Load buttons are gone (the mask Load stays —
+it's an external input). `.ntfm` is the only persisted artifact; batch caches
+just the opt-in preprocessed `.tif`, and stage-resume reads results back from the
+`.ntfm`.
+
+**Still open (UI parts):** the tune→commit→run bridge below. Labels have no
+batch-UI entry point yet (read from `config['labels']` keyed by folder when
+present).
 
 **Decision.** Separate **parameter tuning** from **data production**.
 

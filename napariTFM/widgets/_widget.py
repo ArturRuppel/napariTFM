@@ -60,7 +60,7 @@ STAGE_DATA_ARTIFACTS = {
 }
 
 
-def _build_preprocessing_specs(preprocessing_widget, visualization_manager, save_artifact):
+def _build_preprocessing_specs(preprocessing_widget, visualization_manager):
     def assign(role: str):
         return lambda: preprocessing_widget.load_active_layer(role)
 
@@ -109,7 +109,6 @@ def _build_preprocessing_specs(preprocessing_widget, visualization_manager, save
             "preprocessed_reference",
             "output",
             on_view=view("preprocessed_reference"),
-            on_action=lambda: save_artifact("preprocessed_reference"),
         ),
         DataArtifactSpec(
             "preprocessed_bead_stack",
@@ -117,12 +116,11 @@ def _build_preprocessing_specs(preprocessing_widget, visualization_manager, save
             "preprocessed_bead_stack",
             "output",
             on_view=view("preprocessed_bead_stack"),
-            on_action=lambda: save_artifact("preprocessed_bead_stack"),
         ),
     ]
 
 
-def _build_displacement_specs(displacement_widget, save_artifact):
+def _build_displacement_specs(displacement_widget):
     def assign(role: str):
         return lambda: displacement_widget.load_active_layer(role)
 
@@ -146,38 +144,35 @@ def _build_displacement_specs(displacement_widget, save_artifact):
             "Displacement field",
             "displacement_results",
             "output",
-            on_action=lambda: save_artifact("displacement_results"),
         ),
     ]
 
 
-def _build_force_specs(force_widget, save_artifact):
+def _build_force_specs(force_widget):
+    # Results chain in-memory (ROADMAP §4); the upstream input row is status-only.
     return [
         DataArtifactSpec(
             "displacement_results",
             "Displacement field",
             "displacement_results",
             "input",
-            on_action=lambda: force_widget.load_result_artifact("displacement_results"),
         ),
         DataArtifactSpec(
             "force_results",
             "Traction map",
             "force_results",
             "output",
-            on_action=lambda: save_artifact("force_results"),
         ),
     ]
 
 
-def _build_stress_specs(stress_widget, save_artifact):
+def _build_stress_specs(stress_widget):
     return [
         DataArtifactSpec(
             "force_results",
             "Traction map",
             "force_results",
             "input",
-            on_action=lambda: stress_widget.load_result_artifact("force_results"),
         ),
         DataArtifactSpec(
             "mask_stack",
@@ -185,6 +180,7 @@ def _build_stress_specs(stress_widget, save_artifact):
             "mask_stack",
             "input",
             required=False,
+            # Masks are an external input (ROADMAP §2): loaded from the active layer.
             on_action=lambda: stress_widget.load_result_artifact("mask_stack"),
         ),
         DataArtifactSpec(
@@ -192,7 +188,6 @@ def _build_stress_specs(stress_widget, save_artifact):
             "Stress map",
             "stress_results",
             "output",
-            on_action=lambda: save_artifact("stress_results"),
         ),
     ]
 
@@ -450,19 +445,15 @@ class napariTFMWidget(QWidget):
         stage_data_artifacts["preprocessing"] = _build_preprocessing_specs(
             self.preprocessing_widget,
             self.visualization_manager,
-            self._save_generated_artifact,
         )
         stage_data_artifacts["displacement"] = _build_displacement_specs(
             self.displacement_widget,
-            self._save_generated_artifact,
         )
         stage_data_artifacts["force"] = _build_force_specs(
             self.force_widget,
-            self._save_generated_artifact,
         )
         stage_data_artifacts["stress"] = _build_stress_specs(
             self.msm_widget,
-            self._save_generated_artifact,
         )
         self._stage_status_panels_by_key = {
             key: StageDataStatusPanel(key, self.data_manager, artifacts)
@@ -690,22 +681,6 @@ class napariTFMWidget(QWidget):
         else:
             self._write_config()
             self.refresh()
-
-    def _save_generated_artifact(self, key: str):
-        try:
-            kwargs = {}
-            if key.startswith("preprocessed_"):
-                kwargs = {
-                    "pixel_size": self.parameter_manager.get_ui_parameter("pixel_size"),
-                    "frame_interval": self.parameter_manager.get_ui_parameter("frame_interval"),
-                }
-            self.data_manager.auto_save_artifact(key, **kwargs)
-        except Exception as exc:
-            self.data_manager.mark_artifact_error(key, str(exc))
-            QMessageBox.warning(self, "Save Failed", str(exc))
-        finally:
-            self.refresh_stage_statuses()
-            self._write_config()
 
     def _reset_parameters(self):
         """Reset parameters to default values and notify all widgets."""

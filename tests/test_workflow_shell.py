@@ -84,9 +84,7 @@ class _StubDataManager:
         self.displacement_results = None
         self.force_results = None
         self.stress_results = None
-        self.auto_save_calls = []
         self.artifact_errors = []
-        self.raise_on_save = None
 
     def add_change_callback(self, callback):
         if callback not in self._callbacks:
@@ -103,14 +101,6 @@ class _StubDataManager:
     def set_output_dir(self, path):
         self.output_dir = Path(path).expanduser() if path else None
         self.notify_changed()
-
-    def auto_save_artifact(self, key, pixel_size=None, frame_interval=None):
-        if self.raise_on_save is not None:
-            raise self.raise_on_save
-        self.auto_save_calls.append(
-            {"key": key, "pixel_size": pixel_size, "frame_interval": frame_interval}
-        )
-        return None
 
     def mark_artifact_error(self, key, error):
         self.artifact_errors.append((key, error))
@@ -635,7 +625,9 @@ def test_preprocessing_data_rows_route_assignment_actions(monkeypatch, app):
     ]
 
 
-def test_generated_output_row_save_calls_data_manager_with_calibration(monkeypatch, app):
+def test_generated_output_rows_have_no_save_button(monkeypatch, app):
+    # Preview-only (ROADMAP §4): stage runs write nothing to disk, so output
+    # rows expose no Save action.
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
@@ -646,39 +638,16 @@ def test_generated_output_row_save_calls_data_manager_with_calibration(monkeypat
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
-    widget.data_manager.preprocessed_bead_stack = object()
-    widget.refresh_stage_statuses()
 
-    row = widget._stage_status_panels_by_key["preprocessing"].artifact_rows["preprocessed_bead_stack"]
-    row.action_btn.click()
-
-    assert widget.data_manager.auto_save_calls[-1] == {
-        "key": "preprocessed_bead_stack",
-        "pixel_size": 1.0,
-        "frame_interval": 1.0,
-    }
-
-
-def test_failed_generated_output_save_marks_artifact_error(monkeypatch, app):
-    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget.QMessageBox, "warning", lambda *args: None)
-
-    widget = _widget.napariTFMWidget(object())
-    widget.data_manager.raise_on_save = RuntimeError("disk full")
-    widget.data_manager.preprocessed_reference = object()
-    widget.refresh_stage_statuses()
-
-    row = widget._stage_status_panels_by_key["preprocessing"].artifact_rows["preprocessed_reference"]
-    row.action_btn.click()
-
-    assert widget.data_manager.artifact_errors[-1] == ("preprocessed_reference", "disk full")
+    panels = widget._stage_status_panels_by_key
+    output_rows = [
+        panels["preprocessing"].artifact_rows["preprocessed_bead_stack"],
+        panels["preprocessing"].artifact_rows["preprocessed_reference"],
+        panels["displacement"].artifact_rows["displacement_results"],
+        panels["force"].artifact_rows["force_results"],
+        panels["stress"].artifact_rows["stress_results"],
+    ]
+    assert all(row.action_btn is None for row in output_rows)
 
 
 def test_displacement_data_rows_route_assignment_actions(monkeypatch, app):
@@ -700,7 +669,10 @@ def test_displacement_data_rows_route_assignment_actions(monkeypatch, app):
     assert widget.displacement_widget.loaded_active_layers == ["reference", "beads"]
 
 
-def test_force_and_stress_input_rows_route_load_actions(monkeypatch, app):
+def test_only_mask_input_row_routes_a_load_action(monkeypatch, app):
+    # Results chain in-memory (ROADMAP §4): the displacement/force input rows are
+    # status-only. The mask is an external input (ROADMAP §2), so its row keeps a
+    # Load action.
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
@@ -712,12 +684,15 @@ def test_force_and_stress_input_rows_route_load_actions(monkeypatch, app):
 
     widget = _widget.napariTFMWidget(object())
 
-    widget._stage_status_panels_by_key["force"].artifact_rows["displacement_results"].action_btn.click()
-    widget._stage_status_panels_by_key["stress"].artifact_rows["force_results"].action_btn.click()
-    widget._stage_status_panels_by_key["stress"].artifact_rows["mask_stack"].action_btn.click()
+    force_input = widget._stage_status_panels_by_key["force"].artifact_rows["displacement_results"]
+    stress_force_input = widget._stage_status_panels_by_key["stress"].artifact_rows["force_results"]
+    mask_row = widget._stage_status_panels_by_key["stress"].artifact_rows["mask_stack"]
 
-    assert widget.force_widget.loaded_files == ["displacement_results"]
-    assert widget.msm_widget.loaded_files == ["force_results", "mask_stack"]
+    assert force_input.action_btn is None
+    assert stress_force_input.action_btn is None
+
+    mask_row.action_btn.click()
+    assert widget.msm_widget.loaded_files == ["mask_stack"]
 
 
 
@@ -834,8 +809,11 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     )
 
 
-def test_stage_status_is_done_when_output_files_exist_on_disk(monkeypatch, app, tmp_path):
+def test_stage_status_is_done_when_results_are_in_memory(monkeypatch, app, tmp_path):
+    # Preview-only (ROADMAP §4): "done" follows in-memory results, not files on
+    # disk. Uses the real DataManager (not the stub) to exercise availability.
     import importlib.util as _ilu
+    import numpy as np
 
     _spec = _ilu.spec_from_file_location(
         "napariTFM.utilities.data_manager_real",
@@ -861,10 +839,15 @@ def test_stage_status_is_done_when_output_files_exist_on_disk(monkeypatch, app, 
     widget.refresh_stage_statuses()
     assert section.status != "done"
 
+    # Files on disk are irrelevant — only in-memory results count.
     (tmp_path / "preprocessed_beads.tif").write_bytes(b"x")
     (tmp_path / "preprocessed_reference.tif").write_bytes(b"x")
     widget.refresh_stage_statuses()
+    assert section.status != "done"
 
+    widget.data_manager.set_preprocessed_bead_stack(np.zeros((2, 4, 4), dtype=np.float32))
+    widget.data_manager.set_preprocessed_reference(np.zeros((4, 4), dtype=np.float32))
+    widget.refresh_stage_statuses()
     assert section.status == "done"
 
 

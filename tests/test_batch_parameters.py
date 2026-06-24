@@ -157,6 +157,7 @@ def test_generate_config_uses_parameter_manager_values():
         parameter_spins={},
         parameter_combos={},
         parameter_checks={},
+        save_cache_checkbox=_Check(False),
     )
 
     config = BatchAnalysisWidget._generate_config(fake)
@@ -197,6 +198,7 @@ def test_batch_config_generation_does_not_read_duplicate_parameter_widgets():
         parameter_spins={"young_modulus": object()},
         parameter_combos={"mesh_algorithm": object()},
         parameter_checks={"auto_gcv": object()},
+        save_cache_checkbox=_Check(False),
     )
 
     config = BatchAnalysisWidget._generate_config(fake)

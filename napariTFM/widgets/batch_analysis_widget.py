@@ -161,6 +161,13 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             self.analysis_checkboxes[key] = checkbox
             layout.addWidget(checkbox)
 
+        # Opt-in stage-resume cache: write preprocessed images to disk so a later
+        # run can resume without re-preprocessing. Off by default — the .ntfm is
+        # the deliverable; displacement/force/stress resume from it (ROADMAP §4).
+        self.save_cache_checkbox = QCheckBox("Save preprocessed image cache (.tif)")
+        self.save_cache_checkbox.setChecked(False)
+        layout.addWidget(self.save_cache_checkbox)
+
         group.setLayout(layout)
         return group
 
@@ -308,7 +315,8 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
             'analysis_steps': analysis_steps,
             'visualizations': visualizations,
             'parameters': parameters,
-            'metrics_parameters': metrics_parameters  # New section
+            'metrics_parameters': metrics_parameters,  # New section
+            'save_cache': self.save_cache_checkbox.isChecked(),
         }
 
         return config
@@ -426,6 +434,10 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
                 for key, checkbox in self.analysis_checkboxes.items():
                     if key in config.get('analysis_steps', {}):
                         checkbox.setChecked(config['analysis_steps'][key])
+
+                # Stage-resume cache toggle
+                if 'save_cache' in config:
+                    self.save_cache_checkbox.setChecked(bool(config['save_cache']))
 
                 # Update visualizations
                 for key, checkbox in self.visualization_checkboxes.items():

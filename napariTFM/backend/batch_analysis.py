@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from time import sleep
 from time import time
+from types import SimpleNamespace
 from typing import Optional
 
 import numpy as np
@@ -228,19 +229,19 @@ class BatchAnalysis:
         1. Preprocessing:
             - Processes bead and cell images if available
             - Applies background subtraction and filtering
-            - Saves preprocessed images as calibrated TIFFs
+            - Optionally caches preprocessed images as calibrated TIFFs
 
         2. Displacement Analysis:
             - Calculates displacement fields from bead images
-            - Saves displacement data as NumPy arrays
 
         3. Force Analysis:
             - Computes traction forces using FTTC
-            - Saves force fields and related metrics
 
         4. Stress Analysis:
             - Calculates internal stress fields
-            - Saves stress tensors and quality metrics
+
+        Displacement, force, and stress are persisted only in the experiment's
+        ``.ntfm`` (ROADMAP §4), not as standalone ``.npy`` files.
 
         Each step is conditional on the corresponding flag in config['analysis_steps']
         being True. Visualizations are generated based on config['visualizations'].
@@ -251,9 +252,11 @@ class BatchAnalysis:
             - <experiment>.ntfm: the sole data artifact (tidy table + metadata)
             - figures/: per-stage PNG/GIF previews (human-facing, not data)
             - batch.log: detailed processing log
-            - stage-resume cache (optional): preprocessed_*.tif, displacements.npy,
-              traction_forces.npy, stress_results.npy — recompute shortcuts, not
-              deliverables. The external mask is an input read from the input folder.
+            - preprocessed_*.tif (optional, ``save_cache``): the one stage-resume
+              cache item not held by the .ntfm (images upstream of the analysis
+              grid). Displacement/force/stress are not re-cached as .npy — resume
+              reads them from the .ntfm. The external mask is an input read from
+              the input folder.
 
         Raises
         ------
@@ -286,7 +289,7 @@ class BatchAnalysis:
             self._handle_visualization(tfm_folder, viz_saver, 'displacement', displacement_data)
 
             # Handle force analysis
-            force_data = self._handle_force_execution(tfm_folder, displacement_data)
+            force_data = self._handle_force_execution(tfm_folder, folder, displacement_data)
             self._handle_visualization(tfm_folder, viz_saver, 'force', force_data)
 
             # Masks are supplied externally as an input layer (ROADMAP §2):
@@ -294,7 +297,7 @@ class BatchAnalysis:
             mask_data = self._load_mask(folder)
 
             # Handle stress analysis
-            stress_data = self._handle_stress_execution(tfm_folder, force_data, mask_data)
+            stress_data = self._handle_stress_execution(tfm_folder, folder, force_data, mask_data)
             self._handle_visualization(tfm_folder, viz_saver, 'stress', stress_data)
 
             # Write the sole data artifact: one .ntfm per experiment (ROADMAP §4).
@@ -343,37 +346,42 @@ class BatchAnalysis:
             print(f"Displacement analysis failed: {str(e)}")
             return None
 
-    def _handle_force_execution(self, tfm_folder: Path, displacement_data: Optional[dict]) -> Optional[dict]:
+    def _handle_force_execution(self, tfm_folder: Path, folder: Path, displacement_data: Optional[dict]) -> Optional[dict]:
         """Handle force analysis execution. Always runs if enabled."""
         if not self.config['analysis_steps']['force']:
             return None
 
         try:
             if displacement_data is None:
-                print("Loading displacement data from file...")
-                try:
-                    displacement_data = np.load(str(tfm_folder / "displacements.npy"), allow_pickle=True).item()
-                except Exception as e:
-                    print(f"Could not load displacement data: {str(e)}")
+                # Stage-resume: read the displacement field back from the prior
+                # run's .ntfm (ROADMAP §4 — no intermediate .npy). Force analysis
+                # consumes only ``.displacement_field``, so a one-field shim is
+                # sufficient.
+                print("Resuming displacement from existing .ntfm...")
+                field = self._resume_field_from_ntfm(tfm_folder, folder, "displacement_field")
+                if field is None:
                     return None
+                displacement_data = SimpleNamespace(displacement_field=field)
             return self._execute_force_analysis(tfm_folder, displacement_data)
         except Exception as e:
             print(f"Force analysis failed: {str(e)}")
             return None
 
-    def _handle_stress_execution(self, tfm_folder: Path, force_data: Optional[dict], mask_data: Optional[np.ndarray]) -> Optional[dict]:
+    def _handle_stress_execution(self, tfm_folder: Path, folder: Path, force_data: Optional[dict], mask_data: Optional[np.ndarray]) -> Optional[dict]:
         """Handle stress analysis execution. Always runs if enabled."""
         if not self.config['analysis_steps']['stress']:
             return None
 
         try:
             if force_data is None:
-                print("Loading force data from file...")
-                try:
-                    force_data = np.load(str(tfm_folder / "traction_forces.npy"), allow_pickle=True).item()
-                except Exception as e:
-                    print(f"Could not load force data: {str(e)}")
+                # Stage-resume: read the force field back from the prior run's
+                # .ntfm (ROADMAP §4). Stress analysis consumes only
+                # ``.force_field``.
+                print("Resuming force from existing .ntfm...")
+                field = self._resume_field_from_ntfm(tfm_folder, folder, "force_field")
+                if field is None:
                     return None
+                force_data = SimpleNamespace(force_field=field)
 
             if mask_data is None:
                 print("Stress analysis requires an external mask; napariTFM does "
@@ -386,6 +394,32 @@ class BatchAnalysis:
         except Exception as e:
             print(f"Stress analysis failed: {str(e)}")
             return None
+
+    def _resume_field_from_ntfm(self, tfm_folder: Path, folder: Path, field_key: str) -> Optional[np.ndarray]:
+        """Read a grid field back from the experiment's ``.ntfm`` for stage-resume.
+
+        The ``.ntfm`` is the sole persisted result (ROADMAP §4); when an upstream
+        stage was skipped this run, the field is reconstructed from a prior run's
+        container. ``field_key`` is one of ``tidy_to_arrays``' output keys
+        (e.g. ``displacement_field``, ``force_field``). Returns ``None`` (with a
+        message) if the container or the field is missing.
+        """
+        ntfm_path = tfm_folder / f"{folder.name}.ntfm"
+        if not ntfm_path.exists():
+            print(f"No existing .ntfm to resume from at {ntfm_path}.")
+            return None
+        try:
+            df, _ = ntfm.read_ntfm(ntfm_path)
+            field = ntfm.tidy_to_arrays(df).get(field_key)
+        except Exception as e:
+            print(f"Could not read {field_key} from {ntfm_path}: {str(e)}")
+            return None
+        # The writer emits every measure column (NaN when a stage wasn't run), so
+        # an all-NaN field means the stage was never computed — treat as absent.
+        if field is None or np.all(np.isnan(field)):
+            print(f"{field_key} not available in {ntfm_path}.")
+            return None
+        return field
 
     def _load_mask(self, folder: Path) -> Optional[np.ndarray]:
         """Load the externally supplied mask from the input folder, or ``None``.
@@ -418,8 +452,9 @@ class BatchAnalysis:
 
         One container holds the tidy long-format table (displacement / force /
         stress on the shared analysis grid) plus run-level provenance, the
-        resolved config, and the per-experiment ``labels``. Retires the scattered
-        ``.npy`` files as deliverables — they remain only as a stage-resume cache.
+        resolved config, and the per-experiment ``labels``. This is the sole
+        persisted form of the results — the scattered ``.npy`` files are gone;
+        stage-resume reads displacement/force back from this container.
         """
         if displacement_result is None and force_result is None and stress_result is None:
             print("No analysis results produced; skipping .ntfm write.")
@@ -569,28 +604,32 @@ class BatchAnalysis:
         if cell_results:
             preprocessed['cells'] = np.stack([r.processed_image for r in cell_results])
 
-        pixel_size = self.config['parameters']['pixel_size']
-        frame_interval = self.config['parameters']['frame_interval']
+        # Preprocessed images are the one cache item the .ntfm does NOT hold
+        # (they live upstream of the analysis grid). They are written only as an
+        # opt-in stage-resume cache (ROADMAP §4); off by default.
+        if self.config.get('save_cache', False):
+            pixel_size = self.config['parameters']['pixel_size']
+            frame_interval = self.config['parameters']['frame_interval']
 
-        self._save_calibrated_tiff(
-            preprocessed['beads'],
-            tfm_folder / "preprocessed_beads.tif",
-            pixel_size,
-            frame_interval
-        )
-        self._save_calibrated_tiff(
-            preprocessed['reference'],
-            tfm_folder / "preprocessed_reference.tif",
-            pixel_size,
-            frame_interval
-        )
-        if 'cells' in preprocessed:
             self._save_calibrated_tiff(
-                preprocessed['cells'],
-                tfm_folder / "preprocessed_cells.tif",
+                preprocessed['beads'],
+                tfm_folder / "preprocessed_beads.tif",
                 pixel_size,
                 frame_interval
             )
+            self._save_calibrated_tiff(
+                preprocessed['reference'],
+                tfm_folder / "preprocessed_reference.tif",
+                pixel_size,
+                frame_interval
+            )
+            if 'cells' in preprocessed:
+                self._save_calibrated_tiff(
+                    preprocessed['cells'],
+                    tfm_folder / "preprocessed_cells.tif",
+                    pixel_size,
+                    frame_interval
+                )
 
         print(f"Preprocessing completed in {self._format_duration(time() - start_time)}")
         return preprocessed
@@ -627,7 +666,7 @@ class BatchAnalysis:
             - Background subtraction
             - Optical flow calculation (Farneback)
             - Optional downscaling and filtering
-        4. Saves displacement field as NumPy array
+        4. Returns the displacement field (persisted later in the .ntfm)
 
         The displacement parameters are taken from the config:
             - nscales, inner_iterations, median_filtering (Farneback parameters)
@@ -662,9 +701,9 @@ class BatchAnalysis:
         if displacement_result is None:
             raise RuntimeError("Displacement calculation failed")
 
-        # Save the displacement field
-        np.save(str(tfm_folder / "displacements.npy"), displacement_result)
-
+        # No intermediate .npy: the sole persisted result is the experiment's
+        # .ntfm (ROADMAP §4), written once all stages finish. Stage-resume reads
+        # the displacement field back from that .ntfm.
         print(f"Displacement analysis completed in {self._format_duration(time() - start_time)}")
         return displacement_result
 
@@ -700,7 +739,7 @@ class BatchAnalysis:
             - Application of Green's function
             - Regularization
             - Inverse transform
-        3. Saves results as NumPy array
+        3. Returns the force field (persisted later in the .ntfm)
 
         The force calculation parameters are taken from the config:
             - young_modulus
@@ -744,8 +783,8 @@ class BatchAnalysis:
         if force_result is None:
             raise RuntimeError("Force calculation failed")
 
-        np.save(str(tfm_folder / "traction_forces.npy"), force_result)
-
+        # No intermediate .npy (ROADMAP §4): the .ntfm is the sole persisted
+        # result; stage-resume reads the force field back from it.
         print(f"Force analysis completed in {self._format_duration(time() - start_time)}")
         return force_result
 
@@ -784,7 +823,7 @@ class BatchAnalysis:
             - Applies boundary conditions
             - Solves equilibrium equations
             - Calculates stress tensor field
-        3. Saves results as NumPy array
+        3. Returns the stress result (persisted later in the .ntfm)
 
         The stress analysis parameters are taken from the config:
             - poisson_ratio_cells
@@ -879,9 +918,8 @@ class BatchAnalysis:
             if final_result is None:
                 raise RuntimeError("Stress calculation failed")
 
-            # Save results
-            np.save(str(tfm_folder / "stress_results.npy"), final_result)
-
+            # No intermediate .npy (ROADMAP §4): the .ntfm is the sole persisted
+            # result.
             print(f"Stress analysis completed in {self._format_duration(time() - start_time)}")
             return final_result
 
@@ -988,7 +1026,10 @@ class BatchAnalysis:
         try:
             data = current_data
             if data is None:
-                # Try to load data from files based on step
+                # Only preprocessing has an on-disk cache to fall back to (the
+                # opt-in preprocessed .tif). Displacement/force/stress results are
+                # not cached as .npy (ROADMAP §4) — if the stage produced nothing
+                # this run there is nothing to visualize.
                 if step == 'preprocessing':
                     try:
                         data = {
@@ -997,27 +1038,6 @@ class BatchAnalysis:
                         }
                     except Exception as e:
                         print(f"Could not load preprocessed files for visualization: {str(e)}")
-                        return
-
-                elif step == 'displacement':
-                    try:
-                        data = np.load(str(tfm_folder / "displacements.npy"), allow_pickle=True).item()
-                    except Exception as e:
-                        print(f"Could not load displacement data for visualization: {str(e)}")
-                        return
-
-                elif step == 'force':
-                    try:
-                        data = np.load(str(tfm_folder / "traction_forces.npy"), allow_pickle=True).item()
-                    except Exception as e:
-                        print(f"Could not load force data for visualization: {str(e)}")
-                        return
-
-                elif step == 'stress':
-                    try:
-                        data = np.load(str(tfm_folder / "stress_results.npy"), allow_pickle=True).item()
-                    except Exception as e:
-                        print(f"Could not load stress/mask data for visualization: {str(e)}")
                         return
 
             if data is None:

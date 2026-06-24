@@ -5,14 +5,12 @@ from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout,
                             QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
-from qtpy.QtWidgets import QFileDialog
 
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optimal_regularization
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
-from napariTFM.widgets._output_directory import ensure_output_dir_for_generated_artifacts
 
 
 class FTTCController(QObject):
@@ -477,15 +475,11 @@ class FTTCWidget(BaseAnalysisWidget):
         self.action_states_changed.emit()
 
     def _on_analysis_completed(self, results: FTTCResult):
-        """Handle completed analysis."""
-        if ensure_output_dir_for_generated_artifacts(self, self.data_manager):
-            try:
-                self.data_manager.auto_save_artifact("force_results")
-            except Exception as exc:
-                self.data_manager.mark_artifact_error("force_results", str(exc))
-                QMessageBox.warning(self, "Auto-save Failed", str(exc))
+        """Handle completed analysis.
 
-        # Emit results
+        Preview-only (ROADMAP §4): result held in memory and shown in napari;
+        nothing written to disk. Batch is the only path to persisted data.
+        """
         self.force_calculated.emit(results)
         self._update_ui_state()
 
@@ -500,25 +494,6 @@ class FTTCWidget(BaseAnalysisWidget):
             self.visualization_manager.update_force_frame(
                 self.viewer.dims.current_step[0]
             )
-
-    def load_result_artifact(self, key: str):
-        path = self._choose_result_path(key)
-        if not path:
-            return
-        self.data_manager.load_result_artifact(key, path)
-        show_displacement = getattr(self.visualization_manager, "visualize_displacement_results", None)
-        if key == "displacement_results" and show_displacement is not None:
-            show_displacement()
-        self._update_ui_state()
-
-    def _choose_result_path(self, key: str):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            f"Load {key.replace('_', ' ')}",
-            "",
-            "NumPy Files (*.npy)",
-        )
-        return path
 
     def cleanup(self):
         """Clean up resources."""
