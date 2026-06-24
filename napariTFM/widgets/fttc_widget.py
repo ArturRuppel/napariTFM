@@ -3,8 +3,7 @@ from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal
-from qtpy.QtWidgets import (QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout,
-                            QSizePolicy, QSpacerItem)
+from qtpy.QtWidgets import QMessageBox, QHBoxLayout
 
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optimal_regularization
 from napariTFM.utilities.data_manager import DataManager
@@ -348,7 +347,9 @@ class FTTCWidget(BaseAnalysisWidget):
         self.parameter_manager = parameter_manager
 
         # Header-proxied action enablement state
-        self._action_enabled = {"run": False, "preview": False, "cancel": True}
+        self._action_enabled = {
+            "run": False, "preview": False, "cancel": True, "gcv": False,
+        }
 
         # Initialize controller
         self.controller = FTTCController(
@@ -368,44 +369,15 @@ class FTTCWidget(BaseAnalysisWidget):
         self.viewer.dims.events.current_step.connect(self._on_frame_changed)
 
     def _setup_ui(self):
-        """Set up the user interface."""
+        """Set up the user interface.
+
+        All stage actions — run/preview/cancel plus GCV auto-select — live in
+        the stage header (P7), so this widget owns no visible body content.
+        """
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        content_container = self._create_content_container()
-        main_layout.addWidget(content_container)
-
         self.setLayout(main_layout)
-
-    def _create_content_container(self) -> QWidget:
-        """Create the main content container."""
-        container = QWidget()
-        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        layout = QVBoxLayout()
-
-        layout.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        layout.addWidget(self._create_action_row())
-        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-
-        container.setLayout(layout)
-        return container
-
-    def _create_action_row(self) -> QWidget:
-        """Build widget-owned action buttons (run/preview/cancel proxied by the stage header)."""
-        container = QWidget()
-        layout = QVBoxLayout()
-
-        self.gcv_btn = QPushButton("Auto-select Regularization (GCV)")
-        self.gcv_btn.setToolTip(
-            "Calculate the optimal regularization parameter for the current frame\n"
-            "using Generalized Cross-Validation"
-        )
-        layout.addWidget(self.gcv_btn)
-
-        container.setLayout(layout)
-        return container
 
     def _connect_signals(self):
         """Connect all widget signals."""
@@ -415,9 +387,6 @@ class FTTCWidget(BaseAnalysisWidget):
         self.controller.analysis_failed.connect(self._on_analysis_failed)
         self.controller.data_updated.connect(self._update_ui_state)
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
-
-        # Wire widget-owned action button to controller operation
-        self.gcv_btn.clicked.connect(self.controller.calculate_optimal_regularization)
 
         # Connect to layer selection changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
@@ -434,13 +403,16 @@ class FTTCWidget(BaseAnalysisWidget):
     def cancel_action(self):
         self.controller.cancel_operation()
 
+    def gcv_action(self):
+        self.controller.calculate_optimal_regularization()
+
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
         has_displacement = self.data_manager.displacement_results is not None
 
         self._action_enabled["preview"] = has_displacement
         self._action_enabled["run"] = has_displacement
-        self.gcv_btn.setEnabled(has_displacement)
+        self._action_enabled["gcv"] = has_displacement
         self._action_enabled["cancel"] = True
         self.action_states_changed.emit()
 
@@ -448,7 +420,7 @@ class FTTCWidget(BaseAnalysisWidget):
         """Handle UI freeze/unfreeze during processing."""
         self._action_enabled["preview"] = not frozen
         self._action_enabled["run"] = not frozen
-        self.gcv_btn.setEnabled(not frozen)
+        self._action_enabled["gcv"] = not frozen
         # Cancel action always enabled
         self._action_enabled["cancel"] = True
         self.action_states_changed.emit()

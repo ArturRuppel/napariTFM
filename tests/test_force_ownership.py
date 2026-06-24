@@ -83,6 +83,26 @@ def test_force_exposes_action_contract(app, force_widget):
     assert callable(w.cancel_action)
 
 
+def test_force_gcv_is_a_header_action_not_a_body_button(app, force_widget):
+    w = force_widget
+    # GCV auto-select is now a header glyph action, not a text body button.
+    assert not hasattr(w, "gcv_btn")
+    assert "gcv" in w.action_states()
+    assert callable(w.gcv_action)
+
+
+def test_force_gcv_action_invokes_controller(app, force_widget, monkeypatch):
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        force_widget.controller,
+        "calculate_optimal_regularization",
+        lambda: calls.__setitem__("n", calls["n"] + 1),
+    )
+
+    force_widget.gcv_action()
+    assert calls["n"] == 1
+
+
 def test_no_per_stage_status_label(app, force_widget):
     # P2: the shell's one global status label replaces per-stage labels.
     assert not hasattr(force_widget, "status_label")

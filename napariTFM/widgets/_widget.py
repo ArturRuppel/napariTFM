@@ -542,6 +542,14 @@ class napariTFMWidget(QWidget):
                 },
                 action_states=self.force_widget.action_states,
                 action_states_changed=self.force_widget.action_states_changed,
+                extra_actions=[
+                    {
+                        "key": "gcv",
+                        "icon": "gcv",
+                        "tooltip": "Auto-select regularization (GCV)",
+                        "handler": self.force_widget.gcv_action,
+                    }
+                ],
             ),
             "stress": StageSection(
                 "Stress Analysis",
