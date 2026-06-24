@@ -1,3 +1,113 @@
+# napariTFM UI Redesign (viridis) — Active Worklist
+
+> **Status (2026-06-24):** branch `ui-redesign` merged to `master`; Slices 1–5
+> done & test-locked (290 tests). The owner's remarks below **supersede the
+> original Slice 6/7 outlines** in
+> `docs/superpowers/plans/2026-06-24-experiments-list-at-top.md` and redefine the
+> remaining work. Build sliced & test-locked (TDD → commit), polish last. The
+> existing **UI-Coherence roadmap** (now complete) and the **batch/data backlog**
+> are preserved further down for historical context.
+
+The shift: the top experiments list (Slice 5) grows into the **single config =
+metadata table**; the old per-stage *enable* toggles and the whole
+`BatchAnalysisWidget` scaffolding (folder mgmt, analysis/viz checkboxes, run-mode
+radios, per-stage progress bars) are retired. Stages become **mandatory**
+(MSM excepted) and **auto-skip when their output already exists**, reporting via a
+single **global status label**.
+
+## Resolved decisions
+
+- **D1 — MSM optionality → keep its existing on/off glyph.** MSM is already the
+  only stage carrying an enable/power glyph (Slice 4), and that glyph *is* the
+  disable path. **No walk-back of Slice 4** — the MSM toggle stays; only the
+  *other* batch checkboxes below go (P1). All non-MSM stages are mandatory.
+- **D2 — "Discover" = folders, not columns.** We do **not** autodiscover columns
+  from filenames. Discovery is **folder-presence** only (CellFlow-style:
+  `src/cellflow/aggregate_quantification/catalog.py:212` `discover_catalog_entries`
+  — find folders containing the named input files). Column metadata is **not**
+  parsed. The flow is **two add steps**: (1) discover folders; (2) a second
+  *commit* step adds those folders to the list **together with the column config**
+  set up above them — the column name/value pairs are **copied to every row** of
+  the batch being added.
+
+## Priority phases (execution order = dependency + risk)
+
+### P0 — Config = the metadata table  *(keystone; supersedes folder mgmt + Slice-7 label entry)*
+Grow the Slice-5 `ExperimentsList` (`napariTFM/widgets/_experiments_list.py`) into
+the one top config table, tied to folders:
+- Columns: **relative path · input file name(s) · free-form extra columns**.
+- **"+ Add column"** → a text field for the column *name* plus a *value* field
+  (e.g. name = `condition`, value = `WT`); this is the column config for the
+  next batch.
+- **Two-step add (see D2):** (1) **Discover** folders (folder-presence, no
+  filename parsing); (2) **Commit** the discovered folders into the list, copying
+  the current column config to **every** added row.
+- This *is* the metadata, folded into the config — no separate metadata step.
+- Replaces `batch_analysis_widget.py:201-245` (folder management).
+
+### P0b — One save, one config  *("save parameters and save config? we just need one")*
+Merge **Save Parameters** (`_project_section.py:70` → `_widget.py:803`
+`_save_parameters`) and **Save Config** (`batch_analysis_widget.py:216` →
+`_save_config_dialog:324`, `save_config_to_yaml`) into a single config save that
+carries params **plus** the P0 table.
+
+### P1 — Strip superseded scaffolding  *(deletions — low risk, parallelizable, do early)*
+Independent of P0 and safe to start first; **keep the batch run trigger until P4.**
+- **Folder management** (list/add/clear): `batch_analysis_widget.py:201-245`,
+  `_add_folder:498`, `_clear_folders:573` — superseded by P0.
+- **Run-in-napari vs run-in-console** radios: `batch_analysis_widget.py:223-235`
+  (a headless CLI comes later, not a radio).
+- **Analysis-step checkboxes**: `batch_analysis_widget.py:144-172`
+  (`analysis_checkboxes`) — stages are mandatory now.
+- **Visualization checkboxes incl. bead overlay**:
+  `batch_analysis_widget.py:174-199` (`visualization_checkboxes`), bead overlay at
+  `:181, :290`.
+- **Per-stage progress bars**: `preprocessing_widget.py:433`,
+  `displacement_analysis_widget.py:419`, `fttc_widget.py:416`,
+  `msm_widget.py:501`, `batch_analysis_widget.py:252` (→ replaced by P2).
+
+### P2 — Global status label  *(replaces the progress bars)*
+One panel-level **text** status (no bar); stages report run/skip/done into it
+(e.g. `displacement — skipped (output present)`). Pairs with the P1 bar removal.
+
+### P3 — Auto-skip-when-output-present  *(the "don't recompute" path for mandatory stages)*
+Each mandatory stage checks for its existing output and skips, reporting via P2.
+(MSM is exempt — it's gated by its own on/off glyph per D1, not auto-skip.)
+Refine `_widget.py:_experiment_stage_status` from the Slice-5 *coarse* `.ntfm`
+check to **per-output truth**. (This is the data half of the old Slice 6.)
+
+### P4 — Run-all walks the rail  *(was Slice 6; live)*
+"Run all" iterates the P0 table through the stages via
+`BatchAnalysis.process_all_folders()`, with live mini-rail updates; **drives runs
+from the config table** and retires the old batch run button
+(`batch_analysis_widget.py:240` `run_analysis_btn`). Couples with P1 (radios gone)
++ P3 (skip logic). Likely collapses `BatchAnalysisWidget` entirely.
+
+### P5 — Per-stage viz-toggle glyph  *(replaces the removed viz checkboxes)*
+Each stage header gains a single **viz-toggle glyph** that toggles that stage's
+preview/overlay layer (one per stage, "everyone gets a viz toggle").
+
+### P6 — Free-text px-size & frame-length inputs
+Convert `_project_section.py:18-55` `pixel_size` / `frame_interval`
+`QDoubleSpinBox`es to free input fields.
+
+### P7 — Rationalize + glyph-ify remaining buttons  *(polish)*
+Audit remaining action buttons, dedupe redundant ones, replace text buttons with
+glyphs from the `_icons.py` SVG set. Targets: `gcv_btn` (`fttc_widget.py:401`),
+`preview_mesh_btn` (`msm_widget.py:488`), and the stage-header
+run/preview/files/params controls (`_stage_section.py:81-112`).
+
+### P8 — Align status dots with the pills  *(polish; deferred from Slice 5)*
+Align the mini-rail / spine status dots with the header pills (the known
+dot-spacing/alignment nit).
+
+### P9 — Aggregate → `.iris`  *(was Slice 7, minus labels)*
+Labels now come from the P0 metadata table, so this is just the backend +
+footer entry: a short `.iris` schema spec, then `aggregate_to_iris()` over the
+`.ntfm` series. ROADMAP §5.
+
+---
+
 # napariTFM UI Coherence — Roadmap  ✅ COMPLETE
 
 > **Status (2026-06-24): all four steps below are implemented, integrated, and
