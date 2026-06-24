@@ -1,10 +1,40 @@
+from pathlib import Path
+
 import pytest
 from qtpy.QtWidgets import QApplication
 
 from napariTFM.widgets._experiments_list import (
     MiniRail,
     PIPELINE_STAGES,
+    discover_experiment_folders,
 )
+
+
+def test_discover_finds_folders_with_all_required_inputs(tmp_path):
+    for sub in ("Ctrl/pos_00", "Ctrl/pos_01"):
+        d = tmp_path / sub
+        d.mkdir(parents=True)
+        (d / "beads.tif").write_bytes(b"x")
+        (d / "reference.tif").write_bytes(b"x")
+    incomplete = tmp_path / "Ctrl" / "pos_02"  # has beads but no reference
+    incomplete.mkdir(parents=True)
+    (incomplete / "beads.tif").write_bytes(b"x")
+
+    found = discover_experiment_folders(tmp_path, ["beads.tif", "reference.tif"])
+
+    assert sorted(Path(p).name for p in found) == ["pos_00", "pos_01"]
+
+
+def test_discover_ignores_blank_names_and_missing_root(tmp_path):
+    assert discover_experiment_folders(tmp_path / "nope", ["beads.tif"]) == []
+    d = tmp_path / "pos"
+    d.mkdir()
+    (d / "beads.tif").write_bytes(b"x")
+    # all-blank requirement set -> nothing to match on
+    assert discover_experiment_folders(tmp_path, ["", None]) == []
+    # blank entries are dropped; the real requirement still discovers the folder
+    found = discover_experiment_folders(tmp_path, ["beads.tif", ""])
+    assert sorted(Path(p).name for p in found) == ["pos"]
 
 
 @pytest.fixture

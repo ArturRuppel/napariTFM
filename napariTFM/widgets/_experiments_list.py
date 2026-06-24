@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 from qtpy.QtCore import QRectF, Qt, Signal
 from qtpy.QtGui import QBrush, QColor, QPainter, QPen
@@ -28,6 +28,46 @@ from napariTFM.widgets._ui_style import (
 
 # The four pipeline stages a mini-rail summarises (project/batch are not dots).
 PIPELINE_STAGES = ("preprocessing", "displacement", "force", "stress")
+
+
+def _path_ends_with(path: Path, rel: Path) -> bool:
+    """True when *path*'s trailing parts equal *rel*'s (a relative-path match)."""
+    return path.parts[-len(rel.parts):] == rel.parts
+
+
+def discover_experiment_folders(
+    root: str | Path,
+    required_names: Iterable[Optional[str]],
+) -> list[str]:
+    """Find folders under *root* that contain **every** file in *required_names*.
+
+    Folder-presence discovery (D2): no filename parsing, no metadata read. Each
+    name is a bare file name or a path relative to the experiment folder, matched
+    recursively under *root*; a folder qualifies only when all required names
+    resolve to existing files inside it. Blank/``None`` names are dropped. A
+    missing *root* or an empty requirement set yields an empty list. Returns
+    absolute folder paths, sorted.
+    """
+    root = Path(root)
+    names = [n for n in required_names if n]
+    if not root.is_dir() or not names:
+        return []
+
+    found: dict[Path, set[str]] = {}
+    for name in names:
+        rel = Path(name)
+        for match in sorted(root.rglob(rel.name)):
+            if not match.is_file():
+                continue
+            if len(rel.parts) > 1 and not _path_ends_with(match, rel):
+                continue
+            folder = match
+            for _ in rel.parts:
+                folder = folder.parent
+            found.setdefault(folder.resolve(), set()).add(name)
+
+    required = set(names)
+    return [str(folder) for folder in sorted(found) if found[folder] >= required]
 
 
 class MiniRail(QWidget):
