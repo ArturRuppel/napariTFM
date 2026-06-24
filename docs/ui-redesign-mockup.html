@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>napariTFM — UI redesign companion</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* viridis ramp — the ordered pipeline colormap (the signature) */
+  --v-project:#440154;
+  --v-pre:#414487;
+  --v-disp:#2a788e;
+  --v-force:#22a884;
+  --v-stress:#7ad151;
+  --v-batch:#fde725;
+
+  /* dark lab-instrument surface (napari-adjacent, not pure black) */
+  --bg:#0e1116;
+  --bg-deep:#0a0d12;
+  --surface:#161b22;
+  --surface-2:#0f141a;
+  --line:rgba(255,255,255,.07);
+  --line-strong:rgba(255,255,255,.13);
+  --text:#e6edf3;
+  --text-mid:#aeb6c0;
+  --text-dim:#6b7484;
+
+  --done:#3fb950;
+  --run:#e3b341;
+  --ready:#58a6ff;
+
+  --r:11px;
+  --r-sm:8px;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{
+  background:
+    radial-gradient(1100px 700px at 12% -8%, #1a2030 0%, transparent 55%),
+    radial-gradient(900px 600px at 108% 110%, #16201d 0%, transparent 50%),
+    var(--bg-deep);
+  color:var(--text);
+  font-family:"IBM Plex Sans",system-ui,sans-serif;
+  min-height:100vh;
+  padding:48px 32px 64px;
+}
+
+.wrap{
+  max-width:1180px;margin:0 auto;
+  display:grid;grid-template-columns:1fr 372px;gap:56px;align-items:start;
+}
+
+/* ───────── rationale column ───────── */
+.brief{position:sticky;top:48px}
+.kicker{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:500;
+  letter-spacing:.34em;text-transform:uppercase;color:var(--v-stress);
+  display:flex;align-items:center;gap:12px;margin-bottom:22px;
+}
+.kicker::before{content:"";width:34px;height:2px;border-radius:2px;
+  background:linear-gradient(90deg,var(--v-pre),var(--v-stress))}
+.brief h1{
+  font-size:46px;line-height:1.04;font-weight:700;letter-spacing:-.02em;
+  margin-bottom:18px;
+}
+.brief h1 em{font-style:normal;
+  background:linear-gradient(96deg,var(--v-pre),var(--v-disp) 38%,var(--v-force) 64%,var(--v-stress));
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.brief .lede{color:var(--text-mid);font-size:15.5px;line-height:1.6;max-width:46ch;margin-bottom:34px}
+
+.notes{display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--line)}
+.note{display:grid;grid-template-columns:26px 1fr;gap:16px;padding:18px 2px;border-bottom:1px solid var(--line)}
+.note .n{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--text-dim);font-weight:500;padding-top:2px}
+.note h3{font-size:13px;font-weight:600;letter-spacing:.01em;margin-bottom:5px}
+.note p{font-size:13px;line-height:1.55;color:var(--text-mid)}
+.note h3 b{font-weight:600;color:var(--v-force)}
+
+.legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:30px}
+.legend .sw{display:flex;align-items:center;gap:8px;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--text-dim)}
+.legend .dot{width:11px;height:11px;border-radius:50%}
+
+/* ───────── the dock panel ───────── */
+.dockwrap{display:flex;flex-direction:column;gap:14px}
+.dock-label{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.22em;
+  text-transform:uppercase;color:var(--text-dim);padding-left:4px}
+.dock{
+  width:372px;background:var(--bg);border:1px solid var(--line-strong);
+  border-radius:16px;overflow:hidden;
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.7),0 0 0 1px rgba(0,0,0,.3);
+}
+
+/* title bar */
+.titlebar{padding:18px 18px 16px;border-bottom:1px solid var(--line);
+  display:flex;align-items:flex-start;justify-content:space-between;
+  background:linear-gradient(180deg,rgba(255,255,255,.025),transparent)}
+.brandname{font-size:18px;font-weight:700;letter-spacing:-.01em}
+.brandname span{color:var(--v-disp)}
+.brandsub{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--text-dim);margin-top:4px}
+.theme-btn{display:flex;align-items:center;gap:7px;background:var(--surface);
+  border:1px solid var(--line-strong);border-radius:20px;padding:5px 10px 5px 7px;cursor:pointer;
+  color:var(--text-mid);font-family:"IBM Plex Mono",monospace;font-size:11px}
+.theme-btn:hover{border-color:var(--text-dim)}
+.theme-ramp{width:34px;height:9px;border-radius:5px;
+  background:linear-gradient(90deg,var(--v-project),var(--v-pre),var(--v-disp),var(--v-force),var(--v-stress))}
+
+/* project bar */
+.project{display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid var(--line);
+  background:var(--surface-2)}
+.project .marker{width:9px;height:9px;border-radius:2px;flex:none;
+  background:var(--v-project);box-shadow:0 0 10px -1px var(--v-project)}
+.project .pgrow{flex:1;min-width:0}
+.project .ptitle{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text-mid)}
+.project .pmeta{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--text);margin-top:3px}
+.project .pmeta b{color:var(--text-dim);font-weight:400}
+.gear{color:var(--text-dim);cursor:pointer}
+.gear:hover{color:var(--text-mid)}
+
+/* the rail: stages with gradient spine */
+.rail{padding:8px 0 14px}
+.stage{position:relative;display:grid;grid-template-columns:34px 1fr;padding:0 16px 0 0}
+/* spine segment, drawn per stage so it forms one continuous gradient line */
+.stage .spine{position:relative}
+.stage .spine::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:2px;
+  transform:translateX(-50%);background:var(--seg,var(--line-strong))}
+.stage:first-child .spine::before{top:50%}
+.stage:last-child .spine::before{bottom:50%}
+.node{position:absolute;left:50%;top:22px;width:14px;height:14px;border-radius:50%;
+  transform:translate(-50%,-50%);z-index:2;
+  background:var(--bg);border:2px solid var(--nc,var(--text-dim))}
+.node.done{background:var(--nc);border-color:var(--nc);box-shadow:0 0 12px -2px var(--nc)}
+.node.running{border-color:var(--run);box-shadow:0 0 0 0 rgba(227,179,65,.5);animation:pulse 1.8s ease-out infinite}
+.node.running::after{content:"";position:absolute;inset:2px;border-radius:50%;background:var(--run)}
+.node.ready{border-color:var(--nc)}
+.node.idle{width:8px;height:8px;border-width:2px}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(227,179,65,.45)}70%{box-shadow:0 0 0 7px rgba(227,179,65,0)}100%{box-shadow:0 0 0 0 rgba(227,179,65,0)}}
+
+/* stage card */
+.card{margin:7px 0;border:1px solid var(--line);border-radius:var(--r);
+  background:var(--surface);overflow:hidden;transition:transform .15s ease,border-color .15s ease}
+.card:hover{transform:translateY(-1px);border-color:var(--line-strong)}
+.card.active{border-color:color-mix(in srgb,var(--ac) 45%,var(--line-strong))}
+.card.idle{background:color-mix(in srgb,var(--surface) 78%,var(--bg-deep))}
+.chead{display:flex;align-items:center;gap:10px;padding:12px 13px}
+.chead .titles{flex:1;min-width:0}
+.stagename{font-size:12.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ac);display:flex;align-items:center;gap:8px}
+.card.idle .stagename{color:var(--text-dim)}
+.stagedesc{font-size:11px;color:var(--text-dim);margin-top:3px;font-weight:400;letter-spacing:.01em}
+.statuschip{font-family:"IBM Plex Mono",monospace;font-size:9.5px;font-weight:600;letter-spacing:.12em;
+  text-transform:uppercase;padding:3px 7px;border-radius:5px;white-space:nowrap}
+.chip-done{color:var(--done);background:color-mix(in srgb,var(--done) 14%,transparent)}
+.chip-run{color:var(--run);background:color-mix(in srgb,var(--run) 15%,transparent)}
+.chip-ready{color:var(--ready);background:color-mix(in srgb,var(--ready) 14%,transparent)}
+.chip-idle{color:var(--text-dim);background:rgba(255,255,255,.04)}
+
+/* action buttons (crisp stroked icons, accent-tinted pills) */
+.actions{display:flex;gap:6px;padding:0 13px 12px}
+.iconbtn{width:30px;height:28px;display:grid;place-items:center;border-radius:7px;cursor:pointer;
+  background:color-mix(in srgb,var(--ac) 13%,transparent);
+  border:1px solid color-mix(in srgb,var(--ac) 22%,transparent);
+  color:color-mix(in srgb,var(--ac) 82%,white);transition:background .12s ease}
+.iconbtn:hover{background:color-mix(in srgb,var(--ac) 24%,transparent)}
+.iconbtn svg{width:15px;height:15px;stroke-width:1.7;fill:none;stroke:currentColor;
+  stroke-linecap:round;stroke-linejoin:round}
+.iconbtn.run{margin-left:auto;width:auto;padding:0 13px;gap:7px;font-family:"IBM Plex Mono",monospace;
+  font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--bg-deep);
+  background:var(--ac);border-color:var(--ac)}
+.iconbtn.run:hover{filter:brightness(1.08)}
+.iconbtn.stop{margin-left:auto;width:auto;padding:0 13px;gap:7px;font-family:"IBM Plex Mono",monospace;
+  font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--run);
+  background:color-mix(in srgb,var(--run) 16%,transparent);border-color:color-mix(in srgb,var(--run) 40%,transparent)}
+.iconbtn.disabled{opacity:.34;cursor:not-allowed}
+
+/* expanded params panel */
+.params{margin:0 13px 13px;padding:13px;border-radius:var(--r-sm);
+  background:var(--surface-2);border:1px solid var(--line);
+  border-left:2px solid var(--ac)}
+.params .grp{font-family:"IBM Plex Mono",monospace;font-size:9.5px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--text-dim);margin-bottom:11px}
+.prow{display:grid;grid-template-columns:1fr 1fr;gap:11px 16px}
+.field{display:flex;flex-direction:column;gap:6px}
+.flabel{font-size:11px;color:var(--text-mid);display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.fval{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--text);font-weight:500}
+.fval .u{color:var(--text-dim);font-weight:400}
+.track{height:4px;border-radius:3px;background:rgba(255,255,255,.09);position:relative}
+.track .fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--ac) 55%,transparent),var(--ac))}
+.track .knob{position:absolute;top:50%;width:11px;height:11px;border-radius:50%;
+  transform:translate(-50%,-50%);background:#fff;border:2px solid var(--ac);box-shadow:0 1px 4px rgba(0,0,0,.5)}
+.field.full{grid-column:1/-1}
+.selpill,.toggle{display:flex;align-items:center;justify-content:space-between;
+  background:var(--surface);border:1px solid var(--line-strong);border-radius:6px;padding:7px 10px;
+  font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--text)}
+.selpill .chev{color:var(--text-dim)}
+.switch{width:30px;height:17px;border-radius:9px;background:var(--ac);position:relative;flex:none}
+.switch.off{background:rgba(255,255,255,.13)}
+.switch::after{content:"";position:absolute;top:2px;width:13px;height:13px;border-radius:50%;background:#fff;
+  right:2px;transition:all .15s}
+.switch.off::after{right:auto;left:2px}
+
+/* data/files panel (collapsed look, one shown open) */
+.files{margin:0 13px 13px;padding:11px 13px;border-radius:var(--r-sm);
+  background:var(--surface-2);border:1px solid var(--line)}
+.files .grp{font-family:"IBM Plex Mono",monospace;font-size:9.5px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--text-dim);margin-bottom:9px}
+.frow{display:flex;align-items:center;gap:9px;padding:5px 0;font-size:11.5px}
+.frow .fi{width:14px;height:14px;display:grid;place-items:center;flex:none}
+.frow .fi svg{width:13px;height:13px;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.frow .name{flex:1;color:var(--text-mid);font-family:"IBM Plex Mono",monospace;font-size:11px}
+.frow .meta{color:var(--text-dim);font-family:"IBM Plex Mono",monospace;font-size:10.5px}
+.frow.has .fi{stroke:var(--done)}.frow.has .name{color:var(--text)}
+.frow.miss .fi{stroke:var(--text-dim)}
+
+/* batch tail */
+.batchmeta{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--text-mid);
+  padding:0 13px 13px;display:flex;align-items:center;gap:7px}
+.batchmeta .b{color:var(--v-batch)}
+
+/* theme strip */
+.themestrip{display:flex;gap:9px;padding:13px 16px;border-top:1px solid var(--line);background:var(--surface-2)}
+.tcard{flex:1;text-align:center;cursor:pointer}
+.tcard .ramp{height:22px;border-radius:6px;border:1px solid var(--line-strong)}
+.tcard.sel .ramp{outline:2px solid var(--text-mid);outline-offset:1px}
+.tcard .tn{font-family:"IBM Plex Mono",monospace;font-size:9.5px;color:var(--text-dim);margin-top:6px;letter-spacing:.05em}
+.tcard.sel .tn{color:var(--text)}
+
+.footnote{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--text-dim);
+  text-align:center;line-height:1.7}
+
+@media (max-width:980px){
+  body{padding:32px 18px}
+  .wrap{grid-template-columns:1fr;gap:40px}
+  .brief{position:static}
+  .brief h1{font-size:38px}
+  .dockwrap{align-items:center}
+  .dock{width:100%;max-width:400px}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ───── rationale / companion column ───── -->
+  <section class="brief">
+    <div class="kicker">UI redesign · companion</div>
+    <h1>The pipeline<br>is a <em>colormap.</em></h1>
+    <p class="lede">napariTFM turns bead displacement into traction and cell stress — one ordered
+      sequence on one grid. The redesign makes the dock <em>read</em> as that sequence: a
+      viridis spine you watch fill in as the analysis completes.</p>
+
+    <div class="notes">
+      <div class="note"><div class="n">01</div><div>
+        <h3>A gradient <b>spine</b>, not five flat cards</h3>
+        <p>Stages sample the viridis ramp start→end and connect down the left gutter. A finished
+          run lights the spine top-to-bottom; each node encodes status at a glance — restoring the
+          signal the old status dot lost.</p></div></div>
+      <div class="note"><div class="n">02</div><div>
+        <h3>Status lives in the <b>node</b></h3>
+        <p>Done fills + glows in the stage's accent. Running pulses amber. Ready is a hollow accent
+          ring. Idle is a dim dot. Semantics never fight the accent because they read as fill-state,
+          not hue.</p></div></div>
+      <div class="note"><div class="n">03</div><div>
+        <h3>Physical values in <b>monospace</b></h3>
+        <p>Every readout — <span style="font-family:'IBM Plex Mono'">12.0&nbsp;µm</span>,
+          <span style="font-family:'IBM Plex Mono'">9.00&nbsp;kPa</span>,
+          <span style="font-family:'IBM Plex Mono'">10⁻⁶</span> — sets in IBM Plex Mono with the unit
+          dimmed. A lab-instrument register, and numbers align in the two-up grid.</p></div></div>
+      <div class="note"><div class="n">04</div><div>
+        <h3>Drawn icons replace the <b>emoji</b></h3>
+        <p>🔍⚙▷▶ rendered differently on every OS. Crisp stroked glyphs — files, params, preview,
+          run/stop — tinted from the stage accent read as one designed set.</p></div></div>
+    </div>
+
+    <div class="legend">
+      <div class="sw"><span class="dot" style="background:var(--done)"></span>done</div>
+      <div class="sw"><span class="dot" style="background:var(--run)"></span>running</div>
+      <div class="sw"><span class="dot" style="background:transparent;border:2px solid var(--ready)"></span>ready</div>
+      <div class="sw"><span class="dot" style="width:8px;height:8px;background:var(--text-dim)"></span>idle</div>
+    </div>
+  </section>
+
+  <!-- ───── the redesigned dock ───── -->
+  <div class="dockwrap">
+    <div class="dock-label">▮ napari dock · 372 px</div>
+    <div class="dock">
+
+      <div class="titlebar">
+        <div>
+          <div class="brandname">napari<span>TFM</span></div>
+          <div class="brandsub">traction force microscopy</div>
+        </div>
+        <button class="theme-btn"><span class="theme-ramp"></span>Viridis</button>
+      </div>
+
+      <div class="project">
+        <span class="marker"></span>
+        <div class="pgrow">
+          <div class="ptitle">Project</div>
+          <div class="pmeta">23 frames&nbsp; <b>·</b> &nbsp;0.33 µm/px&nbsp; <b>·</b> &nbsp;2.0 min/frame</div>
+        </div>
+        <span class="gear" title="Calibration & I/O">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </span>
+      </div>
+
+      <div class="rail">
+
+        <!-- PREPROCESSING — done -->
+        <div class="stage" style="--ac:var(--v-pre);--seg:linear-gradient(180deg,var(--v-project),var(--v-pre));--nc:var(--v-pre)">
+          <div class="spine"><span class="node done"></span></div>
+          <div class="card">
+            <div class="chead">
+              <div class="titles">
+                <div class="stagename">Preprocessing</div>
+                <div class="stagedesc">register · denoise · background</div>
+              </div>
+              <span class="statuschip chip-done">done</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- DISPLACEMENT — running, expanded (the showcase) -->
+        <div class="stage" style="--ac:var(--v-disp);--seg:linear-gradient(180deg,var(--v-pre),var(--v-disp));--nc:var(--v-disp)">
+          <div class="spine"><span class="node running"></span></div>
+          <div class="card active">
+            <div class="chead">
+              <div class="titles">
+                <div class="stagename">Displacement</div>
+                <div class="stagedesc">Farneback optical flow → bead field</div>
+              </div>
+              <span class="statuschip chip-run">running</span>
+            </div>
+            <div class="params">
+              <div class="grp">Parameters</div>
+              <div class="prow">
+                <div class="field">
+                  <div class="flabel">Farneback levels <span class="fval">10</span></div>
+                  <div class="track"><span class="fill" style="width:20%"></span><span class="knob" style="left:20%"></span></div>
+                </div>
+                <div class="field">
+                  <div class="flabel">Iterations <span class="fval">10</span></div>
+                  <div class="track"><span class="fill" style="width:20%"></span><span class="knob" style="left:20%"></span></div>
+                </div>
+                <div class="field">
+                  <div class="flabel">Downscale <span class="fval">4×</span></div>
+                  <div class="track"><span class="fill" style="width:40%"></span><span class="knob" style="left:40%"></span></div>
+                </div>
+                <div class="field">
+                  <div class="flabel">Window <span class="fval">9</span></div>
+                  <div class="track"><span class="fill" style="width:17%"></span><span class="knob" style="left:17%"></span></div>
+                </div>
+                <div class="field full">
+                  <div class="flabel">Max displacement <span class="fval">12.0 <span class="u">µm</span></span></div>
+                  <div class="track"><span class="fill" style="width:30%"></span><span class="knob" style="left:30%"></span></div>
+                </div>
+              </div>
+            </div>
+            <div class="actions">
+              <span class="iconbtn" title="Data / files">
+                <svg viewBox="0 0 24 24"><path d="M3 7l2-2h5l2 2h7a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>
+              </span>
+              <span class="iconbtn" title="Parameters">
+                <svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h7M15 18h5"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></svg>
+              </span>
+              <span class="iconbtn" title="Preview">
+                <svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+              </span>
+              <span class="iconbtn stop" title="Stop">
+                <svg viewBox="0 0 24 24" style="fill:currentColor;stroke:none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                Stop
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- FORCE — ready, files panel open -->
+        <div class="stage" style="--ac:var(--v-force);--seg:linear-gradient(180deg,var(--v-disp),var(--v-force));--nc:var(--v-force)">
+          <div class="spine"><span class="node ready"></span></div>
+          <div class="card">
+            <div class="chead">
+              <div class="titles">
+                <div class="stagename">Force</div>
+                <div class="stagedesc">FTTC traction · E = 9.00 kPa</div>
+              </div>
+              <span class="statuschip chip-ready">ready</span>
+            </div>
+            <div class="files">
+              <div class="grp">Data</div>
+              <div class="frow has">
+                <span class="fi"><svg viewBox="0 0 24 24" stroke="currentColor"><path d="M20 6L9 17l-5-5"/></svg></span>
+                <span class="name">displacement_field</span><span class="meta">128×128×2</span>
+              </div>
+              <div class="frow miss">
+                <span class="fi"><svg viewBox="0 0 24 24" stroke="currentColor"><circle cx="12" cy="12" r="8"/></svg></span>
+                <span class="name">traction_map</span><span class="meta">—</span>
+              </div>
+              <div class="frow miss">
+                <span class="fi"><svg viewBox="0 0 24 24" stroke="currentColor"><circle cx="12" cy="12" r="8"/></svg></span>
+                <span class="name">mask.tif <span style="opacity:.6">(optional)</span></span><span class="meta">—</span>
+              </div>
+            </div>
+            <div class="actions">
+              <span class="iconbtn" title="Data / files">
+                <svg viewBox="0 0 24 24"><path d="M3 7l2-2h5l2 2h7a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>
+              </span>
+              <span class="iconbtn" title="Parameters">
+                <svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h7M15 18h5"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></svg>
+              </span>
+              <span class="iconbtn disabled" title="Preview (run first)">
+                <svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+              </span>
+              <span class="iconbtn run" title="Run force">
+                <svg viewBox="0 0 24 24" style="fill:currentColor;stroke:none"><path d="M8 5v14l11-7z"/></svg>
+                Run
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- STRESS — idle -->
+        <div class="stage" style="--ac:var(--v-stress);--seg:linear-gradient(180deg,var(--v-force),var(--v-stress));--nc:var(--v-stress)">
+          <div class="spine"><span class="node idle"></span></div>
+          <div class="card idle">
+            <div class="chead">
+              <div class="titles">
+                <div class="stagename">Stress</div>
+                <div class="stagedesc">monolayer stress · needs mask</div>
+              </div>
+              <span class="statuschip chip-idle">idle</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- BATCH — idle, the production meta-stage -->
+        <div class="stage" style="--ac:var(--v-batch);--seg:linear-gradient(180deg,var(--v-stress),var(--v-batch));--nc:var(--v-batch)">
+          <div class="spine"><span class="node idle"></span></div>
+          <div class="card idle">
+            <div class="chead">
+              <div class="titles">
+                <div class="stagename">Batch</div>
+                <div class="stagedesc">commit params → run series → .ntfm</div>
+              </div>
+              <span class="statuschip chip-idle">5 queued</span>
+            </div>
+            <div class="batchmeta"><span class="b">▸</span> writes one .ntfm per experiment into processed/</div>
+          </div>
+        </div>
+
+      </div><!-- /rail -->
+
+      <div class="themestrip">
+        <div class="tcard sel"><div class="ramp" style="background:linear-gradient(90deg,#440154,#414487,#2a788e,#22a884,#7ad151,#fde725)"></div><div class="tn">VIRIDIS</div></div>
+        <div class="tcard"><div class="ramp" style="background:linear-gradient(90deg,#00204d,#414d6b,#7c7b78,#bcb582,#ffea46)"></div><div class="tn">CIVIDIS</div></div>
+        <div class="tcard"><div class="ramp" style="background:linear-gradient(90deg,#5e81ac,#81a1c1,#8fbcbb,#a3be8c,#ebcb8b)"></div><div class="tn">NORD</div></div>
+        <div class="tcard"><div class="ramp" style="background:linear-gradient(90deg,#bd93f9,#ff79c6,#8be9fd,#50fa7b,#f1fa8c)"></div><div class="tn">DRACULA</div></div>
+      </div>
+
+    </div><!-- /dock -->
+    <div class="footnote">mockup · not the running plugin<br>colors sampled along the matplotlib viridis ramp</div>
+  </div>
+
+</div>
+</body>
+</html>

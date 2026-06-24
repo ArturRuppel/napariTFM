@@ -18,8 +18,8 @@ The five decisions form a near-linear chain. Recommended sequence:
 |-------|-----------------------------------|----------------------------------------------------------------|--------|
 | **0** | §2 Drop mask creation             | Cheap deletion; de-scopes batch + the `.ntfm` mask column      | ✅ done |
 | **1** | §1 `.ntfm` + tidy converter       | Foundation — every data-shaped item below consumes it          | ✅ built |
-| **2** | §4 Batch-only data production      | Writes `.ntfm`; needs the container to exist                   | 🟡 backend + preview-only done; tune→commit bridge open |
-| **3** | §3 Toolbar UI                     | Final shape depends on which buttons §4 leaves behind          | 🔵 |
+| **2** | §4 Batch-only data production      | Writes `.ntfm`; needs the container to exist                   | ✅ done — shared param object *is* the bridge; labels moved to §5 |
+| **3** | §3 Toolbar UI                     | Final shape depends on which buttons §4 leaves behind          | ✅ done — all `TODO.md` slices landed (see §3) |
 | **4** | §5 Aggregator → `.iris`           | Consumes `.ntfm` series + structured batch output              | 🔵 designed |
 
 **Parallelizable now:** §2 and the in-flight `TODO.md` UI-coherence slices both
@@ -191,7 +191,19 @@ shrinks the surface §1 and §4 have to cover. Do it first.
 
 ---
 
-## §3 — UI: toolbar-style stages, not button walls  🔵 (Phase 3)
+## §3 — UI: toolbar-style stages, not button walls  ✅ done (Phase 3)
+
+**Implemented.** All four `TODO.md` slices landed (commits `8f0afe6`, `0d5ce79`,
+`fd6a358`, `e95074b`, `2e70f5a`): inner scroll areas + the 360px lock removed;
+`StageSection` rebuilt on CellFlow's `CollapsibleSection` with a glyph-pill header
+(🔍 files · ⚙ params · ▷ preview · ▶/■ run), no status dot; the `_ActionStateSync`
+proxy machinery retired for a single-instance signal-driven action model; and the
+`section_grid` vocabulary now backs both `WorkflowParameterPanel` and the Project
+px/dt controls (flat, two-up, no `QGroupBox`). The duplicated per-stage load/save
+buttons are gone — loading consolidated when §4 made the interactive path
+preview-only. Locked by `tests/test_stage_section_header.py`,
+`tests/test_ui_style.py`, `tests/test_preprocessing_ui_redesign.py`,
+`tests/test_project_section.py`, `tests/test_collapsible_section.py`.
 
 **Decision.** Collapse each stage's control surface to a **thin line with a
 small set of action buttons** — a toolbar idiom — instead of the current
@@ -229,9 +241,22 @@ it's an external input). `.ntfm` is the only persisted artifact; batch caches
 just the opt-in preprocessed `.tif`, and stage-resume reads results back from the
 `.ntfm`.
 
-**Still open (UI parts):** the tune→commit→run bridge below. Labels have no
-batch-UI entry point yet (read from `config['labels']` keyed by folder when
-present).
+**Bridge resolved — shared parameter object.** The interactive stage widgets and
+the batch widget hold the **same** `ParameterManager` instance
+(`widgets/_widget.py` constructs one and passes it to every stage *and* to the
+batch widget). Tuning a stage mutates exactly the object batch serializes via
+`get_all_parameters()`, and each `.ntfm` already stamps the resolved
+`asdict(UnifiedParameters)`. So "tune → commit → run" is realized by the shared
+object — no separate commit step or duplicate param set. (A future explicit
+*snapshot/freeze* affordance is optional polish, folded into §3's redesign.)
+
+**Labels relocated to §5.** Experiment-design tags
+(`condition`/`replicate`/`position`) are **no longer** entered in the batch UI or
+baked into each `.ntfm`. They are assigned in the **aggregator** (§5), where the
+grouping is actually used, and persisted in the `.iris`. The `mask` *id* (region
+label `1..N`) is a separate thing — it comes straight from the mask file and is
+already a `.ntfm` column. (The batch backend's `config['labels']` read is now
+dead/optional; removable when §5 lands.)
 
 **Decision.** Separate **parameter tuning** from **data production**.
 
@@ -300,15 +325,20 @@ aggregator (§5) and live in `.iris` (with optional CSV export from there). The
 old `metrics_results.csv` batch output is **retired**; `.ntfm` stays strictly
 single-grain (per-sample). Derived = downstream, always.
 
-### Series organization — labels in the leaf
+### Series organization — labels assigned in the aggregator
 
 The experimental *design* (which experiment is which condition / replicate /
-position) is the new info the aggregator needs. Carry it **in the leaf**: add a
-free-form **`labels: {condition, replicate, position, …}`** dict to each
-`.ntfm` sidecar, supplied per-experiment in the batch config. The aggregator
-then scans a tree of `.ntfm`s and groups by label — no central registry. A
-`series.json` index is at most an optional, regenerable cache, never the source
-of truth. Keeps the `.ntfm` self-contained (consistent with §1).
+position) is the new info the aggregator needs. **Decision (revised): assign it
+in the aggregator (§5), not the batch.** When the aggregator scans a tree of
+`.ntfm`s, the user tags/groups experiments there — that is where the grouping is
+consumed, so it belongs there. The mapping is persisted in the exported `.iris`
+(and optionally a regenerable `series.json` cache), never in a central registry.
+
+This deliberately trades the earlier "self-contained `.ntfm`" goal (a `.ntfm`
+alone won't state its condition) for a far simpler batch UI — no per-folder
+labels grid. The `.ntfm` still carries everything *intrinsic* (per-sample data,
+resolved config, provenance); only the extrinsic experiment-design tags move
+downstream to where they're used.
 
 **Why Phase 2:** depends on §1's container (now built); reframes the workflow §3
 then presents.
@@ -360,8 +390,9 @@ biological identifier (per-cell), not a connected-component artifact.
 
 Columns map to Iris schema types:
 - **identifier** — `experiment_id`, `region_id` (cell), `frame`
-- **categorical** — the §4 `labels` (`condition`, `replicate`, `position`),
-  promoted one column per label key
+- **categorical** — experiment-design tags (`condition`, `replicate`,
+  `position`), **assigned in the aggregator UI** (no longer carried in the
+  `.ntfm`); promoted one column per label key
 - **numeric** — every derived metric (with `unit` + `label`)
 
 **Let Iris do the statistical reduction, not the aggregator.** Iris aggregates

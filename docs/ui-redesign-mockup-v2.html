@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>napariTFM — UI redesign v2 (one list, three jobs)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --v-project:#440154;--v-pre:#414487;--v-disp:#2a788e;--v-force:#22a884;--v-stress:#7ad151;--v-batch:#fde725;
+  --bg:#0e1116;--bg-deep:#0a0d12;--surface:#161b22;--surface-2:#0f141a;
+  --line:rgba(255,255,255,.07);--line-strong:rgba(255,255,255,.13);
+  --text:#e6edf3;--text-mid:#aeb6c0;--text-dim:#6b7484;
+  --done:#3fb950;--run:#e3b341;--ready:#58a6ff;
+  --r:11px;--r-sm:8px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{
+  background:
+    radial-gradient(1100px 700px at 10% -8%, #1a2030 0%, transparent 55%),
+    radial-gradient(900px 620px at 110% 112%, #16201d 0%, transparent 50%),
+    var(--bg-deep);
+  color:var(--text);font-family:"IBM Plex Sans",system-ui,sans-serif;min-height:100vh;padding:48px 32px 64px;
+}
+.wrap{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:1fr 392px;gap:56px;align-items:start}
+
+/* brief column */
+.brief{position:sticky;top:48px}
+.kicker{font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:500;letter-spacing:.32em;
+  text-transform:uppercase;color:var(--v-force);display:flex;align-items:center;gap:12px;margin-bottom:22px}
+.kicker::before{content:"";width:34px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--v-pre),var(--v-stress))}
+.brief h1{font-size:44px;line-height:1.05;font-weight:700;letter-spacing:-.02em;margin-bottom:18px}
+.brief h1 em{font-style:normal;background:linear-gradient(96deg,var(--v-pre),var(--v-disp) 40%,var(--v-force) 66%,var(--v-stress));
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.brief .lede{color:var(--text-mid);font-size:15px;line-height:1.6;max-width:46ch;margin-bottom:30px}
+.notes{border-top:1px solid var(--line)}
+.note{display:grid;grid-template-columns:26px 1fr;gap:16px;padding:17px 2px;border-bottom:1px solid var(--line)}
+.note .n{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--text-dim);font-weight:500;padding-top:2px}
+.note h3{font-size:13px;font-weight:600;margin-bottom:5px}
+.note h3 b{font-weight:600}
+.note p{font-size:12.5px;line-height:1.55;color:var(--text-mid)}
+.three{display:flex;gap:8px;margin-top:26px}
+.job{flex:1;border:1px solid var(--line);border-radius:var(--r-sm);padding:12px;background:var(--surface)}
+.job .jt{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px}
+.job p{font-size:11px;color:var(--text-dim);line-height:1.45}
+.job.tune .jt{color:var(--v-disp)}.job.batch .jt{color:var(--v-stress)}.job.agg .jt{color:var(--v-batch)}
+
+/* dock */
+.dockwrap{display:flex;flex-direction:column;gap:14px}
+.dock-label{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--text-dim);padding-left:4px}
+.dock{width:392px;background:var(--bg);border:1px solid var(--line-strong);border-radius:16px;overflow:hidden;
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.7),0 0 0 1px rgba(0,0,0,.3)}
+
+.titlebar{padding:18px 18px 16px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;justify-content:space-between;
+  background:linear-gradient(180deg,rgba(255,255,255,.025),transparent)}
+.brandname{font-size:18px;font-weight:700;letter-spacing:-.01em}
+.brandname span{color:var(--v-disp)}
+.brandsub{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--text-dim);margin-top:4px}
+.theme-btn{display:flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--line-strong);border-radius:20px;
+  padding:5px 10px 5px 7px;cursor:pointer;color:var(--text-mid);font-family:"IBM Plex Mono",monospace;font-size:11px}
+.theme-ramp{width:34px;height:9px;border-radius:5px;background:linear-gradient(90deg,var(--v-project),var(--v-pre),var(--v-disp),var(--v-force),var(--v-stress))}
+
+/* ── EXPERIMENTS (top, shared substrate) ── */
+.sectionhdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 9px}
+.sectionhdr .lbl{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--text-mid)}
+.addbtn{display:flex;align-items:center;gap:6px;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--text-mid);
+  background:var(--surface);border:1px solid var(--line-strong);border-radius:7px;padding:5px 10px;cursor:pointer}
+.addbtn:hover{border-color:var(--text-dim);color:var(--text)}
+.addbtn svg{width:13px;height:13px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round}
+.explist{padding:0 12px}
+.exp{display:flex;align-items:center;gap:11px;padding:10px 11px;border-radius:var(--r-sm);border:1px solid transparent;cursor:pointer}
+.exp:hover{background:var(--surface)}
+.exp.sel{background:var(--surface);border-color:color-mix(in srgb,var(--v-disp) 50%,var(--line-strong))}
+.exp .selbar{width:3px;align-self:stretch;border-radius:2px;background:transparent}
+.exp.sel .selbar{background:var(--v-disp)}
+.exp .ename{flex:1;min-width:0;font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--text-mid);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.exp.sel .ename{color:var(--text)}
+/* per-experiment mini-rail of stage dots */
+.minirail{display:flex;gap:4px;align-items:center}
+.md{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--text-dim);background:transparent}
+.md.d-pre{--mc:var(--v-pre)} .md.d-disp{--mc:var(--v-disp)} .md.d-force{--mc:var(--v-force)} .md.d-stress{--mc:var(--v-stress)}
+.md.done{background:var(--mc);border-color:var(--mc)}
+.md.run{border-color:var(--run);background:var(--run)}
+.md.pending{border-color:var(--text-dim);background:transparent}
+.md.off{opacity:.22;width:6px;height:6px}
+.estatus{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.06em;width:54px;text-align:right;color:var(--text-dim)}
+.estatus.done{color:var(--done)} .estatus.run{color:var(--run)}
+.expmeta{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--text-dim);padding:9px 18px 13px;border-bottom:1px solid var(--line)}
+.expmeta b{color:var(--text-mid);font-weight:400}
+
+/* ── PIPELINE rail (operates on selected experiment) ── */
+.pipehdr{display:flex;align-items:baseline;justify-content:space-between;padding:14px 16px 4px}
+.pipehdr .lbl{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--text-mid)}
+.pipehdr .ctx{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--text-dim)}
+.pipehdr .ctx b{color:var(--v-disp);font-weight:500}
+.rail{padding:4px 0 6px}
+.stage{position:relative;display:grid;grid-template-columns:34px 1fr;padding:0 16px 0 0}
+.stage .spine{position:relative}
+.stage .spine::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:2px;transform:translateX(-50%);background:var(--seg,var(--line-strong))}
+.stage:first-child .spine::before{top:50%}
+.stage:last-child .spine::before{bottom:50%}
+.stage.inactive .spine::before{background:repeating-linear-gradient(180deg,var(--line-strong) 0 3px,transparent 3px 7px)}
+.node{position:absolute;left:50%;top:21px;width:14px;height:14px;border-radius:50%;transform:translate(-50%,-50%);z-index:2;
+  background:var(--bg);border:2px solid var(--nc,var(--text-dim))}
+.node.done{background:var(--nc);border-color:var(--nc);box-shadow:0 0 12px -2px var(--nc)}
+.node.running{border-color:var(--run);animation:pulse 1.8s ease-out infinite}
+.node.running::after{content:"";position:absolute;inset:2px;border-radius:50%;background:var(--run)}
+.node.ready{border-color:var(--nc)}
+.node.off{width:9px;height:9px;border-color:var(--text-dim);border-style:dashed;background:var(--bg)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(227,179,65,.45)}70%{box-shadow:0 0 0 7px rgba(227,179,65,0)}100%{box-shadow:0 0 0 0 rgba(227,179,65,0)}}
+
+.card{margin:6px 0;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);overflow:hidden;
+  transition:transform .15s ease,border-color .15s ease}
+.card:hover{transform:translateY(-1px);border-color:var(--line-strong)}
+.card.active{border-color:color-mix(in srgb,var(--ac) 45%,var(--line-strong))}
+.card.inactive{background:color-mix(in srgb,var(--surface) 70%,var(--bg-deep));opacity:.72}
+.chead{display:flex;align-items:center;gap:10px;padding:11px 12px}
+.chead .titles{flex:1;min-width:0}
+.stagename{font-size:12.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ac);display:flex;align-items:center;gap:8px}
+.card.inactive .stagename{color:var(--text-dim)}
+.stagedesc{font-size:11px;color:var(--text-dim);margin-top:3px;letter-spacing:.01em}
+.statuschip{font-family:"IBM Plex Mono",monospace;font-size:9.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;padding:3px 7px;border-radius:5px;white-space:nowrap}
+.chip-done{color:var(--done);background:color-mix(in srgb,var(--done) 14%,transparent)}
+.chip-run{color:var(--run);background:color-mix(in srgb,var(--run) 15%,transparent)}
+.chip-ready{color:var(--ready);background:color-mix(in srgb,var(--ready) 14%,transparent)}
+.chip-off{color:var(--text-dim);background:rgba(255,255,255,.04)}
+/* per-stage enable toggle */
+.enable{width:30px;height:17px;border-radius:9px;background:var(--ac);position:relative;flex:none;cursor:pointer}
+.enable.off{background:rgba(255,255,255,.12)}
+.enable::after{content:"";position:absolute;top:2px;width:13px;height:13px;border-radius:50%;background:#fff;right:2px;transition:all .15s}
+.enable.off::after{right:auto;left:2px}
+
+/* params (one expanded) */
+.params{margin:0 12px 12px;padding:12px;border-radius:var(--r-sm);background:var(--surface-2);border:1px solid var(--line);border-left:2px solid var(--ac)}
+.params .grp{font-family:"IBM Plex Mono",monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-dim);margin-bottom:11px}
+.prow{display:grid;grid-template-columns:1fr 1fr;gap:11px 16px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field.full{grid-column:1/-1}
+.flabel{font-size:11px;color:var(--text-mid);display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.fval{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--text);font-weight:500}
+.fval .u{color:var(--text-dim);font-weight:400}
+.track{height:4px;border-radius:3px;background:rgba(255,255,255,.09);position:relative}
+.track .fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:linear-gradient(90deg,color-mix(in srgb,var(--ac) 55%,transparent),var(--ac))}
+.track .knob{position:absolute;top:50%;width:11px;height:11px;border-radius:50%;transform:translate(-50%,-50%);background:#fff;border:2px solid var(--ac);box-shadow:0 1px 4px rgba(0,0,0,.5)}
+
+.actions{display:flex;gap:6px;padding:0 12px 12px}
+.iconbtn{width:30px;height:28px;display:grid;place-items:center;border-radius:7px;cursor:pointer;
+  background:color-mix(in srgb,var(--ac) 13%,transparent);border:1px solid color-mix(in srgb,var(--ac) 22%,transparent);
+  color:color-mix(in srgb,var(--ac) 82%,white)}
+.iconbtn:hover{background:color-mix(in srgb,var(--ac) 24%,transparent)}
+.iconbtn svg{width:15px;height:15px;stroke-width:1.7;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}
+.iconbtn.disabled{opacity:.34;cursor:not-allowed}
+
+/* run-all primary */
+.runbar{padding:6px 16px 16px}
+.runall{width:100%;display:flex;align-items:center;justify-content:center;gap:10px;padding:12px;border-radius:10px;cursor:pointer;
+  font-family:"IBM Plex Mono",monospace;font-size:13px;font-weight:600;letter-spacing:.04em;color:var(--bg-deep);
+  background:linear-gradient(96deg,var(--v-disp),var(--v-force) 55%,var(--v-stress));border:none}
+.runall:hover{filter:brightness(1.07)}
+.runall svg{width:16px;height:16px;fill:currentColor}
+.runhint{text-align:center;font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--text-dim);margin-top:8px}
+
+/* aggregate footer (appears when outputs exist) */
+.agg{display:flex;align-items:center;gap:12px;padding:14px 16px;border-top:1px solid var(--line);background:var(--surface-2)}
+.agg .ico{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex:none;
+  background:color-mix(in srgb,var(--v-batch) 16%,transparent);border:1px solid color-mix(in srgb,var(--v-batch) 32%,transparent)}
+.agg .ico svg{width:16px;height:16px;stroke:var(--v-batch);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.agg .at{flex:1}
+.agg .att{font-size:12px;font-weight:600;color:var(--text)}
+.agg .ats{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--text-dim);margin-top:2px}
+.agg .ago{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--v-batch);border:1px solid color-mix(in srgb,var(--v-batch) 36%,transparent);
+  border-radius:7px;padding:6px 11px;cursor:pointer}
+.agg .ago:hover{background:color-mix(in srgb,var(--v-batch) 12%,transparent)}
+
+.themestrip{display:flex;gap:9px;padding:13px 16px;border-top:1px solid var(--line);background:var(--surface-2)}
+.tcard{flex:1;text-align:center;cursor:pointer}
+.tcard .ramp{height:20px;border-radius:6px;border:1px solid var(--line-strong)}
+.tcard.sel .ramp{outline:2px solid var(--text-mid);outline-offset:1px}
+.tcard .tn{font-family:"IBM Plex Mono",monospace;font-size:9px;color:var(--text-dim);margin-top:6px;letter-spacing:.05em}
+.tcard.sel .tn{color:var(--text)}
+.footnote{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--text-dim);text-align:center;line-height:1.7}
+
+@media (max-width:980px){
+  body{padding:32px 18px}.wrap{grid-template-columns:1fr;gap:40px}
+  .brief{position:static}.brief h1{font-size:36px}.dockwrap{align-items:center}.dock{width:100%;max-width:420px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="brief">
+    <div class="kicker">UI redesign · v2</div>
+    <h1>One list,<br><em>three jobs.</em></h1>
+    <p class="lede">The experiment list sits at the top and feeds everything below it: tune one,
+      run them all, aggregate their results. The pipeline rail is the same surface in every mode —
+      batch just walks it automatically.</p>
+
+    <div class="notes">
+      <div class="note"><div class="n">01</div><div>
+        <h3 style="color:var(--v-disp)">Experiments at the top</h3>
+        <p>The folder picker is the shared substrate. Each experiment shows its own mini-rail —
+          which stages are done, running, pending — so you read the whole series at a glance.</p></div></div>
+      <div class="note"><div class="n">02</div><div>
+        <h3 style="color:var(--v-stress)">Active stages only</h3>
+        <p>Each stage has an on/off toggle. Turn Stress off (no MSM — common) and it reads as
+          <em>off</em>, never <em>missing</em>; status only judges the stages you've enabled.</p></div></div>
+      <div class="note"><div class="n">03</div><div>
+        <h3 style="color:var(--v-batch)">Run all walks the rail, live</h3>
+        <p>Batch isn't a separate screen. "Run all" steps every experiment through the active
+          stages and streams previews into napari as it goes.</p></div></div>
+    </div>
+
+    <div class="three">
+      <div class="job tune"><div class="jt">Tune</div><p>Select one → rail previews on it</p></div>
+      <div class="job batch"><div class="jt">Batch</div><p>Run all → one .ntfm each</p></div>
+      <div class="job agg"><div class="jt">Aggregate</div><p>Outputs → .iris</p></div>
+    </div>
+  </section>
+
+  <div class="dockwrap">
+    <div class="dock-label">▮ napari dock · 392 px · follows host theme</div>
+    <div class="dock">
+
+      <div class="titlebar">
+        <div><div class="brandname">napari<span>TFM</span></div>
+          <div class="brandsub">traction force microscopy</div></div>
+        <button class="theme-btn"><span class="theme-ramp"></span>Viridis</button>
+      </div>
+
+      <!-- EXPERIMENTS -->
+      <div class="sectionhdr">
+        <span class="lbl">Experiments</span>
+        <span class="addbtn"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add folders</span>
+      </div>
+      <div class="explist">
+        <div class="exp sel">
+          <span class="selbar"></span>
+          <span class="ename">Ctrl / pos_00</span>
+          <span class="minirail">
+            <span class="md d-pre done"></span><span class="md d-disp run"></span>
+            <span class="md d-force pending"></span><span class="md d-stress off"></span>
+          </span>
+          <span class="estatus run">run</span>
+        </div>
+        <div class="exp">
+          <span class="selbar"></span>
+          <span class="ename">Ctrl / pos_01</span>
+          <span class="minirail">
+            <span class="md d-pre done"></span><span class="md d-disp done"></span>
+            <span class="md d-force done"></span><span class="md d-stress off"></span>
+          </span>
+          <span class="estatus done">done</span>
+        </div>
+        <div class="exp">
+          <span class="selbar"></span>
+          <span class="ename">Blebb / pos_00</span>
+          <span class="minirail">
+            <span class="md d-pre pending"></span><span class="md d-disp pending"></span>
+            <span class="md d-force pending"></span><span class="md d-stress off"></span>
+          </span>
+          <span class="estatus">queued</span>
+        </div>
+        <div class="exp">
+          <span class="selbar"></span>
+          <span class="ename">Blebb / pos_01</span>
+          <span class="minirail">
+            <span class="md d-pre pending"></span><span class="md d-disp pending"></span>
+            <span class="md d-force pending"></span><span class="md d-stress off"></span>
+          </span>
+          <span class="estatus">queued</span>
+        </div>
+      </div>
+      <div class="expmeta">4 experiments &nbsp;<b>·</b>&nbsp; stress off &nbsp;<b>·</b>&nbsp; → processed/</div>
+
+      <!-- PIPELINE -->
+      <div class="pipehdr">
+        <span class="lbl">Pipeline</span>
+        <span class="ctx">tuning ▸ <b>Ctrl/pos_00</b></span>
+      </div>
+      <div class="rail">
+
+        <div class="stage" style="--ac:var(--v-pre);--seg:linear-gradient(180deg,var(--v-project),var(--v-pre));--nc:var(--v-pre)">
+          <div class="spine"><span class="node done"></span></div>
+          <div class="card">
+            <div class="chead">
+              <div class="titles"><div class="stagename">Preprocessing</div>
+                <div class="stagedesc">register · denoise · background</div></div>
+              <span class="statuschip chip-done">done</span>
+              <span class="enable" title="Stage on"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage" style="--ac:var(--v-disp);--seg:linear-gradient(180deg,var(--v-pre),var(--v-disp));--nc:var(--v-disp)">
+          <div class="spine"><span class="node running"></span></div>
+          <div class="card active">
+            <div class="chead">
+              <div class="titles"><div class="stagename">Displacement</div>
+                <div class="stagedesc">Farneback optical flow → bead field</div></div>
+              <span class="statuschip chip-run">running</span>
+              <span class="enable" title="Stage on"></span>
+            </div>
+            <div class="params">
+              <div class="grp">Parameters</div>
+              <div class="prow">
+                <div class="field"><div class="flabel">Levels <span class="fval">10</span></div>
+                  <div class="track"><span class="fill" style="width:20%"></span><span class="knob" style="left:20%"></span></div></div>
+                <div class="field"><div class="flabel">Downscale <span class="fval">4×</span></div>
+                  <div class="track"><span class="fill" style="width:40%"></span><span class="knob" style="left:40%"></span></div></div>
+                <div class="field full"><div class="flabel">Max displacement <span class="fval">12.0 <span class="u">µm</span></span></div>
+                  <div class="track"><span class="fill" style="width:30%"></span><span class="knob" style="left:30%"></span></div></div>
+              </div>
+            </div>
+            <div class="actions">
+              <span class="iconbtn" title="Data"><svg viewBox="0 0 24 24"><path d="M3 7l2-2h5l2 2h7a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg></span>
+              <span class="iconbtn" title="Parameters"><svg viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h7M15 18h5"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="13" cy="18" r="2"/></svg></span>
+              <span class="iconbtn" title="Preview"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage" style="--ac:var(--v-force);--seg:linear-gradient(180deg,var(--v-disp),var(--v-force));--nc:var(--v-force)">
+          <div class="spine"><span class="node ready"></span></div>
+          <div class="card">
+            <div class="chead">
+              <div class="titles"><div class="stagename">Force</div>
+                <div class="stagedesc">FTTC traction · E = 9.00 kPa</div></div>
+              <span class="statuschip chip-ready">ready</span>
+              <span class="enable" title="Stage on"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- STRESS — toggled OFF: reads 'off', not 'missing' -->
+        <div class="stage inactive" style="--ac:var(--v-stress);--seg:linear-gradient(180deg,var(--v-force),var(--v-stress));--nc:var(--v-stress)">
+          <div class="spine"><span class="node off"></span></div>
+          <div class="card inactive">
+            <div class="chead">
+              <div class="titles"><div class="stagename">Stress</div>
+                <div class="stagedesc">monolayer stress microscopy</div></div>
+              <span class="statuschip chip-off">off</span>
+              <span class="enable off" title="Stage off"></span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="runbar">
+        <button class="runall"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>Run all 4 experiments</button>
+        <div class="runhint">walks each through the 3 active stages · previews stream live</div>
+      </div>
+
+      <!-- AGGREGATE -->
+      <div class="agg">
+        <span class="ico"><svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10"/></svg></span>
+        <div class="at"><div class="att">Aggregate → .iris</div>
+          <div class="ats">1 done · 3 pending · groups by condition</div></div>
+        <span class="ago">Open</span>
+      </div>
+
+      <div class="themestrip">
+        <div class="tcard sel"><div class="ramp" style="background:linear-gradient(90deg,#440154,#414487,#2a788e,#22a884,#7ad151,#fde725)"></div><div class="tn">VIRIDIS</div></div>
+        <div class="tcard"><div class="ramp" style="background:linear-gradient(90deg,#00204d,#414d6b,#7c7b78,#bcb582,#ffea46)"></div><div class="tn">CIVIDIS</div></div>
+        <div class="tcard"><div class="ramp" style="background:linear-gradient(90deg,#5e81ac,#81a1c1,#8fbcbb,#a3be8c,#ebcb8b)"></div><div class="tn">NORD</div></div>
+        <div class="tcard"><div class="ramp" style="background:linear-gradient(90deg,#bd93f9,#ff79c6,#8be9fd,#50fa7b,#f1fa8c)"></div><div class="tn">DRACULA</div></div>
+      </div>
+
+    </div>
+    <div class="footnote">mockup v2 · one experiment list feeds tune / batch / aggregate<br>stress shown toggled off — reads "off", never "missing"</div>
+  </div>
+
+</div>
+</body>
+</html>
