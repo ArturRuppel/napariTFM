@@ -301,6 +301,7 @@ def build_metadata(
     *,
     config: Dict,
     inputs: Optional[Dict] = None,
+    labels: Optional[Dict] = None,
     repo_path: Optional[Path] = None,
 ) -> Dict:
     """Assemble the ``metadata.json`` payload: provenance + resolved config.
@@ -309,12 +310,17 @@ def build_metadata(
     effective ``UnifiedParameters``) — the source of truth for parameters. The
     grid descriptor is intentionally *not* stored: spacing is derivable from
     ``config`` and the table carries ``row``/``col``.
+
+    ``labels`` are the free-form experiment-design tags (``{condition,
+    replicate, position, …}``) the §5 aggregator groups by, supplied
+    per-experiment in the batch config (ROADMAP §4).
     """
     metadata = {
         "format_version": FORMAT_VERSION,
         "package_version": package_version(),
         "config": config,
         "inputs": inputs or {},
+        "labels": labels or {},
     }
     metadata.update(git_provenance(repo_path))
     return metadata
@@ -425,12 +431,14 @@ def results_to_ntfm(
     stress_result=None,
     mask: Optional[np.ndarray] = None,
     inputs: Optional[Dict] = None,
+    labels: Optional[Dict] = None,
     repo_path: Optional[Path] = None,
 ) -> Path:
     """End-to-end: write one experiment's results to a ``.ntfm`` container.
 
     ``config`` is the resolved per-experiment run config (``asdict`` of the
-    effective ``UnifiedParameters``).
+    effective ``UnifiedParameters``). ``labels`` are the per-experiment
+    design tags the §5 aggregator groups by.
     """
     df = dataframe_from_results(
         displacement_result=displacement_result,
@@ -438,5 +446,7 @@ def results_to_ntfm(
         stress_result=stress_result,
         mask=mask,
     )
-    metadata = build_metadata(config=config, inputs=inputs, repo_path=repo_path)
+    metadata = build_metadata(
+        config=config, inputs=inputs, labels=labels, repo_path=repo_path
+    )
     return write_ntfm(path, df, metadata)

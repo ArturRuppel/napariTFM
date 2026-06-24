@@ -18,9 +18,9 @@ The five decisions form a near-linear chain. Recommended sequence:
 |-------|-----------------------------------|----------------------------------------------------------------|--------|
 | **0** | §2 Drop mask creation             | Cheap deletion; de-scopes batch + the `.ntfm` mask column      | ✅ done |
 | **1** | §1 `.ntfm` + tidy converter       | Foundation — every data-shaped item below consumes it          | ✅ built |
-| **2** | §4 Batch-only data production      | Writes `.ntfm`; needs the container to exist                   | 🔵 |
+| **2** | §4 Batch-only data production      | Writes `.ntfm`; needs the container to exist                   | 🟡 backend wired; UI parts open |
 | **3** | §3 Toolbar UI                     | Final shape depends on which buttons §4 leaves behind          | 🔵 |
-| **4** | §5 Aggregator → `.iris`           | Consumes `.ntfm` series + structured batch output              | 🟡 |
+| **4** | §5 Aggregator → `.iris`           | Consumes `.ntfm` series + structured batch output              | 🔵 designed |
 
 **Parallelizable now:** §2 and the in-flight `TODO.md` UI-coherence slices both
 run independently of the format work — start them without waiting on §1.
@@ -159,8 +159,9 @@ the earlier `nN` label was a schema error.
 **Remaining open item** ⚪
 - **Migration.** One-shot `.npy` → `.ntfm` converter, or a transparent
   read-compat shim for existing projects? (Lower-stakes now the schema is fixed.)
-- **Wiring.** `data_manager.py` still writes the scattered `.npy` files; switching
-  it (and batch) to `.ntfm` is §4's job.
+- **Wiring.** Batch now writes one `.ntfm` per experiment (§4 backend, done).
+  `data_manager.py`'s interactive path still writes the scattered `.npy` files;
+  making per-stage runs preview-only is §4's remaining UI part.
 
 ---
 
@@ -208,7 +209,20 @@ toolbar shape does.
 
 ---
 
-## §4 — Enforce structured I/O: batch is the only path to real data  🔵 (Phase 2)
+## §4 — Enforce structured I/O: batch is the only path to real data  🟡 (Phase 2)
+
+**Backend wired.** Batch now produces the structured artifact: one
+`<experiment>.ntfm` per experiment, written into the `processed/` bucket with the
+mirroring rules below (`napariTFM/utilities/batch_output.py`), carrying the
+resolved per-experiment `config`, `inputs`, and per-experiment `labels`
+(ROADMAP §4 → §5). `figures/` and `batch.log` join it in the same folder; the old
+`.npy`/`.tif` files survive only as a stage-resume cache. The
+`metrics_results.csv` batch output is **retired** (derived metrics are §5's job).
+Tested in `tests/test_batch_output.py` + `tests/test_batch_ntfm_output.py`.
+
+**Still open (UI parts):** per-stage buttons going preview-only, and the
+tune→commit→run bridge below. Labels have no batch-UI entry point yet (read from
+`config['labels']` keyed by folder when present).
 
 **Decision.** Separate **parameter tuning** from **data production**.
 
@@ -292,41 +306,98 @@ then presents.
 
 ---
 
-## §5 — Aggregator: browse a TFM series, export to `.iris`  🟡 (Phase 4)
+## §5 — Aggregator: browse a TFM series, export to `.iris`  🔵 designed (Phase 4)
 
-**Decision.** Add an **aggregator** that operates one level above a single
-analysis run.
+**Decision.** Add an **aggregator** one level above a single analysis run: it
+ingests a **series** (a tree of `.ntfm` files from §4), reduces them to a tidy
+summary table, lets the user browse it, and exports a ready-to-render `.iris`
+document.
 
-- **Input:** the structured batch outputs from §4 — many runs / positions /
-  conditions across a **whole TFM series experiment** — consuming `.ntfm`
-  series directly.
-- **Browse:** let the user navigate and inspect the aggregated dataset across
-  the series.
-- **Export to `.iris`:** emit **`.iris` documents** for the Iris app
-  (`~/Projects/Iris`).
+**What `.iris` actually is** (pinned against `Iris/engine/iris_engine/
+document.py`, format `2.0`). A `.iris` is **not** pre-rendered images — it is the
+**same container shape as `.ntfm`**: a ZIP of a Parquet table + JSON sidecars,
+from which the Iris engine (scipy / statsmodels / pingouin + matplotlib vector
+output) re-renders figures and citable stats. Derived stats fields are *dropped*
+on save and recomputed on open, so the stored file is purely declarative intent.
+Contents:
 
-**What `.iris` actually is** (verified against the Iris repo). A `.iris` file is
-**not** a bundle of pre-rendered images — it is a **declarative analysis spec**:
-a typed data table + a grammar-of-graphics figure spec + an optional statistical
-test, from which the Iris engine (scipy / statsmodels / pingouin + matplotlib
-vector output) re-renders publication figures and citable statistics. Every
-computed value is a function of the spec. This aligns cleanly with §1: Iris
-consumes a typed table, which is exactly the tidy long-format export.
+```
+document.iris  (zip)
+├── manifest.json          # format_version, modified, engine identity + snapshot
+├── data/table.parquet     # the summary table (rows)
+├── data/schema.json       # columns: [{name, type, label, unit?, levels?}]
+│                          #   type ∈ identifier | categorical | numeric
+├── analyses/NN-<id>.json  # one grammar-of-graphics spec per premade analysis
+└── provenance.json        # where the data came from
+```
 
-So the aggregator's job is **not** "render plots" — it is:
-1. Collect the series into one typed data table (the tidy format, aggregated /
-   reshaped to the analysis grain — per-cell, per-condition, per-timepoint).
-2. Attach a **pre-authored declarative spec**: column → plot mappings and chosen
-   stat tests for the standard TFM summaries ("premade analyses").
-3. Write the table + spec as a `.iris` document; Iris renders it.
+**The aggregator is a reduction layer.** Each `.ntfm` is per-sample `(t,y,x)` —
+far too granular for figures/stats. The aggregator groups each `.ntfm`'s tidy
+table by **`(region = mask label, frame = t)`** and computes per-region-per-frame
+**derived scalar metrics** (the quantities §4 deferred). **Metric set = exactly
+what `metrics_calculator.py` already computes** — no new physics for now:
+- `total_strain_energy` (over the region) — `calculate_total_strain_energy`
+- `polarization_index`, `lambda1`, `lambda2` — `calculate_polarization` of the
+  `calculate_moment_tensor` result
 
-**Open questions** 🟡
-- Pin the exact `.iris` document schema against the Iris engine's save/load
-  format (`engine/iris_engine/` — `build_info.py`, `render.py`, the
-  `/document/save` contract) before authoring specs.
-- Which aggregate summaries ship as the "premade" spec set (per-condition
-  force/stress summaries, time-course curves, distributions).
-- Aggregation grain — what one row of the exported table represents.
+(Extensible later — stress/traction aggregates can be added when needed.)
+Stacking all experiments yields one long **summary table**:
+
+> **grain = one row per `(experiment_id, region_id, frame)`** — the
+> "regions-by-frame" analog of Iris's own `cells_by_frame` sample.
+
+Each mask label `1..N` is a **distinct cell**, so `region_id` is a meaningful
+biological identifier (per-cell), not a connected-component artifact.
+
+Columns map to Iris schema types:
+- **identifier** — `experiment_id`, `region_id` (cell), `frame`
+- **categorical** — the §4 `labels` (`condition`, `replicate`, `position`),
+  promoted one column per label key
+- **numeric** — every derived metric (with `unit` + `label`)
+
+**Let Iris do the statistical reduction, not the aggregator.** Iris aggregates
+across a grain via the **data hierarchy `spine`** (the coarsest spine level is
+the inferential unit — `reduce.py`). So the aggregator emits the *fine*
+(per-cell-per-frame) grain and each premade spec sets the spine to the
+**replicate unit** (`experiment_id` by default, or a `replicate` label if
+biological replicates span experiments). Cells within one experiment are
+**pseudo-replicates**, so the spine ensures tests treat each experiment/replicate
+as **n = 1**, not each cell or pixel — statistically honest by construction.
+
+**Premade analyses** — ship the authored grammar-of-graphics specs backed by the
+current metric set (`spec_version` `2.1`; shape: `{encodings, hierarchy:{spine,
+fn}, layers:[{geom}], stats:{family,test,alpha}}`):
+1. Strain energy by condition — box/swarm, `group_comparison` (Welch *t* / ANOVA)
+2. Polarization index by condition — box/swarm, `group_comparison`
+3. Strain-energy **time course** per condition — line over `frame`, per-replicate mean
+
+Each carries `spine: ["experiment_id"]` and `alpha: 0.05`. Iris's `specnorm`
+normalizes legacy specs, so loose version coupling is safe.
+
+**Browse + export.** The aggregator UI loads a series, shows the summary table,
+lets the user filter/inspect and pick which premade analyses to include, then
+**writes the `.iris` zip directly** (the format is small and inspectable — no
+hard dependency on the Iris engine package). Optional CSV export of the summary
+table. `provenance.json` records the contributing `.ntfm` paths + their
+`git_commit`/`config`, plus the napariTFM producer version.
+
+**Resolved**
+- **Manifest `engine` identity** 🔵 — napariTFM writes its producer identity into
+  `provenance.json` and a minimal manifest; Iris **re-stamps** its
+  `build_identity()` on first open/save. (Still worth a one-time round-trip check
+  on the Iris side, but the approach is settled.)
+- **Metric set** 🔵 — for now, exactly the existing `metrics_calculator.py`
+  outputs: `total_strain_energy`, `polarization_index`, `lambda1`, `lambda2`.
+  Extensible later.
+- **Multi-region semantics** 🔵 — mask labels `1..N` are **distinct cells**;
+  `region_id` is a real per-cell identifier (nested under `experiment_id` for
+  stats).
+
+**Remaining risk** ⚪
+- **Iris format is moving.** Pinned to format `2.0` / spec `2.1` today, but an
+  active redesign is in flight (`Iris/docs/superpowers/specs/
+  2026-06-24-iris-file-format-redesign-design.md`). Re-verify the container +
+  spec grammar against Iris **at build time** — not a design blocker now.
 
 ---
 

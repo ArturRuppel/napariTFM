@@ -177,6 +177,17 @@ def test_metadata_carries_provenance():
     assert metadata["config"] == {"a": 1}
 
 
+def test_metadata_carries_labels():
+    labels = {"condition": "stiff", "replicate": 2, "position": "p1"}
+    metadata = ntfm.build_metadata(config={}, labels=labels)
+    assert metadata["labels"] == labels
+
+
+def test_metadata_labels_default_to_empty_dict():
+    metadata = ntfm.build_metadata(config={})
+    assert metadata["labels"] == {}
+
+
 # ---------------------------------------------------------------------------
 # Result-dataclass adapter
 # ---------------------------------------------------------------------------
@@ -205,3 +216,19 @@ def test_results_to_ntfm_writes_container(tmp_path):
     df, metadata = ntfm.read_ntfm(path)
     assert len(df) == 4
     assert metadata["config"]["downscale_factor"] == 4
+
+
+def test_results_to_ntfm_persists_labels(tmp_path):
+    disp = np.ones((1, 2, 2, 2))
+    scale = {"grid_spacing": 1.0, "time_interval": 1.0}
+    result = _FakeResult(displacement_field=disp, physical_scale=scale)
+    path = tmp_path / "exp.ntfm"
+    ntfm.results_to_ntfm(
+        path,
+        config={"downscale_factor": 4},
+        displacement_result=result,
+        labels={"condition": "soft"},
+    )
+
+    _, metadata = ntfm.read_ntfm(path)
+    assert metadata["labels"] == {"condition": "soft"}
