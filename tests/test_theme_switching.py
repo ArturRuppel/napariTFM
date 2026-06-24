@@ -16,10 +16,11 @@ def test_theme_names_nonempty_and_contains_default():
     assert _ui_style.active_theme_name() in names
 
 
-def test_stage_accent_resolves_through_active_palette():
-    semantic = _ui_style.STAGE_ACCENTS["preprocessing"]
-    expected = _ui_style.ACTIVE_PALETTE[semantic]
-    assert _ui_style.stage_accent("preprocessing") == expected
+def test_stage_accent_resolves_through_active_ramp():
+    _ui_style.set_active_theme("Viridis")
+    assert _ui_style.stage_accent("preprocessing") == _ui_style._sample_ramp(
+        _ui_style.THEME_RAMPS["Viridis"], _ui_style.STAGE_RAMP_POSITION["preprocessing"]
+    )
 
 
 def test_stage_accent_unknown_key_falls_back_to_inputs():
