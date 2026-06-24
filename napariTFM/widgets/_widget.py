@@ -512,6 +512,7 @@ class napariTFMWidget(QWidget):
                 },
                 action_states=self.msm_widget.action_states,
                 action_states_changed=self.msm_widget.action_states_changed,
+                optional=True,
             ),
             "batch": StageSection(
                 "Batch Analysis",
@@ -524,6 +525,11 @@ class napariTFMWidget(QWidget):
         }
         self._stage_sections = list(self._stage_sections_by_key.values())
         self._apply_spine_neighbours()
+        for key, section in self._stage_sections_by_key.items():
+            if section.enable_btn is not None:
+                section.enabled_changed.connect(
+                    lambda _enabled, k=key: self._on_stage_enabled_changed(k)
+                )
 
         container_layout.setSpacing(0)
         for section in self._stage_sections:
@@ -625,12 +631,24 @@ class napariTFMWidget(QWidget):
             status = panel.refresh()
             self._stage_sections_by_key[key].set_status(status)
 
+    def _on_stage_enabled_changed(self, key: str) -> None:
+        self.refresh_stage_statuses()
+        self._write_config()
+
+    def _disabled_stages(self) -> list[str]:
+        return [
+            key
+            for key, section in self._stage_sections_by_key.items()
+            if not section.is_enabled
+        ]
+
     def get_state(self) -> dict:
         output_dir = self.data_manager.output_dir
         return {
             "version": STATE_VERSION,
             "parameters": self.parameter_manager.get_all_parameters(),
             "output_dir": str(output_dir) if output_dir else None,
+            "disabled_stages": self._disabled_stages(),
         }
 
     def set_state(self, state: dict) -> None:
@@ -652,6 +670,10 @@ class napariTFMWidget(QWidget):
                         logger.warning("Skipped parameter %s: %s", name, exc)
             # output_dir is intentionally NOT re-applied: the config lives
             # inside output_dir, so the dir is already known when we load it.
+            disabled = set(state.get("disabled_stages") or [])
+            for key, section in self._stage_sections_by_key.items():
+                if section.enable_btn is not None:
+                    section.set_enabled(key not in disabled)
         finally:
             self._applying_state = False
         self.refresh()

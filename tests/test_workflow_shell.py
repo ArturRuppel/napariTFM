@@ -58,6 +58,9 @@ class _StubParameterManager(QObject):
     def get_parameter(self, name):
         return self._values[name]
 
+    def get_all_parameters(self):
+        return dict(self._values)
+
     def set_parameter(self, name, value):
         self._values[name] = value
         self.parameter_changed.emit(name, value)
@@ -403,6 +406,46 @@ def test_stage_sections_receive_ordered_neighbour_accents(monkeypatch, app):
     # continuous ramp down the rail.
     for i, sec in enumerate(sections[:-1]):
         assert sec._accent_below == sections[i + 1]._accent
+
+
+def _stub_main_widget(monkeypatch):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    return _widget.napariTFMWidget(object())
+
+
+def test_only_stress_stage_is_optional(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    assert widget._stage_sections_by_key["stress"].enable_btn is not None
+    for key in ("preprocessing", "displacement", "force", "batch"):
+        assert widget._stage_sections_by_key[key].enable_btn is None
+
+
+def test_disabling_stress_marks_it_off_and_persists_in_state(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    stress = widget._stage_sections_by_key["stress"]
+
+    stress.set_enabled(False)
+    assert stress.spine._status == "off"
+    assert widget.get_state()["disabled_stages"] == ["stress"]
+
+
+def test_set_state_restores_disabled_stages(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    stress = widget._stage_sections_by_key["stress"]
+
+    widget.set_state({"parameters": {}, "disabled_stages": ["stress"]})
+    assert stress.is_enabled is False
+    assert stress.spine._status == "off"
+
+    widget.set_state({"parameters": {}, "disabled_stages": []})
+    assert stress.is_enabled is True
 
 
 def test_main_widget_lets_dock_determine_width(monkeypatch, app):
