@@ -194,3 +194,56 @@ def test_build_summary_table_no_labels_has_only_grain_and_metrics(tmp_path):
     table = iris.build_summary_table([a])
 
     assert list(table.columns) == iris.ID_COLUMNS + iris.METRIC_COLUMNS
+
+
+# ---------------------------------------------------------------------------
+# Slice 3 — Iris schema typing (data/schema.json)
+# ---------------------------------------------------------------------------
+
+def _schema_by_name(table, **kw):
+    return {entry["name"]: entry for entry in iris.build_schema(table, **kw)}
+
+
+def test_schema_types_identifiers(tmp_path):
+    a = tmp_path / "exp_a.ntfm"
+    _make_ntfm(a)
+    schema = _schema_by_name(iris.build_summary_table([a]))
+
+    for name in ("experiment_id", "region_id", "frame"):
+        assert schema[name]["type"] == "identifier"
+
+
+def test_schema_types_metrics_numeric_with_unit_and_label(tmp_path):
+    a = tmp_path / "exp_a.ntfm"
+    _make_ntfm(a)
+    schema = _schema_by_name(iris.build_summary_table([a]))
+
+    energy = schema["total_strain_energy"]
+    assert energy["type"] == "numeric"
+    assert energy["unit"] == "J"
+    assert energy["label"]  # human-readable, non-empty
+
+
+def test_schema_types_labels_categorical_with_levels(tmp_path):
+    a = tmp_path / "exp_a.ntfm"
+    b = tmp_path / "exp_b.ntfm"
+    _make_ntfm(a)
+    _make_ntfm(b)
+    table = iris.build_summary_table(
+        [a, b],
+        labels={"exp_a": {"condition": "ctrl"}, "exp_b": {"condition": "drug"}},
+    )
+    schema = _schema_by_name(table)
+
+    condition = schema["condition"]
+    assert condition["type"] == "categorical"
+    assert sorted(condition["levels"]) == ["ctrl", "drug"]
+
+
+def test_schema_order_matches_table_columns(tmp_path):
+    a = tmp_path / "exp_a.ntfm"
+    _make_ntfm(a)
+    table = iris.build_summary_table([a])
+    schema = iris.build_schema(table)
+
+    assert [entry["name"] for entry in schema] == list(table.columns)

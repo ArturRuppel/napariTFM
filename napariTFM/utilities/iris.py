@@ -48,6 +48,22 @@ METRIC_COLUMNS = [
 # Grain identifiers.
 ID_COLUMNS = ["experiment_id", "region_id", "frame"]
 
+# Human-readable label per identifier column (Iris schema vocabulary).
+_ID_LABELS = {
+    "experiment_id": "Experiment",
+    "region_id": "Cell",
+    "frame": "Frame",
+}
+
+# Numeric metric metadata: (human label, physical unit). λ are moment-tensor
+# eigenvalues in N·m; the polarization index is dimensionless.
+_METRIC_META = {
+    "total_strain_energy": ("Total strain energy", "J"),
+    "polarization_index": ("Polarization index", ""),
+    "lambda1": ("λ1", "N·m"),
+    "lambda2": ("λ2", "N·m"),
+}
+
 
 def _present(field: Optional[np.ndarray]) -> Optional[np.ndarray]:
     """Return the field, or None if it is missing / entirely NaN (unrun stage)."""
@@ -201,3 +217,40 @@ def build_summary_table(
         ]
 
     return table
+
+
+def build_schema(table: pd.DataFrame) -> list:
+    """Type every summary-table column into the Iris schema vocabulary.
+
+    Returns one entry per column, in column order::
+
+        {"name", "type", "label"[, "unit"][, "levels"]}
+
+    where ``type`` is ``identifier`` (grain keys), ``numeric`` (derived metrics,
+    carrying ``unit``), or ``categorical`` (promoted label columns, carrying the
+    sorted ``levels``).
+    """
+    schema = []
+    for name in table.columns:
+        if name in ID_COLUMNS:
+            schema.append(
+                {"name": name, "type": "identifier", "label": _ID_LABELS[name]}
+            )
+        elif name in _METRIC_META:
+            label, unit = _METRIC_META[name]
+            schema.append(
+                {"name": name, "type": "numeric", "label": label, "unit": unit}
+            )
+        else:  # a promoted experiment-design label column
+            levels = sorted(
+                {v for v in table[name].tolist() if v is not None and pd.notna(v)}
+            )
+            schema.append(
+                {
+                    "name": name,
+                    "type": "categorical",
+                    "label": name.replace("_", " ").capitalize(),
+                    "levels": levels,
+                }
+            )
+    return schema
