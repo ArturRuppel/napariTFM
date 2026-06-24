@@ -124,9 +124,19 @@ from the config table** and retires the old batch run button
   syncing. The latent `"batch"` accent stays in `_ui_style` as colormap
   vocabulary. (suite 340 green)
 
-### P5 — Per-stage viz-toggle glyph  *(replaces the removed viz checkboxes)*
-Each stage header gains a single **viz-toggle glyph** that toggles that stage's
-preview/overlay layer (one per stage, "everyone gets a viz toggle").
+### P5 — Per-stage viz-toggle glyph  ✅ DONE *(commits d31bd39, 7f721e9; suite 346 green)*
+Each stage header now carries a single **viz-toggle glyph** (stacked-layers icon)
+that shows/hides that stage's napari overlay layers ("everyone gets a viz toggle"),
+replacing the removed viz checkboxes.
+- ✅ **P5.1** `StageSection` gains a checkable `viz_btn` (default on) emitting
+  `visualization_toggled(bool)`; new `"viz"` SVG icon; re-tints on theme switch.
+  UI-only.
+- ✅ **P5.2** the shell maps each stage → the layer names it paints
+  (`STAGE_LAYER_NAMES`) and connects every section's `visualization_toggled` to
+  `_set_stage_layers_visible(key, visible)`, flipping just that stage's layers
+  (no-op when the viewer has none).
+- **Deferred (cosmetic):** disabling the glyph when a stage has no layers yet, and
+  persisting toggle state in `get_state`/`set_state` (polish, not required).
 
 ### P6 — Free-text px-size & frame-length inputs
 Convert `_project_section.py:18-55` `pixel_size` / `frame_interval`
