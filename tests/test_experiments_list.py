@@ -359,3 +359,41 @@ def test_mark_running_unknown_path_is_a_noop(app):
     widget = ExperimentsList()
     widget.set_experiments(["/data/a"])
     widget.mark_running("/data/zzz")  # must not raise
+
+
+def test_set_records_rebuilds_rows_with_per_row_metadata(app):
+    widget = ExperimentsList()
+    widget.set_records([
+        {"path": "/data/a", "input_files": {"beads": "b.tif"}, "columns": {"day": "1"}},
+        {"path": "/data/b", "input_files": {"beads": "b.tif"}, "columns": {"day": "2"}},
+    ])
+    assert widget.experiments() == ["/data/a", "/data/b"]
+    records = widget.experiment_records()
+    assert records[0]["columns"] == {"day": "1"}
+    assert records[1]["columns"] == {"day": "2"}
+    assert records[0]["input_files"] == {"beads": "b.tif"}
+
+
+def test_set_records_replaces_previous_rows(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/old"])
+    widget.set_records([
+        {"path": "/data/new", "input_files": {}, "columns": {}},
+    ])
+    assert widget.experiments() == ["/data/new"]
+
+
+def test_set_records_seeds_input_file_header_from_first_record(app):
+    widget = ExperimentsList()
+    widget.set_records([
+        {"path": "/data/a", "input_files": {"beads": "raw.tif", "reference": "ref.tif"}, "columns": {}},
+    ])
+    assert widget.file_name_inputs["beads"].text() == "raw.tif"
+    assert widget.file_name_inputs["reference"].text() == "ref.tif"
+
+
+def test_set_records_empty_clears_the_list(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    widget.set_records([])
+    assert widget.experiments() == []

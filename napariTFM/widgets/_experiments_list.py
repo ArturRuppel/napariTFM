@@ -434,6 +434,34 @@ class ExperimentsList(QWidget):
             }
         self.set_experiments(self._paths + new_paths)
 
+    def set_records(self, records: list[dict]) -> None:
+        """Rebuild the whole table from saved records (the load path, P4.5).
+
+        Each record is ``{"path", "input_files", "columns"}`` — the same shape
+        ``experiment_records`` emits. Replaces every row (paths + per-row
+        metadata), seeds the input-file header from the first record so a
+        round-tripped config keeps its file names, then refreshes statuses.
+        """
+        self._paths = list(dict.fromkeys(r["path"] for r in records))
+        self._records = {}
+        for record in records:
+            path = record["path"]
+            self._records[path] = {
+                "input_files": dict(record.get("input_files") or {}),
+                "columns": dict(record.get("columns") or {}),
+            }
+        if records:
+            first_files = self._records[records[0]["path"]]["input_files"]
+            for key, field in self.file_name_inputs.items():
+                if key in first_files:
+                    field.setText(first_files[key])
+        self._rebuild_rows()
+        if self._active not in self._paths:
+            self._active = None
+        self.refresh_statuses()
+        self._update_meta()
+        self.experiments_changed.emit()
+
     def set_active(self, path: Optional[str]) -> None:
         if path is not None and path not in self._paths:
             return
