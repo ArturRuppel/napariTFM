@@ -4,7 +4,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout,
-                            QSizePolicy, QProgressBar, QLabel, QFrame, QSpacerItem)
+                            QSizePolicy, QLabel, QFrame, QSpacerItem)
 
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optimal_regularization
 from napariTFM.utilities.data_manager import DataManager
@@ -413,11 +413,9 @@ class FTTCWidget(BaseAnalysisWidget):
         frame = QFrame()
         layout = QVBoxLayout()
 
-        self.progress_bar = QProgressBar()
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
 
-        layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
 
         frame.setLayout(layout)
@@ -440,7 +438,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _update_status(self, progress: int, message: str):
         """Update status display."""
-        self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
     def action_states(self):

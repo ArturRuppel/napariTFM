@@ -235,6 +235,19 @@ def test_batch_widget_has_no_analysis_or_visualization_checkboxes():
     assert hasattr(widget, "save_cache_checkbox")
 
 
+def test_batch_widget_has_no_progress_bar():
+    from qtpy.QtWidgets import QProgressBar
+
+    app = _app()
+    widget = BatchAnalysisWidget(None, object(), ParameterManager(), object())
+    widget.show()
+    app.processEvents()
+
+    assert not hasattr(widget, "progress_bar")
+    assert widget.findChildren(QProgressBar) == []
+    assert hasattr(widget, "status_label")
+
+
 def test_batch_widget_has_no_run_mode_radios():
     """Run mode is always in-process; the napari/new-console radios are gone."""
     app = _app()

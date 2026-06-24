@@ -7,7 +7,7 @@ from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (
     QFrame, QCheckBox, QApplication,
-    QProgressBar, QMessageBox, QSizePolicy
+    QMessageBox, QSizePolicy
 )
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QWidget
@@ -430,11 +430,9 @@ class PreprocessingWidget(BaseAnalysisWidget):
         frame = QFrame()
         layout = QVBoxLayout()
 
-        self.progress_bar = QProgressBar()
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
 
-        layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
 
         frame.setLayout(layout)
@@ -496,7 +494,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
     # region === State Management
     def _update_status(self, progress: int, message: str):
         """Update status display."""
-        self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
     def _has_required_data(self) -> bool:

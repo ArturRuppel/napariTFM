@@ -267,6 +267,25 @@ def test_preprocessing_widget_hides_large_body_actions_and_radio_buttons(app):
     assert not hasattr(widget, "cell_radio")
 
 
+def test_preprocessing_widget_has_no_progress_bar(app):
+    """Per-stage progress bars are gone; a global status label replaces them (P2)."""
+    from qtpy.QtWidgets import QProgressBar
+
+    widget = PreprocessingWidget(
+        _FakeViewer(),
+        DataManager(),
+        _ParameterManager(),
+        _FakeVisualizationManager(),
+    )
+    widget.show()
+    app.processEvents()
+
+    assert not hasattr(widget, "progress_bar")
+    assert widget.findChildren(QProgressBar) == []
+    # The textual status survives — only the bar is removed.
+    assert hasattr(widget, "status_label")
+
+
 def test_preprocessing_widget_has_no_inner_scroll_area(app):
     widget = PreprocessingWidget(
         _FakeViewer(),

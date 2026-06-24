@@ -7,7 +7,7 @@ from qtpy.QtCore import Qt, Signal, QSettings
 from qtpy.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QGridLayout, QListView,
     QPushButton, QFrame, QTreeView, QDialog,
-    QProgressBar, QMessageBox, QListWidget, QCheckBox, QLineEdit, QFileDialog,
+    QMessageBox, QListWidget, QCheckBox, QLineEdit, QFileDialog,
 )
 
 from napariTFM.backend.batch_analysis import BatchAnalysis
@@ -181,11 +181,9 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         frame = QFrame()
         layout = QVBoxLayout()
 
-        self.progress_bar = QProgressBar()
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
 
-        layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
 
         frame.setLayout(layout)

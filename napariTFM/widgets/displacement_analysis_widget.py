@@ -4,7 +4,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import Signal, QObject
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMessageBox, QSpacerItem,
-    QSizePolicy, QFrame, QProgressBar
+    QSizePolicy, QFrame
 )
 
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
@@ -416,12 +416,10 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         frame = QFrame()
         layout = QVBoxLayout()
 
-        self.progress_bar = QProgressBar()
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)  # Enable text wrapping
         self.status_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
-        layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
 
         frame.setLayout(layout)
@@ -459,7 +457,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _update_status(self, progress: int, message: str):
         """Update status display."""
-        self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
     def _update_ui_state(self, event=None):

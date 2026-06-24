@@ -6,7 +6,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import Signal, QObject
 from qtpy.QtWidgets import (
     QLabel, QSizePolicy, QFrame, QApplication, QSpacerItem,
-    QPushButton, QProgressBar
+    QPushButton
 )
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
 
@@ -498,11 +498,9 @@ class MSMWidget(BaseAnalysisWidget):
         frame = QFrame()
         layout = QVBoxLayout()
 
-        self.progress_bar = QProgressBar()
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
 
-        layout.addWidget(self.progress_bar)
         layout.addWidget(self.status_label)
 
         frame.setLayout(layout)
@@ -524,7 +522,6 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _update_status(self, progress: int, message: str):
         """Update status display."""
-        self.progress_bar.setValue(progress)
         self.status_label.setText(message)
 
     def _on_frame_changed(self, event=None):
@@ -615,7 +612,6 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _on_analysis_started(self):
         """Handle analysis start event."""
-        self.progress_bar.setValue(0)
         self.status_label.setText("Analysis started...")
 
     def _on_analysis_completed(self, results):
