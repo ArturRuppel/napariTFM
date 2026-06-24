@@ -32,24 +32,29 @@ single **global status label**.
 
 ## Priority phases (execution order = dependency + risk)
 
-### P0 — Config = the metadata table  *(keystone; supersedes folder mgmt + Slice-7 label entry)*
-Grow the Slice-5 `ExperimentsList` (`napariTFM/widgets/_experiments_list.py`) into
-the one top config table, tied to folders:
-- Columns: **relative path · input file name(s) · free-form extra columns**.
-- **"+ Add column"** → a text field for the column *name* plus a *value* field
-  (e.g. name = `condition`, value = `WT`); this is the column config for the
-  next batch.
-- **Two-step add (see D2):** (1) **Discover** folders (folder-presence, no
-  filename parsing); (2) **Commit** the discovered folders into the list, copying
-  the current column config to **every** added row.
-- This *is* the metadata, folded into the config — no separate metadata step.
-- Replaces `batch_analysis_widget.py:201-245` (folder management).
+### P0 — Config = the metadata table  ✅ DONE *(commits 65b88e1, c1f2212, b9a0179, f23de7c, 25d13d6)*
+Grew the Slice-5 `ExperimentsList` into the one top config table, tied to folders.
+Landed test-locked across five sub-slices (suite 311 green):
+- ✅ **P0.1** `discover_experiment_folders()` — folder-presence discovery (D2;
+  mirrors CellFlow, recursive, beads+reference required, cells optional).
+- ✅ **P0.2** per-row records carry `{input_files, columns}`; `add_folders()`
+  copies the column config onto each new row; `experiment_records()` query.
+- ✅ **P0.3** column-config header: input file-name fields + **"+ Add column"**
+  name/value pairs; `input_file_config()` / `column_config()`.
+- ✅ **P0.4** two-step **Discover → Commit** ("Add to list" button + staging
+  label); commit copies the column config to **every** added row.
+- ✅ **P0.5** config bridge: the shell feeds `experiment_records()` into the
+  batch widget (`set_experiment_records`), which drives folders/input files and
+  carries each row's columns as `experiment_metadata` in the saved config.
+- **Deferred (cosmetic):** rendering the extra columns *in the rows* (polish);
+  removing the now-vestigial folder-management UI rides with **P4**.
 
-### P0b — One save, one config  *("save parameters and save config? we just need one")*
-Merge **Save Parameters** (`_project_section.py:70` → `_widget.py:803`
-`_save_parameters`) and **Save Config** (`batch_analysis_widget.py:216` →
-`_save_config_dialog:324`, `save_config_to_yaml`) into a single config save that
-carries params **plus** the P0 table.
+### P0b — One save, one config  ✅ DONE *(commit 1f5334a)*
+Merged **Save Parameters** (params-only) and **Save Config** (full config) into a
+single config save at the Project section (**Save/Load Config**), delegating to
+`batch_analysis_widget.save_config_to_yaml`/`load_config_from_yaml` — it carries
+params **plus** the P0 table (`experiment_metadata`). The params-only handlers and
+the batch widget's duplicate config buttons/dialogs are removed.
 
 ### P1 — Strip superseded scaffolding  ✅ DONE *(commits b80a71d, 706841a, bea9847)*
 Independent of P0 and safe to start first; **keep the batch run trigger until P4.**
