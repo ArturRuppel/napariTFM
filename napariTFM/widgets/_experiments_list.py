@@ -142,3 +142,114 @@ class ExperimentRow(QWidget):
     def mousePressEvent(self, event) -> None:  # pragma: no cover - GUI event
         self._emit_selected()
         super().mousePressEvent(event)
+
+
+class ExperimentsList(QWidget):
+    """Top-of-panel list of experiments; the shared substrate for all three jobs."""
+
+    experiments_changed = Signal()
+    active_changed = Signal(str)
+
+    def __init__(
+        self,
+        status_fn: Optional[Callable[[str], dict[str, str]]] = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._status_fn = status_fn
+        self._paths: list[str] = []
+        self._rows: list[ExperimentRow] = []
+        self._active: Optional[str] = None
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(COMPACT_SPACING)
+        self.setLayout(layout)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        label = QLabel("Experiments")
+        label.setStyleSheet(section_label_style())
+        header.addWidget(label)
+        header.addStretch()
+        self.add_btn = QToolButton()
+        self.add_btn.setObjectName("experiments_add_button")
+        self.add_btn.setText("Add folders")
+        self.add_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.add_btn.clicked.connect(self._on_add_clicked)
+        header.addWidget(self.add_btn)
+        layout.addLayout(header)
+
+        self._rows_box = QVBoxLayout()
+        self._rows_box.setContentsMargins(0, 0, 0, 0)
+        self._rows_box.setSpacing(0)
+        layout.addLayout(self._rows_box)
+
+        self._meta = QLabel("")
+        layout.addWidget(self._meta)
+        self._update_meta()
+
+    # -- queries ---------------------------------------------------------
+    def experiments(self) -> list[str]:
+        return list(self._paths)
+
+    def active(self) -> Optional[str]:
+        return self._active
+
+    def meta_text(self) -> str:
+        return self._meta.text()
+
+    # -- mutation --------------------------------------------------------
+    def set_experiments(self, paths: list[str]) -> None:
+        self._paths = list(dict.fromkeys(paths))  # de-dup, keep order
+        self._rebuild_rows()
+        if self._active not in self._paths:
+            self._active = None
+        self.refresh_statuses()
+        self._update_meta()
+        self.experiments_changed.emit()
+
+    def add_folders(self, paths: list[str]) -> None:
+        merged = list(dict.fromkeys(self._paths + list(paths)))
+        if merged == self._paths:
+            return
+        self.set_experiments(merged)
+
+    def set_active(self, path: Optional[str]) -> None:
+        if path is not None and path not in self._paths:
+            return
+        self._active = path
+        for row in self._rows:
+            row.set_selected(row.path == path)
+        self.active_changed.emit(path or "")
+
+    def refresh_statuses(self) -> None:
+        if self._status_fn is None:
+            return
+        for row in self._rows:
+            row.set_stage_statuses(self._status_fn(row.path))
+        self._update_meta()
+
+    # -- internals -------------------------------------------------------
+    def _rebuild_rows(self) -> None:
+        while self._rows_box.count():
+            item = self._rows_box.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self._rows = []
+        for path in self._paths:
+            row = ExperimentRow(path)
+            row.selected.connect(self.set_active)
+            self._rows_box.addWidget(row)
+            self._rows.append(row)
+
+    def _update_meta(self) -> None:
+        n = len(self._paths)
+        self._meta.setText(f"{n} experiment{'s' if n != 1 else ''}")
+
+    def _on_add_clicked(self) -> None:  # pragma: no cover - GUI dialog
+        dialog = QFileDialog(self, "Add experiment folders")
+        dialog.setFileMode(QFileDialog.Directory)
+        dialog.setOption(QFileDialog.ShowDirsOnly, True)
+        if dialog.exec_():
+            self.add_folders(dialog.selectedFiles())

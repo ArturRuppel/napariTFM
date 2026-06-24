@@ -85,3 +85,60 @@ def test_experiment_row_set_selected_toggles_state(app):
     assert row.is_selected() is False
     row.set_selected(True)
     assert row.is_selected() is True
+
+
+from napariTFM.widgets._experiments_list import ExperimentsList
+
+
+def test_list_starts_empty(app):
+    widget = ExperimentsList()
+    assert widget.experiments() == []
+    assert widget.active() is None
+
+
+def test_set_experiments_populates_rows(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b"])
+    assert widget.experiments() == ["/data/a", "/data/b"]
+
+
+def test_add_folders_appends_without_duplicates(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    widget.add_folders(["/data/a", "/data/b"])
+    assert widget.experiments() == ["/data/a", "/data/b"]
+
+
+def test_selecting_a_row_sets_single_active_and_emits(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b"])
+    seen = []
+    widget.active_changed.connect(seen.append)
+
+    widget.set_active("/data/b")
+
+    assert widget.active() == "/data/b"
+    assert seen == ["/data/b"]
+    rows = widget._rows
+    assert rows[1].is_selected() is True
+    assert rows[0].is_selected() is False
+
+
+def test_meta_line_counts_experiments(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b", "/data/c"])
+    assert "3 experiments" in widget.meta_text()
+
+
+def test_refresh_statuses_calls_status_fn_for_each_row(app):
+    calls = []
+    def status_fn(path):
+        calls.append(path)
+        return {"preprocessing": "done", "displacement": "not_started",
+                "force": "not_started", "stress": "off"}
+    widget = ExperimentsList(status_fn=status_fn)
+    widget.set_experiments(["/data/a", "/data/b"])
+    # set_experiments triggers an initial refresh; clear and call explicitly
+    calls.clear()
+    widget.refresh_statuses()
+    assert set(calls) == {"/data/a", "/data/b"}
