@@ -1556,3 +1556,39 @@ def test_load_config_rebuilds_the_experiments_table(monkeypatch, app, tmp_path):
     assert records[0]["columns"] == {"day": "1"}
     assert records[1]["columns"] == {"day": "2"}
     assert widget.parameter_manager.get_parameter("young_modulus") == 9.0
+
+
+class _FakeLayer:
+    def __init__(self, name):
+        self.name = name
+        self.visible = True
+
+
+class _FakeViewer:
+    def __init__(self, layers):
+        self.layers = layers
+
+
+def test_viz_toggle_hides_and_shows_only_that_stages_layers(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    layers = [
+        _FakeLayer("Displacement Vectors"),
+        _FakeLayer("Displacement Magnitude"),
+        _FakeLayer("Force Vectors"),
+    ]
+    widget.viewer = _FakeViewer(layers)
+
+    section = widget._stage_sections_by_key["displacement"]
+    section.viz_btn.setChecked(False)
+    assert [layer.visible for layer in layers] == [False, False, True]
+
+    section.viz_btn.setChecked(True)
+    assert [layer.visible for layer in layers] == [True, True, True]
+
+
+def test_viz_toggle_is_a_noop_when_viewer_has_no_layers(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget.viewer = object()  # no .layers attribute
+
+    section = widget._stage_sections_by_key["force"]
+    section.viz_btn.setChecked(False)  # must not raise

@@ -25,7 +25,7 @@ def _opaque_count(pixmap):
 
 
 def test_icon_names_cover_the_header_action_set():
-    assert set(ICON_NAMES) == {"files", "params", "preview", "run", "cancel", "power", "plus"}
+    assert set(ICON_NAMES) == {"files", "params", "preview", "run", "cancel", "power", "plus", "viz"}
 
 
 def test_every_action_icon_renders_visible_pixels(app):

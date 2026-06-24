@@ -58,6 +58,18 @@ STAGE_DATA_ARTIFACTS = {
     ],
 }
 
+# napari layer names each stage paints, toggled by the header viz glyph (P5).
+STAGE_LAYER_NAMES = {
+    "preprocessing": (
+        "Preprocessed Beads",
+        "Preprocessed Reference",
+        "Preprocessed Cells",
+    ),
+    "displacement": ("Displacement Vectors", "Displacement Magnitude"),
+    "force": ("Force Vectors", "Force Magnitude"),
+    "stress": ("Normal Stress XX", "Normal Stress YY", "Average Normal Stress"),
+}
+
 
 def _build_preprocessing_specs(preprocessing_widget, visualization_manager):
     def assign(role: str):
@@ -553,6 +565,9 @@ class napariTFMWidget(QWidget):
                 section.enabled_changed.connect(
                     lambda _enabled, k=key: self._on_stage_enabled_changed(k)
                 )
+            section.visualization_toggled.connect(
+                lambda visible, k=key: self._set_stage_layers_visible(k, visible)
+            )
 
         container_layout.setSpacing(0)
         for section in self._stage_sections:
@@ -703,6 +718,16 @@ class napariTFMWidget(QWidget):
     def _on_stage_enabled_changed(self, key: str) -> None:
         self.refresh_stage_statuses()
         self._write_config()
+
+    def _set_stage_layers_visible(self, key: str, visible: bool) -> None:
+        """Show/hide the napari layers a stage paints (header viz glyph, P5)."""
+        names = set(STAGE_LAYER_NAMES.get(key, ()))
+        layers = getattr(self.viewer, "layers", None)
+        if not names or layers is None:
+            return
+        for layer in layers:
+            if layer.name in names:
+                layer.visible = visible
 
     def _disabled_stages(self) -> list[str]:
         return [
