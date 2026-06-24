@@ -314,3 +314,48 @@ def test_refresh_statuses_calls_status_fn_for_each_row(app):
     calls.clear()
     widget.refresh_statuses()
     assert set(calls) == {"/data/a", "/data/b"}
+
+
+# -- Run all (P4.3) ------------------------------------------------------
+
+def test_run_all_button_exists_and_is_disabled_when_empty(app):
+    widget = ExperimentsList()
+    assert hasattr(widget, "run_all_btn")
+    assert widget.run_all_btn.isEnabled() is False
+
+
+def test_run_all_button_enables_once_experiments_exist(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    assert widget.run_all_btn.isEnabled() is True
+
+
+def test_run_all_button_click_emits_run_all_requested(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    seen = []
+    widget.run_all_requested.connect(lambda: seen.append(True))
+    widget.run_all_btn.click()
+    assert seen == [True]
+
+
+def test_mark_running_sets_that_rows_enabled_dots_to_running(app):
+    def status_fn(path):
+        return {"preprocessing": "ready", "displacement": "not_started",
+                "force": "not_started", "stress": "off"}
+    widget = ExperimentsList(status_fn=status_fn)
+    widget.set_experiments(["/data/a", "/data/b"])
+
+    widget.mark_running("/data/a")
+    row_a = widget._rows[0]
+    # Enabled stages flip to running; an off stage stays off.
+    assert row_a.mini_rail._statuses["preprocessing"] == "running"
+    assert row_a.mini_rail._statuses["stress"] == "off"
+    # Untouched row keeps its computed statuses.
+    assert widget._rows[1].mini_rail._statuses["preprocessing"] == "ready"
+
+
+def test_mark_running_unknown_path_is_a_noop(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    widget.mark_running("/data/zzz")  # must not raise

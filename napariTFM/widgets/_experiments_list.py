@@ -193,6 +193,7 @@ class ExperimentsList(QWidget):
 
     experiments_changed = Signal()
     active_changed = Signal(str)
+    run_all_requested = Signal()
 
     def __init__(
         self,
@@ -233,6 +234,19 @@ class ExperimentsList(QWidget):
         self.commit_btn.setEnabled(False)
         self.commit_btn.clicked.connect(self.commit_discovered)
         header.addWidget(self.commit_btn)
+
+        # Run all (P4): batch is no longer a separate card — running the whole
+        # list is an action on the list itself, walking the rail live.
+        self.run_all_btn = QToolButton()
+        self.run_all_btn.setObjectName("experiments_run_all_button")
+        self.run_all_btn.setText("Run all")
+        self.run_all_btn.setIcon(
+            stage_action_icon("run", muted_accent(stage_accent("force")))
+        )
+        self.run_all_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.run_all_btn.setEnabled(False)
+        self.run_all_btn.clicked.connect(self.run_all_requested)
+        header.addWidget(self.run_all_btn)
         layout.addLayout(header)
 
         # Staging for the two-step Discover→Commit flow (D2).
@@ -435,6 +449,23 @@ class ExperimentsList(QWidget):
             row.set_stage_statuses(self._status_fn(row.path))
         self._update_meta()
 
+    def mark_running(self, path: str) -> None:
+        """Flip one experiment's enabled stage dots to 'running' (live, P4).
+
+        Off stages stay off; other rows are untouched. The shell calls this as
+        the batch reaches each folder, then ``refresh_statuses`` re-reads disk
+        truth once the folder's ``.ntfm`` is written.
+        """
+        for row in self._rows:
+            if row.path != path:
+                continue
+            statuses = {
+                stage: ("running" if status != "off" else "off")
+                for stage, status in row.mini_rail._statuses.items()
+            }
+            row.set_stage_statuses(statuses)
+            return
+
     # -- internals -------------------------------------------------------
     def _rebuild_rows(self) -> None:
         while self._rows_box.count():
@@ -451,6 +482,7 @@ class ExperimentsList(QWidget):
     def _update_meta(self) -> None:
         n = len(self._paths)
         self._meta.setText(f"{n} experiment{'s' if n != 1 else ''}")
+        self.run_all_btn.setEnabled(n > 0)
 
     def _on_add_clicked(self) -> None:  # pragma: no cover - GUI dialog
         dialog = QFileDialog(self, "Discover experiments under a root folder")
