@@ -357,6 +357,38 @@ def read_ntfm(path) -> tuple:
     return df, metadata
 
 
+# One representative column per measured stage. The writer always emits every
+# measure column (all-NaN when the stage wasn't run), so presence is judged by
+# "the column exists and is not entirely NaN".
+_STAGE_MEASURE_COLUMN = {
+    "displacement": "u_x[µm]",
+    "force": "F_x[Pa]",
+    "stress": "sigma_xx[mN/m]",
+}
+
+
+def populated_measures(path) -> set:
+    """Return which measured stages have real (non-all-NaN) data in a ``.ntfm``.
+
+    The result is a subset of ``{"displacement", "force", "stress"}``. A missing
+    or unreadable container yields the empty set, so callers can treat "no
+    output yet" and "can't tell" identically. This is the per-output truth the
+    experiments-list stage-status reads (P3); ``mask`` is an input, not a stage.
+    """
+    path = Path(path)
+    if not path.exists():
+        return set()
+    try:
+        df, _ = read_ntfm(path)
+    except Exception:
+        return set()
+    present = set()
+    for stage, column in _STAGE_MEASURE_COLUMN.items():
+        if column in df.columns and not df[column].isna().all():
+            present.add(stage)
+    return present
+
+
 # ---------------------------------------------------------------------------
 # CSV export (lossy, additional)
 # ---------------------------------------------------------------------------

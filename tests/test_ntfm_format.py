@@ -232,3 +232,51 @@ def test_results_to_ntfm_persists_labels(tmp_path):
 
     _, metadata = ntfm.read_ntfm(path)
     assert metadata["labels"] == {"condition": "soft"}
+
+
+# ---------------------------------------------------------------------------
+# populated_measures — per-output truth for stage-status (P3)
+# ---------------------------------------------------------------------------
+
+def _write_measure_ntfm(tmp_path, **arrays):
+    df = ntfm.arrays_to_tidy(grid_spacing=1.0, frame_interval=1.0, **arrays)
+    path = tmp_path / "exp.ntfm"
+    ntfm.write_ntfm(path, df, ntfm.build_metadata(config={}))
+    return path
+
+
+def test_populated_measures_displacement_only(tmp_path):
+    path = _write_measure_ntfm(tmp_path, displacement_field=np.ones((1, 2, 2, 2)))
+    assert ntfm.populated_measures(path) == {"displacement"}
+
+
+def test_populated_measures_through_force(tmp_path):
+    path = _write_measure_ntfm(
+        tmp_path,
+        displacement_field=np.ones((1, 2, 2, 2)),
+        force_field=np.ones((1, 2, 2, 2)) * 5.0,
+    )
+    assert ntfm.populated_measures(path) == {"displacement", "force"}
+
+
+def test_populated_measures_full_pipeline(tmp_path):
+    stress = np.ones((1, 2, 2, 2, 2))
+    path = _write_measure_ntfm(
+        tmp_path,
+        displacement_field=np.ones((1, 2, 2, 2)),
+        force_field=np.ones((1, 2, 2, 2)) * 5.0,
+        stress_tensor=stress,
+    )
+    assert ntfm.populated_measures(path) == {"displacement", "force", "stress"}
+
+
+def test_populated_measures_ignores_all_nan_columns(tmp_path):
+    # A force-less run still writes F_x/F_y as all-NaN; that is not "present".
+    path = _write_measure_ntfm(tmp_path, displacement_field=np.ones((1, 2, 2, 2)))
+    df, _ = ntfm.read_ntfm(path)
+    assert df["F_x[Pa]"].isna().all()
+    assert "force" not in ntfm.populated_measures(path)
+
+
+def test_populated_measures_missing_file_is_empty(tmp_path):
+    assert ntfm.populated_measures(tmp_path / "nope.ntfm") == set()
