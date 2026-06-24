@@ -523,7 +523,9 @@ class napariTFMWidget(QWidget):
             ),
         }
         self._stage_sections = list(self._stage_sections_by_key.values())
+        self._apply_spine_neighbours()
 
+        container_layout.setSpacing(0)
         for section in self._stage_sections:
             container_layout.addWidget(section)
         container_layout.addStretch()
@@ -571,7 +573,16 @@ class napariTFMWidget(QWidget):
         for key, section in self._stage_sections_by_key.items():
             section.set_accent(stage_accent(key))
         self.project_section.set_accent(stage_accent("project"))
+        self._apply_spine_neighbours()
         self._sync_theme_menu_state()
+
+    def _apply_spine_neighbours(self):
+        """Give each stage's spine its neighbours' accents so the rail blends."""
+        sections = self._stage_sections
+        for i, section in enumerate(sections):
+            above = sections[i - 1]._accent if i > 0 else section._accent
+            below = sections[i + 1]._accent if i < len(sections) - 1 else section._accent
+            section.set_accents(section._accent, above=above, below=below)
 
     def _sync_theme_menu_state(self):
         current = active_theme_name()

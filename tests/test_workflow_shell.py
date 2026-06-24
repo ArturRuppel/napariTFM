@@ -387,6 +387,24 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     assert widget.batch_widget.isVisible()
 
 
+def test_stage_sections_receive_ordered_neighbour_accents(monkeypatch, app):
+    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
+    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
+    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
+    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
+    widget = _widget.napariTFMWidget(object())
+
+    sections = widget._stage_sections
+    # each section's "below" accent equals the next section's accent — a
+    # continuous ramp down the rail.
+    for i, sec in enumerate(sections[:-1]):
+        assert sec._accent_below == sections[i + 1]._accent
+
+
 def test_main_widget_lets_dock_determine_width(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
