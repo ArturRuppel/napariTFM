@@ -2,11 +2,12 @@ from pathlib import Path
 from typing import Any
 
 from qtpy.QtCore import Signal
+from qtpy.QtGui import QDoubleValidator
 from qtpy.QtWidgets import (
     QFileDialog,
-    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QWidget,
 )
@@ -15,10 +16,20 @@ from napariTFM.widgets._stage_section import StageSection
 from napariTFM.widgets._ui_style import danger_text_style, section_grid, add_section_pair_row, add_section_full_row
 
 
+# Free-text fields (P6): bounds feed a soft validator, not spinbox stepping.
 _GENERAL_SPECS = [
-    ("pixel_size", "Pixel Size (um)", 0.001, 100.0, 0.1, 3),
-    ("frame_interval", "Frame Length (min)", 0.001, 1000.0, 0.1, 3),
+    ("pixel_size", "Pixel Size (um)", 0.001, 100.0),
+    ("frame_interval", "Frame Length (min)", 0.001, 1000.0),
 ]
+
+# Validator decimals kept generous so realistic inputs stay "Acceptable" and
+# editingFinished fires; the real parse happens in _commit_parameter.
+_INPUT_DECIMALS = 6
+
+
+def _format_value(value) -> str:
+    """Compact text for a parameter value — no trailing-zero noise."""
+    return f"{float(value):g}"
 
 
 class _GeneralBody(QWidget):
@@ -28,22 +39,22 @@ class _GeneralBody(QWidget):
         super().__init__()
         self.parameter_manager = parameter_manager
         self.data_manager = data_manager
-        self.parameter_controls: dict[str, QDoubleSpinBox] = {}
+        self.parameter_controls: dict[str, QLineEdit] = {}
 
         grid = section_grid()
         grid.setContentsMargins(8, 8, 8, 8)
         self.setLayout(grid)
 
         controls = []
-        for name, label, min_val, max_val, step, decimals in _GENERAL_SPECS:
-            control = QDoubleSpinBox()
-            control.setRange(min_val, max_val)
-            control.setSingleStep(step)
-            control.setDecimals(decimals)
+        for name, label, min_val, max_val in _GENERAL_SPECS:
+            control = QLineEdit()
+            validator = QDoubleValidator(min_val, max_val, _INPUT_DECIMALS, control)
+            validator.setNotation(QDoubleValidator.StandardNotation)
+            control.setValidator(validator)
             control.setObjectName(f"workflow_parameter_{name}")
-            control.setValue(parameter_manager.get_ui_parameter(name))
-            control.valueChanged.connect(
-                lambda value, n=name: parameter_manager.set_ui_parameter(n, value)
+            control.setText(_format_value(parameter_manager.get_ui_parameter(name)))
+            control.editingFinished.connect(
+                lambda n=name, c=control: self._commit_parameter(n, c)
             )
             self.parameter_controls[name] = control
             controls.append((label, control))
@@ -94,13 +105,24 @@ class _GeneralBody(QWidget):
             self.data_manager.add_change_callback(self._sync_output_dir)
         self._sync_output_dir()
 
+    def _commit_parameter(self, name: str, control: QLineEdit):
+        """Parse a free-text field on edit; revert to the last good value if junk."""
+        try:
+            value = float(control.text().strip())
+        except ValueError:
+            control.setText(
+                _format_value(self.parameter_manager.get_ui_parameter(name))
+            )
+            return
+        self.parameter_manager.set_ui_parameter(name, value)
+
     def _sync_parameter(self, name: str, value: Any):
         control = self.parameter_controls.get(name)
         if control is None:
             return
         control.blockSignals(True)
         try:
-            control.setValue(value)
+            control.setText(_format_value(value))
         finally:
             control.blockSignals(False)
 

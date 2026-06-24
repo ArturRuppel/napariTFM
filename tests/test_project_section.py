@@ -70,13 +70,51 @@ def test_project_section_exposes_one_config_save_plus_reset_clear(app):
     assert not hasattr(section, "save_params_btn")
 
 
+def test_project_section_uses_free_text_inputs(app):
+    from qtpy.QtWidgets import QLineEdit
+
+    section = ProjectSection(_StubParameterManager())
+
+    for name in ("pixel_size", "frame_interval"):
+        assert isinstance(section.parameter_controls[name], QLineEdit)
+
+
+def test_free_text_field_shows_initial_parameter_value(app):
+    section = ProjectSection(_StubParameterManager())
+
+    assert float(section.parameter_controls["pixel_size"].text()) == 1.0
+
+
 def test_project_section_writes_through_ui_parameter_api(app):
     manager = _StubParameterManager()
     section = ProjectSection(manager)
 
-    section.parameter_controls["pixel_size"].setValue(0.108)
+    field = section.parameter_controls["pixel_size"]
+    field.setText("0.108")
+    field.editingFinished.emit()
 
     assert ("pixel_size", 0.108) in manager.ui_writes
+
+
+def test_free_text_field_reverts_unparseable_input(app):
+    manager = _StubParameterManager()
+    section = ProjectSection(manager)
+
+    field = section.parameter_controls["pixel_size"]
+    field.setText("not-a-number")
+    field.editingFinished.emit()
+
+    assert manager.ui_writes == []  # nothing written
+    assert float(field.text()) == 1.0  # reverted to last good value
+
+
+def test_free_text_field_syncs_from_parameter_changed(app):
+    manager = _StubParameterManager()
+    section = ProjectSection(manager)
+
+    manager.set_ui_parameter("frame_interval", 2.5)
+
+    assert float(section.parameter_controls["frame_interval"].text()) == 2.5
 
 
 def test_project_section_starts_expanded(app):
