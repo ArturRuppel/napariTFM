@@ -115,6 +115,10 @@ class _StubVisualizationManager:
         self.data_manager = data_manager
 
 
+class _StubController(QObject):
+    progress_updated = Signal(int, str)
+
+
 class _StubStageWidget(QWidget):
     preprocessing_completed = Signal(object)
     displacement_calculated = Signal(object)
@@ -124,6 +128,7 @@ class _StubStageWidget(QWidget):
 
     def __init__(self, *args):
         super().__init__()
+        self.controller = _StubController()
         self.parameter_panel = QWidget()
         self.preview_btn = QPushButton("Preview")
         self.process_btn = QPushButton("Run")
@@ -428,6 +433,22 @@ def _stub_main_widget(monkeypatch):
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
     return _widget.napariTFMWidget(object())
+
+
+def test_stage_progress_feeds_one_global_status_label(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+
+    # One panel-level status label, prefixed with the reporting stage (P2).
+    assert hasattr(widget, "status_label")
+
+    widget.displacement_widget.controller.progress_updated.emit(40, "Calculating…")
+    assert widget.status_label.text() == "Displacement — Calculating…"
+
+    widget.preprocessing_widget.controller.progress_updated.emit(0, "Error: boom")
+    assert widget.status_label.text() == "Preprocessing — Error: boom"
+
+    widget.msm_widget.controller.progress_updated.emit(100, "Done")
+    assert widget.status_label.text() == "Stress — Done"
 
 
 def test_only_stress_stage_is_optional(monkeypatch, app):

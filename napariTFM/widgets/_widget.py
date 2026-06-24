@@ -407,6 +407,13 @@ class napariTFMWidget(QWidget):
         self._pipeline_context_label.setStyleSheet(section_label_style())
         container_layout.addWidget(self._pipeline_context_label)
 
+        # One panel-level status line (P2) — replaces the per-stage labels/bars.
+        # Stages report run/skip/done into it, prefixed with the reporting stage.
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("global_status_label")
+        self.status_label.setWordWrap(True)
+        container_layout.addWidget(self.status_label)
+
         self._stage_parameter_panels_by_key = self._create_stage_parameter_panels()
 
         # Wire up the Project section's I/O buttons (replaces _create_general_group).
@@ -463,6 +470,21 @@ class napariTFMWidget(QWidget):
         self.batch_widget.set_experiment_records(
             self.experiments_list.experiment_records()
         )
+
+        # Funnel every pipeline stage's progress into the single global status
+        # label (P2). Batch is excluded — it has no controller progress signal
+        # and is retired in P4.
+        for stage_widget, stage_label in (
+            (self.preprocessing_widget, "Preprocessing"),
+            (self.displacement_widget, "Displacement"),
+            (self.force_widget, "Force"),
+            (self.msm_widget, "Stress"),
+        ):
+            stage_widget.controller.progress_updated.connect(
+                lambda _progress, message, label=stage_label: self._relay_stage_status(
+                    label, message
+                )
+            )
 
         stage_data_artifacts = dict(STAGE_DATA_ARTIFACTS)
         stage_data_artifacts["preprocessing"] = _build_preprocessing_specs(
@@ -648,6 +670,10 @@ class napariTFMWidget(QWidget):
             if callable(update):
                 update()
         self.refresh_stage_statuses()
+
+    def _relay_stage_status(self, stage_label: str, message: str) -> None:
+        """Render a stage's progress message in the one global status label (P2)."""
+        self.status_label.setText(f"{stage_label} — {message}")
 
     def refresh_stage_statuses(self):
         for key, panel in self._stage_status_panels_by_key.items():
