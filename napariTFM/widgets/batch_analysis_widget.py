@@ -79,8 +79,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self.add_folder_btn.clicked.connect(self._add_folder)
         self.clear_folders_btn.clicked.connect(self._clear_folders)
         self.run_analysis_btn.clicked.connect(self._run_batch_analysis)
-        self.save_config_btn.clicked.connect(self._save_config_dialog)
-        self.load_config_btn.clicked.connect(self._load_config_dialog)
 
     # endregion === Initialization ===
 
@@ -153,15 +151,12 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         # Create grid layout for buttons
         button_layout = QGridLayout()
 
-        # Add folder management buttons
+        # Add folder management buttons. Config save/load now lives once at the
+        # top (P0b); this widget keeps only the folder controls until P4.
         self.add_folder_btn = QPushButton("Add Folder")
         self.clear_folders_btn = QPushButton("Clear Folders")
-        self.save_config_btn = QPushButton("Save Config")
-        self.load_config_btn = QPushButton("Load Config")
         button_layout.addWidget(self.add_folder_btn, 0, 0)
         button_layout.addWidget(self.clear_folders_btn, 0, 1)
-        button_layout.addWidget(self.save_config_btn, 1, 0)
-        button_layout.addWidget(self.load_config_btn, 1, 1)
 
         # Opt-in stage-resume cache: write preprocessed images to disk so a later
         # run can resume without re-preprocessing. Off by default — the .ntfm is
@@ -259,54 +254,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         }
 
         return config
-
-    def _save_config_dialog(self):
-        """Open a file dialog to save the configuration file."""
-        filepath, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Configuration",
-            os.path.expanduser("~"),
-            "YAML Files (*.yaml *.yml);;All Files (*.*)"
-        )
-
-        if filepath:
-            try:
-                self.save_config_to_yaml(filepath)
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Configuration saved successfully to:\n{filepath}"
-                )
-            except IOError as e:
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"Failed to save configuration:\n{str(e)}"
-                )
-
-    def _load_config_dialog(self):
-        """Open a file dialog to load a configuration file."""
-        filepath, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load Configuration",
-            os.path.expanduser("~"),
-            "YAML Files (*.yaml *.yml);;All Files (*.*)"
-        )
-
-        if filepath:
-            try:
-                self.load_config_from_yaml(filepath)
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"Configuration loaded successfully from:\n{filepath}"
-                )
-            except Exception as e:
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"Failed to load configuration:\n{str(e)}"
-                )
 
     def save_config_to_yaml(self, filepath: str) -> None:
         """

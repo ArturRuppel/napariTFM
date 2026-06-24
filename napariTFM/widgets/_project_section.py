@@ -67,8 +67,10 @@ class _GeneralBody(QWidget):
         output_row.addWidget(self.output_dir_label, stretch=1)
         add_section_full_row(grid, 1, output_container)
 
-        self.save_params_btn = QPushButton("Save Parameters")
-        self.load_params_btn = QPushButton("Load Parameters")
+        # One save (P0b): the config save carries parameters *and* the experiment
+        # table, so the old params-only save is gone.
+        self.save_config_btn = QPushButton("Save Config")
+        self.load_config_btn = QPushButton("Load Config")
         self.reset_params_btn = QPushButton("Reset Parameters")
         self.clear_data_btn = QPushButton("Clear All Data")
         self.clear_data_btn.setStyleSheet(danger_text_style())
@@ -76,8 +78,8 @@ class _GeneralBody(QWidget):
         button_container1 = QWidget()
         button_row1 = QHBoxLayout(button_container1)
         button_row1.setContentsMargins(0, 0, 0, 0)
-        button_row1.addWidget(self.save_params_btn)
-        button_row1.addWidget(self.load_params_btn)
+        button_row1.addWidget(self.save_config_btn)
+        button_row1.addWidget(self.load_config_btn)
         add_section_full_row(grid, 2, button_container1)
 
         button_container2 = QWidget()
@@ -142,12 +144,12 @@ class ProjectSection(StageSection):
         return self.body.parameter_controls
 
     @property
-    def save_params_btn(self):
-        return self.body.save_params_btn
+    def save_config_btn(self):
+        return self.body.save_config_btn
 
     @property
-    def load_params_btn(self):
-        return self.body.load_params_btn
+    def load_config_btn(self):
+        return self.body.load_config_btn
 
     @property
     def reset_params_btn(self):

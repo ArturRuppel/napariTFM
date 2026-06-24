@@ -58,12 +58,16 @@ def test_project_section_contains_general_parameter_controls(app):
     assert "frame_interval" in section.parameter_controls
 
 
-def test_project_section_exposes_save_load_reset_clear_buttons(app):
+def test_project_section_exposes_one_config_save_plus_reset_clear(app):
     section = ProjectSection(_StubParameterManager())
 
-    for name in ["save_params_btn", "load_params_btn", "reset_params_btn", "clear_data_btn"]:
+    for name in ["save_config_btn", "load_config_btn", "reset_params_btn", "clear_data_btn"]:
         button = getattr(section, name)
         assert isinstance(button, QPushButton)
+    # The params-only save merged into the single config save (P0b).
+    assert section.save_config_btn.text() == "Save Config"
+    assert section.load_config_btn.text() == "Load Config"
+    assert not hasattr(section, "save_params_btn")
 
 
 def test_project_section_writes_through_ui_parameter_api(app):

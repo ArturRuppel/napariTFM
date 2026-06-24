@@ -410,12 +410,12 @@ class napariTFMWidget(QWidget):
         self._stage_parameter_panels_by_key = self._create_stage_parameter_panels()
 
         # Wire up the Project section's I/O buttons (replaces _create_general_group).
-        self.save_params_btn = self.project_section.save_params_btn
-        self.load_params_btn = self.project_section.load_params_btn
+        self.save_config_btn = self.project_section.save_config_btn
+        self.load_config_btn = self.project_section.load_config_btn
         self.reset_params_btn = self.project_section.reset_params_btn
         self.clear_data_btn = self.project_section.clear_data_btn
-        self.save_params_btn.clicked.connect(self._save_parameters)
-        self.load_params_btn.clicked.connect(self._load_parameters)
+        self.save_config_btn.clicked.connect(self._save_config)
+        self.load_config_btn.clicked.connect(self._load_config)
         self.reset_params_btn.clicked.connect(self._reset_parameters)
         self.clear_data_btn.clicked.connect(self._clear_all_data)
         self.project_section.body.output_dir_changed.connect(self._reconcile_to_output_dir)
@@ -809,39 +809,37 @@ class napariTFMWidget(QWidget):
             logger.error(f"Error resetting parameters: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to reset parameters: {str(e)}")
 
-    def _save_parameters(self):
-        """Save parameters using parameter manager."""
+    def _save_config(self):
+        """Save the single config: parameters plus the experiment table (P0b)."""
         try:
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Save Parameters",
+                "Save Config",
                 "",
                 "YAML Files (*.yaml *.yml)"
             )
             if file_path:
-                if not file_path.lower().endswith(('.yaml', '.yml')):
-                    file_path += '.yaml'
-                self.parameter_manager.save_to_file(file_path)
-                QMessageBox.information(self, "Success", "Parameters saved successfully!")
+                self.batch_widget.save_config_to_yaml(file_path)
+                QMessageBox.information(self, "Success", "Config saved successfully!")
         except Exception as e:
-            logger.error(f"Error saving parameters: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to save parameters: {str(e)}")
+            logger.error(f"Error saving config: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to save config: {str(e)}")
 
-    def _load_parameters(self):
-        """Load parameters using parameter manager."""
+    def _load_config(self):
+        """Load the single config: parameters plus the experiment table (P0b)."""
         try:
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
-                "Load Parameters",
+                "Load Config",
                 "",
                 "YAML Files (*.yaml *.yml)"
             )
             if file_path:
-                self.parameter_manager.load_from_file(file_path)
-                QMessageBox.information(self, "Success", "Parameters loaded successfully!")
+                self.batch_widget.load_config_from_yaml(file_path)
+                QMessageBox.information(self, "Success", "Config loaded successfully!")
         except Exception as e:
-            logger.error(f"Error loading parameters: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to load parameters: {str(e)}")
+            logger.error(f"Error loading config: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to load config: {str(e)}")
 
     def connect_signals(self):
         """Connect signals between components"""

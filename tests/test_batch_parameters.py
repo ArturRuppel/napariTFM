@@ -162,8 +162,10 @@ def test_batch_keeps_batch_specific_controls_visible_after_parameter_slimdown():
     widget.show()
     app.processEvents()
 
-    assert widget.save_config_btn.isVisibleTo(widget)
-    assert widget.load_config_btn.isVisibleTo(widget)
+    # The config save/load now lives once at the top (P0b); the batch widget's
+    # duplicate buttons are gone.
+    assert not hasattr(widget, "save_config_btn")
+    assert not hasattr(widget, "load_config_btn")
     assert widget.run_analysis_btn.isVisibleTo(widget)
     assert widget.folder_list_widget.isVisibleTo(widget)
 

@@ -163,6 +163,12 @@ class _StubStageWidget(QWidget):
         # The batch widget consumes the config table (P0); the stub just records.
         self.experiment_records = list(records)
 
+    def save_config_to_yaml(self, filepath):
+        self.saved_config_path = filepath
+
+    def load_config_from_yaml(self, filepath):
+        self.loaded_config_path = filepath
+
     def set_action_states(self, **states):
         self._action_states.update(states)
         self.action_states_changed.emit()
@@ -1338,3 +1344,23 @@ def test_state_round_trips_experiments_and_active(monkeypatch, app):
     fresh.set_state(state)
     assert fresh.experiments_list.experiments() == ["/data/a", "/data/b"]
     assert fresh.experiments_list.active() == "/data/b"
+
+
+def test_single_config_save_delegates_to_the_full_config_save(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    # One save lives at the top now; the params-only handler is gone (P0b).
+    assert widget.save_config_btn.text() == "Save Config"
+    assert not hasattr(widget, "_save_parameters")
+
+    monkeypatch.setattr(
+        _widget.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("/tmp/run.yaml", ""))
+    )
+    monkeypatch.setattr(_widget.QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    widget._save_config()
+    assert widget.batch_widget.saved_config_path == "/tmp/run.yaml"
+
+    monkeypatch.setattr(
+        _widget.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: ("/tmp/run.yaml", ""))
+    )
+    widget._load_config()
+    assert widget.batch_widget.loaded_config_path == "/tmp/run.yaml"
