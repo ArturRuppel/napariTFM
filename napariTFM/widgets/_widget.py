@@ -25,6 +25,7 @@ from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, 
 from napariTFM.widgets._param_controls import dslider, islider
 from superqt import QLabeledDoubleSlider, QLabeledSlider
 from napariTFM.widgets._project_section import ProjectSection
+from napariTFM.widgets._experiments_list import ExperimentsList, PIPELINE_STAGES
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +391,22 @@ class napariTFMWidget(QWidget):
         self.project_section = ProjectSection(self.parameter_manager, self.data_manager)
         container_layout.addWidget(self.project_section)
 
+        self.experiments_list = ExperimentsList(
+            status_fn=self._experiment_stage_status,
+        )
+        self.experiments_list.active_changed.connect(
+            self._on_active_experiment_changed
+        )
+        self.experiments_list.experiments_changed.connect(
+            self._on_experiments_changed
+        )
+        container_layout.addWidget(self.experiments_list)
+
+        self._active_experiment: str | None = None
+        self._pipeline_context_label = QLabel("Pipeline")
+        self._pipeline_context_label.setStyleSheet(section_label_style())
+        container_layout.addWidget(self._pipeline_context_label)
+
         self._stage_parameter_panels_by_key = self._create_stage_parameter_panels()
 
         # Wire up the Project section's I/O buttons (replaces _create_general_group).
@@ -630,6 +647,7 @@ class napariTFMWidget(QWidget):
         for key, panel in self._stage_status_panels_by_key.items():
             status = panel.refresh()
             self._stage_sections_by_key[key].set_status(status)
+        self.experiments_list.refresh_statuses()
 
     def _on_stage_enabled_changed(self, key: str) -> None:
         self.refresh_stage_statuses()
@@ -641,6 +659,48 @@ class napariTFMWidget(QWidget):
             for key, section in self._stage_sections_by_key.items()
             if not section.is_enabled
         ]
+
+    def _experiment_stage_status(self, path: str) -> dict[str, str]:
+        """Coarse per-stage status for an experiment folder (Slice 5).
+
+        `.ntfm` present -> enabled stages 'done'; inputs present ->
+        preprocessing 'ready'; disabled stages 'off'. Slice 6 refines this
+        to per-field granularity driven by live runs.
+        """
+        from pathlib import Path
+
+        folder = Path(path)
+        ntfm = folder / "TFM_data" / f"{folder.name}.ntfm"
+        inputs_ready = (folder / "beads.tif").exists() and (
+            folder / "reference.tif"
+        ).exists()
+        disabled = set(self._disabled_stages())
+        statuses: dict[str, str] = {}
+        for stage in PIPELINE_STAGES:
+            if stage in disabled:
+                statuses[stage] = "off"
+            elif ntfm.exists():
+                statuses[stage] = "done"
+            elif inputs_ready and stage == "preprocessing":
+                statuses[stage] = "ready"
+            else:
+                statuses[stage] = "not_started"
+        return statuses
+
+    def _on_active_experiment_changed(self, path: str) -> None:
+        self._active_experiment = path or None
+        if self._active_experiment is None:
+            self._pipeline_context_label.setText("Pipeline")
+        else:
+            from pathlib import Path
+
+            self._pipeline_context_label.setText(
+                f"Pipeline · tuning ▸ {Path(self._active_experiment).name}"
+            )
+        self._write_config()
+
+    def _on_experiments_changed(self) -> None:
+        self._write_config()
 
     def get_state(self) -> dict:
         output_dir = self.data_manager.output_dir

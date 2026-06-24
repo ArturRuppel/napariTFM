@@ -1296,3 +1296,26 @@ def test_shell_preprocessing_panel_has_no_calibration_controls(monkeypatch, app)
     panel = widget._stage_parameter_panels_by_key["preprocessing"]
     assert "pixel_size" not in panel.parameter_controls
     assert "frame_interval" not in panel.parameter_controls
+
+
+def test_experiments_list_is_present_above_pipeline(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    assert hasattr(widget, "experiments_list")
+    assert widget.experiments_list is not None
+
+
+def test_selecting_experiment_updates_pipeline_context_label(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.set_experiments(["/data/Ctrl/pos_00"])
+    widget.experiments_list.set_active("/data/Ctrl/pos_00")
+    assert "pos_00" in widget._pipeline_context_label.text()
+
+
+def test_disabling_stress_refreshes_experiment_minirails(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.set_experiments(["/data/Ctrl/pos_00"])
+    section = widget._stage_sections_by_key["stress"]
+    section.set_enabled(False)
+    row = widget.experiments_list._rows[0]
+    fill, ring = row.mini_rail.appearance("stress")
+    assert fill is None  # stress dot now reads 'off'
