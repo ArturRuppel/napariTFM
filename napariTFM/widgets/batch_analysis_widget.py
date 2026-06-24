@@ -292,16 +292,12 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
         parameters = self.parameter_manager.get_all_parameters()
 
-        # Add metrics parameters
-        # 'mask_source' is removed as per request, assuming mask is always required
-        # and its source is handled implicitly or by other means by the backend.
+        # Add metrics parameters. Masks are always supplied externally (napariTFM
+        # does not generate them), so no mask-creation/refinement parameters here.
         metrics_parameters = {}
         if analysis_steps.get('calculate_metrics', False):
             # Use default values as these detailed controls are not in the batch UI
             metrics_parameters = {
-                'force_threshold_percentile': 10,  # Default
-                'mask_erosion': 0,  # Default
-                'mask_dilation': 0,  # Default
                 'calculate_strain_energy': True,  # Default
                 'calculate_polarization': True,  # Default
                 'export_eigenvalues': True  # Default

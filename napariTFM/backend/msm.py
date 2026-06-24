@@ -25,11 +25,11 @@ and triangular instead of quadratic meshing while maintaining the accuracy of th
 original MSM method. The solver employs an optimized LSQR implementation with careful
 constraint handling for solving the resulting system of equations.
 
-The implementation provides methods for:
-1. Creating binary masks from images
-2. Generating optimized FEM meshes
-3. Calculating stress fields from traction forces
-4. Handling boundary conditions and numerical stability
+Masks are supplied externally (napariTFM does not generate them); the
+implementation provides methods for:
+1. Generating optimized FEM meshes from a supplied binary mask
+2. Calculating stress fields from traction forces
+3. Handling boundary conditions and numerical stability
 """
 
 from dataclasses import dataclass
