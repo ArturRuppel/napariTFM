@@ -1,6 +1,7 @@
 import re
 from typing import Callable
 
+from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from napariTFM.widgets._ui_style import (
@@ -18,6 +19,8 @@ from napariTFM.widgets._stage_spine import StageSpine
 class StageSection(QWidget):
     """Workflow stage section with a CellFlow-style glyph-pill header."""
 
+    enabled_changed = Signal(bool)
+
     def __init__(
         self,
         title: str,
@@ -30,6 +33,7 @@ class StageSection(QWidget):
         status_panel: QWidget | None = None,
         parameter_panel: QWidget | None = None,
         parameters_expanded: bool = False,
+        optional: bool = False,
     ):
         super().__init__()
         self._title = title
@@ -37,6 +41,9 @@ class StageSection(QWidget):
         self._actions = actions or {}
         self._action_states = action_states
         self._status = status
+        self._optional = optional
+        self._enabled = True
+        self.enable_btn = None
         self.status_panel = status_panel
         self.parameter_panel = parameter_panel
         if accent is not None:
@@ -113,6 +120,16 @@ class StageSection(QWidget):
         for button in self._action_buttons:
             header_layout.addWidget(button)
 
+        if self._optional:
+            self.enable_btn = self._create_glyph_button(
+                "enable", "⏻", f"Disable {title}", "power", checkable=True
+            )
+            self.enable_btn.setChecked(True)
+            self.enable_btn.toggled.connect(self._on_enable_toggled)
+            self._action_buttons.append(self.enable_btn)
+            self._static_button_icons[self.enable_btn] = "power"
+            header_layout.insertWidget(0, self.enable_btn)
+
         if self.status_panel is not None:
             self._status_section = CollapsibleSection(
                 "Data", self.status_panel, expanded=False, accent_color=self._accent
@@ -169,6 +186,33 @@ class StageSection(QWidget):
     def status(self) -> str:
         return self._status
 
+    @property
+    def is_enabled(self) -> bool:
+        return self._enabled
+
+    def _effective_status(self) -> str:
+        """What the spine shows: 'off' when disabled, else the real status."""
+        return self._status if self._enabled else "off"
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Turn this (optional) stage on/off; off reads as 'skipped', not missing."""
+        if enabled == self._enabled:
+            return
+        self._enabled = enabled
+        if self.enable_btn is not None:
+            self.enable_btn.blockSignals(True)
+            self.enable_btn.setChecked(enabled)
+            self.enable_btn.blockSignals(False)
+            self.enable_btn.setToolTip(
+                f"{'Disable' if enabled else 'Enable'} {self._title}"
+            )
+        self.spine.set_status(self._effective_status())
+        self._refresh_action_states()
+        self.enabled_changed.emit(enabled)
+
+    def _on_enable_toggled(self, checked: bool) -> None:
+        self.set_enabled(checked)
+
     def set_status(self, status: str):
         self._status = status
         if status == "running":
@@ -177,10 +221,14 @@ class StageSection(QWidget):
         else:
             self.run_cancel_btn.setIcon(stage_action_button_icon("run", self._accent))
             self.run_cancel_btn.setToolTip(f"Run {self._title}")
-        self.spine.set_status(status)
+        self.spine.set_status(self._effective_status())
         self._refresh_action_states()
 
     def _refresh_action_states(self):
+        if not self._enabled:
+            self.run_cancel_btn.setEnabled(False)
+            self.preview_button.setEnabled(False)
+            return
         states = self._action_states() if self._action_states is not None else {}
         running = self._status == "running"
         self.run_cancel_btn.setEnabled(running or states.get("run", False))
