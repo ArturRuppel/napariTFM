@@ -550,6 +550,83 @@ def test_experiment_stage_status_disabled_stress_reads_off(monkeypatch, app, tmp
     assert statuses["force"] == "done"
 
 
+class _FakeBatchAnalysis:
+    """Records its config and replays per-folder lifecycle to the callback."""
+
+    last_config = None
+    last_instance = None
+
+    def __init__(self, config, progress_callback=None):
+        self.config = config
+        self.progress_callback = progress_callback
+        type(self).last_config = config
+        type(self).last_instance = self
+
+    def process_all_folders(self):
+        for folder in self.config["root_folders"]:
+            if self.progress_callback:
+                self.progress_callback(folder, "running")
+                self.progress_callback(folder, "done")
+
+
+def test_run_all_builds_config_from_table_and_runs_batch(monkeypatch, app):
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.add_folders(
+        ["/data/exp_a", "/data/exp_b"],
+        input_files={"beads": "beads.tif", "reference": "reference.tif"},
+        columns={"condition": "soft"},
+    )
+
+    widget.experiments_list.run_all_requested.emit()
+
+    cfg = _FakeBatchAnalysis.last_config
+    assert cfg["root_folders"] == ["/data/exp_a", "/data/exp_b"]
+    assert cfg["experiment_metadata"]["/data/exp_a"] == {"condition": "soft"}
+    assert cfg["analysis_steps"]["stress"] is True
+
+
+def test_run_all_honours_disabled_stress(monkeypatch, app):
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
+    widget = _stub_main_widget(monkeypatch)
+    widget._stage_sections_by_key["stress"].set_enabled(False)
+    widget.experiments_list.add_folders(["/data/exp_a"])
+
+    widget.experiments_list.run_all_requested.emit()
+
+    assert _FakeBatchAnalysis.last_config["analysis_steps"]["stress"] is False
+
+
+def test_run_all_progress_marks_running_then_refreshes(monkeypatch, app, tmp_path):
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
+    widget = _stub_main_widget(monkeypatch)
+
+    seen = []
+    monkeypatch.setattr(
+        widget.experiments_list, "mark_running", lambda path: seen.append(("run", path))
+    )
+    monkeypatch.setattr(
+        widget.experiments_list, "refresh_statuses", lambda: seen.append(("refresh",))
+    )
+    widget.experiments_list.add_folders(["/data/exp_a"])
+
+    widget.experiments_list.run_all_requested.emit()
+
+    # running -> mark_running; done -> refresh from disk.
+    assert ("run", "/data/exp_a") in seen
+    assert ("refresh",) in seen
+
+
+def test_run_all_with_no_experiments_is_a_noop(monkeypatch, app):
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
+    _FakeBatchAnalysis.last_config = None
+    widget = _stub_main_widget(monkeypatch)
+
+    widget.experiments_list.run_all_requested.emit()
+
+    assert _FakeBatchAnalysis.last_config is None
+
+
 def test_only_stress_stage_is_optional(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     assert widget._stage_sections_by_key["stress"].enable_btn is not None

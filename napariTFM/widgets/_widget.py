@@ -7,7 +7,7 @@ from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox,
     QHBoxLayout, QSpinBox, QComboBox, QFileDialog, QCheckBox,
-    QMenu, QToolButton
+    QMenu, QToolButton, QApplication
 )
 
 from napariTFM.utilities.parameter_manager import ParameterManager
@@ -26,6 +26,8 @@ from napariTFM.widgets._param_controls import dslider, islider
 from superqt import QLabeledDoubleSlider, QLabeledSlider
 from napariTFM.widgets._project_section import ProjectSection
 from napariTFM.widgets._experiments_list import ExperimentsList, PIPELINE_STAGES
+from napariTFM.widgets._run_config import build_run_config
+from napariTFM.backend.batch_analysis import BatchAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -400,6 +402,7 @@ class napariTFMWidget(QWidget):
         self.experiments_list.experiments_changed.connect(
             self._on_experiments_changed
         )
+        self.experiments_list.run_all_requested.connect(self._run_all_experiments)
         container_layout.addWidget(self.experiments_list)
 
         self._active_experiment: str | None = None
@@ -674,6 +677,48 @@ class napariTFMWidget(QWidget):
     def _relay_stage_status(self, stage_label: str, message: str) -> None:
         """Render a stage's progress message in the one global status label (P2)."""
         self.status_label.setText(f"{stage_label} — {message}")
+
+    def _run_all_experiments(self) -> None:
+        """Run the whole config table through the pipeline, walking the rail (P4).
+
+        The experiments list is the single run source: its records + the shared
+        parameters build the run config, and stress is skipped when its on/off
+        glyph is off (D1). A per-folder progress callback drives the live
+        mini-rails as the batch advances.
+        """
+        records = self.experiments_list.experiment_records()
+        if not records:
+            return
+        config = build_run_config(
+            records,
+            self.parameter_manager.get_all_parameters(),
+            disabled_stages=self._disabled_stages(),
+        )
+        analyzer = BatchAnalysis(config, progress_callback=self._on_batch_progress)
+        try:
+            analyzer.process_all_folders()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("Run-all failed")
+            QMessageBox.critical(self, "Run all", f"Batch run failed: {exc}")
+        finally:
+            self.refresh_stage_statuses()
+
+    def _on_batch_progress(self, folder: str, status: str) -> None:
+        """Live per-folder feedback for Run-all: walk the rail, then refresh (P4)."""
+        from pathlib import Path
+
+        name = Path(folder).name
+        if status == "running":
+            self.experiments_list.mark_running(folder)
+            self.status_label.setText(f"Batch — running {name}")
+        elif status == "done":
+            self.experiments_list.refresh_statuses()
+            self.status_label.setText(f"Batch — finished {name}")
+        elif status == "error":
+            self.experiments_list.refresh_statuses()
+            self.status_label.setText(f"Batch — failed {name}")
+        # Keep the rail repainting between folders during the in-process run.
+        QApplication.processEvents()
 
     def refresh_stage_statuses(self):
         for key, panel in self._stage_status_panels_by_key.items():
