@@ -221,14 +221,27 @@ class ExperimentsList(QWidget):
         header.addStretch()
         self.add_btn = QToolButton()
         self.add_btn.setObjectName("experiments_add_button")
-        self.add_btn.setText("Add folders")
+        self.add_btn.setText("Discover")
         self.add_btn.setIcon(stage_action_icon("plus", muted_accent(stage_accent("displacement"))))
         self.add_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.add_btn.clicked.connect(self._on_add_clicked)
         header.addWidget(self.add_btn)
+
+        self.commit_btn = QToolButton()
+        self.commit_btn.setObjectName("experiments_commit_button")
+        self.commit_btn.setText("Add to list")
+        self.commit_btn.setEnabled(False)
+        self.commit_btn.clicked.connect(self.commit_discovered)
+        header.addWidget(self.commit_btn)
         layout.addLayout(header)
 
+        # Staging for the two-step Discover→Commit flow (D2).
+        self._discovered: list[str] = []
+
         layout.addLayout(self._build_config_header())
+
+        self._staging_label = QLabel("")
+        layout.addWidget(self._staging_label)
 
         self._rows_box = QVBoxLayout()
         self._rows_box.setContentsMargins(0, 0, 0, 0)
@@ -308,6 +321,44 @@ class ExperimentsList(QWidget):
             if name:
                 config[name] = value_edit.text().strip()
         return config
+
+    # -- two-step Discover -> Commit (D2) --------------------------------
+    def discover(self, root: str | Path) -> list[str]:
+        """Step 1: stage the folders under *root* that hold the required inputs.
+
+        Folder-presence only — required inputs are beads + reference (cells is
+        optional and excluded from the requirement). Staging never mutates the
+        list; the second Commit step does.
+        """
+        cfg = self.input_file_config()
+        required = [cfg.get("beads"), cfg.get("reference")]
+        self._discovered = discover_experiment_folders(root, required)
+        self._update_staging()
+        return list(self._discovered)
+
+    def discovered(self) -> list[str]:
+        return list(self._discovered)
+
+    def commit_discovered(self) -> None:
+        """Step 2: add the staged folders, copying the column config onto each."""
+        if not self._discovered:
+            return
+        self.add_folders(
+            self._discovered,
+            input_files=self.input_file_config(),
+            columns=self.column_config(),
+        )
+        self._discovered = []
+        self._update_staging()
+
+    def _update_staging(self) -> None:
+        n = len(self._discovered)
+        self.commit_btn.setEnabled(n > 0)
+        self._staging_label.setText(
+            f"{n} folder{'s' if n != 1 else ''} discovered — Add to list"
+            if n
+            else ""
+        )
 
     # -- queries ---------------------------------------------------------
     def experiments(self) -> list[str]:
@@ -402,8 +453,10 @@ class ExperimentsList(QWidget):
         self._meta.setText(f"{n} experiment{'s' if n != 1 else ''}")
 
     def _on_add_clicked(self) -> None:  # pragma: no cover - GUI dialog
-        dialog = QFileDialog(self, "Add experiment folders")
+        dialog = QFileDialog(self, "Discover experiments under a root folder")
         dialog.setFileMode(QFileDialog.Directory)
         dialog.setOption(QFileDialog.ShowDirsOnly, True)
         if dialog.exec_():
-            self.add_folders(dialog.selectedFiles())
+            roots = dialog.selectedFiles()
+            if roots:
+                self.discover(roots[0])

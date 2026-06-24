@@ -258,6 +258,50 @@ def test_add_column_button_spawns_one_empty_field(app):
     assert widget.column_config() == {}  # the new field is blank
 
 
+def _make_qualifying(tmp_path, *names):
+    for name in names:
+        d = tmp_path / name
+        d.mkdir()
+        (d / "beads.tif").write_bytes(b"x")
+        (d / "reference.tif").write_bytes(b"x")
+
+
+def test_discover_stages_folders_without_adding_them(app, tmp_path):
+    _make_qualifying(tmp_path, "a", "b")
+    widget = ExperimentsList()
+    staged = widget.discover(tmp_path)
+    assert sorted(Path(p).name for p in staged) == ["a", "b"]
+    assert widget.discovered() == staged
+    assert widget.experiments() == []  # discovery never adds on its own
+
+
+def test_commit_adds_discovered_with_current_column_config(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    widget.file_name_inputs["cells"].setText("")
+    widget.add_column_field("condition", "WT")
+    widget.discover(tmp_path)
+    widget.commit_discovered()
+    records = widget.experiment_records()
+    assert len(records) == 1
+    assert records[0]["columns"] == {"condition": "WT"}
+    assert records[0]["input_files"] == {
+        "beads": "beads.tif",
+        "reference": "reference.tif",
+    }
+    assert widget.discovered() == []  # staging cleared after commit
+
+
+def test_commit_button_enables_only_after_discovery(app, tmp_path):
+    widget = ExperimentsList()
+    assert widget.commit_btn.isEnabled() is False
+    _make_qualifying(tmp_path, "a")
+    widget.discover(tmp_path)
+    assert widget.commit_btn.isEnabled() is True
+    widget.commit_discovered()
+    assert widget.commit_btn.isEnabled() is False
+
+
 def test_refresh_statuses_calls_status_fn_for_each_row(app):
     calls = []
     def status_fn(path):
