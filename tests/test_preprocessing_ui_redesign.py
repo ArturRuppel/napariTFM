@@ -282,8 +282,8 @@ def test_preprocessing_widget_has_no_progress_bar(app):
 
     assert not hasattr(widget, "progress_bar")
     assert widget.findChildren(QProgressBar) == []
-    # The textual status survives — only the bar is removed.
-    assert hasattr(widget, "status_label")
+    # P2: the per-stage status label is gone too — the shell owns one global label.
+    assert not hasattr(widget, "status_label")
 
 
 def test_preprocessing_widget_has_no_inner_scroll_area(app):

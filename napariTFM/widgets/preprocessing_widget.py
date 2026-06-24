@@ -397,7 +397,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.action_frame = self._create_action_frame()
         self.action_frame.setVisible(False)
         layout.addWidget(self.action_frame)
-        layout.addWidget(self._create_status_frame())
 
         container.setLayout(layout)
         return container
@@ -425,19 +424,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         frame.setLayout(layout)
         return frame
 
-    def _create_status_frame(self) -> QFrame:
-        """Create status display frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-
-        layout.addWidget(self.status_label)
-
-        frame.setLayout(layout)
-        return frame
-
     # endregion
 
     # region === Signal Handling
@@ -449,8 +435,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Run/cancel are driven by the header via the action contract
         # (run_action / cancel_action); no body button wiring here.
 
-        # Connect controller signals
-        self.controller.progress_updated.connect(self._update_status)
+        # Connect controller signals. Progress is surfaced by the shell's one
+        # global status label (P2), so there is no local status slot to wire.
         self.controller.preprocessing_completed.connect(self._on_preprocessing_completed)
         self.controller.preprocessing_failed.connect(self._on_preprocessing_failed)
         self.controller.data_updated.connect(self._update_ui_state)
@@ -492,10 +478,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
     # endregion
 
     # region === State Management
-    def _update_status(self, progress: int, message: str):
-        """Update status display."""
-        self.status_label.setText(message)
-
     def _has_required_data(self) -> bool:
         """Check if required data for processing is loaded."""
         return (self.data_manager.bead_stack is not None and

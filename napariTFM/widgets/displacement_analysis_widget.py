@@ -3,8 +3,8 @@ from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, QObject
 from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMessageBox, QSpacerItem,
-    QSizePolicy, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QSpacerItem,
+    QSizePolicy
 )
 
 from napariTFM.widgets._base_widget import BaseAnalysisWidget
@@ -399,7 +399,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
         layout.addWidget(self._create_action_row())
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-        layout.addWidget(self._create_status_frame())
 
         container.setLayout(layout)
         return container
@@ -411,27 +410,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         container.setLayout(layout)
         return container
 
-    def _create_status_frame(self) -> QFrame:
-        """Create the status display frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)  # Enable text wrapping
-        self.status_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
-
-        layout.addWidget(self.status_label)
-
-        frame.setLayout(layout)
-        return frame
-
     # endregion
 
     # region === Signal Handling
     def _connect_signals(self):
         """Connect all widget signals."""
-        # Connect controller signals
-        self.controller.progress_updated.connect(self._update_status)
+        # Connect controller signals. Progress flows to the shell's one global
+        # status label (P2); no local status slot.
         self.controller.analysis_completed.connect(self._on_analysis_completed)
         self.controller.analysis_failed.connect(self._on_analysis_failed)
         self.controller.data_updated.connect(self._update_ui_state)
@@ -454,10 +439,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def cancel_action(self):
         self.controller.cancel_operation()
-
-    def _update_status(self, progress: int, message: str):
-        """Update status display."""
-        self.status_label.setText(message)
 
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""

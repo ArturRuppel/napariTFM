@@ -83,6 +83,11 @@ def test_force_exposes_action_contract(app, force_widget):
     assert callable(w.cancel_action)
 
 
+def test_no_per_stage_status_label(app, force_widget):
+    # P2: the shell's one global status label replaces per-stage labels.
+    assert not hasattr(force_widget, "status_label")
+
+
 def test_parameter_panel_class_is_removed():
     assert not hasattr(fw, "FTTCParameterPanel")
 

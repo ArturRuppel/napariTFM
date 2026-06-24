@@ -5,7 +5,7 @@ from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, QObject
 from qtpy.QtWidgets import (
-    QLabel, QSizePolicy, QFrame, QApplication, QSpacerItem,
+    QSizePolicy, QApplication, QSpacerItem,
     QPushButton
 )
 from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
@@ -474,7 +474,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         layout.addWidget(self._create_action_row())
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-        layout.addWidget(self._create_status_frame())
 
         container.setLayout(layout)
         return container
@@ -493,22 +492,10 @@ class MSMWidget(BaseAnalysisWidget):
         container.setLayout(layout)
         return container
 
-    def _create_status_frame(self) -> QFrame:
-        """Create the status display frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-
-        layout.addWidget(self.status_label)
-
-        frame.setLayout(layout)
-        return frame
-
     def _connect_signals(self):
         """Connect all widget signals."""
-        self.controller.progress_updated.connect(self._update_status)
+        # Progress flows to the shell's one global status label (P2); no local
+        # status slot.
         self.controller.analysis_started.connect(self._on_analysis_started)
         self.controller.analysis_completed.connect(self._on_analysis_completed)
         self.controller.analysis_failed.connect(self._on_analysis_failed)
@@ -519,10 +506,6 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Update enablement when the active layer changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
-
-    def _update_status(self, progress: int, message: str):
-        """Update status display."""
-        self.status_label.setText(message)
 
     def _on_frame_changed(self, event=None):
         """Handle frame change events."""
@@ -612,7 +595,7 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _on_analysis_started(self):
         """Handle analysis start event."""
-        self.status_label.setText("Analysis started...")
+        self.controller.progress_updated.emit(0, "Analysis started...")
 
     def _on_analysis_completed(self, results):
         """Handle analysis completion.
@@ -625,5 +608,5 @@ class MSMWidget(BaseAnalysisWidget):
 
     def _on_analysis_failed(self, error_msg: str):
         """Handle analysis failure."""
-        self._update_status(0, f"Analysis failed: {error_msg}")
+        self.controller.progress_updated.emit(0, f"Analysis failed: {error_msg}")
         self._update_ui_state()

@@ -4,7 +4,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (QPushButton, QMessageBox, QWidget, QVBoxLayout, QHBoxLayout,
-                            QSizePolicy, QLabel, QFrame, QSpacerItem)
+                            QSizePolicy, QSpacerItem)
 
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optimal_regularization
 from napariTFM.utilities.data_manager import DataManager
@@ -388,7 +388,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
         layout.addWidget(self._create_action_row())
         layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-        layout.addWidget(self._create_status_frame())
 
         container.setLayout(layout)
         return container
@@ -408,23 +407,10 @@ class FTTCWidget(BaseAnalysisWidget):
         container.setLayout(layout)
         return container
 
-    def _create_status_frame(self) -> QFrame:
-        """Create the status display frame."""
-        frame = QFrame()
-        layout = QVBoxLayout()
-
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-
-        layout.addWidget(self.status_label)
-
-        frame.setLayout(layout)
-        return frame
-
     def _connect_signals(self):
         """Connect all widget signals."""
-        # Connect controller signals
-        self.controller.progress_updated.connect(self._update_status)
+        # Connect controller signals. Progress flows to the shell's one global
+        # status label (P2); no local status slot.
         self.controller.analysis_completed.connect(self._on_analysis_completed)
         self.controller.analysis_failed.connect(self._on_analysis_failed)
         self.controller.data_updated.connect(self._update_ui_state)
@@ -435,10 +421,6 @@ class FTTCWidget(BaseAnalysisWidget):
 
         # Connect to layer selection changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
-
-    def _update_status(self, progress: int, message: str):
-        """Update status display."""
-        self.status_label.setText(message)
 
     def action_states(self):
         return dict(self._action_enabled)
@@ -482,7 +464,7 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def _on_analysis_failed(self, error_msg: str):
         """Handle analysis failure."""
-        self._update_status(0, f"Error: {error_msg}")
+        self.controller.progress_updated.emit(0, f"Error: {error_msg}")
         self._update_ui_state()
 
     def _on_frame_changed(self, event=None):
