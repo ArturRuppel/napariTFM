@@ -693,31 +693,53 @@ class napariTFMWidget(QWidget):
         ]
 
     def _experiment_stage_status(self, path: str) -> dict[str, str]:
-        """Coarse per-stage status for an experiment folder (Slice 5).
+        """Per-output stage status for an experiment folder (P3).
 
-        `.ntfm` present -> enabled stages 'done'; inputs present ->
-        preprocessing 'ready'; disabled stages 'off'. Slice 6 refines this
-        to per-field granularity driven by live runs.
+        Reads the experiment's `.ntfm` for which measures actually carry data
+        (`displacement`/`force`/`stress`), so a stage is 'done' only when *its*
+        output is present — not merely because a container exists. Each stage's
+        immediate predecessor being done makes it 'ready' (the single run-next
+        frontier); upstream of that is 'not_started'. Disabled stages read
+        'off' (MSM is exempt from auto-skip per D1).
         """
         from pathlib import Path
 
+        from napariTFM.utilities import ntfm as _ntfm
+
         folder = Path(path)
-        ntfm = folder / "TFM_data" / f"{folder.name}.ntfm"
+        tfm_folder = folder / "TFM_data"
+        ntfm_path = tfm_folder / f"{folder.name}.ntfm"
+        measures = _ntfm.populated_measures(ntfm_path)
         inputs_ready = (folder / "beads.tif").exists() and (
             folder / "reference.tif"
         ).exists()
+        # Preprocessing leaves no measure column of its own; a cached image or any
+        # downstream measure both prove it ran.
+        preproc_cached = (tfm_folder / "preprocessed_beads.tif").exists() and (
+            tfm_folder / "preprocessed_reference.tif"
+        ).exists()
+        preproc_done = preproc_cached or bool(measures)
+
         disabled = set(self._disabled_stages())
-        statuses: dict[str, str] = {}
-        for stage in PIPELINE_STAGES:
+
+        def _status(stage: str) -> str:
             if stage in disabled:
-                statuses[stage] = "off"
-            elif ntfm.exists():
-                statuses[stage] = "done"
-            elif inputs_ready and stage == "preprocessing":
-                statuses[stage] = "ready"
-            else:
-                statuses[stage] = "not_started"
-        return statuses
+                return "off"
+            if stage == "preprocessing":
+                if preproc_done:
+                    return "done"
+                return "ready" if inputs_ready else "not_started"
+            if stage in measures:
+                return "done"
+            # 'ready' when this stage's immediate input is available.
+            ready_when = {
+                "displacement": preproc_done,
+                "force": "displacement" in measures,
+                "stress": "force" in measures,
+            }
+            return "ready" if ready_when.get(stage, False) else "not_started"
+
+        return {stage: _status(stage) for stage in PIPELINE_STAGES}
 
     def _on_active_experiment_changed(self, path: str) -> None:
         self._active_experiment = path or None

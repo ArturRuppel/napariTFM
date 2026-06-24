@@ -451,6 +451,105 @@ def test_stage_progress_feeds_one_global_status_label(monkeypatch, app):
     assert widget.status_label.text() == "Stress — Done"
 
 
+def _write_stage_ntfm(folder, **arrays):
+    # Write a real .ntfm into the experiment's TFM_data folder (P3 truth source).
+    import numpy as np  # noqa: F401  (kept local; arrays passed by caller)
+
+    from napariTFM.utilities import ntfm
+
+    tfm = folder / "TFM_data"
+    tfm.mkdir(parents=True, exist_ok=True)
+    df = ntfm.arrays_to_tidy(grid_spacing=1.0, frame_interval=1.0, **arrays)
+    ntfm.write_ntfm(tfm / f"{folder.name}.ntfm", df, ntfm.build_metadata(config={}))
+
+
+def test_experiment_stage_status_inputs_only_is_ready_frontier(monkeypatch, app, tmp_path):
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "exp"
+    folder.mkdir()
+    (folder / "beads.tif").write_bytes(b"x")
+    (folder / "reference.tif").write_bytes(b"x")
+
+    statuses = widget._experiment_stage_status(str(folder))
+    assert statuses["preprocessing"] == "ready"
+    assert statuses["displacement"] == "not_started"
+    assert statuses["force"] == "not_started"
+    assert statuses["stress"] == "not_started"
+
+
+def test_experiment_stage_status_displacement_only(monkeypatch, app, tmp_path):
+    import numpy as np
+
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "exp"
+    folder.mkdir()
+    (folder / "beads.tif").write_bytes(b"x")
+    (folder / "reference.tif").write_bytes(b"x")
+    _write_stage_ntfm(folder, displacement_field=np.ones((1, 2, 2, 2)))
+
+    statuses = widget._experiment_stage_status(str(folder))
+    # Displacement present implies preprocessing ran; force is the next frontier.
+    assert statuses["preprocessing"] == "done"
+    assert statuses["displacement"] == "done"
+    assert statuses["force"] == "ready"
+    assert statuses["stress"] == "not_started"
+
+
+def test_experiment_stage_status_through_force(monkeypatch, app, tmp_path):
+    import numpy as np
+
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "exp"
+    folder.mkdir()
+    _write_stage_ntfm(
+        folder,
+        displacement_field=np.ones((1, 2, 2, 2)),
+        force_field=np.ones((1, 2, 2, 2)) * 5.0,
+    )
+
+    statuses = widget._experiment_stage_status(str(folder))
+    assert statuses["preprocessing"] == "done"
+    assert statuses["displacement"] == "done"
+    assert statuses["force"] == "done"
+    assert statuses["stress"] == "ready"
+
+
+def test_experiment_stage_status_full_pipeline_all_done(monkeypatch, app, tmp_path):
+    import numpy as np
+
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "exp"
+    folder.mkdir()
+    _write_stage_ntfm(
+        folder,
+        displacement_field=np.ones((1, 2, 2, 2)),
+        force_field=np.ones((1, 2, 2, 2)) * 5.0,
+        stress_tensor=np.ones((1, 2, 2, 2, 2)),
+    )
+
+    statuses = widget._experiment_stage_status(str(folder))
+    assert all(statuses[s] == "done" for s in ("preprocessing", "displacement", "force", "stress"))
+
+
+def test_experiment_stage_status_disabled_stress_reads_off(monkeypatch, app, tmp_path):
+    import numpy as np
+
+    widget = _stub_main_widget(monkeypatch)
+    widget._stage_sections_by_key["stress"].set_enabled(False)
+    folder = tmp_path / "exp"
+    folder.mkdir()
+    _write_stage_ntfm(
+        folder,
+        displacement_field=np.ones((1, 2, 2, 2)),
+        force_field=np.ones((1, 2, 2, 2)) * 5.0,
+    )
+
+    statuses = widget._experiment_stage_status(str(folder))
+    # MSM is exempt from auto-skip (D1); disabling it reads as off, not ready.
+    assert statuses["stress"] == "off"
+    assert statuses["force"] == "done"
+
+
 def test_only_stress_stage_is_optional(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     assert widget._stage_sections_by_key["stress"].enable_btn is not None
