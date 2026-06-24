@@ -163,10 +163,17 @@ run/preview/files/params controls (`_stage_section.py:81-112`).
 Align the mini-rail / spine status dots with the header pills (the known
 dot-spacing/alignment nit).
 
-### P9 — Aggregate → `.iris`  *(was Slice 7, minus labels)*
-Labels now come from the P0 metadata table, so this is just the backend +
-footer entry: a short `.iris` schema spec, then `aggregate_to_iris()` over the
-`.ntfm` series. ROADMAP §5.
+### P9 — Aggregate → summary table  *(was Slice 7, minus labels)*
+Reduction backend **DONE** in `napariTFM/utilities/iris.py` (suite 375 green):
+`summarize_ntfm` (per-`.ntfm` `(region, frame)` reduction over the
+`metrics_calculator` scalars), `build_summary_table` (stack the series + promote
+aggregator-assigned label columns), `build_schema` (Iris column typing),
+`premade_analyses` (the three GoG specs), and `aggregate_to_csv` (current export
+format). ROADMAP §5.
+
+**Deferred:** the `.iris` container itself (`write_iris`/`read_iris` zip with
+manifest + provenance) — for now the aggregator exports the summary table as
+**CSV**. The schema/analyses builders already exist for when the container lands.
 
 ---
 
