@@ -17,7 +17,7 @@ The five decisions form a near-linear chain. Recommended sequence:
 | Phase | Item                              | Why here                                                        | Status |
 |-------|-----------------------------------|----------------------------------------------------------------|--------|
 | **0** | §2 Drop mask creation             | Cheap deletion; de-scopes batch + the `.ntfm` mask column      | ✅ done |
-| **1** | §1 `.ntfm` + tidy converter       | Foundation — every data-shaped item below consumes it          | 🔵 designed |
+| **1** | §1 `.ntfm` + tidy converter       | Foundation — every data-shaped item below consumes it          | ✅ built |
 | **2** | §4 Batch-only data production      | Writes `.ntfm`; needs the container to exist                   | 🔵 |
 | **3** | §3 Toolbar UI                     | Final shape depends on which buttons §4 leaves behind          | 🔵 |
 | **4** | §5 Aggregator → `.iris`           | Consumes `.ntfm` series + structured batch output              | 🟡 |
@@ -26,12 +26,14 @@ The five decisions form a near-linear chain. Recommended sequence:
 run independently of the format work — start them without waiting on §1.
 
 **Critical path:** §1 is the keystone. §4 and §5 are blocked on it; §3's final
-form is blocked on §4. The `.ntfm`/tidy format is now designed (single canonical
-grid, Parquet payload + JSON sidecar) — only the `.npy` migration path is open.
+form is blocked on §4. The `.ntfm`/tidy format is now **built** (single canonical
+grid, Parquet payload + JSON sidecar) in `napariTFM/utilities/ntfm.py` with a
+lossless round-trip converter — §4 can now wire batch output to it. Only the
+`.npy` migration path remains open.
 
 ---
 
-## §1 — Output formats: tidy tables + a native `.ntfm` container  🔵 designed
+## §1 — Output formats: tidy tables + a native `.ntfm` container  ✅ built
 
 **Decision.** A single **tidy, long-format table** is the canonical data
 representation, with one row per `(t, y, x)` grid sample. **Everything lives in
@@ -48,12 +50,11 @@ sidecar is never needed for analysis. Columns:
 | `col`          | id      | grid col index (int) — for array pivot    |
 | `u_x[µm]`      | measure | displacement, x                           |
 | `u_y[µm]`      | measure | displacement, y                           |
-| `F_x[nN]`      | measure | traction force, x                         |
-| `F_y[nN]`      | measure | traction force, y                         |
-| `sigma_xx[mN/m]` | measure | stress tensor component                 |
-| `sigma_yy[mN/m]` | measure | stress tensor component                 |
-| `sigma_xy[mN/m]` | measure | stress tensor component                 |
-| `sigma_yx[mN/m]` | measure | stress (= `sigma_xy`, symmetric; derived)|
+| `F_x[Pa]`      | measure | traction stress, x                        |
+| `F_y[Pa]`      | measure | traction stress, y                        |
+| `sigma_xx[mN/m]`    | measure | normal stress, x                     |
+| `sigma_yy[mN/m]`    | measure | normal stress, y                     |
+| `sigma_shear[mN/m]` | measure | shear stress (σxy = σyx, symmetric)  |
 | `mask`         | measure | region label: 0 = background, 1..N = ROI  |
 
 `(t, y, x)` are **identifiers** (Iris vocabulary), the rest are **measures** —
@@ -82,8 +83,9 @@ problem — one grid holds everything.
 - `u_x, u_y` are included (primary measurement, same grid) so the native
   container round-trips fully. The CSV/Iris export may drop them if only
   results are wanted.
-- `sigma_yx[mN/m]` is a symmetric duplicate of `sigma_xy` (MSM computes only
-  σxx, σyy, σxy). Kept for explicitness as a `derived` column.
+- Stress is three independent components (MSM computes only σxx, σyy, σxy; the
+  Cauchy tensor is symmetric). Stored as `sigma_xx`, `sigma_yy`, and a single
+  `sigma_shear` (= σxy = σyx) — no redundant `sigma_yx` column.
 - Off-mask grid nodes still emit rows: valid `u_*`/`F_*`, `NaN` stress,
   `mask = 0`. NaN measures are normal in long format — no special-casing.
 
@@ -110,26 +112,55 @@ experiment.ntfm  (zip)
 └── metadata.json     # everything needed to reconstruct + interpret
 ```
 
-`metadata.json` holds **only experiment-wide constants** (everything per-sample,
-including units, is already in the table):
-- `format_version`, `software_version`
-- **grid**: `origin_um [x0, y0]`, `spacing_um`, `shape [ny, nx]`,
-  `downscale_factor` — the grid descriptor (redundant with `x/y/row/col` but
-  explicit; cheap insurance if rows are ever filtered)
-- `pixel_size_um`, `dt_min`
-- gel/substrate params (Young's modulus, Poisson ratio, gel height, …)
-- full per-stage parameter snapshot (`UnifiedParameters`: preprocessing /
-  displacement / FTTC / MSM)
-- source-file / channel provenance
-- `derived` column flags (e.g. `sigma_yx`)
+`metadata.json` holds **run-level provenance + the exact config** — no
+cherry-picked constants; the config *is* the source of truth for parameters, and
+everything per-sample (coords, indices, units) is already in the table:
+- `format_version` — the `.ntfm` schema version, independent of code version
+- **code provenance** (reproducibility):
+  - `git_commit` — full hash of the analysis code at run time
+  - `git_dirty` — `true` if the worktree had uncommitted changes (the run is
+    *not* fully reproducible from the commit alone); optionally store the diff
+    when dirty
+  - `package_version` — human-readable napariTFM version
+- **`config`** — the full, **resolved per-experiment** run config (the effective
+  `UnifiedParameters` actually applied to *this* experiment: pixel size, dt,
+  gel/substrate params, `downscale_factor`, every per-stage parameter). For a
+  batch run, embed the resolved config for this experiment, **not** the whole
+  sweep — each `.ntfm` is reproducible standalone. Supersedes any separately
+  listed constants.
+- **inputs** — source file(s) / channel provenance
+- **`labels`** (added by §4) — free-form experiment-design tags
+  (`{condition, replicate, position, …}`) the aggregator groups by; supplied
+  per-experiment in the batch config. Not yet in the built writer.
+
+The **grid descriptor is not stored** — it's derivable from `config`
+(`spacing = pixel_size · downscale_factor`) plus the table (`row`/`col`, shape).
+Config and table are the two sources of truth.
 
 This retires the scattered per-artifact `.npy` files (`displacement_results
 .npy`, `force_results.npy`, `stress_results.npy` in
 `utilities/data_manager.py`); one `.ntfm` per experiment is the unit users move.
 
+**Implemented** (`napariTFM/utilities/ntfm.py`, tested in
+`tests/test_ntfm_format.py`):
+- `arrays_to_tidy` / `tidy_to_arrays` — the lossless round-trip converter (one
+  canonical grid; `row`/`col` explicit; symmetric stress stored once as
+  `sigma_shear`; absent measures → NaN columns, missing columns → `None` on read).
+- `write_ntfm` / `read_ntfm` — the zip container (`samples.parquet` +
+  `metadata.json`); `write_csv` — the lossy CSV exporter.
+- `build_metadata` / `git_provenance` / `package_version` — run-level provenance
+  plus the resolved `config`; grid descriptor intentionally not stored.
+- `dataframe_from_results` / `results_to_ntfm` — adapter from the pipeline's
+  `DisplacementResult` / `FTTCResult` / `MSMResult` + `UnifiedParameters`.
+
+Traction is stored in **Pa** (`F_x[Pa]`, `F_y[Pa]`) — the native pipeline unit;
+the earlier `nN` label was a schema error.
+
 **Remaining open item** ⚪
 - **Migration.** One-shot `.npy` → `.ntfm` converter, or a transparent
   read-compat shim for existing projects? (Lower-stakes now the schema is fixed.)
+- **Wiring.** `data_manager.py` still writes the scattered `.npy` files; switching
+  it (and batch) to `.ntfm` is §4's job.
 
 ---
 
@@ -181,25 +212,82 @@ toolbar shape does.
 
 **Decision.** Separate **parameter tuning** from **data production**.
 
-- **Batch analysis becomes the only way to produce persisted, real output
-  data.** Its output is structured, organized, and the authoritative artifact —
-  written as `.ntfm` (§1).
-- The **intermediate per-stage action buttons** become **preview-only**: they
-  run a stage and *display* results for parameter tuning, but do **not** write
-  canonical data to disk.
-- This removes the current ambiguity where ad-hoc single-stage runs and batch
-  runs both yield "data" in inconsistent layouts.
+- **Batch analysis is the only way to produce persisted data.** Its output is
+  structured, organized, and the authoritative artifact — one `.ntfm` (§1) per
+  experiment.
+- The **per-stage action buttons** become **preview-only**: they run a stage and
+  *display* results in napari for parameter tuning, but write **nothing** to
+  disk.
+- This kills the ambiguity where ad-hoc single-stage runs and batch runs both
+  yield "data" in inconsistent layouts.
 
-**Workflow framing.** *Tune interactively on a representative sample → commit
-the tuned parameters → run batch to generate the organized dataset.* Output
-organization (directory layout, naming, the `.ntfm` container) is owned by the
-batch path.
+### Tune → commit → run bridge
 
-**Open question** ⚪
-- On-disk organization for a batch run of many positions/series — one `.ntfm`
-  per series vs. a parent index. Coordinate with §1 and §5.
+The link between §3's interactive UI and batch: the interactive session holds
+the working `UnifiedParameters`. A **"commit parameters"** action serializes
+them into a batch config; batch runs that config over the experiment list and
+stamps the resolved params into each `.ntfm`'s `config` block (§1). Tuning and
+production share one parameter object — tune on a representative experiment,
+commit, batch reuses exactly those numbers.
 
-**Why Phase 2:** depends on §1's container existing; reframes the workflow §3
+### Input — unchanged
+
+Batch input keeps the current model: a **list of folders** + a **filename per
+input** (beads / reference / cells / `masks.tif`). One input folder = one time
+series = one `.ntfm`.
+
+### Output — a mirrored `processed/` bucket
+
+All derived output goes into a bucket named **`processed/`**, never mixed with
+raw inputs:
+
+- **Processed root configured** → the input folder tree is **mirrored** under it;
+  each experiment's derived files land in the mirrored folder.
+- **Processed root empty → in-place**: a `processed/` subfolder is created
+  **inside each input folder**, so derived files still never mix with raw.
+
+```
+processed root SET:                 processed root EMPTY (in-place):
+<processed_root>/                   <input_folder>/
+  exp_A/                              beads.tif, reference.tif, masks.tif  (raw)
+    exp_A.ntfm                        processed/
+    figures/                            <input_folder>.ntfm
+    batch.log                           figures/
+  exp_B/ …                             batch.log
+```
+
+Each experiment's output folder holds: **`<experiment>.ntfm`** (the sole data
+artifact), **`figures/`** (per-stage PNG/GIF previews — human-facing, not data),
+and **`batch.log`** (run log). Preprocessed `.tif`s, if retained, are an optional
+compute cache for stage-resume — not deliverables.
+
+**Mirroring base** 🔵 — the mirror base is the **longest common parent** of all
+input folders; each folder's path is reproduced relative to that base under the
+processed root. When the folders are **genuinely disconnected** (no shared
+parent — e.g. one on `C:`, another on `D:`), **emit a warning and fall back to
+folder basenames** flat under the processed root. Single folder likewise falls
+back to its basename. (Basename collisions across disconnected roots are the
+warning's job to surface.)
+
+### Derived metrics are not batch output
+
+Strain energy, polarization, and all aggregate/derived quantities are **not**
+cached in `.ntfm` and **not** written as batch CSVs — they are computed by the
+aggregator (§5) and live in `.iris` (with optional CSV export from there). The
+old `metrics_results.csv` batch output is **retired**; `.ntfm` stays strictly
+single-grain (per-sample). Derived = downstream, always.
+
+### Series organization — labels in the leaf
+
+The experimental *design* (which experiment is which condition / replicate /
+position) is the new info the aggregator needs. Carry it **in the leaf**: add a
+free-form **`labels: {condition, replicate, position, …}`** dict to each
+`.ntfm` sidecar, supplied per-experiment in the batch config. The aggregator
+then scans a tree of `.ntfm`s and groups by label — no central registry. A
+`series.json` index is at most an optional, regenerable cache, never the source
+of truth. Keeps the `.ntfm` self-contained (consistent with §1).
+
+**Why Phase 2:** depends on §1's container (now built); reframes the workflow §3
 then presents.
 
 ---
