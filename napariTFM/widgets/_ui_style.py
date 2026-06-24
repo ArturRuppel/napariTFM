@@ -1,6 +1,7 @@
 import colorsys
 
 from qtpy.QtCore import Qt
+from qtpy.QtGui import QFont
 from qtpy.QtWidgets import QGridLayout, QLabel, QSizePolicy, QStyle, QToolButton, QVBoxLayout, QWidget
 
 
@@ -271,6 +272,14 @@ def section_label_style() -> str:
 def caption_style() -> str:
     """Stylesheet for a small, muted caption label."""
     return f"color: {MUTED_TEXT_COLOR}; font-size: 9pt;"
+
+
+def mono_font() -> QFont:
+    """A monospace QFont for physical-value readouts (units stay column-aligned)."""
+    font = QFont()
+    font.setFamilies(["IBM Plex Mono", "DejaVu Sans Mono", "Menlo", "Consolas", "monospace"])
+    font.setStyleHint(QFont.StyleHint.Monospace)
+    return font
 
 
 def danger_text_style() -> str:

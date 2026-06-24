@@ -13,6 +13,8 @@ from qtpy.QtWidgets import (
 )
 from superqt import QLabeledDoubleSlider, QLabeledSlider
 
+from napariTFM.widgets._ui_style import mono_font
+
 
 def _patch_label_autosize(label) -> None:
     """Size the editable slider label to fit its widest formatted value."""
@@ -90,6 +92,7 @@ def _connect_step_buttons(slider):
 
 def _stack_label_above(slider, *, step_buttons: bool) -> None:
     label = slider._label
+    label.setFont(mono_font())
     track = slider._slider
     label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
     label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
