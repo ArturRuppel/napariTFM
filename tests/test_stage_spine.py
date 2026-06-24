@@ -76,3 +76,21 @@ def test_stage_section_set_accents_forwards_to_spine(app):
     section.set_accents("#22a884", above="#2a788e", below="#7ad151")
     assert section.spine._accent_above == "#2a788e"
     assert section.spine._accent_below == "#7ad151"
+
+
+def test_spine_node_aligns_vertically_with_header_pills(app):
+    """The spine status node centres on the header pill row (P8)."""
+    from napariTFM.widgets._stage_section import StageSection
+    from qtpy.QtWidgets import QWidget
+
+    section = StageSection("Preprocessing", QWidget(), status="ready")
+    section.resize(360, 120)
+    section.show()
+    app.processEvents()
+
+    pill = section.run_cancel_btn
+    pill_centre_y = pill.mapTo(section, pill.rect().topLeft()).y() + pill.height() / 2.0
+    spine_top_y = section.spine.mapTo(section, section.spine.rect().topLeft()).y()
+    node_centre_y = spine_top_y + section.spine.NODE_Y
+
+    assert abs(node_centre_y - pill_centre_y) <= 1

@@ -33,7 +33,10 @@ class StageSpine(QWidget):
     """A vertical gradient line + a status node, sized to its stage's height."""
 
     GUTTER_WIDTH = 28
-    NODE_Y = 20      # node centre from the top, aligned to the header row
+    # Node centre from the top, aligned to the header pill row. The header is
+    # the first row of the stage body (zero top margin) and is dominated by the
+    # 22px action pills, so its vertical centre sits at ~11px (P8).
+    NODE_Y = 11
     NODE_R = 6
     LINE_W = 2
 
