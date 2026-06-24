@@ -8,9 +8,11 @@ from qtpy.QtCore import QRectF, Qt, Signal
 from qtpy.QtGui import QBrush, QColor, QPainter, QPen
 from qtpy.QtWidgets import (
     QFileDialog,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -226,6 +228,8 @@ class ExperimentsList(QWidget):
         header.addWidget(self.add_btn)
         layout.addLayout(header)
 
+        layout.addLayout(self._build_config_header())
+
         self._rows_box = QVBoxLayout()
         self._rows_box.setContentsMargins(0, 0, 0, 0)
         self._rows_box.setSpacing(0)
@@ -234,6 +238,76 @@ class ExperimentsList(QWidget):
         self._meta = QLabel("")
         layout.addWidget(self._meta)
         self._update_meta()
+
+    # -- column config (the table's shared header) -----------------------
+    def _build_config_header(self) -> QVBoxLayout:
+        """Input file names + free-form columns — the config copied to each batch."""
+        box = QVBoxLayout()
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(COMPACT_SPACING)
+
+        files = QFormLayout()
+        files.setContentsMargins(0, 0, 0, 0)
+        files.setSpacing(2)
+        self.file_name_inputs: dict[str, QLineEdit] = {}
+        for key, label, default in (
+            ("beads", "Beads file", "beads.tif"),
+            ("reference", "Reference file", "reference.tif"),
+            ("cells", "Cells file (optional)", "cells.tif"),
+        ):
+            field = QLineEdit(default)
+            self.file_name_inputs[key] = field
+            files.addRow(QLabel(label), field)
+        box.addLayout(files)
+
+        # Free-form columns: each is a (name, value) pair copied to every row of
+        # the next committed batch (D2).
+        self._column_fields: list[tuple[QLineEdit, QLineEdit]] = []
+        self._columns_box = QVBoxLayout()
+        self._columns_box.setContentsMargins(0, 0, 0, 0)
+        self._columns_box.setSpacing(2)
+        box.addLayout(self._columns_box)
+
+        add_row = QHBoxLayout()
+        add_row.setContentsMargins(0, 0, 0, 0)
+        self.add_column_btn = QToolButton()
+        self.add_column_btn.setObjectName("experiments_add_column_button")
+        self.add_column_btn.setText("+ Add column")
+        self.add_column_btn.clicked.connect(lambda: self.add_column_field())
+        add_row.addWidget(self.add_column_btn)
+        add_row.addStretch()
+        box.addLayout(add_row)
+        return box
+
+    def add_column_field(self, name: str = "", value: str = "") -> None:
+        """Append a (name, value) column-config field; the +Add column action."""
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        name_edit = QLineEdit(name)
+        name_edit.setPlaceholderText("column")
+        value_edit = QLineEdit(value)
+        value_edit.setPlaceholderText("value")
+        row.addWidget(name_edit, 1)
+        row.addWidget(value_edit, 1)
+        self._columns_box.addLayout(row)
+        self._column_fields.append((name_edit, value_edit))
+
+    def input_file_config(self) -> dict:
+        """Current input file names, blanks dropped (cells is optional)."""
+        return {
+            key: field.text().strip()
+            for key, field in self.file_name_inputs.items()
+            if field.text().strip()
+        }
+
+    def column_config(self) -> dict:
+        """Current free-form columns as name->value, unnamed rows dropped."""
+        config: dict[str, str] = {}
+        for name_edit, value_edit in self._column_fields:
+            name = name_edit.text().strip()
+            if name:
+                config[name] = value_edit.text().strip()
+        return config
 
     # -- queries ---------------------------------------------------------
     def experiments(self) -> list[str]:

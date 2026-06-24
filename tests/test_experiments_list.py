@@ -224,6 +224,40 @@ def test_existing_rows_keep_metadata_when_a_second_batch_is_added(app):
     assert by_path == {"/data/a": {"condition": "WT"}, "/data/b": {"condition": "KO"}}
 
 
+def test_input_file_config_has_bead_reference_defaults(app):
+    widget = ExperimentsList()
+    cfg = widget.input_file_config()
+    assert cfg["beads"] == "beads.tif"
+    assert cfg["reference"] == "reference.tif"
+
+
+def test_input_file_config_drops_blank_fields(app):
+    widget = ExperimentsList()
+    widget.file_name_inputs["cells"].setText("")
+    assert "cells" not in widget.input_file_config()
+
+
+def test_add_column_field_then_config_reads_name_value(app):
+    widget = ExperimentsList()
+    widget.add_column_field("condition", "WT")
+    assert widget.column_config() == {"condition": "WT"}
+
+
+def test_column_config_drops_rows_without_a_name(app):
+    widget = ExperimentsList()
+    widget.add_column_field("", "orphan")  # no column name -> ignored
+    widget.add_column_field("condition", "WT")
+    assert widget.column_config() == {"condition": "WT"}
+
+
+def test_add_column_button_spawns_one_empty_field(app):
+    widget = ExperimentsList()
+    before = len(widget._column_fields)
+    widget.add_column_btn.click()
+    assert len(widget._column_fields) == before + 1
+    assert widget.column_config() == {}  # the new field is blank
+
+
 def test_refresh_statuses_calls_status_fn_for_each_row(app):
     calls = []
     def status_fn(path):
