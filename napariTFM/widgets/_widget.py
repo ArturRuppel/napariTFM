@@ -709,6 +709,8 @@ class napariTFMWidget(QWidget):
             "parameters": self.parameter_manager.get_all_parameters(),
             "output_dir": str(output_dir) if output_dir else None,
             "disabled_stages": self._disabled_stages(),
+            "experiments": self.experiments_list.experiments(),
+            "active_experiment": self.experiments_list.active(),
         }
 
     def set_state(self, state: dict) -> None:
@@ -734,6 +736,10 @@ class napariTFMWidget(QWidget):
             for key, section in self._stage_sections_by_key.items():
                 if section.enable_btn is not None:
                     section.set_enabled(key not in disabled)
+            self.experiments_list.set_experiments(state.get("experiments") or [])
+            active = state.get("active_experiment")
+            if active:
+                self.experiments_list.set_active(active)
         finally:
             self._applying_state = False
         self.refresh()

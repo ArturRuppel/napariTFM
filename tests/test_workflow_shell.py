@@ -1319,3 +1319,18 @@ def test_disabling_stress_refreshes_experiment_minirails(monkeypatch, app):
     row = widget.experiments_list._rows[0]
     fill, ring = row.mini_rail.appearance("stress")
     assert fill is None  # stress dot now reads 'off'
+
+
+def test_state_round_trips_experiments_and_active(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.set_experiments(["/data/a", "/data/b"])
+    widget.experiments_list.set_active("/data/b")
+
+    state = widget.get_state()
+    assert state["experiments"] == ["/data/a", "/data/b"]
+    assert state["active_experiment"] == "/data/b"
+
+    fresh = _stub_main_widget(monkeypatch)
+    fresh.set_state(state)
+    assert fresh.experiments_list.experiments() == ["/data/a", "/data/b"]
+    assert fresh.experiments_list.active() == "/data/b"
