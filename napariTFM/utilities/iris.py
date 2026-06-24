@@ -219,6 +219,54 @@ def build_summary_table(
     return table
 
 
+SPEC_VERSION = "2.1"
+
+
+def premade_analyses() -> list:
+    """The authored grammar-of-graphics specs backed by the current metric set.
+
+    Each spec sets the data-hierarchy ``spine`` to the **replicate unit**
+    (``experiment_id``) so Iris's reduction treats every experiment as ``n = 1``
+    — cells within one experiment are pseudo-replicates. Shape per ROADMAP §5::
+
+        {encodings, hierarchy:{spine, fn}, layers:[{geom}], stats:{family,...,alpha}}
+    """
+    spine = ["experiment_id"]
+    return [
+        {
+            "id": "strain-energy-by-condition",
+            "spec_version": SPEC_VERSION,
+            "title": "Strain energy by condition",
+            "encodings": {"x": "condition", "y": "total_strain_energy"},
+            "hierarchy": {"spine": spine, "fn": "mean"},
+            "layers": [{"geom": "box"}, {"geom": "swarm"}],
+            "stats": {"family": "group_comparison", "test": "welch", "alpha": 0.05},
+        },
+        {
+            "id": "polarization-by-condition",
+            "spec_version": SPEC_VERSION,
+            "title": "Polarization index by condition",
+            "encodings": {"x": "condition", "y": "polarization_index"},
+            "hierarchy": {"spine": spine, "fn": "mean"},
+            "layers": [{"geom": "box"}, {"geom": "swarm"}],
+            "stats": {"family": "group_comparison", "test": "welch", "alpha": 0.05},
+        },
+        {
+            "id": "strain-energy-time-course",
+            "spec_version": SPEC_VERSION,
+            "title": "Strain-energy time course",
+            "encodings": {
+                "x": "frame",
+                "y": "total_strain_energy",
+                "color": "condition",
+            },
+            "hierarchy": {"spine": spine, "fn": "mean"},
+            "layers": [{"geom": "line"}],
+            "stats": {"family": "timeseries", "alpha": 0.05},
+        },
+    ]
+
+
 def build_schema(table: pd.DataFrame) -> list:
     """Type every summary-table column into the Iris schema vocabulary.
 

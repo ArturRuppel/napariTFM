@@ -247,3 +247,47 @@ def test_schema_order_matches_table_columns(tmp_path):
     schema = iris.build_schema(table)
 
     assert [entry["name"] for entry in schema] == list(table.columns)
+
+
+# ---------------------------------------------------------------------------
+# Slice 4 — premade grammar-of-graphics analyses
+# ---------------------------------------------------------------------------
+
+def test_premade_analyses_count_and_versions():
+    analyses = iris.premade_analyses()
+    assert len(analyses) == 3
+    for spec in analyses:
+        assert spec["spec_version"] == "2.1"
+
+
+def test_premade_analyses_carry_replicate_spine_and_alpha():
+    for spec in iris.premade_analyses():
+        assert spec["hierarchy"]["spine"] == ["experiment_id"]
+        assert spec["stats"]["alpha"] == 0.05
+
+
+def test_premade_strain_energy_by_condition():
+    spec = iris.premade_analyses()[0]
+    assert spec["encodings"]["y"] == "total_strain_energy"
+    assert spec["encodings"]["x"] == "condition"
+    assert {layer["geom"] for layer in spec["layers"]} == {"box", "swarm"}
+    assert spec["stats"]["family"] == "group_comparison"
+
+
+def test_premade_polarization_by_condition():
+    spec = iris.premade_analyses()[1]
+    assert spec["encodings"]["y"] == "polarization_index"
+    assert spec["stats"]["family"] == "group_comparison"
+
+
+def test_premade_strain_energy_time_course():
+    spec = iris.premade_analyses()[2]
+    assert spec["encodings"]["x"] == "frame"
+    assert spec["encodings"]["y"] == "total_strain_energy"
+    assert {layer["geom"] for layer in spec["layers"]} == {"line"}
+
+
+def test_premade_analyses_are_json_serializable():
+    import json
+
+    json.dumps(iris.premade_analyses())
