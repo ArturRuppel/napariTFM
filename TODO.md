@@ -153,15 +153,19 @@ read `config['input_files']['masks']` — and round-trips via
 `set_records`. Masks stays out of folder discovery (beads + reference
 remain the only requirements).
 
-### P7 — Rationalize + glyph-ify remaining buttons  *(polish)*
-Audit remaining action buttons, dedupe redundant ones, replace text buttons with
-glyphs from the `_icons.py` SVG set. Targets: `gcv_btn` (`fttc_widget.py:401`),
-`preview_mesh_btn` (`msm_widget.py:488`), and the stage-header
-run/preview/files/params controls (`_stage_section.py:81-112`).
+### P7 — Rationalize + glyph-ify remaining buttons  *(polish)* — **DONE**
+The two remaining widget-owned text buttons are now stage-header glyph pills:
+`gcv_btn` → a crosshair `gcv` action on the Force header, `preview_mesh_btn` →
+a grid `mesh` action on the Stress header. `StageSection` gained an
+`extra_actions` mechanism (specs → tinted glyph pills, enablement off the same
+`action_states` map), and `_icons.py` gained `gcv`/`mesh` icons. The FTTC and
+MSM widget bodies are now empty (all actions live in the header). The
+stage-header run/preview/files/params controls were already glyph buttons.
 
-### P8 — Align status dots with the pills  *(polish; deferred from Slice 5)*
-Align the mini-rail / spine status dots with the header pills (the known
-dot-spacing/alignment nit).
+### P8 — Align status dots with the pills  *(polish; deferred from Slice 5)* — **DONE**
+The spine status node was painted at `NODE_Y=20`, ~9px below the 22px header
+pills (row centre y≈11). Dropped `NODE_Y` to 11 so the colormap node sits level
+with the action pills; locked with a geometry regression test.
 
 ### P9 — Aggregate → summary table  *(was Slice 7, minus labels)*
 Reduction backend **DONE** in `napariTFM/utilities/iris.py` (suite 375 green):
