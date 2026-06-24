@@ -51,24 +51,25 @@ Merge **Save Parameters** (`_project_section.py:70` → `_widget.py:803`
 `_save_config_dialog:324`, `save_config_to_yaml`) into a single config save that
 carries params **plus** the P0 table.
 
-### P1 — Strip superseded scaffolding  *(deletions — low risk, parallelizable, do early)*
+### P1 — Strip superseded scaffolding  ✅ DONE *(commits b80a71d, 706841a, bea9847)*
 Independent of P0 and safe to start first; **keep the batch run trigger until P4.**
 All removals here are behavior-preserving (each control already defaults to its
-"on"/"napari-console" state, hardcoded into `_generate_config`).
+"on"/"napari-console" state, hardcoded into `_generate_config`). Landed as P1a
+(radios), P1b (analysis/viz checkboxes + bead overlay, incl. backend), P1c
+(progress bars); full suite 295 green.
 - **Folder management** (list/add/clear): `batch_analysis_widget.py:201-245`,
   `_add_folder:498`, `_clear_folders:573` — **deferred to P0/P4**: the kept batch
   run reads `folder_list` as its only source, and P0's table is its replacement.
   Cannot remove without breaking the run we keep until P4.
-- **Run-in-napari vs run-in-console** radios: `batch_analysis_widget.py:223-235`
-  (a headless CLI comes later, not a radio).
-- **Analysis-step checkboxes**: `batch_analysis_widget.py:144-172`
-  (`analysis_checkboxes`) — stages are mandatory now.
-- **Visualization checkboxes incl. bead overlay**:
-  `batch_analysis_widget.py:174-199` (`visualization_checkboxes`), bead overlay at
-  `:181, :290`.
-- **Per-stage progress bars**: `preprocessing_widget.py:433`,
-  `displacement_analysis_widget.py:419`, `fttc_widget.py:416`,
-  `msm_widget.py:501`, `batch_analysis_widget.py:252` (→ replaced by P2).
+- ✅ **Run-in-napari vs run-in-console** radios — removed (P1a); batch runs
+  in-process. `_run_in_new_console`/`_launch_console` gone too.
+- ✅ **Analysis-step checkboxes** — removed (P1b); `_generate_config` emits
+  constant all-mandatory `analysis_steps`.
+- ✅ **Visualization checkboxes incl. bead overlay** — removed (P1b);
+  `_generate_config` emits constant viz; bead overlay deleted from UI **and**
+  backend (`batch_analysis.py` viz_map/branch + `save_bead_overlay`).
+- ✅ **Per-stage progress bars** — removed (P1c) from all 4 stage widgets + batch;
+  textual `status_label` kept as interim until P2's global label.
 
 ### P2 — Global status label  *(replaces the progress bars)*
 One panel-level **text** status (no bar); stages report run/skip/done into it
