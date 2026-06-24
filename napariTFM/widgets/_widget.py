@@ -563,6 +563,14 @@ class napariTFMWidget(QWidget):
                 },
                 action_states=self.msm_widget.action_states,
                 action_states_changed=self.msm_widget.action_states_changed,
+                extra_actions=[
+                    {
+                        "key": "mesh",
+                        "icon": "mesh",
+                        "tooltip": "Preview mesh",
+                        "handler": self.msm_widget.mesh_action,
+                    }
+                ],
                 optional=True,
             ),
         }

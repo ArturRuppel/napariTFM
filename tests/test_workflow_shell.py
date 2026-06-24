@@ -161,6 +161,12 @@ class _StubStageWidget(QWidget):
     def cancel_action(self):
         self.action_calls["cancel"] += 1
 
+    def gcv_action(self):
+        self.action_calls["gcv"] = self.action_calls.get("gcv", 0) + 1
+
+    def mesh_action(self):
+        self.action_calls["mesh"] = self.action_calls.get("mesh", 0) + 1
+
     def action_states(self):
         return dict(self._action_states)
 

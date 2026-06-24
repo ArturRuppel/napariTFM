@@ -4,11 +4,7 @@ import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal, QObject
-from qtpy.QtWidgets import (
-    QSizePolicy, QApplication, QSpacerItem,
-    QPushButton
-)
-from qtpy.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QMessageBox
+from qtpy.QtWidgets import QApplication, QHBoxLayout, QMessageBox
 
 from napariTFM.backend.parameter_dataclasses import MSMParameters
 from napariTFM.backend.msm import (
@@ -427,7 +423,9 @@ class MSMWidget(BaseAnalysisWidget):
         self.parameter_manager = parameter_manager
 
         # Action enablement consumed by the stage header via the action contract
-        self._action_enabled = {"run": False, "preview": False, "cancel": True}
+        self._action_enabled = {
+            "run": False, "preview": False, "cancel": True, "mesh": False,
+        }
 
         # Get initial parameters from parameter manager
         self.msm_params = parameter_manager.get_msm_parameters()
@@ -454,43 +452,15 @@ class MSMWidget(BaseAnalysisWidget):
         self.controller.unfreeze_ui()
 
     def _setup_ui(self):
-        """Set up the user interface."""
+        """Set up the user interface.
+
+        All stage actions — run/preview/cancel plus mesh preview — live in the
+        stage header (P7), so this widget owns no visible body content.
+        """
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-
-        content_container = self._create_content_container()
-        main_layout.addWidget(content_container)
-
         self.setLayout(main_layout)
-
-    def _create_content_container(self) -> QWidget:
-        """Create the main content container."""
-        container = QWidget()
-        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        layout = QVBoxLayout()
-        layout.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        layout.addWidget(self._create_action_row())
-        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-
-        container.setLayout(layout)
-        return container
-
-    def _create_action_row(self) -> QWidget:
-        """Build widget-owned action buttons (run/preview/cancel proxied by the stage header)."""
-        container = QWidget()
-        layout = QVBoxLayout()
-
-        row1 = QHBoxLayout()
-        self.preview_mesh_btn = QPushButton("Preview Mesh")
-        self.preview_mesh_btn.setToolTip("Generate and display a mesh preview for the current frame")
-        row1.addWidget(self.preview_mesh_btn)
-        layout.addLayout(row1)
-
-        container.setLayout(layout)
-        return container
 
     def _connect_signals(self):
         """Connect all widget signals."""
@@ -500,9 +470,6 @@ class MSMWidget(BaseAnalysisWidget):
         self.controller.analysis_completed.connect(self._on_analysis_completed)
         self.controller.analysis_failed.connect(self._on_analysis_failed)
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
-
-        # Wire widget-owned action buttons to controller operations
-        self.preview_mesh_btn.clicked.connect(self.controller.preview_mesh)
 
         # Update enablement when the active layer changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
@@ -565,12 +532,15 @@ class MSMWidget(BaseAnalysisWidget):
     def cancel_action(self):
         self.controller.cancel_all_operations()
 
+    def mesh_action(self):
+        self.controller.preview_mesh()
+
     def _update_ui_state(self, event=None):
         """Update action button enablement based on available data."""
         has_force = self.data_manager.force_results is not None
         has_mask = self.data_manager.mask_stack is not None
 
-        self.preview_mesh_btn.setEnabled(has_mask)
+        self._action_enabled["mesh"] = has_mask
         self._action_enabled["preview"] = has_force and has_mask
         self._action_enabled["run"] = has_force and has_mask
         self._action_enabled["cancel"] = True
@@ -579,7 +549,7 @@ class MSMWidget(BaseAnalysisWidget):
     def _handle_ui_freeze(self, frozen: bool):
         """Handle UI freeze/unfreeze during processing."""
         if frozen:
-            self.preview_mesh_btn.setEnabled(False)
+            self._action_enabled["mesh"] = False
             self._action_enabled["preview"] = False
             self._action_enabled["run"] = False
             self._action_enabled["cancel"] = True
