@@ -35,6 +35,8 @@ _ICON_BODIES = {
         '<path d="M12 3 L12 11"/>'
         '<path d="M6.4 6.8 A8 8 0 1 0 17.6 6.8"/>'
     ),
+    # plus — "add folders"
+    "plus": '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
 }
 
 _SVG_TEMPLATE = (

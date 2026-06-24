@@ -25,7 +25,7 @@ def _opaque_count(pixmap):
 
 
 def test_icon_names_cover_the_header_action_set():
-    assert set(ICON_NAMES) == {"files", "params", "preview", "run", "cancel", "power"}
+    assert set(ICON_NAMES) == {"files", "params", "preview", "run", "cancel", "power", "plus"}
 
 
 def test_every_action_icon_renders_visible_pixels(app):
@@ -59,3 +59,17 @@ def test_disabled_pixmap_differs_from_normal_when_disabled_color_given(app):
 def test_unknown_icon_name_raises(app):
     with pytest.raises(KeyError):
         stage_action_pixmap("nope", "#2a788e")
+
+
+def test_plus_icon_is_registered_and_renders_opaque(app):
+    from napariTFM.widgets._icons import ICON_NAMES, stage_action_pixmap
+
+    assert "plus" in ICON_NAMES
+    pm = stage_action_pixmap("plus", "#7ad151", size=18)
+    img = pm.toImage()
+    opaque = sum(
+        img.pixelColor(x, y).alpha() > 0
+        for x in range(img.width())
+        for y in range(img.height())
+    )
+    assert opaque > 0
