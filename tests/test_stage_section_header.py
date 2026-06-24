@@ -75,6 +75,70 @@ def test_run_cancel_btn_invokes_run_handler_when_not_running(app):
     assert clicks == {"run": 1, "cancel": 1}
 
 
+def test_extra_action_adds_named_glyph_button(app):
+    section = StageSection(
+        "Force Analysis",
+        QWidget(),
+        extra_actions=[
+            {"key": "gcv", "tooltip": "Auto-select regularization", "icon": "gcv"}
+        ],
+    )
+
+    button = section.extra_buttons["gcv"]
+    assert button.objectName() == "stage_force_analysis_gcv_button"
+    assert button.text() == ""
+    assert not button.icon().isNull()
+    assert button.toolTip() == "Auto-select regularization"
+
+
+def test_extra_action_button_invokes_handler(app):
+    clicks = {"gcv": 0}
+    section = StageSection(
+        "Force Analysis",
+        QWidget(),
+        extra_actions=[
+            {
+                "key": "gcv",
+                "tooltip": "Auto-select regularization",
+                "icon": "gcv",
+                "handler": lambda: clicks.__setitem__("gcv", clicks["gcv"] + 1),
+            }
+        ],
+        action_states=lambda: {"gcv": True},
+    )
+
+    section.extra_buttons["gcv"].click()
+    assert clicks["gcv"] == 1
+
+
+def test_extra_action_enablement_follows_action_states(app):
+    enabled = {"gcv": False}
+    section = StageSection(
+        "Force Analysis",
+        QWidget(),
+        extra_actions=[{"key": "gcv", "tooltip": "GCV", "icon": "gcv"}],
+        action_states=lambda: {"gcv": enabled["gcv"]},
+    )
+
+    assert not section.extra_buttons["gcv"].isEnabled()
+
+    enabled["gcv"] = True
+    section._refresh_action_states()
+    assert section.extra_buttons["gcv"].isEnabled()
+
+
+def test_extra_action_button_retints_on_accent_change(app):
+    section = StageSection(
+        "Force Analysis",
+        QWidget(),
+        extra_actions=[{"key": "gcv", "tooltip": "GCV", "icon": "gcv"}],
+    )
+    before = section.extra_buttons["gcv"].icon().cacheKey()
+
+    section.set_accent("#ff00ff")
+    assert section.extra_buttons["gcv"].icon().cacheKey() != before
+
+
 def test_action_buttons_use_vector_icons_not_text(app):
     section = StageSection("Preprocessing", QWidget())
 

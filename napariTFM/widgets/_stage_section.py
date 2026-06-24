@@ -35,11 +35,13 @@ class StageSection(QWidget):
         parameter_panel: QWidget | None = None,
         parameters_expanded: bool = False,
         optional: bool = False,
+        extra_actions: list[dict] | None = None,
     ):
         super().__init__()
         self._title = title
         self._child = child
         self._actions = actions or {}
+        self._extra_action_specs = extra_actions or []
         self._action_states = action_states
         self._status = status
         self._optional = optional
@@ -79,6 +81,25 @@ class StageSection(QWidget):
         header_layout.addWidget(self.header_label)
         header_layout.addStretch()
 
+        # Stage-specific auxiliary actions (e.g. GCV auto-select, mesh preview)
+        # live in the header as glyph pills, alongside the standard controls.
+        self.extra_buttons: dict[str, object] = {}
+        self._extra_button_icons: dict[object, str] = {}
+        for spec in self._extra_action_specs:
+            key = spec["key"]
+            icon_name = spec["icon"]
+            button = self._create_glyph_button(
+                key, spec.get("glyph", ""), spec["tooltip"], icon_name
+            )
+            handler = spec.get("handler")
+            if handler is not None:
+                button.clicked.connect(
+                    lambda _checked=False, fn=handler: fn()
+                )
+            button.setEnabled(False)
+            self.extra_buttons[key] = button
+            self._extra_button_icons[button] = icon_name
+
         self.files_btn = self._create_glyph_button(
             "files", "🔍", f"Show {title} data", "files", checkable=True
         )
@@ -112,7 +133,9 @@ class StageSection(QWidget):
         self.run_cancel_btn.setEnabled(False)
 
         self._toggle_button = self.params_btn
+        extra_button_list = list(self.extra_buttons.values())
         self._action_buttons = [
+            *extra_button_list,
             self.files_btn,
             self.params_btn,
             self.preview_button,
@@ -125,6 +148,7 @@ class StageSection(QWidget):
             self.params_btn: "params",
             self.preview_button: "preview",
             self.viz_btn: "viz",
+            **self._extra_button_icons,
         }
         for button in self._action_buttons:
             header_layout.addWidget(button)
@@ -243,11 +267,15 @@ class StageSection(QWidget):
         if not self._enabled:
             self.run_cancel_btn.setEnabled(False)
             self.preview_button.setEnabled(False)
+            for button in self.extra_buttons.values():
+                button.setEnabled(False)
             return
         states = self._action_states() if self._action_states is not None else {}
         running = self._status == "running"
         self.run_cancel_btn.setEnabled(running or states.get("run", False))
         self.preview_button.setEnabled(states.get("preview", False))
+        for key, button in self.extra_buttons.items():
+            button.setEnabled(states.get(key, False))
 
     def set_accent(self, accent: str) -> None:
         """Re-accent the header pill + action buttons (used by the theme picker)."""

@@ -25,7 +25,17 @@ def _opaque_count(pixmap):
 
 
 def test_icon_names_cover_the_header_action_set():
-    assert set(ICON_NAMES) == {"files", "params", "preview", "run", "cancel", "power", "plus", "viz"}
+    assert set(ICON_NAMES) == {
+        "files", "params", "preview", "run", "cancel", "power", "plus", "viz",
+        "gcv", "mesh",
+    }
+
+
+def test_stage_specific_action_icons_render_opaque(app):
+    for name in ("gcv", "mesh"):
+        assert name in ICON_NAMES
+        pixmap = stage_action_pixmap(name, "#2a788e", size=18)
+        assert _opaque_count(pixmap) > 0, f"{name} rendered blank"
 
 
 def test_every_action_icon_renders_visible_pixels(app):
