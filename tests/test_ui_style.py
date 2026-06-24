@@ -183,3 +183,13 @@ def test_make_stage_action_button_carries_glyph_and_is_fixed(app):
     assert btn.objectName() == "stage_x_run_button"
     assert btn.width() == STAGE_ACTION_BUTTON_SIZE
     assert btn.isCheckable() is False
+
+
+def test_make_stage_action_button_with_icon_name_uses_vector_icon(app):
+    from napariTFM.widgets._ui_style import make_stage_action_button
+
+    btn = make_stage_action_button(
+        None, "stage_x_run_button", "Run", "▶", stage_accent("force"), icon_name="run"
+    )
+    assert btn.text() == ""
+    assert not btn.icon().isNull()

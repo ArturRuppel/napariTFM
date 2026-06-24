@@ -1,6 +1,6 @@
 import colorsys
 
-from qtpy.QtCore import Qt
+from qtpy.QtCore import QSize, Qt
 from qtpy.QtGui import QFont
 from qtpy.QtWidgets import QGridLayout, QLabel, QSizePolicy, QStyle, QToolButton, QVBoxLayout, QWidget
 
@@ -8,6 +8,7 @@ from qtpy.QtWidgets import QGridLayout, QLabel, QSizePolicy, QStyle, QToolButton
 COMPACT_SPACING = 4
 ICON_BUTTON_SIZE = 24
 STAGE_ACTION_BUTTON_SIZE = 22
+STAGE_ACTION_ICON_SIZE = 15
 TINY_MARGIN = 2
 SECTION_MARGIN = 4
 TIGHT_SPACING = 4
@@ -244,18 +245,44 @@ def stage_header_action_button_style(accent: str) -> str:
     )
 
 
+def stage_action_button_icon(name: str, accent: str):
+    """A theme-tinted QIcon (with a dimmed disabled mode) for a header action."""
+    from napariTFM.widgets._icons import stage_action_icon
+
+    return stage_action_icon(
+        name,
+        muted_accent(accent),
+        disabled_color=stage_header_disabled_action_color(accent),
+        size=STAGE_ACTION_ICON_SIZE,
+    )
+
+
 def make_stage_action_button(
-    owner, object_name: str, tooltip: str, glyph: str, accent: str, checkable: bool = False
+    owner,
+    object_name: str,
+    tooltip: str,
+    glyph: str,
+    accent: str,
+    checkable: bool = False,
+    icon_name: str | None = None,
 ) -> QToolButton:
-    """Build a glyph QToolButton styled as a CellFlow-style accent pill."""
+    """Build a stage-header action button styled as a CellFlow-style accent pill.
+
+    Pass ``icon_name`` for a crisp tinted vector icon; ``glyph`` is the legacy
+    text fallback used when no icon is given.
+    """
     button = QToolButton(owner)
-    button.setText(glyph)
     button.setObjectName(object_name)
     button.setToolTip(tooltip)
     button.setCheckable(checkable)
     button.setFixedSize(STAGE_ACTION_BUTTON_SIZE, STAGE_ACTION_BUTTON_SIZE)
     button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     button.setStyleSheet(stage_header_action_button_style(accent))
+    if icon_name is not None:
+        button.setIcon(stage_action_button_icon(icon_name, accent))
+        button.setIconSize(QSize(STAGE_ACTION_ICON_SIZE, STAGE_ACTION_ICON_SIZE))
+    else:
+        button.setText(glyph)
     return button
 
 

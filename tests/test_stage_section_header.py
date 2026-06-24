@@ -75,23 +75,24 @@ def test_run_cancel_btn_invokes_run_handler_when_not_running(app):
     assert clicks == {"run": 1, "cancel": 1}
 
 
-def test_action_buttons_use_glyphs(app):
+def test_action_buttons_use_vector_icons_not_text(app):
     section = StageSection("Preprocessing", QWidget())
 
-    assert section.run_cancel_btn.text() == "▶"
-    assert section.preview_button.text() == "▷"
-    assert section.params_btn.text() == "⚙"
+    for button in (section.run_cancel_btn, section.preview_button, section.params_btn):
+        assert button.text() == ""
+        assert not button.icon().isNull()
 
 
-def test_run_cancel_glyph_swaps_on_running(app):
+def test_run_cancel_icon_swaps_on_running(app):
     section = StageSection("Preprocessing", QWidget(), status="ready")
-    assert section.run_cancel_btn.text() == "▶"
+    run_icon = section.run_cancel_btn.icon().cacheKey()
 
     section.set_status("running")
-    assert section.run_cancel_btn.text() == "■"
+    cancel_icon = section.run_cancel_btn.icon().cacheKey()
+    assert cancel_icon != run_icon
 
     section.set_status("done")
-    assert section.run_cancel_btn.text() == "▶"
+    assert section.run_cancel_btn.icon().cacheKey() != cancel_icon
 
 
 def test_no_status_indicator_dot(app):
