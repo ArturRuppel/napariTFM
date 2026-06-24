@@ -91,8 +91,8 @@ def test_widget_constructs_with_pyqt6_qtpy_backend():
         app.processEvents()
 
         assert API_NAME == "PyQt6", API_NAME
-        assert len(widget.batch_widget.parameter_spins) == 0
         assert "preprocessing" in widget._stage_sections_by_key
+        assert "batch" not in widget._stage_sections_by_key
 
         viewer.close()
         print(f"qtpy={API_NAME}")

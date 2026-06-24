@@ -3,8 +3,8 @@
 The experiments list is the single source of truth for what gets run: its
 per-row records (folder + input file names + free-form columns) plus the shared
 ``ParameterManager`` values are all a :class:`BatchAnalysis` needs. This pure
-function replaces ``BatchAnalysisWidget._generate_config`` so the run can be
-driven from the table and the batch widget retired.
+function is the sole producer of the run config now that the standalone batch
+widget is retired — the run is driven straight from the table.
 """
 from __future__ import annotations
 

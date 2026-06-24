@@ -18,7 +18,6 @@ from napariTFM.widgets.preprocessing_widget import PreprocessingWidget
 from napariTFM.widgets.displacement_analysis_widget import DisplacementAnalysisWidget
 from napariTFM.widgets.fttc_widget import FTTCWidget
 from napariTFM.widgets.msm_widget import MSMWidget
-from napariTFM.widgets.batch_analysis_widget import BatchAnalysisWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStatusPanel
 from napariTFM.widgets._stage_section import StageSection
 from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, section_label_style, TIGHT_SPACING
@@ -56,9 +55,6 @@ STAGE_DATA_ARTIFACTS = {
         DataArtifactSpec("force_results", "Traction map", "force_results", "input"),
         DataArtifactSpec("mask_stack", "Mask stack", "mask_stack", "input", required=False),
         DataArtifactSpec("stress_results", "Stress map", "stress_results", "output"),
-    ],
-    "batch": [
-        DataArtifactSpec("batch_outputs", "Batch outputs", None, "output"),
     ],
 }
 
@@ -461,22 +457,9 @@ class napariTFMWidget(QWidget):
             self.visualization_manager
         )
 
-        self.batch_widget = BatchAnalysisWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager
-        )
-        # The config table (top) is the single source of folders + metadata; feed
-        # it into the batch run (P0). The batch widget's own folder list is kept
-        # in sync until P4 retires it.
-        self.batch_widget.set_experiment_records(
-            self.experiments_list.experiment_records()
-        )
-
         # Funnel every pipeline stage's progress into the single global status
-        # label (P2). Batch is excluded — it has no controller progress signal
-        # and is retired in P4.
+        # label (P2). Run-all (the retired batch widget's successor) reports via
+        # its own per-folder callback, not a controller progress signal.
         for stage_widget, stage_label in (
             (self.preprocessing_widget, "Preprocessing"),
             (self.displacement_widget, "Displacement"),
@@ -561,14 +544,6 @@ class napariTFMWidget(QWidget):
                 action_states=self.msm_widget.action_states,
                 action_states_changed=self.msm_widget.action_states_changed,
                 optional=True,
-            ),
-            "batch": StageSection(
-                "Batch Analysis",
-                self.batch_widget,
-                status_panel=self._stage_status_panels_by_key["batch"],
-                actions={"run": self.batch_widget.run_analysis_btn.click},
-                action_states=self.batch_widget.action_states,
-                action_states_changed=self.batch_widget.action_states_changed,
             ),
         }
         self._stage_sections = list(self._stage_sections_by_key.values())
@@ -663,7 +638,6 @@ class napariTFMWidget(QWidget):
             self.displacement_widget,
             self.force_widget,
             self.msm_widget,
-            self.batch_widget,
         ]
 
     def refresh(self):
@@ -799,9 +773,6 @@ class napariTFMWidget(QWidget):
         self._write_config()
 
     def _on_experiments_changed(self) -> None:
-        self.batch_widget.set_experiment_records(
-            self.experiments_list.experiment_records()
-        )
         self._write_config()
 
     def get_state(self) -> dict:

@@ -208,10 +208,6 @@ _stub_module(
 )
 _stub_module("napariTFM.widgets.fttc_widget", FTTCWidget=_StubStageWidget)
 _stub_module("napariTFM.widgets.msm_widget", MSMWidget=_StubStageWidget)
-_stub_module(
-    "napariTFM.widgets.batch_analysis_widget",
-    BatchAnalysisWidget=_StubStageWidget,
-)
 
 from napariTFM.widgets import _widget
 
@@ -391,7 +387,6 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
     widget = _widget.napariTFMWidget(object())
     widget.show()
     app.processEvents()
@@ -402,7 +397,6 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     assert widget.displacement_widget.isVisible()
     assert widget.force_widget.isVisible()
     assert widget.msm_widget.isVisible()
-    assert widget.batch_widget.isVisible()
 
 
 def test_stage_sections_receive_ordered_neighbour_accents(monkeypatch, app):
@@ -413,7 +407,6 @@ def test_stage_sections_receive_ordered_neighbour_accents(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
     widget = _widget.napariTFMWidget(object())
 
     sections = widget._stage_sections
@@ -431,7 +424,6 @@ def _stub_main_widget(monkeypatch):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
     return _widget.napariTFMWidget(object())
 
 
@@ -630,7 +622,7 @@ def test_run_all_with_no_experiments_is_a_noop(monkeypatch, app):
 def test_only_stress_stage_is_optional(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     assert widget._stage_sections_by_key["stress"].enable_btn is not None
-    for key in ("preprocessing", "displacement", "force", "batch"):
+    for key in ("preprocessing", "displacement", "force"):
         assert widget._stage_sections_by_key[key].enable_btn is None
 
 
@@ -663,7 +655,6 @@ def test_main_widget_lets_dock_determine_width(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
 
@@ -678,7 +669,6 @@ def test_data_manager_change_callback_refreshes_stage_widgets(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
 
@@ -688,7 +678,6 @@ def test_data_manager_change_callback_refreshes_stage_widgets(monkeypatch, app):
     assert widget.displacement_widget.update_count == 1
     assert widget.force_widget.update_count == 1
     assert widget.msm_widget.update_count == 1
-    assert widget.batch_widget.update_count == 1
 
 
 def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app):
@@ -699,7 +688,6 @@ def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -723,7 +711,6 @@ def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, 
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -743,17 +730,6 @@ def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, 
             f"{key} header run button did not trigger its widget run_action"
         )
 
-    # Batch keeps its own run button; the header run clicks it, and its
-    # enablement follows the widget's action_states (run enabled once folders exist).
-    widget.batch_widget.set_action_states(run=True)
-    app.processEvents()
-    batch_clicks = {"n": 0}
-    widget.batch_widget.run_analysis_btn.clicked.connect(
-        lambda *_: batch_clicks.__setitem__("n", batch_clicks["n"] + 1)
-    )
-    widget._stage_sections_by_key["batch"].run_cancel_btn.click()
-    assert batch_clicks["n"] == 1, "batch header run button did not click its run button"
-
 
 def test_main_widget_stress_header_preview_wires_to_frame_preview(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
@@ -763,7 +739,6 @@ def test_main_widget_stress_header_preview_wires_to_frame_preview(monkeypatch, a
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -790,7 +765,6 @@ def test_stage_sections_use_signal_action_contract(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     main_widget = _widget.napariTFMWidget(object())
 
@@ -845,7 +819,6 @@ def test_main_widget_does_not_expose_legacy_parameter_panel(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
 
@@ -861,7 +834,6 @@ def test_main_widget_project_section_tracks_output_directory(monkeypatch, app, t
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.data_manager.set_output_dir(tmp_path)
@@ -877,7 +849,6 @@ def test_preprocessing_data_rows_route_assignment_actions(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     rows = widget._stage_status_panels_by_key["preprocessing"].artifact_rows
@@ -903,7 +874,6 @@ def test_generated_output_rows_have_no_save_button(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
 
@@ -926,7 +896,6 @@ def test_displacement_data_rows_route_assignment_actions(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     rows = widget._stage_status_panels_by_key["displacement"].artifact_rows
@@ -948,7 +917,6 @@ def test_only_mask_input_row_routes_a_load_action(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
 
@@ -972,7 +940,6 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -1017,7 +984,6 @@ def test_main_widget_exposes_collapsed_stage_data_status_panels(monkeypatch, app
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
@@ -1047,7 +1013,6 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     section = widget._stage_sections_by_key["preprocessing"]
@@ -1098,7 +1063,6 @@ def test_stage_status_is_done_when_results_are_in_memory(monkeypatch, app, tmp_p
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.data_manager.set_output_dir(tmp_path)
@@ -1132,7 +1096,6 @@ def test_main_widget_constructs_when_stage_widget_lacks_parameter_panel(monkeypa
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())  # must not raise
 
@@ -1145,7 +1108,7 @@ def test_each_stage_has_single_inline_parameter_editor(monkeypatch, app):
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
     for name in (
         "PreprocessingWidget", "DisplacementAnalysisWidget",
-        "FTTCWidget", "MSMWidget", "BatchAnalysisWidget",
+        "FTTCWidget", "MSMWidget",
     ):
         monkeypatch.setattr(_widget, name, _StubStageWidget)
 
@@ -1156,8 +1119,8 @@ def test_each_stage_has_single_inline_parameter_editor(monkeypatch, app):
     for key in ("preprocessing", "displacement", "force", "stress"):
         section = widget._stage_sections_by_key[key]
         assert section.parameter_panel is widget._stage_parameter_panels_by_key[key]
-    assert widget._stage_sections_by_key["batch"].parameter_panel is None
     assert "batch" not in widget._stage_parameter_panels_by_key
+    assert "batch" not in widget._stage_sections_by_key
     assert not hasattr(widget, "_hide_embedded_parameter_panels")
 
 
@@ -1181,13 +1144,13 @@ def test_refresh_updates_every_stage_widget_once(monkeypatch, app):
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
     for name in (
         "PreprocessingWidget", "DisplacementAnalysisWidget",
-        "FTTCWidget", "MSMWidget", "BatchAnalysisWidget",
+        "FTTCWidget", "MSMWidget",
     ):
         monkeypatch.setattr(_widget, name, _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     stage_widgets = widget._stage_widgets()
-    assert len(stage_widgets) == 5
+    assert len(stage_widgets) == 4
 
     before = [w.update_count for w in stage_widgets]
     widget.refresh()
@@ -1201,7 +1164,7 @@ def test_completion_signal_triggers_single_refresh(monkeypatch, app):
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
     for name in (
         "PreprocessingWidget", "DisplacementAnalysisWidget",
-        "FTTCWidget", "MSMWidget", "BatchAnalysisWidget",
+        "FTTCWidget", "MSMWidget",
     ):
         monkeypatch.setattr(_widget, name, _StubStageWidget)
 
@@ -1238,7 +1201,7 @@ def test_get_set_state_round_trips_parameters(monkeypatch, app, tmp_path):
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
     for name in (
         "PreprocessingWidget", "DisplacementAnalysisWidget",
-        "FTTCWidget", "MSMWidget", "BatchAnalysisWidget",
+        "FTTCWidget", "MSMWidget",
     ):
         monkeypatch.setattr(_widget, name, _StubStageWidget)
 
@@ -1280,7 +1243,7 @@ def test_reconcile_loads_existing_config_from_output_dir(monkeypatch, app, tmp_p
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
     for name in (
         "PreprocessingWidget", "DisplacementAnalysisWidget",
-        "FTTCWidget", "MSMWidget", "BatchAnalysisWidget",
+        "FTTCWidget", "MSMWidget",
     ):
         monkeypatch.setattr(_widget, name, _StubStageWidget)
 
@@ -1304,7 +1267,6 @@ def test_calibration_change_updates_all_stage_widgets(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     stage = widget._stage_widgets()
@@ -1322,7 +1284,6 @@ def test_force_param_change_updates_only_force_widget(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     before = {id(w): w.update_count for w in widget._stage_widgets()}
@@ -1342,7 +1303,6 @@ def test_unrouted_param_change_updates_no_stage_widget(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     before = [w.update_count for w in widget._stage_widgets()]
@@ -1375,7 +1335,7 @@ def test_reconcile_writes_config_when_absent(monkeypatch, app, tmp_path):
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
     for name in (
         "PreprocessingWidget", "DisplacementAnalysisWidget",
-        "FTTCWidget", "MSMWidget", "BatchAnalysisWidget",
+        "FTTCWidget", "MSMWidget",
     ):
         monkeypatch.setattr(_widget, name, _StubStageWidget)
 
@@ -1396,7 +1356,6 @@ def test_shell_theme_button_switches_palette(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     original = _ui_style.active_theme_name()
     try:
@@ -1468,7 +1427,6 @@ def test_shell_mounts_param_panels_as_section_parameter_panel(monkeypatch, app):
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     section = widget._stage_sections_by_key["displacement"]
@@ -1497,7 +1455,6 @@ def test_shell_preprocessing_panel_has_no_calibration_controls(monkeypatch, app)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "BatchAnalysisWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     panel = widget._stage_parameter_panels_by_key["preprocessing"]
