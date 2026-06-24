@@ -76,9 +76,18 @@ All removals here are behavior-preserving (each control already defaults to its
 - ✅ **Per-stage progress bars** — removed (P1c) from all 4 stage widgets + batch;
   textual `status_label` kept as interim until P2's global label.
 
-### P2 — Global status label  *(replaces the progress bars)*
+### P2 — Global status label  ✅ DONE *(commits 3d147c6 P2.1, 31c7e45 P2.2)*
 One panel-level **text** status (no bar); stages report run/skip/done into it
-(e.g. `displacement — skipped (output present)`). Pairs with the P1 bar removal.
+(e.g. `Displacement — Calculating…`). Pairs with the P1 bar removal. Landed
+test-locked in two sub-slices (suite 317 green):
+- ✅ **P2.1** the shell owns one `status_label` under the pipeline-context line;
+  each pipeline stage's `controller.progress_updated` is funnelled into it,
+  prefixed with the reporting stage (`_relay_stage_status`). Batch excluded (no
+  controller progress signal; retired in P4).
+- ✅ **P2.2** the four pipeline widgets drop their local `status_label` /
+  `_create_status_frame` / `_update_status`; MSM/FTTC direct-to-label calls now
+  emit `controller.progress_updated` so the shell hears start/fail. The batch
+  widget's vestigial label rides with P4.
 
 ### P3 — Auto-skip-when-output-present  *(the "don't recompute" path for mandatory stages)*
 Each mandatory stage checks for its existing output and skips, reporting via P2.
