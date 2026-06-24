@@ -903,7 +903,13 @@ class napariTFMWidget(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to reset parameters: {str(e)}")
 
     def _save_config(self):
-        """Save the single config: parameters plus the experiment table (P0b)."""
+        """Save the run config: parameters plus the experiment table (P4.5).
+
+        The table is the single config source — ``build_run_config`` turns the
+        rows + shared parameters into the same YAML the batch backend consumes.
+        """
+        import yaml
+
         try:
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
@@ -911,15 +917,26 @@ class napariTFMWidget(QWidget):
                 "",
                 "YAML Files (*.yaml *.yml)"
             )
-            if file_path:
-                self.batch_widget.save_config_to_yaml(file_path)
-                QMessageBox.information(self, "Success", "Config saved successfully!")
+            if not file_path:
+                return
+            if not file_path.lower().endswith((".yml", ".yaml")):
+                file_path += ".yaml"
+            config = build_run_config(
+                self.experiments_list.experiment_records(),
+                self.parameter_manager.get_all_parameters(),
+                disabled_stages=self._disabled_stages(),
+            )
+            with open(file_path, "w") as f:
+                yaml.safe_dump(config, f, default_flow_style=False)
+            QMessageBox.information(self, "Success", "Config saved successfully!")
         except Exception as e:
             logger.error(f"Error saving config: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to save config: {str(e)}")
 
     def _load_config(self):
-        """Load the single config: parameters plus the experiment table (P0b)."""
+        """Load a run config: apply parameters, then rebuild the table (P4.5)."""
+        import yaml
+
         try:
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
@@ -927,9 +944,36 @@ class napariTFMWidget(QWidget):
                 "",
                 "YAML Files (*.yaml *.yml)"
             )
-            if file_path:
-                self.batch_widget.load_config_from_yaml(file_path)
-                QMessageBox.information(self, "Success", "Config loaded successfully!")
+            if not file_path:
+                return
+            with open(file_path) as f:
+                config = yaml.safe_load(f) or {}
+
+            params = config.get("parameters", {})
+            if isinstance(params, dict):
+                valid = set(self.parameter_manager.get_all_parameters())
+                for name, value in params.items():
+                    if name not in valid:
+                        continue
+                    try:
+                        if name == "registration_mode" and isinstance(value, str):
+                            value = value.lower()
+                        self.parameter_manager.set_parameter(name, value)
+                    except Exception as exc:
+                        logger.warning("Skipped parameter %s: %s", name, exc)
+
+            input_files = config.get("input_files", {}) or {}
+            metadata = config.get("experiment_metadata", {}) or {}
+            records = [
+                {
+                    "path": path,
+                    "input_files": dict(input_files),
+                    "columns": dict(metadata.get(path, {})),
+                }
+                for path in config.get("root_folders", [])
+            ]
+            self.experiments_list.set_records(records)
+            QMessageBox.information(self, "Success", "Config loaded successfully!")
         except Exception as e:
             logger.error(f"Error loading config: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to load config: {str(e)}")
