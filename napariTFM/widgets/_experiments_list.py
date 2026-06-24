@@ -281,6 +281,7 @@ class ExperimentsList(QWidget):
             ("beads", "Beads file", "beads.tif"),
             ("reference", "Reference file", "reference.tif"),
             ("cells", "Cells file (optional)", "cells.tif"),
+            ("masks", "Masks file (optional)", "masks.tif"),
         ):
             field = QLineEdit(default)
             self.file_name_inputs[key] = field

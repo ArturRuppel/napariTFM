@@ -279,6 +279,7 @@ def test_commit_adds_discovered_with_current_column_config(app, tmp_path):
     _make_qualifying(tmp_path, "a")
     widget = ExperimentsList()
     widget.file_name_inputs["cells"].setText("")
+    widget.file_name_inputs["masks"].setText("")
     widget.add_column_field("condition", "WT")
     widget.discover(tmp_path)
     widget.commit_discovered()
@@ -397,3 +398,22 @@ def test_set_records_empty_clears_the_list(app):
     widget.set_experiments(["/data/a"])
     widget.set_records([])
     assert widget.experiments() == []
+
+
+def test_input_file_config_has_optional_masks_default(app):
+    widget = ExperimentsList()
+    assert "masks" in widget.file_name_inputs
+    assert widget.input_file_config()["masks"] == "masks.tif"
+
+
+def test_masks_field_is_optional_and_excluded_from_discovery(app, tmp_path):
+    # Masks are not a discovery requirement (only beads + reference are).
+    _make_qualifying(tmp_path, "a")  # writes beads.tif + reference.tif, no masks
+    widget = ExperimentsList()
+    assert sorted(Path(p).name for p in widget.discover(tmp_path)) == ["a"]
+
+
+def test_masks_field_blank_is_dropped_from_config(app):
+    widget = ExperimentsList()
+    widget.file_name_inputs["masks"].setText("")
+    assert "masks" not in widget.input_file_config()
