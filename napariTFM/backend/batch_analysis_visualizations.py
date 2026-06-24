@@ -26,53 +26,6 @@ class BatchVisualizationSaver:
         self.viz_folder = self.base_folder / "figures"
         self.viz_folder.mkdir(parents=True, exist_ok=True)
 
-    def save_bead_overlay(self, bead_stack: np.ndarray, reference_image: np.ndarray, fps: int = 10) -> None:
-        """
-        Create a GIF showing an overlay of bead images with the reference image.
-
-        Each frame shows the reference image in magenta and current bead image in green.
-        Both images are normalized independently for better contrast.
-
-        Parameters
-        ----------
-        bead_stack : np.ndarray
-            Stack of bead images (frames × height × width)
-        reference_image : np.ndarray
-            Single reference image (height × width)
-        fps : int, optional
-            Frames per second for output GIF, default 10
-        """
-        # Normalize reference image
-        reference = reference_image.astype(float)
-        ref_min, ref_max = reference.min(), reference.max()
-        if ref_max > ref_min:
-            reference = (reference - ref_min) / (ref_max - ref_min)
-
-        # Create overlay frames
-        frames = []
-        for bead_frame in bead_stack:
-            # Normalize bead frame
-            bead = bead_frame.astype(float)
-            bead_min, bead_max = bead.min(), bead.max()
-            if bead_max > bead_min:
-                bead = (bead - bead_min) / (bead_max - bead_min)
-
-            # Create RGB overlay (magenta reference, green beads)
-            overlay = np.zeros((*bead.shape, 3))
-            overlay[..., 0] = reference  # Red channel (for magenta)
-            overlay[..., 1] = bead  # Green channel
-            overlay[..., 2] = reference  # Blue channel (for magenta)
-
-            # Convert to uint8 for GIF
-            overlay_uint8 = (overlay * 255).astype(np.uint8)
-            frames.append(overlay_uint8)
-
-        # Save as GIF with looping enabled
-        output_path = self.viz_folder / 'bead_overlay.gif'
-        imageio.mimsave(str(output_path), frames, fps=fps, loop=0)
-
-
-
     def save_displacement_visualization(self, displacement_results: DisplacementResult, fps: int = 10) -> None:
         """
         Create a GIF visualizing displacement fields with magnitude map and vectors.

@@ -142,17 +142,6 @@ def test_generate_config_uses_parameter_manager_values():
     fake = SimpleNamespace(
         folder_list_widget=_List(),
         file_inputs={"beads": _Text("beads.tif"), "reference": _Text("ref.tif"), "cells": _Text("")},
-        analysis_checkboxes={"preprocess": _Check(True), "calculate_metrics": _Check(False)},
-        visualization_checkboxes={
-            "bead_overlay": _Check(True),
-            "displacement_map": _Check(False),
-            "force_map": _Check(False),
-            "force_cell_overlay": _Check(False),
-            "sigma_xx": _Check(False),
-            "sigma_yy": _Check(False),
-            "normal_stress": _Check(False),
-            "mesh": _Check(False),
-        },
         parameter_manager=_Manager(),
         parameter_spins={},
         parameter_combos={},
@@ -183,17 +172,6 @@ def test_batch_config_generation_does_not_read_duplicate_parameter_widgets():
     fake = SimpleNamespace(
         folder_list_widget=_List(),
         file_inputs={"beads": _Text("beads.tif"), "reference": _Text("ref.tif"), "cells": _Text("")},
-        analysis_checkboxes={"preprocess": _Check(True)},
-        visualization_checkboxes={
-            "bead_overlay": _Check(False),
-            "displacement_map": _Check(False),
-            "force_map": _Check(False),
-            "force_cell_overlay": _Check(False),
-            "sigma_xx": _Check(False),
-            "sigma_yy": _Check(False),
-            "normal_stress": _Check(False),
-            "mesh": _Check(False),
-        },
         parameter_manager=_Manager(),
         parameter_spins={"young_modulus": object()},
         parameter_combos={"mesh_algorithm": object()},
@@ -205,6 +183,56 @@ def test_batch_config_generation_does_not_read_duplicate_parameter_widgets():
 
     assert config["parameters"]["young_modulus"] == 9000
     assert config["parameters"]["mesh_algorithm"] == "Frontal-Del."
+
+
+def test_generate_config_emits_constant_mandatory_steps_without_checkboxes():
+    """All steps are mandatory; viz is all-on; no analysis/viz checkbox reads."""
+    fake = SimpleNamespace(
+        folder_list_widget=_List(),
+        file_inputs={"beads": _Text("beads.tif"), "reference": _Text("ref.tif"), "cells": _Text("")},
+        parameter_manager=_Manager(),
+        parameter_spins={},
+        parameter_combos={},
+        parameter_checks={},
+        save_cache_checkbox=_Check(False),
+    )
+
+    config = BatchAnalysisWidget._generate_config(fake)
+
+    assert config["analysis_steps"] == {
+        "preprocessing": True,
+        "displacement": True,
+        "force": True,
+        "stress": True,
+        "calculate_metrics": True,
+    }
+    # Bead overlay leaves completely; the remaining visualizations are all on.
+    assert "bead_overlay" not in config["visualizations"]
+    assert set(config["visualizations"]) == {
+        "displacement_map",
+        "force_map",
+        "force_cell_overlay",
+        "sigma_xx",
+        "sigma_yy",
+        "normal_stress",
+        "mesh",
+    }
+    assert all(config["visualizations"].values())
+
+
+def test_batch_widget_has_no_analysis_or_visualization_checkboxes():
+    app = _app()
+    widget = BatchAnalysisWidget(None, object(), ParameterManager(), object())
+    widget.show()
+    app.processEvents()
+
+    assert not hasattr(widget, "analysis_checkboxes")
+    assert not hasattr(widget, "visualization_checkboxes")
+    titles = {group.title() for group in widget.findChildren(QGroupBox)}
+    assert "Analysis Steps" not in titles
+    assert "Visualizations" not in titles
+    # The preprocessed-cache opt-in survives the analysis-group removal.
+    assert hasattr(widget, "save_cache_checkbox")
 
 
 def test_batch_widget_has_no_run_mode_radios():

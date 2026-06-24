@@ -39,7 +39,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         self.parameter_spins = {}
         self.parameter_combos = {}
         self.parameter_checks = {}
-        self.visualization_checkboxes = {}
         self.folder_list = []
 
         self.blockSignals(True)
@@ -64,9 +63,9 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         main_layout.addWidget(self._create_metadata_group())
 
         # Batch execution consumes the shared workflow parameters from
-        # ParameterManager; this panel only owns batch-specific inputs.
-        main_layout.addWidget(self._create_analysis_steps_group())
-        main_layout.addWidget(self._create_visualization_group())
+        # ParameterManager; this panel only owns batch-specific inputs. All
+        # pipeline steps are mandatory and every visualization is produced, so
+        # there are no per-step / per-viz checkboxes here anymore.
         main_layout.addWidget(self._create_folder_management_group())
         main_layout.addWidget(self._create_status_frame())
 
@@ -139,63 +138,6 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         group.setLayout(layout)
         return group
 
-    def _create_analysis_steps_group(self) -> QGroupBox:
-        """Create analysis steps group with checkboxes."""
-        group = QGroupBox("Analysis Steps")
-        layout = QVBoxLayout()
-
-        steps = [
-            ("preprocessing", "Preprocessing"),
-            ("displacement", "Displacement"),
-            ("force", "Force"),
-            ("stress", "Stress"),
-            ("calculate_metrics", "Calculate Metrics (Strain Energy & Polarization)")
-        ]
-
-        self.analysis_checkboxes = {}
-        for key, label in steps:
-            checkbox = QCheckBox(label)
-            checkbox.setChecked(True)
-            self.analysis_checkboxes[key] = checkbox
-            layout.addWidget(checkbox)
-
-        # Opt-in stage-resume cache: write preprocessed images to disk so a later
-        # run can resume without re-preprocessing. Off by default — the .ntfm is
-        # the deliverable; displacement/force/stress resume from it (ROADMAP §4).
-        self.save_cache_checkbox = QCheckBox("Save preprocessed image cache (.tif)")
-        self.save_cache_checkbox.setChecked(False)
-        layout.addWidget(self.save_cache_checkbox)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_visualization_group(self) -> QGroupBox:
-        """Create visualization options group."""
-        group = QGroupBox("Visualizations")
-        layout = QVBoxLayout()
-
-        # Define visualization options
-        viz_options = [
-            ("bead_overlay", "Bead Overlay"),
-            ("displacement_map", "Displacement Map"),
-            ("force_map", "Force Map"),
-            ("force_cell_overlay", "Force Cell Overlay"),
-            ("sigma_xx", "Sigma XX"),
-            ("sigma_yy", "Sigma YY"),
-            ("normal_stress", "Normal Stress"),
-            ("mesh", "Mesh")
-        ]
-
-        self.visualization_checkboxes = {}
-        for key, label in viz_options:
-            checkbox = QCheckBox(label)
-            checkbox.setChecked(True)
-            self.visualization_checkboxes[key] = checkbox
-            layout.addWidget(checkbox)
-
-        group.setLayout(layout)
-        return group
-
     def _create_folder_management_group(self) -> QGroupBox:
         """Create folder management group."""
         group = QGroupBox("Folder Management")
@@ -217,6 +159,13 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         button_layout.addWidget(self.clear_folders_btn, 0, 1)
         button_layout.addWidget(self.save_config_btn, 1, 0)
         button_layout.addWidget(self.load_config_btn, 1, 1)
+
+        # Opt-in stage-resume cache: write preprocessed images to disk so a later
+        # run can resume without re-preprocessing. Off by default — the .ntfm is
+        # the deliverable; displacement/force/stress resume from it (ROADMAP §4).
+        self.save_cache_checkbox = QCheckBox("Save preprocessed image cache (.tif)")
+        self.save_cache_checkbox.setChecked(False)
+        layout.addWidget(self.save_cache_checkbox)
 
         # Add run button — batch always runs in-process (a headless CLI is the
         # future home for out-of-process runs).
@@ -262,36 +211,39 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
         if self.file_inputs['cells'].text():
             input_files['cells'] = self.file_inputs['cells'].text()
 
-        # Analysis steps from checkboxes
+        # Every pipeline step is mandatory now — the per-step checkboxes are gone.
+        # MSM/stress optionality moves to the interactive stage glyph and the
+        # unified run path (TODO P3/P4); the batch path runs the full pipeline.
         analysis_steps = {
-            key: checkbox.isChecked()
-            for key, checkbox in self.analysis_checkboxes.items()
+            'preprocessing': True,
+            'displacement': True,
+            'force': True,
+            'stress': True,
+            'calculate_metrics': True,
         }
 
-        # Visualization options
+        # Every visualization is produced; per-stage viz selection returns as a
+        # header glyph (TODO P5). Bead overlay was removed entirely.
         visualizations = {
-            'bead_overlay': self.visualization_checkboxes['bead_overlay'].isChecked(),
-            'displacement_map': self.visualization_checkboxes['displacement_map'].isChecked(),
-            'force_map': self.visualization_checkboxes['force_map'].isChecked(),
-            'force_cell_overlay': self.visualization_checkboxes['force_cell_overlay'].isChecked(),
-            'sigma_xx': self.visualization_checkboxes['sigma_xx'].isChecked(),
-            'sigma_yy': self.visualization_checkboxes['sigma_yy'].isChecked(),
-            'normal_stress': self.visualization_checkboxes['normal_stress'].isChecked(),
-            'mesh': self.visualization_checkboxes['mesh'].isChecked()
+            'displacement_map': True,
+            'force_map': True,
+            'force_cell_overlay': True,
+            'sigma_xx': True,
+            'sigma_yy': True,
+            'normal_stress': True,
+            'mesh': True,
         }
 
         parameters = self.parameter_manager.get_all_parameters()
 
         # Add metrics parameters. Masks are always supplied externally (napariTFM
         # does not generate them), so no mask-creation/refinement parameters here.
-        metrics_parameters = {}
-        if analysis_steps.get('calculate_metrics', False):
-            # Use default values as these detailed controls are not in the batch UI
-            metrics_parameters = {
-                'calculate_strain_energy': True,  # Default
-                'calculate_polarization': True,  # Default
-                'export_eigenvalues': True  # Default
-            }
+        # Use default values as these detailed controls are not in the batch UI.
+        metrics_parameters = {
+            'calculate_strain_energy': True,  # Default
+            'calculate_polarization': True,  # Default
+            'export_eigenvalues': True  # Default
+        }
         config = {
             'root_folders': folders,
             'input_files': input_files,
@@ -413,20 +365,13 @@ class BatchAnalysisWidget(BaseAnalysisWidget):
 
                 failed_updates = self._apply_config_parameters(config.get('parameters', {}))
 
-                # Update analysis steps
-                for key, checkbox in self.analysis_checkboxes.items():
-                    if key in config.get('analysis_steps', {}):
-                        checkbox.setChecked(config['analysis_steps'][key])
-
                 # Stage-resume cache toggle
                 if 'save_cache' in config:
                     self.save_cache_checkbox.setChecked(bool(config['save_cache']))
 
-                # Update visualizations
-                for key, checkbox in self.visualization_checkboxes.items():
-                    viz_key = key.replace('save_', '')
-                    if viz_key in config.get('visualizations', {}):
-                        checkbox.setChecked(config['visualizations'][viz_key])
+                # Analysis steps and visualizations are no longer user-selectable
+                # (all steps mandatory, all visualizations produced) — older config
+                # files may still carry those sections; they are simply ignored.
 
                 # Clear and update folder list
                 self.folder_list.clear()

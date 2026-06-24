@@ -1007,9 +1007,9 @@ class BatchAnalysis:
         current_data : Optional[dict]
             Data from the current analysis step, if available
         """
-        # Map analysis steps to their visualization flags
+        # Map analysis steps to their visualization flags. Preprocessing has no
+        # visualization (the bead overlay was removed).
         viz_map = {
-            'preprocessing': 'bead_overlay',
             'displacement': 'displacement_map',
             'force': ['force_map', 'force_cell_overlay'],
             'stress': ['sigma_xx', 'sigma_yy', 'normal_stress', 'mesh']
@@ -1045,11 +1045,7 @@ class BatchAnalysis:
                 return
 
             # Generate visualizations based on enabled flags
-            if step == 'preprocessing' and self.config['visualizations']['bead_overlay']:
-                print("Generating bead overlay visualization...")
-                viz_saver.save_bead_overlay(data['beads'], data['reference'])
-
-            elif step == 'displacement' and self.config['visualizations']['displacement_map']:
+            if step == 'displacement' and self.config['visualizations']['displacement_map']:
                 print("Generating displacement map visualization...")
                 viz_saver.save_displacement_visualization(data)
 
