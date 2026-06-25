@@ -8,7 +8,10 @@ widget is retired — the run is driven straight from the table.
 """
 from __future__ import annotations
 
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, List, Mapping, Sequence
+
+# Bump when the on-disk shape of the experiment-series file changes.
+SERIES_FORMAT_VERSION = 1
 
 # Every visualization is produced; per-stage viz selection returns as a header
 # glyph (P5). Bead overlay was removed entirely.
@@ -74,3 +77,52 @@ def build_run_config(
         "save_cache": bool(save_cache),
         "experiment_metadata": experiment_metadata,
     }
+
+
+def build_series_config(
+    records: Sequence[Mapping],
+    *,
+    disabled_stages: Iterable[str] = (),
+    processed_root: object = None,
+) -> dict:
+    """The portable *experiment-series* file: *what* to run, never *how*.
+
+    Holds the dataset (folders + the shared input-file names) and each row's
+    free-form design tags, plus run options (which stages to skip, where
+    processed output should land). The analysis knobs live in the separate
+    ``tfm_params`` preset; the two halves are folded back together only at run
+    time and inside each ``.ntfm`` for provenance. Mirrors
+    :func:`build_run_config` minus ``parameters`` so the same ``records`` feed
+    both.
+    """
+    input_files = dict(records[0]["input_files"]) if records else {}
+    return {
+        "format_version": SERIES_FORMAT_VERSION,
+        "input_files": input_files,
+        "root_folders": [record["path"] for record in records],
+        "experiment_metadata": {
+            record["path"]: dict(record.get("columns", {})) for record in records
+        },
+        "run_options": {
+            "disabled_stages": list(disabled_stages),
+            "processed_root": str(processed_root) if processed_root else None,
+        },
+    }
+
+
+def series_records(config: Mapping) -> List[dict]:
+    """Rebuild :meth:`ExperimentsList.set_records` rows from a series file.
+
+    The inverse of :func:`build_series_config`: the shared ``input_files`` map is
+    copied onto every row and each path picks up its own design tags.
+    """
+    input_files = config.get("input_files", {}) or {}
+    metadata = config.get("experiment_metadata", {}) or {}
+    return [
+        {
+            "path": path,
+            "input_files": dict(input_files),
+            "columns": dict(metadata.get(path, {})),
+        }
+        for path in (config.get("root_folders", []) or [])
+    ]

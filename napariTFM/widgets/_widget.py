@@ -25,7 +25,11 @@ from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, 
 from napariTFM.widgets._param_controls import dslider, islider
 from superqt import QLabeledDoubleSlider, QLabeledSlider
 from napariTFM.widgets._experiments_list import ExperimentsList, PIPELINE_STAGES
-from napariTFM.widgets._run_config import build_run_config
+from napariTFM.widgets._run_config import (
+    build_run_config,
+    build_series_config,
+    series_records,
+)
 from napariTFM.backend.batch_analysis import BatchAnalysis
 
 logger = logging.getLogger(__name__)
@@ -388,17 +392,19 @@ class napariTFMWidget(QWidget):
         container_layout.setContentsMargins(0, 0, 0, 0)
         container.setLayout(container_layout)
 
-        # Title row: brand + a compact config toolbar (Save / Load / Reset).
+        # Title row: brand + the parameter-preset toolbar. These act on the
+        # analysis knobs only (the portable tfm_params recipe); the experiment
+        # series (folders + tags) has its own Open/Save in the list header.
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title = QLabel("napariTFM")
         title.setStyleSheet(title_style())
         title_row.addWidget(title)
         title_row.addStretch()
-        self.save_config_btn = self._make_toolbar_button("Save", "Save config")
-        self.load_config_btn = self._make_toolbar_button("Load", "Load config")
+        self.save_params_btn = self._make_toolbar_button("Save params", "Save parameters preset")
+        self.load_params_btn = self._make_toolbar_button("Load params", "Load parameters preset")
         self.reset_params_btn = self._make_toolbar_button("Reset", "Reset parameters")
-        for _btn in (self.save_config_btn, self.load_config_btn, self.reset_params_btn):
+        for _btn in (self.save_params_btn, self.load_params_btn, self.reset_params_btn):
             title_row.addWidget(_btn)
         container_layout.addLayout(title_row)
 
@@ -435,11 +441,13 @@ class napariTFMWidget(QWidget):
 
         self._stage_parameter_panels_by_key = self._create_stage_parameter_panels()
 
-        # Wire the title-bar config toolbar; output dir now lives in the
-        # experiments (aggregation) layer.
-        self.save_config_btn.clicked.connect(self._save_config)
-        self.load_config_btn.clicked.connect(self._load_config)
+        # Wire the title-bar parameter-preset toolbar; the experiment-series
+        # Open/Save lives on the list header instead.
+        self.save_params_btn.clicked.connect(self._save_params)
+        self.load_params_btn.clicked.connect(self._load_params)
         self.reset_params_btn.clicked.connect(self._reset_parameters)
+        self.experiments_list.save_series_requested.connect(self._save_series)
+        self.experiments_list.load_series_requested.connect(self._load_series)
         self.experiments_list.output_dir_changed.connect(self._reconcile_to_output_dir)
 
         # Initialize all widgets with parameter_manager
@@ -850,18 +858,7 @@ class napariTFMWidget(QWidget):
             return
         self._applying_state = True
         try:
-            params = state.get("parameters", {})
-            if isinstance(params, dict):
-                valid = set(self.parameter_manager.get_all_parameters())
-                for name, value in params.items():
-                    if name not in valid:
-                        continue
-                    try:
-                        if name == "registration_mode" and isinstance(value, str):
-                            value = value.lower()
-                        self.parameter_manager.set_parameter(name, value)
-                    except Exception as exc:
-                        logger.warning("Skipped parameter %s: %s", name, exc)
+            self._apply_parameters(state.get("parameters", {}))
             # output_dir is intentionally NOT re-applied: the config lives
             # inside output_dir, so the dir is already known when we load it.
             disabled = set(state.get("disabled_stages") or [])
@@ -932,81 +929,143 @@ class napariTFMWidget(QWidget):
             logger.error(f"Error resetting parameters: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to reset parameters: {str(e)}")
 
-    def _save_config(self):
-        """Save the run config: parameters plus the experiment table (P4.5).
+    def _apply_parameters(self, params) -> None:
+        """Apply a name→value dict of analysis knobs onto the shared manager.
 
-        The table is the single config source — ``build_run_config`` turns the
-        rows + shared parameters into the same YAML the batch backend consumes.
+        Unknown names are skipped (forward/backward-compatible files) and
+        ``registration_mode`` is normalised, mirroring :meth:`set_state`.
+        """
+        if not isinstance(params, dict):
+            return
+        valid = set(self.parameter_manager.get_all_parameters())
+        for name, value in params.items():
+            if name not in valid:
+                continue
+            try:
+                if name == "registration_mode" and isinstance(value, str):
+                    value = value.lower()
+                self.parameter_manager.set_parameter(name, value)
+            except Exception as exc:
+                logger.warning("Skipped parameter %s: %s", name, exc)
+
+    def _save_params(self):
+        """Save the analysis knobs as a portable ``tfm_params`` preset (no paths).
+
+        The preset is the reusable "how to analyze" recipe; the dataset it gets
+        applied to lives in the separate experiment-series file.
         """
         import yaml
 
         try:
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Save Config",
-                "",
-                "YAML Files (*.yaml *.yml)"
+                "Save parameters preset",
+                "tfm_params.yaml",
+                "YAML Files (*.yaml *.yml)",
             )
             if not file_path:
                 return
             if not file_path.lower().endswith((".yml", ".yaml")):
                 file_path += ".yaml"
-            config = build_run_config(
-                self.experiments_list.experiment_records(),
-                self.parameter_manager.get_all_parameters(),
-                disabled_stages=self._disabled_stages(),
-            )
+            preset = {
+                "format_version": 1,
+                "parameters": self.parameter_manager.get_all_parameters(),
+            }
             with open(file_path, "w") as f:
-                yaml.safe_dump(config, f, default_flow_style=False)
-            QMessageBox.information(self, "Success", "Config saved successfully!")
+                yaml.safe_dump(preset, f, default_flow_style=False)
+            QMessageBox.information(self, "Success", "Parameters preset saved!")
         except Exception as e:
-            logger.error(f"Error saving config: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to save config: {str(e)}")
+            logger.error(f"Error saving parameters preset: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to save parameters: {str(e)}")
 
-    def _load_config(self):
-        """Load a run config: apply parameters, then rebuild the table (P4.5)."""
+    def _load_params(self):
+        """Load a ``tfm_params`` preset and apply it to every stage's knobs."""
         import yaml
 
         try:
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
-                "Load Config",
+                "Load parameters preset",
                 "",
-                "YAML Files (*.yaml *.yml)"
+                "YAML Files (*.yaml *.yml)",
+            )
+            if not file_path:
+                return
+            with open(file_path) as f:
+                preset = yaml.safe_load(f) or {}
+            # Accept the versioned {"parameters": {...}} shape and, for old
+            # files, a bare flat parameter dict.
+            params = preset.get("parameters") if isinstance(preset, dict) else None
+            if not isinstance(params, dict):
+                params = preset if isinstance(preset, dict) else {}
+            self._apply_parameters(params)
+            self.refresh()
+            QMessageBox.information(self, "Success", "Parameters preset loaded!")
+        except Exception as e:
+            logger.error(f"Error loading parameters preset: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to load parameters: {str(e)}")
+
+    def _save_series(self):
+        """Save the experiment series: folders + design tags + run options.
+
+        No analysis knobs ride along — those are a separate ``tfm_params``
+        preset, so a series file stays a portable manifest of *what* to run.
+        """
+        import yaml
+
+        try:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save experiment series",
+                "tfm_experiment_series.yaml",
+                "YAML Files (*.yaml *.yml)",
+            )
+            if not file_path:
+                return
+            if not file_path.lower().endswith((".yml", ".yaml")):
+                file_path += ".yaml"
+            config = build_series_config(
+                self.experiments_list.experiment_records(),
+                disabled_stages=self._disabled_stages(),
+                processed_root=self.data_manager.output_dir,
+            )
+            with open(file_path, "w") as f:
+                yaml.safe_dump(config, f, default_flow_style=False)
+            QMessageBox.information(self, "Success", "Experiment series saved!")
+        except Exception as e:
+            logger.error(f"Error saving experiment series: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to save series: {str(e)}")
+
+    def _load_series(self):
+        """Load an experiment series: rebuild the table + restore run options."""
+        import yaml
+
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Load experiment series",
+                "",
+                "YAML Files (*.yaml *.yml)",
             )
             if not file_path:
                 return
             with open(file_path) as f:
                 config = yaml.safe_load(f) or {}
 
-            params = config.get("parameters", {})
-            if isinstance(params, dict):
-                valid = set(self.parameter_manager.get_all_parameters())
-                for name, value in params.items():
-                    if name not in valid:
-                        continue
-                    try:
-                        if name == "registration_mode" and isinstance(value, str):
-                            value = value.lower()
-                        self.parameter_manager.set_parameter(name, value)
-                    except Exception as exc:
-                        logger.warning("Skipped parameter %s: %s", name, exc)
-
-            input_files = config.get("input_files", {}) or {}
-            metadata = config.get("experiment_metadata", {}) or {}
-            records = [
-                {
-                    "path": path,
-                    "input_files": dict(input_files),
-                    "columns": dict(metadata.get(path, {})),
-                }
-                for path in config.get("root_folders", [])
-            ]
-            self.experiments_list.set_records(records)
-            QMessageBox.information(self, "Success", "Config loaded successfully!")
+            run_options = config.get("run_options", {}) or {}
+            disabled = set(run_options.get("disabled_stages") or [])
+            for key, section in self._stage_sections_by_key.items():
+                if section.enable_btn is not None:
+                    section.set_enabled(key not in disabled)
+            # ``processed_root`` is recorded for provenance but intentionally NOT
+            # re-applied here: claiming an output dir reloads *its* autosaved
+            # state, which would clobber the series we just loaded.
+            self.experiments_list.set_records(series_records(config))
+            self.refresh_stage_statuses()
+            QMessageBox.information(self, "Success", "Experiment series loaded!")
         except Exception as e:
-            logger.error(f"Error loading config: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to load config: {str(e)}")
+            logger.error(f"Error loading experiment series: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to load series: {str(e)}")
 
     def connect_signals(self):
         """Connect signals between components"""

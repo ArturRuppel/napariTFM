@@ -1,6 +1,10 @@
 """The config table is the single source of a batch run config (P4.1)."""
 
-from napariTFM.widgets._run_config import build_run_config
+from napariTFM.widgets._run_config import (
+    build_run_config,
+    build_series_config,
+    series_records,
+)
 
 
 _RECORDS = [
@@ -72,3 +76,36 @@ def test_empty_records_yield_empty_folders_and_inputs():
     assert cfg["root_folders"] == []
     assert cfg["input_files"] == {}
     assert cfg["experiment_metadata"] == {}
+
+
+# -- experiment-series file (the portable "what to run", no knobs) -----------
+
+
+def test_series_config_holds_dataset_but_no_parameters():
+    cfg = build_series_config(_RECORDS, disabled_stages=["stress"], processed_root="/out")
+    assert cfg["root_folders"] == ["/data/exp_a", "/data/exp_b"]
+    assert cfg["input_files"]["beads"] == "beads.tif"
+    assert cfg["experiment_metadata"]["/data/exp_a"] == {"condition": "soft"}
+    assert cfg["run_options"] == {"disabled_stages": ["stress"], "processed_root": "/out"}
+    # The series file never carries analysis knobs.
+    assert "parameters" not in cfg
+
+
+def test_series_processed_root_is_none_when_unset():
+    cfg = build_series_config(_RECORDS)
+    assert cfg["run_options"]["processed_root"] is None
+    assert cfg["run_options"]["disabled_stages"] == []
+
+
+def test_series_records_round_trips_through_the_series_file():
+    cfg = build_series_config(_RECORDS)
+    rows = series_records(cfg)
+    assert [r["path"] for r in rows] == ["/data/exp_a", "/data/exp_b"]
+    assert rows[0]["columns"] == {"condition": "soft"}
+    # Shared input-file names are copied onto every row.
+    assert rows[1]["input_files"]["beads"] == "beads.tif"
+
+
+def test_series_records_tolerates_a_sparse_file():
+    rows = series_records({"root_folders": ["/data/x"]})
+    assert rows == [{"path": "/data/x", "input_files": {}, "columns": {}}]

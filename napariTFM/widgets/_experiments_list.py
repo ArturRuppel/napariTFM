@@ -226,6 +226,8 @@ class ExperimentsList(QWidget):
     active_changed = Signal(str)
     run_all_requested = Signal()
     output_dir_changed = Signal()
+    save_series_requested = Signal()
+    load_series_requested = Signal()
 
     def __init__(
         self,
@@ -256,6 +258,24 @@ class ExperimentsList(QWidget):
         label.setStyleSheet(f"color: {TEXT_MID}; font-weight: bold;")
         header.addWidget(label)
         header.addStretch()
+
+        # Series I/O lives with the series it serializes (the list itself):
+        # Open/Save the portable experiment-series file (folders + tags + run
+        # options). Analysis knobs are saved separately as a tfm_params preset.
+        self.load_series_btn = QToolButton()
+        self.load_series_btn.setObjectName("experiments_load_series_button")
+        self.load_series_btn.setText("Open")
+        self.load_series_btn.setToolTip("Open an experiment series (folders + tags)")
+        self.load_series_btn.clicked.connect(self.load_series_requested)
+        header.addWidget(self.load_series_btn)
+
+        self.save_series_btn = QToolButton()
+        self.save_series_btn.setObjectName("experiments_save_series_button")
+        self.save_series_btn.setText("Save")
+        self.save_series_btn.setToolTip("Save this experiment series (folders + tags)")
+        self.save_series_btn.clicked.connect(self.save_series_requested)
+        header.addWidget(self.save_series_btn)
+
         self.add_btn = QToolButton()
         self.add_btn.setObjectName("experiments_add_button")
         self.add_btn.setText("Discover")

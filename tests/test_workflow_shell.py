@@ -1516,14 +1516,59 @@ def test_state_round_trips_experiments_and_active(monkeypatch, app):
     assert fresh.experiments_list.active() == "/data/b"
 
 
-def test_single_config_button_label_and_no_params_only_handler(monkeypatch, app):
+def test_config_split_into_params_preset_and_series_handlers(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
-    # One save lives at the top now; the params-only handler is gone (P0b).
-    assert widget.save_config_btn.text() == "Save"
-    assert not hasattr(widget, "_save_parameters")
+    # Two config files now: the params preset lives in the title bar, the
+    # experiment series in the list header. The old unified handler is gone.
+    assert widget.save_params_btn.text() == "Save params"
+    assert widget.load_params_btn.text() == "Load params"
+    assert widget.experiments_list.save_series_btn.text() == "Save"
+    assert widget.experiments_list.load_series_btn.text() == "Open"
+    assert not hasattr(widget, "_save_config")
+    assert not hasattr(widget, "_load_config")
 
 
-def test_save_config_writes_table_driven_yaml(monkeypatch, app, tmp_path):
+def test_save_params_writes_knobs_without_paths(monkeypatch, app, tmp_path):
+    import yaml
+
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.add_folders(
+        ["/data/a"], input_files={"beads": "beads.tif"}, columns={"day": "1"}
+    )
+    out = tmp_path / "tfm_params.yaml"
+    monkeypatch.setattr(
+        _widget.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), ""))
+    )
+    monkeypatch.setattr(_widget.QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    widget._save_params()
+
+    preset = yaml.safe_load(out.read_text())
+    assert "parameters" in preset
+    assert "young_modulus" in preset["parameters"]
+    # The preset is a portable recipe: no dataset paths leak into it.
+    assert "root_folders" not in preset
+    assert "experiment_metadata" not in preset
+
+
+def test_load_params_applies_knobs(monkeypatch, app, tmp_path):
+    import yaml
+
+    path = tmp_path / "tfm_params.yaml"
+    path.write_text(yaml.safe_dump({"format_version": 1, "parameters": {"young_modulus": 9.0}}))
+
+    widget = _stub_main_widget(monkeypatch)
+    monkeypatch.setattr(
+        _widget.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(path), ""))
+    )
+    monkeypatch.setattr(_widget.QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    widget._load_params()
+
+    assert widget.parameter_manager.get_parameter("young_modulus") == 9.0
+
+
+def test_save_series_writes_dataset_without_knobs(monkeypatch, app, tmp_path):
     import yaml
 
     widget = _stub_main_widget(monkeypatch)
@@ -1532,46 +1577,51 @@ def test_save_config_writes_table_driven_yaml(monkeypatch, app, tmp_path):
         input_files={"beads": "beads.tif", "reference": "reference.tif"},
         columns={"day": "1"},
     )
-    out = tmp_path / "run.yaml"
+    out = tmp_path / "tfm_experiment_series.yaml"
     monkeypatch.setattr(
         _widget.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), ""))
     )
     monkeypatch.setattr(_widget.QMessageBox, "information", staticmethod(lambda *a, **k: None))
 
-    widget._save_config()
+    widget._save_series()
 
     config = yaml.safe_load(out.read_text())
     assert config["root_folders"] == ["/data/a", "/data/b"]
     assert config["experiment_metadata"]["/data/a"] == {"day": "1"}
     assert config["input_files"]["beads"] == "beads.tif"
-    assert "parameters" in config
+    assert "run_options" in config
+    # Analysis knobs stay out of the series file — they are a separate preset.
+    assert "parameters" not in config
 
 
-def test_load_config_rebuilds_the_experiments_table(monkeypatch, app, tmp_path):
+def test_load_series_rebuilds_table_without_touching_params(monkeypatch, app, tmp_path):
     import yaml
 
     config = {
+        "format_version": 1,
         "root_folders": ["/data/x", "/data/y"],
         "input_files": {"beads": "beads.tif", "reference": "reference.tif"},
-        "parameters": {"young_modulus": 9.0},
         "experiment_metadata": {"/data/x": {"day": "1"}, "/data/y": {"day": "2"}},
+        "run_options": {"disabled_stages": [], "processed_root": None},
     }
-    path = tmp_path / "run.yaml"
+    path = tmp_path / "tfm_experiment_series.yaml"
     path.write_text(yaml.safe_dump(config))
 
     widget = _stub_main_widget(monkeypatch)
+    baseline = widget.parameter_manager.get_parameter("young_modulus")
     monkeypatch.setattr(
         _widget.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(path), ""))
     )
     monkeypatch.setattr(_widget.QMessageBox, "information", staticmethod(lambda *a, **k: None))
 
-    widget._load_config()
+    widget._load_series()
 
     assert widget.experiments_list.experiments() == ["/data/x", "/data/y"]
     records = widget.experiments_list.experiment_records()
     assert records[0]["columns"] == {"day": "1"}
     assert records[1]["columns"] == {"day": "2"}
-    assert widget.parameter_manager.get_parameter("young_modulus") == 9.0
+    # Loading a series leaves the knobs untouched.
+    assert widget.parameter_manager.get_parameter("young_modulus") == baseline
 
 
 class _FakeLayer:
