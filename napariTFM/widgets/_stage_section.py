@@ -6,6 +6,7 @@ from qtpy.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from napariTFM.widgets._ui_style import (
     COMPACT_SPACING,
+    TINY_MARGIN,
     make_stage_action_button,
     stage_accent,
     stage_action_button_icon,
@@ -66,7 +67,10 @@ class StageSection(QWidget):
         body = QWidget()
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(COMPACT_SPACING)
+        # No uniform inter-row spacing: a collapsed param panel and an empty body
+        # must contribute zero height (and zero gap) so sections sit flush. The
+        # only deliberate gap is a hair under the pill, added explicitly below.
+        layout.setSpacing(0)
         body.setLayout(layout)
 
         outer.addWidget(self.spine)
@@ -173,8 +177,10 @@ class StageSection(QWidget):
 
         layout.addLayout(header_layout)
         # The file-status dot row sits directly under the header, always visible
-        # (no toggle): it IS the data inspector now.
+        # (no toggle): it IS the data inspector now. A hair of breathing room
+        # separates the pill from the dots; everything below collapses flush.
         if self.status_panel is not None:
+            layout.addSpacing(TINY_MARGIN)
             layout.addWidget(self.status_panel)
         if self._param_section is not None:
             layout.addWidget(self._param_section)
@@ -306,3 +312,6 @@ class StageSection(QWidget):
     def _set_parameter_panel_expanded(self, expanded: bool):
         if self._param_section is not None:
             self._param_section._toggle.setChecked(expanded)
+            # Hide the whole section when collapsed so it reserves no height or
+            # gap — collapsing the inner frame alone leaves a dead stub.
+            self._param_section.setVisible(expanded)

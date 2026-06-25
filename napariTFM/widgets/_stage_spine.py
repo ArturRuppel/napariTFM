@@ -57,7 +57,12 @@ class StageSpine(QWidget):
         self._accent_below = accent
         self._status = status
         self.setFixedWidth(self.GUTTER_WIDTH)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        # Fixed width, but vertically the spine only *follows* its stage's height
+        # rather than expanding to grab free space — otherwise each section
+        # balloons and the stages drift apart. The box layout still stretches it
+        # to fill the row, so its painted segment stays full-height and the rail
+        # remains continuous.
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
 
     def set_status(self, status: str) -> None:
         self._status = status
