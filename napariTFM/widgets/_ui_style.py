@@ -114,10 +114,10 @@ ACTION_GLYPHS = {
 # File-status dot colours: a stage's input/output artifacts read red (missing)
 # → green (present, in cache or on disk), with a quiet grey for absent optionals.
 FILE_STATUS_COLORS = {
-    "present": "#3fb950",  # green — value is in cache or a file is on disk
-    "missing": "#d62828",  # red — a required artifact is absent
-    "optional": "#6b7484",  # grey — an optional artifact is absent (no alarm)
-    "error": "#e3b341",  # amber — the artifact failed to load
+    "present": "#5e9468",  # muted green — value is in cache or a file is on disk
+    "missing": "#b05751",  # muted brick — a required artifact is absent
+    "optional": "#5b626d",  # quiet grey — an optional artifact is absent (no alarm)
+    "error": "#c2a04e",  # muted amber — the artifact failed to load
 }
 
 

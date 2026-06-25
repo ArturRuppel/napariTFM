@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QHBoxLayout, QLabel, QToolButton, QWidget
+from qtpy.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QToolButton, QWidget
 
 from napariTFM.widgets._stage_data_status import (
     DataArtifactSpec,
@@ -33,13 +33,13 @@ _DOT_RADIUS = DOT_SIZE // 2
 
 
 def _dot_style(color: str, enabled: bool) -> str:
-    border = "border: 1px solid rgba(0, 0, 0, 90);"
+    border = "border: 1px solid rgba(0, 0, 0, 60);"
     base = (
         f"QToolButton {{ background-color: {color}; {border} "
         f"border-radius: {_DOT_RADIUS}px; }}"
     )
     if enabled:
-        base += "QToolButton:hover { border: 1px solid white; }"
+        base += "QToolButton:hover { border: 1px solid rgba(255, 255, 255, 110); }"
     return base
 
 
@@ -58,8 +58,11 @@ class StageFileStatusRow(QWidget):
         self.refresh()
 
     def _setup_ui(self) -> None:
+        # Fixed height so the parent layout never stretches the row and floats the
+        # dots in dead space below the header pill — keep them tucked under it.
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QHBoxLayout()
-        layout.setContentsMargins(18, 0, 0, 2)
+        layout.setContentsMargins(0, 0, 0, 2)
         layout.setSpacing(COMPACT_SPACING)
         self.setLayout(layout)
 

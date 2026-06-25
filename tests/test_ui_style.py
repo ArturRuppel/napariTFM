@@ -83,13 +83,14 @@ def test_file_status_color_maps_presence_to_red_green():
     from napariTFM.widgets._ui_style import file_status_color
 
     # Present (in cache or on disk) reads green; required-and-absent reads red.
-    assert file_status_color("present") == "#3fb950"
-    assert file_status_color("missing") == "#d62828"
+    # The hues are muted (quiet, not alarming) but stay clearly red vs green.
+    assert file_status_color("present") == "#5e9468"
+    assert file_status_color("missing") == "#b05751"
     # Optional-and-absent is a quiet grey, not an alarming red.
-    assert file_status_color("optional") == "#6b7484"
-    assert file_status_color("error") == "#e3b341"
+    assert file_status_color("optional") == "#5b626d"
+    assert file_status_color("error") == "#c2a04e"
     # Unknown states fall back to the optional grey rather than crashing.
-    assert file_status_color("nonsense") == "#6b7484"
+    assert file_status_color("nonsense") == "#5b626d"
 
 
 def test_file_status_state_classifies_availability():
