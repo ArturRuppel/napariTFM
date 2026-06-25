@@ -37,6 +37,18 @@ def test_stage_accent_samples_active_ramp_in_pipeline_order():
     assert len(set(accents)) == len(accents)
 
 
+def test_cividis_stages_match_cellflow_ordered_stops():
+    """The Cividis spine reuses CellFlow's five ordered cividis stops, mapped
+    project(yellow)→stress(dark blue) — project first, stress analysis last."""
+    from napariTFM.widgets import _ui_style
+    _ui_style.set_active_theme("Cividis")
+    assert _ui_style.stage_accent("project") == "#d6c35d"
+    assert _ui_style.stage_accent("preprocessing") == "#a79d73"
+    assert _ui_style.stage_accent("displacement") == "#7d7c78"
+    assert _ui_style.stage_accent("force") == "#555c6d"
+    assert _ui_style.stage_accent("stress") == "#243c6e"
+
+
 def test_stage_accent_falls_back_to_inputs_for_unknown_key():
     assert stage_accent("nonexistent_stage") == stage_accent("inputs")
 
@@ -50,13 +62,43 @@ def test_muted_stage_accent_reduces_saturation():
 
 
 def test_muted_stage_accent_preserves_hue_family():
-    muted = muted_stage_accent("preprocessing").lstrip("#")
-    r, g, b = int(muted[0:2], 16), int(muted[2:4], 16), int(muted[4:6], 16)
-    assert b > r
+    import colorsys
+
+    def hue(hex_str: str) -> float:
+        c = hex_str.lstrip("#")
+        r, g, b = (int(c[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+        return colorsys.rgb_to_hls(r, g, b)[0]
+
+    full = stage_accent("preprocessing")
+    muted = muted_stage_accent("preprocessing")
+    # Muting drops saturation/lightness but keeps the hue (the colour family).
+    assert abs(hue(full) - hue(muted)) < 0.02
 
 
 def test_muted_stage_accent_falls_back_for_unknown_key():
     assert muted_stage_accent("nonexistent") == muted_stage_accent("inputs")
+
+
+def test_file_status_color_maps_presence_to_red_green():
+    from napariTFM.widgets._ui_style import file_status_color
+
+    # Present (in cache or on disk) reads green; required-and-absent reads red.
+    assert file_status_color("present") == "#3fb950"
+    assert file_status_color("missing") == "#d62828"
+    # Optional-and-absent is a quiet grey, not an alarming red.
+    assert file_status_color("optional") == "#6b7484"
+    assert file_status_color("error") == "#e3b341"
+    # Unknown states fall back to the optional grey rather than crashing.
+    assert file_status_color("nonsense") == "#6b7484"
+
+
+def test_file_status_state_classifies_availability():
+    from napariTFM.widgets._ui_style import file_status_state
+
+    assert file_status_state(available=True, required=True, error=False) == "present"
+    assert file_status_state(available=False, required=True, error=False) == "missing"
+    assert file_status_state(available=False, required=False, error=False) == "optional"
+    assert file_status_state(available=True, required=True, error=True) == "error"
 
 
 def test_caption_style_uses_muted_text_color():

@@ -1,131 +1,76 @@
 from types import SimpleNamespace
 
-import pytest
-from qtpy.QtWidgets import QApplication
-
-from napariTFM.widgets._stage_data_status import DataArtifactSpec, _ArtifactRow
-
-
-@pytest.fixture
-def app():
-    return QApplication.instance() or QApplication([])
+from napariTFM.widgets._stage_data_status import (
+    DataArtifactSpec,
+    artifact_info_text,
+    compute_stage_status,
+)
 
 
-def test_row_shows_check_glyph_when_available(app):
-    spec = DataArtifactSpec("foo", "Foo artifact", "foo", "output")
-    row = _ArtifactRow(spec)
+class _DM:
+    """Fake data manager: one artifact, with a fixed availability + state."""
 
-    row.refresh(available=True, info_text="512x512")
+    def __init__(self, available=False, state=None):
+        self._available = available
+        self._state = state
 
-    assert row.glyph_label.text() == "✓"
-    assert row.info_label.text() == "512x512"
+    def artifact_available(self, key):
+        return self._available
 
-
-def test_row_shows_cross_glyph_when_required_missing(app):
-    spec = DataArtifactSpec("foo", "Foo", "foo", "input", required=True)
-    row = _ArtifactRow(spec)
-
-    row.refresh(available=False, info_text="Missing")
-
-    assert row.glyph_label.text() == "✗"
+    def get_artifact(self, key):
+        return self._state
 
 
-def test_row_shows_circle_glyph_when_optional_missing(app):
-    spec = DataArtifactSpec("foo", "Foo", "foo", "input", required=False)
-    row = _ArtifactRow(spec)
-
-    row.refresh(available=False, info_text="Optional")
-
-    assert row.glyph_label.text() == "○"
+def _spec(role="output", required=True):
+    return DataArtifactSpec("foo", "Foo", "foo", role, required=required)
 
 
-def test_output_row_with_on_view_and_on_action_shows_both_buttons(app):
-    views = []
-    actions = []
-    spec = DataArtifactSpec(
-        "foo",
-        "Foo",
-        "foo",
-        "output",
-        on_view=lambda: views.append(True),
-        on_action=lambda: actions.append(True),
-    )
-    row = _ArtifactRow(spec)
-    row.refresh(available=True, info_text="ok")
-
-    assert row.view_btn is not None
-    assert row.action_btn is not None
-    row.view_btn.click()
-    row.action_btn.click()
-    assert views == [True]
-    assert actions == [True]
+def test_info_text_reports_array_shape_when_loaded():
+    state = SimpleNamespace(value=SimpleNamespace(shape=(512, 512)), dirty=False, path=None, error="")
+    assert artifact_info_text(_DM(available=True, state=state), _spec()) == "512×512"
 
 
-def test_input_row_missing_hides_view_button(app):
-    spec = DataArtifactSpec("foo", "Foo", "foo", "input", on_action=lambda: None)
-    row = _ArtifactRow(spec)
-    row.refresh(available=False, info_text="Missing")
-
-    assert row.view_btn is None or not row.view_btn.isVisible()
-    assert row.action_btn is not None
-
-
-def test_row_with_no_callables_has_no_action_buttons(app):
-    spec = DataArtifactSpec("foo", "Foo", "foo", "output")
-    row = _ArtifactRow(spec)
-    row.refresh(available=True, info_text="ok")
-
-    assert row.view_btn is None
-    assert row.action_btn is None
-
-
-def test_row_appends_unsaved_when_artifact_is_dirty(app):
-    spec = DataArtifactSpec("foo", "Foo", "foo", "output")
-    row = _ArtifactRow(spec)
+def test_info_text_flags_cache_unsaved_when_dirty():
+    # A cache-only (unsaved) value is what run-all clobbers — say so plainly.
     state = SimpleNamespace(value=object(), dirty=True, path=None, error="")
-
-    row.refresh_state(state, info_text="Loaded")
-
-    assert row.glyph_label.text() == "✓"
-    assert row.info_label.text() == "Loaded · Unsaved"
+    assert artifact_info_text(_DM(available=True, state=state), _spec()) == "Loaded · cache (unsaved)"
 
 
-def test_row_appends_saved_filename_when_path_exists(app, tmp_path):
-    spec = DataArtifactSpec("foo", "Foo", "foo", "output")
-    row = _ArtifactRow(spec)
+def test_info_text_names_the_file_on_disk(tmp_path):
     path = tmp_path / "foo.npy"
     state = SimpleNamespace(value=object(), dirty=False, path=path, error="")
-
-    row.refresh_state(state, info_text="Loaded")
-
-    assert row.info_label.text() == "Loaded · foo.npy"
-    assert row.info_label.toolTip() == str(path)
+    assert artifact_info_text(_DM(available=True, state=state), _spec()) == "Loaded · foo.npy"
 
 
-def test_row_shows_error_glyph_and_message(app):
-    spec = DataArtifactSpec("foo", "Foo", "foo", "output")
-    row = _ArtifactRow(spec)
+def test_info_text_surfaces_error():
     state = SimpleNamespace(value=object(), dirty=True, path=None, error="save failed")
-
-    row.refresh_state(state, info_text="Loaded")
-
-    assert row.glyph_label.text() == "⚠"
-    assert row.info_label.text() == "save failed"
+    assert artifact_info_text(_DM(available=True, state=state), _spec()) == "save failed"
 
 
-def test_row_shows_available_glyph_when_on_disk_without_value(app):
-    from napariTFM.widgets._ui_style import STATUS_GLYPHS
+def test_info_text_saved_when_on_disk_without_value():
+    state = SimpleNamespace(value=None, dirty=False, path=None, error="")
+    assert artifact_info_text(_DM(available=True, state=state), _spec()) == "Saved"
 
-    spec = DataArtifactSpec("foo", "Foo", "foo", "output")
-    row = _ArtifactRow(spec)
 
-    class _State:
-        value = None
-        error = ""
-        path = None
-        dirty = False
+def test_info_text_missing_vs_optional():
+    assert artifact_info_text(_DM(available=False), _spec(role="input", required=True)) == "Missing"
+    assert artifact_info_text(_DM(available=False), _spec(role="input", required=False)) == "Optional"
 
-    row.refresh_state(_State(), info_text="Saved", available=True)
 
-    assert row.glyph_label.text() == STATUS_GLYPHS["available"]
-    assert "Saved" in row.info_label.text()
+def test_compute_stage_status_tracks_inputs_and_outputs():
+    inp = DataArtifactSpec("in", "In", "in", "input")
+    out = DataArtifactSpec("out", "Out", "out", "output")
+
+    class _Multi:
+        def __init__(self, present):
+            self._present = set(present)
+
+        def artifact_available(self, key):
+            return key in self._present
+
+        def get_artifact(self, key):
+            return None
+
+    assert compute_stage_status(_Multi([]), [inp, out]) == "not_started"
+    assert compute_stage_status(_Multi(["in"]), [inp, out]) == "ready"
+    assert compute_stage_status(_Multi(["in", "out"]), [inp, out]) == "done"

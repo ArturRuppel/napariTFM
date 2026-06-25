@@ -87,6 +87,18 @@ def test_preprocessing_exposes_action_contract(app, preprocessing_widget):
     assert callable(w.cancel_action)
 
 
+def test_load_active_layer_delegates_to_controller(app, preprocessing_widget):
+    # The file-status dot row (shell) calls widget.load_active_layer(role) to
+    # assign the active napari layer; it must delegate to the controller (which
+    # owns the real implementation), like the displacement widget does.
+    calls = []
+    preprocessing_widget.controller.load_active_layer = lambda role: calls.append(role)
+
+    preprocessing_widget.load_active_layer("reference")
+
+    assert calls == ["reference"]
+
+
 def test_no_per_stage_status_label(app, preprocessing_widget):
     # P2: the shell's one global status label replaces per-stage labels.
     assert not hasattr(preprocessing_widget, "status_label")

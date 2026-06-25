@@ -475,6 +475,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
     def cancel_action(self):
         self.controller.cancel_all_operations()
 
+    def load_active_layer(self, data_type: str):
+        """Delegate input-layer loading to the controller (called by the shell)."""
+        self.controller.load_active_layer(data_type)
+
     # endregion
 
     # region === State Management

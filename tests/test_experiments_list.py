@@ -417,3 +417,118 @@ def test_masks_field_blank_is_dropped_from_config(app):
     widget = ExperimentsList()
     widget.file_name_inputs["masks"].setText("")
     assert "masks" not in widget.input_file_config()
+
+
+# ── styling fidelity (mockup v2 aggregation layer) ──────────────────────
+from qtpy.QtGui import QFont
+from napariTFM.widgets._ui_style import experiment_status_color
+
+
+def test_experiment_row_name_and_chip_use_the_standard_app_font(app):
+    """Rows inherit napari's font — no custom monospace override remains."""
+    row = ExperimentRow("/data/Ctrl/pos_00")
+    assert row._name_label.font().family() == QFont().family()
+    assert row._chip.font().family() == QFont().family()
+
+
+def test_experiment_row_chip_is_colored_by_overall_status(app):
+    row = ExperimentRow("/data/Ctrl/pos_00")
+    row.set_stage_statuses({"preprocessing": "done", "displacement": "running",
+                            "force": "not_started", "stress": "off"})
+    assert row._chip.text() == "run"
+    assert experiment_status_color("run") in row._chip.styleSheet()
+
+    row.set_stage_statuses({"preprocessing": "done", "displacement": "done",
+                            "force": "done", "stress": "off"})
+    assert row._chip.text() == "done"
+    assert experiment_status_color("done") in row._chip.styleSheet()
+
+
+def test_experiment_row_selected_lifts_its_background(app):
+    row = ExperimentRow("/data/Ctrl/pos_00")
+    row.set_selected(False)
+    assert "transparent" in row.styleSheet()
+    row.set_selected(True)
+    # selected rows raise onto a translucent white surface
+    assert "rgba(255, 255, 255" in row.styleSheet()
+
+
+# ── project-level config relocated into the aggregation layer ────────────
+from qtpy.QtCore import QObject, Signal as _Signal
+
+
+class _StubPM(QObject):
+    parameter_changed = _Signal(str, object)
+
+    def __init__(self):
+        super().__init__()
+        self._values = {"pixel_size": 0.1, "frame_interval": 1.0}
+        self.ui_writes = []
+
+    def get_ui_parameter(self, name):
+        return self._values[name]
+
+    def set_ui_parameter(self, name, value):
+        self.ui_writes.append((name, value))
+        self._values[name] = value
+        self.parameter_changed.emit(name, value)
+
+
+class _StubDM:
+    def __init__(self):
+        self.output_dir = None
+        self._cbs = []
+
+    def add_change_callback(self, cb):
+        self._cbs.append(cb)
+
+    def set_output_dir(self, path):
+        self.output_dir = Path(path)
+        for cb in self._cbs:
+            cb()
+
+
+def test_experiments_list_owns_calibration_controls(app):
+    widget = ExperimentsList(parameter_manager=_StubPM())
+    assert "pixel_size" in widget.calibration_controls
+    assert "frame_interval" in widget.calibration_controls
+    assert float(widget.calibration_controls["pixel_size"].text()) == 0.1
+
+
+def test_calibration_field_writes_through_ui_parameter_api(app):
+    pm = _StubPM()
+    widget = ExperimentsList(parameter_manager=pm)
+    field = widget.calibration_controls["pixel_size"]
+    field.setText("0.108")
+    field.editingFinished.emit()
+    assert ("pixel_size", 0.108) in pm.ui_writes
+
+
+def test_calibration_field_syncs_from_parameter_changed(app):
+    pm = _StubPM()
+    widget = ExperimentsList(parameter_manager=pm)
+    pm.set_ui_parameter("frame_interval", 2.5)
+    assert float(widget.calibration_controls["frame_interval"].text()) == 2.5
+
+
+def test_experiments_list_tracks_output_directory(app, tmp_path):
+    dm = _StubDM()
+    widget = ExperimentsList(data_manager=dm)
+    assert widget.output_dir_label.text() == "No output directory"
+    dm.set_output_dir(tmp_path)
+    assert widget.output_dir_label.text() == str(tmp_path)
+
+
+def test_apply_output_dir_sets_manager_and_emits(app, tmp_path):
+    dm = _StubDM()
+    widget = ExperimentsList(data_manager=dm)
+    seen = []
+    widget.output_dir_changed.connect(lambda: seen.append(True))
+    widget._apply_output_dir(str(tmp_path))
+    assert dm.output_dir == Path(tmp_path)
+    assert seen == [True]
+
+
+def test_output_dir_button_has_expected_object_name(app):
+    widget = ExperimentsList(data_manager=_StubDM())
+    assert widget.choose_output_dir_btn.objectName() == "experiments_output_dir_button"

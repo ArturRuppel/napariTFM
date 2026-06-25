@@ -88,3 +88,6 @@ Thumbs.db
 
 # Experimentation / scratch work — not part of the package
 _dev/
+
+# Serena MCP tool scaffolding
+.serena/

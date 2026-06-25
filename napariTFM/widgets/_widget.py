@@ -18,12 +18,12 @@ from napariTFM.widgets.preprocessing_widget import PreprocessingWidget
 from napariTFM.widgets.displacement_analysis_widget import DisplacementAnalysisWidget
 from napariTFM.widgets.fttc_widget import FTTCWidget
 from napariTFM.widgets.msm_widget import MSMWidget
-from napariTFM.widgets._stage_data_status import DataArtifactSpec, StageDataStatusPanel
+from napariTFM.widgets._stage_data_status import DataArtifactSpec
+from napariTFM.widgets._stage_file_status import StageFileStatusRow
 from napariTFM.widgets._stage_section import StageSection
 from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, section_label_style, TIGHT_SPACING
 from napariTFM.widgets._param_controls import dslider, islider
 from superqt import QLabeledDoubleSlider, QLabeledSlider
-from napariTFM.widgets._project_section import ProjectSection
 from napariTFM.widgets._experiments_list import ExperimentsList, PIPELINE_STAGES
 from napariTFM.widgets._run_config import build_run_config
 from napariTFM.backend.batch_analysis import BatchAnalysis
@@ -388,21 +388,29 @@ class napariTFMWidget(QWidget):
         container_layout.setContentsMargins(0, 0, 0, 0)
         container.setLayout(container_layout)
 
-        # Add title
+        # Title row: brand + a compact config toolbar (Save / Load / Reset).
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
         title = QLabel("napariTFM")
         title.setStyleSheet(title_style())
-        container_layout.addWidget(title)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        self.save_config_btn = self._make_toolbar_button("Save", "Save config")
+        self.load_config_btn = self._make_toolbar_button("Load", "Load config")
+        self.reset_params_btn = self._make_toolbar_button("Reset", "Reset parameters")
+        for _btn in (self.save_config_btn, self.load_config_btn, self.reset_params_btn):
+            title_row.addWidget(_btn)
+        container_layout.addLayout(title_row)
 
         # Initialize managers
         self.data_manager = DataManager()
         self.parameter_manager = ParameterManager()
         self.visualization_manager = VisualizationManager(self.viewer, self.data_manager)
 
-        self.project_section = ProjectSection(self.parameter_manager, self.data_manager)
-        container_layout.addWidget(self.project_section)
-
         self.experiments_list = ExperimentsList(
             status_fn=self._experiment_stage_status,
+            parameter_manager=self.parameter_manager,
+            data_manager=self.data_manager,
         )
         self.experiments_list.active_changed.connect(
             self._on_active_experiment_changed
@@ -427,16 +435,12 @@ class napariTFMWidget(QWidget):
 
         self._stage_parameter_panels_by_key = self._create_stage_parameter_panels()
 
-        # Wire up the Project section's I/O buttons (replaces _create_general_group).
-        self.save_config_btn = self.project_section.save_config_btn
-        self.load_config_btn = self.project_section.load_config_btn
-        self.reset_params_btn = self.project_section.reset_params_btn
-        self.clear_data_btn = self.project_section.clear_data_btn
+        # Wire the title-bar config toolbar; output dir now lives in the
+        # experiments (aggregation) layer.
         self.save_config_btn.clicked.connect(self._save_config)
         self.load_config_btn.clicked.connect(self._load_config)
         self.reset_params_btn.clicked.connect(self._reset_parameters)
-        self.clear_data_btn.clicked.connect(self._clear_all_data)
-        self.project_section.body.output_dir_changed.connect(self._reconcile_to_output_dir)
+        self.experiments_list.output_dir_changed.connect(self._reconcile_to_output_dir)
 
         # Initialize all widgets with parameter_manager
         self.preprocessing_widget = PreprocessingWidget(
@@ -499,7 +503,7 @@ class napariTFMWidget(QWidget):
             self.msm_widget,
         )
         self._stage_status_panels_by_key = {
-            key: StageDataStatusPanel(key, self.data_manager, artifacts)
+            key: StageFileStatusRow(key, self.data_manager, artifacts)
             for key, artifacts in stage_data_artifacts.items()
         }
 
@@ -575,7 +579,7 @@ class napariTFMWidget(QWidget):
             ),
         }
         self._stage_sections = list(self._stage_sections_by_key.values())
-        self._apply_spine_neighbours()
+        self._apply_stage_accents()
         for key, section in self._stage_sections_by_key.items():
             if section.enable_btn is not None:
                 section.enabled_changed.connect(
@@ -602,6 +606,14 @@ class napariTFMWidget(QWidget):
         self.connect_signals()
         self.data_manager.add_change_callback(self.refresh)
         self.refresh_stage_statuses()
+
+    def _make_toolbar_button(self, text: str, tooltip: str) -> QToolButton:
+        """A compact auto-raised text button for the title-bar config toolbar."""
+        button = QToolButton()
+        button.setText(text)
+        button.setToolTip(tooltip)
+        button.setAutoRaise(True)
+        return button
 
     def _setup_theme_selector(self, layout):
         footer = QHBoxLayout()
@@ -630,11 +642,17 @@ class napariTFMWidget(QWidget):
 
     def _on_theme_selected(self, name: str):
         set_active_theme(name)
+        self._apply_stage_accents()
+        self._sync_theme_menu_state()
+
+    def _apply_stage_accents(self):
+        """Accent each stage by its pipeline key (not its title slug), then
+        blend neighbours into the spine. Titles like "Force Analysis" don't
+        slugify to a ramp key, so keying off the dict is what keeps the rail a
+        real gradient instead of collapsing to the fallback colour."""
         for key, section in self._stage_sections_by_key.items():
             section.set_accent(stage_accent(key))
-        self.project_section.set_accent(stage_accent("project"))
         self._apply_spine_neighbours()
-        self._sync_theme_menu_state()
 
     def _apply_spine_neighbours(self):
         """Give each stage's spine its neighbours' accents so the rail blends."""
@@ -1011,28 +1029,4 @@ class napariTFMWidget(QWidget):
         elif param_name.startswith("force_"):
             self.force_widget._update_ui_state()
 
-    def _clear_all_data(self):
-        """
-        Clear all data and reset the widget to its initial state.
-        This includes clearing the data manager and resetting UI elements.
-        """
-        reply = QMessageBox.question(
-            self,
-            "Confirm",
-            "Are you sure you want to clear all data? This action cannot be undone.",
-            QMessageBox.Yes | QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
-            try:
-                # Clear data manager
-                self.data_manager.__init__()
-                self.data_manager.add_change_callback(self.refresh)
-                self.refresh()
-
-                logger.info("All data cleared successfully")
-
-            except Exception as e:
-                logger.error(f"Error clearing data: {str(e)}")
-                QMessageBox.critical(self, "Error", f"Failed to clear data: {str(e)}")
 

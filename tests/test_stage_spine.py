@@ -59,6 +59,28 @@ def test_spine_has_fixed_gutter_width(app):
     assert spine.width() == StageSpine.GUTTER_WIDTH
 
 
+def test_spine_gradient_stops_span_neighbour_midpoints(app):
+    """Each segment runs from the above-midpoint to the below-midpoint, so the
+    whole rail reads as one uniform gradient with no jump at a boundary."""
+    spine = StageSpine("#22a884")
+    spine.set_accents("#22a884", above="#2a788e", below="#7ad151")
+    stops = spine._gradient_stops()
+    assert stops[0][0] == 0.0 and stops[-1][0] == 1.0
+    # top stop = midpoint(above, own); bottom stop = midpoint(own, below).
+    assert stops[0][1].name() == "#269089"   # mix(#2a788e, #22a884)
+    assert stops[-1][1].name() == "#4ebc6a"  # mix(#22a884, #7ad151)
+
+
+def test_spine_gradient_is_continuous_across_a_boundary(app):
+    """The bottom colour of an upper stage equals the top colour of the stage
+    below it, so the gradient does not break at the node."""
+    upper = StageSpine("#22a884")
+    upper.set_accents("#22a884", above="#2a788e", below="#7ad151")
+    lower = StageSpine("#7ad151")
+    lower.set_accents("#7ad151", above="#22a884", below="#fde725")
+    assert upper._gradient_stops()[-1][1].name() == lower._gradient_stops()[0][1].name()
+
+
 def test_stage_section_owns_a_spine_and_forwards_status(app):
     from napariTFM.widgets._stage_section import StageSection
     from qtpy.QtWidgets import QLabel

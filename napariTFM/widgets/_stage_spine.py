@@ -14,6 +14,16 @@ _DIM = "#6b7484"
 _OFF = "#3c424c"  # recessed: a stage deliberately turned off (not "missing")
 
 
+def _mix(hex_a: str, hex_b: str) -> QColor:
+    """The colour halfway between two hex values (the rail's boundary tint)."""
+    a, b = QColor(hex_a), QColor(hex_b)
+    return QColor(
+        (a.red() + b.red()) // 2,
+        (a.green() + b.green()) // 2,
+        (a.blue() + b.blue()) // 2,
+    )
+
+
 def _node_style(status: str, accent: str) -> Tuple[Optional[QColor], QColor]:
     """Return (fill, ring) for a node; fill None means a hollow ring."""
     if status == "done":
@@ -59,6 +69,18 @@ class StageSpine(QWidget):
         self._accent_below = below or accent
         self.update()
 
+    def _gradient_stops(self) -> list[Tuple[float, QColor]]:
+        """Two stops that make this segment a slice of one uniform rail.
+
+        The top stop is the colour midway between this stage and the one above;
+        the bottom stop is midway to the stage below. Because neighbouring
+        segments share those midpoints, the rail is continuous across nodes
+        instead of jumping — a single gradient, drawn in pieces.
+        """
+        top = _mix(self._accent_above, self._accent)
+        bottom = _mix(self._accent, self._accent_below)
+        return [(0.0, top), (1.0, bottom)]
+
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -66,9 +88,8 @@ class StageSpine(QWidget):
         h = self.height()
 
         gradient = QLinearGradient(0.0, 0.0, 0.0, float(h))
-        gradient.setColorAt(0.0, QColor(self._accent_above))
-        gradient.setColorAt(0.5, QColor(self._accent))
-        gradient.setColorAt(1.0, QColor(self._accent_below))
+        for position, color in self._gradient_stops():
+            gradient.setColorAt(position, color)
         pen = QPen(QBrush(gradient), self.LINE_W)
         pen.setCapStyle(Qt.FlatCap)
         # A disabled stage recedes: dim and dash its segment of the rail so the

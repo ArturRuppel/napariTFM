@@ -100,11 +100,6 @@ class StageSection(QWidget):
             self.extra_buttons[key] = button
             self._extra_button_icons[button] = icon_name
 
-        self.files_btn = self._create_glyph_button(
-            "files", "🔍", f"Show {title} data", "files", checkable=True
-        )
-        self.files_btn.toggled.connect(self._set_status_panel_expanded)
-
         self.params_btn = self._create_glyph_button(
             "params", "⚙", f"Toggle {title} parameters", "params", checkable=True
         )
@@ -136,7 +131,6 @@ class StageSection(QWidget):
         extra_button_list = list(self.extra_buttons.values())
         self._action_buttons = [
             *extra_button_list,
-            self.files_btn,
             self.params_btn,
             self.preview_button,
             self.viz_btn,
@@ -144,7 +138,6 @@ class StageSection(QWidget):
         ]
         # Static-icon buttons re-tint on theme change; run/cancel re-tints by status.
         self._static_button_icons = {
-            self.files_btn: "files",
             self.params_btn: "params",
             self.preview_button: "preview",
             self.viz_btn: "viz",
@@ -163,14 +156,6 @@ class StageSection(QWidget):
             self._static_button_icons[self.enable_btn] = "power"
             header_layout.insertWidget(0, self.enable_btn)
 
-        if self.status_panel is not None:
-            self._status_section = CollapsibleSection(
-                "Data", self.status_panel, expanded=False, accent_color=self._accent
-            )
-            self._status_section.set_header_visible(False)
-        else:
-            self._status_section = None
-
         if self.parameter_panel is not None:
             self._param_section = CollapsibleSection(
                 self._title, self.parameter_panel, expanded=False, accent_color=self._accent
@@ -187,8 +172,10 @@ class StageSection(QWidget):
         content_layout.addWidget(child)
 
         layout.addLayout(header_layout)
-        if self._status_section is not None:
-            layout.addWidget(self._status_section)
+        # The file-status dot row sits directly under the header, always visible
+        # (no toggle): it IS the data inspector now.
+        if self.status_panel is not None:
+            layout.addWidget(self.status_panel)
         if self._param_section is not None:
             layout.addWidget(self._param_section)
         layout.addWidget(self._content)
@@ -199,7 +186,6 @@ class StageSection(QWidget):
 
         self.set_status(status)
 
-        self.files_btn.setVisible(self.status_panel is not None)
         has_panel = self._param_section is not None
         self.params_btn.setVisible(has_panel)
         self.params_btn.setChecked(parameters_expanded if has_panel else False)
@@ -289,8 +275,6 @@ class StageSection(QWidget):
         self.run_cancel_btn.setIcon(stage_action_button_icon(run_name, accent))
         if self._param_section is not None:
             self._param_section.set_accent_color(accent)
-        if self._status_section is not None:
-            self._status_section.set_accent_color(accent)
         self.spine.set_accents(accent, self._accent_above, self._accent_below)
 
     def set_accents(self, accent: str, above: str | None = None, below: str | None = None) -> None:
@@ -322,10 +306,3 @@ class StageSection(QWidget):
     def _set_parameter_panel_expanded(self, expanded: bool):
         if self._param_section is not None:
             self._param_section._toggle.setChecked(expanded)
-
-    def _set_status_panel_expanded(self, expanded: bool):
-        if self._status_section is not None:
-            self._status_section._toggle.setChecked(expanded)
-        self.files_btn.setToolTip(
-            f"{'Hide' if expanded else 'Show'} {self._title} data"
-        )

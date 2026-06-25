@@ -51,7 +51,7 @@ THEME_PALETTES = {
     "Nord": NORD,
     "Dracula": DRACULA,
 }
-ACTIVE_THEME_NAME = "Viridis"
+ACTIVE_THEME_NAME = "Cividis"
 ACTIVE_PALETTE = THEME_PALETTES[ACTIVE_THEME_NAME]
 
 # ── Ordered perceptual ramps ─────────────────────────────────────────────
@@ -60,7 +60,10 @@ ACTIVE_PALETTE = THEME_PALETTES[ACTIVE_THEME_NAME]
 # of collapsing to a few muddy palette colors.
 THEME_RAMPS = {
     "Viridis": ["#440154", "#414487", "#2a788e", "#22a884", "#7ad151", "#fde725"],
-    "Cividis": ["#00204d", "#31446b", "#666970", "#958f78", "#cab969", "#ffea46"],
+    # CellFlow's five ordered cividis stops (inverted interior 15–85% sampling),
+    # yellow → deep blue. Stage positions land each pipeline node exactly on a
+    # stop: project=yellow (top), stress=deep blue (last).
+    "Cividis": ["#d6c35d", "#a79d73", "#7d7c78", "#555c6d", "#243c6e"],
     "Nord":    ["#5e81ac", "#81a1c1", "#8fbcbb", "#a3be8c", "#ebcb8b", "#d08770"],
     "Dracula": ["#6272a4", "#bd93f9", "#8be9fd", "#50fa7b", "#f1fa8c", "#ffb86c"],
 }
@@ -70,8 +73,8 @@ ACTIVE_RAMP = THEME_RAMPS[ACTIVE_THEME_NAME]
 # the start; batch anchors the end; the four pipeline stages spread between.
 STAGE_RAMP_POSITION = {
     "inputs": 0.0, "project": 0.0,
-    "preprocessing": 0.18, "displacement": 0.40,
-    "force": 0.62, "stress": 0.82, "batch": 1.0,
+    "preprocessing": 0.25, "displacement": 0.50,
+    "force": 0.75, "stress": 1.0, "batch": 1.0,
 }
 
 # Stage key -> semantic palette color name. Each visible stage gets a
@@ -107,6 +110,29 @@ ACTION_GLYPHS = {
     "save": "💾",
     "load": "↑",
 }
+
+# File-status dot colours: a stage's input/output artifacts read red (missing)
+# → green (present, in cache or on disk), with a quiet grey for absent optionals.
+FILE_STATUS_COLORS = {
+    "present": "#3fb950",  # green — value is in cache or a file is on disk
+    "missing": "#d62828",  # red — a required artifact is absent
+    "optional": "#6b7484",  # grey — an optional artifact is absent (no alarm)
+    "error": "#e3b341",  # amber — the artifact failed to load
+}
+
+
+def file_status_color(state: str) -> str:
+    """Colour for a file-status dot; unknown states fall back to the grey."""
+    return FILE_STATUS_COLORS.get(state, FILE_STATUS_COLORS["optional"])
+
+
+def file_status_state(available: bool, required: bool, error: bool) -> str:
+    """Classify an artifact into a file-status state (present/missing/optional/error)."""
+    if error:
+        return "error"
+    if available:
+        return "present"
+    return "missing" if required else "optional"
 
 
 def make_icon_button(
@@ -284,6 +310,60 @@ def make_stage_action_button(
     else:
         button.setText(glyph)
     return button
+
+
+# ── Designed-surface tokens (mockup v2 aggregation layer) ─────────────────
+# Theme-agnostic so the designed panels sit on any host background: surfaces
+# are translucent white overlays (a "lift"), text uses the mockup's grey ramp.
+TEXT_BRIGHT = "#e6edf3"
+TEXT_MID = "#aeb6c0"
+TEXT_DIM = "#6b7484"
+ROW_LIFT_BG = "rgba(255, 255, 255, 13)"   # a selected/raised row surface
+HAIRLINE = "rgba(255, 255, 255, 18)"
+
+# Experiment-row status word -> color (amber running, green done, dim queued).
+EXPERIMENT_STATUS_COLORS = {
+    "run": "#e3b341",
+    "done": "#3fb950",
+    "queued": TEXT_DIM,
+}
+
+
+def experiment_status_color(label: str) -> str:
+    """Color for an experiment row's overall-status word (run/done/queued)."""
+    return EXPERIMENT_STATUS_COLORS.get(label, TEXT_DIM)
+
+
+def experiment_name_color(selected: bool) -> str:
+    """Brighten the active row's name; dim the rest."""
+    return TEXT_BRIGHT if selected else TEXT_MID
+
+
+def experiment_row_style(selected: bool, accent: str) -> str:
+    """Row container style: a raised, accent-bordered surface when selected."""
+    if not selected:
+        return (
+            "QWidget#experiment_row { background: transparent; "
+            "border: 1px solid transparent; border-radius: 8px; }"
+        )
+    r, g, b = _hex_to_rgb(accent)
+    return (
+        "QWidget#experiment_row { "
+        f"background: {ROW_LIFT_BG}; "
+        f"border: 1px solid rgba({r}, {g}, {b}, 130); "
+        "border-radius: 8px; }"
+    )
+
+
+def mono_input_style() -> str:
+    """Themed pill style for a QLineEdit, so config fields aren't raw Qt."""
+    return (
+        "QLineEdit { "
+        "background: rgba(255, 255, 255, 8); "
+        f"border: 1px solid {HAIRLINE}; border-radius: 6px; "
+        f"padding: 3px 7px; color: {TEXT_BRIGHT}; }} "
+        "QLineEdit:focus { border-color: rgba(255, 255, 255, 38); }"
+    )
 
 
 def title_style() -> str:

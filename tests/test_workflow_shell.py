@@ -433,6 +433,21 @@ def _stub_main_widget(monkeypatch):
     return _widget.napariTFMWidget(object())
 
 
+def test_stage_sections_are_accented_by_pipeline_key_not_title(monkeypatch, app):
+    """Each spine segment must take its stage key's ramp colour. Titles like
+    "Force Analysis" slugify to "force_analysis" (not a ramp key), so deriving
+    the accent from the title silently collapses Force/Stress to the fallback
+    colour and the whole rail reads as one flat colour."""
+    from napariTFM.widgets._ui_style import stage_accent
+
+    widget = _stub_main_widget(monkeypatch)
+    for key, section in widget._stage_sections_by_key.items():
+        assert section._accent == stage_accent(key), key
+    # And the four accents are actually distinct (a real gradient, not flat).
+    accents = [s._accent for s in widget._stage_sections]
+    assert len(set(accents)) == len(accents)
+
+
 def test_stage_progress_feeds_one_global_status_label(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
 
@@ -829,10 +844,11 @@ def test_main_widget_does_not_expose_legacy_parameter_panel(monkeypatch, app):
     widget = _widget.napariTFMWidget(object())
 
     assert not hasattr(widget, "parameter_panel")
-    assert widget.project_section is not None
+    # Project config moved into the experiments (aggregation) layer.
+    assert "pixel_size" in widget.experiments_list.calibration_controls
 
 
-def test_main_widget_project_section_tracks_output_directory(monkeypatch, app, tmp_path):
+def test_main_widget_experiments_layer_tracks_output_directory(monkeypatch, app, tmp_path):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
@@ -844,7 +860,7 @@ def test_main_widget_project_section_tracks_output_directory(monkeypatch, app, t
     widget = _widget.napariTFMWidget(object())
     widget.data_manager.set_output_dir(tmp_path)
 
-    assert widget.project_section.output_dir_label.text() == str(tmp_path)
+    assert widget.experiments_list.output_dir_label.text() == str(tmp_path)
 
 
 def test_preprocessing_data_rows_route_assignment_actions(monkeypatch, app):
@@ -857,11 +873,13 @@ def test_preprocessing_data_rows_route_assignment_actions(monkeypatch, app):
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
-    rows = widget._stage_status_panels_by_key["preprocessing"].artifact_rows
+    dots = widget._stage_status_panels_by_key["preprocessing"].dots
 
-    rows["reference"].action_btn.click()
-    rows["bead_stack"].action_btn.click()
-    rows["cell_stack"].action_btn.click()
+    # Inputs are missing in the stub, so clicking a red input dot assigns the
+    # active napari layer (the on_action path).
+    dots["reference"].click()
+    dots["bead_stack"].click()
+    dots["cell_stack"].click()
 
     assert widget.preprocessing_widget.loaded_active_layers == [
         "reference",
@@ -870,9 +888,9 @@ def test_preprocessing_data_rows_route_assignment_actions(monkeypatch, app):
     ]
 
 
-def test_generated_output_rows_have_no_save_button(monkeypatch, app):
-    # Preview-only (ROADMAP §4): stage runs write nothing to disk, so output
-    # rows expose no Save action.
+def test_generated_output_dots_are_inert_when_missing(monkeypatch, app):
+    # Preview-only (ROADMAP §4): stage runs write nothing to disk and outputs
+    # carry no assign action, so a missing output dot is not clickable.
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
@@ -884,14 +902,14 @@ def test_generated_output_rows_have_no_save_button(monkeypatch, app):
     widget = _widget.napariTFMWidget(object())
 
     panels = widget._stage_status_panels_by_key
-    output_rows = [
-        panels["preprocessing"].artifact_rows["preprocessed_bead_stack"],
-        panels["preprocessing"].artifact_rows["preprocessed_reference"],
-        panels["displacement"].artifact_rows["displacement_results"],
-        panels["force"].artifact_rows["force_results"],
-        panels["stress"].artifact_rows["stress_results"],
+    output_dots = [
+        panels["preprocessing"].dots["preprocessed_bead_stack"],
+        panels["preprocessing"].dots["preprocessed_reference"],
+        panels["displacement"].dots["displacement_results"],
+        panels["force"].dots["force_results"],
+        panels["stress"].dots["stress_results"],
     ]
-    assert all(row.action_btn is None for row in output_rows)
+    assert all(dot.isEnabled() is False for dot in output_dots)
 
 
 def test_displacement_data_rows_route_assignment_actions(monkeypatch, app):
@@ -904,10 +922,10 @@ def test_displacement_data_rows_route_assignment_actions(monkeypatch, app):
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
-    rows = widget._stage_status_panels_by_key["displacement"].artifact_rows
+    dots = widget._stage_status_panels_by_key["displacement"].dots
 
-    rows["preprocessed_reference"].action_btn.click()
-    rows["preprocessed_bead_stack"].action_btn.click()
+    dots["preprocessed_reference"].click()
+    dots["preprocessed_bead_stack"].click()
 
     assert widget.displacement_widget.loaded_active_layers == ["reference", "beads"]
 
@@ -926,14 +944,16 @@ def test_only_mask_input_row_routes_a_load_action(monkeypatch, app):
 
     widget = _widget.napariTFMWidget(object())
 
-    force_input = widget._stage_status_panels_by_key["force"].artifact_rows["displacement_results"]
-    stress_force_input = widget._stage_status_panels_by_key["stress"].artifact_rows["force_results"]
-    mask_row = widget._stage_status_panels_by_key["stress"].artifact_rows["mask_stack"]
+    force_input = widget._stage_status_panels_by_key["force"].dots["displacement_results"]
+    stress_force_input = widget._stage_status_panels_by_key["stress"].dots["force_results"]
+    mask_dot = widget._stage_status_panels_by_key["stress"].dots["mask_stack"]
 
-    assert force_input.action_btn is None
-    assert stress_force_input.action_btn is None
+    # The in-memory chained inputs are status-only (no assign action), so their
+    # missing dots are inert; only the external mask input is assignable.
+    assert force_input.isEnabled() is False
+    assert stress_force_input.isEnabled() is False
 
-    mask_row.action_btn.click()
+    mask_dot.click()
     assert widget.msm_widget.loaded_files == ["mask_stack"]
 
 
@@ -982,7 +1002,7 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     assert displacement_panel.isVisibleTo(widget)
 
 
-def test_main_widget_exposes_collapsed_stage_data_status_panels(monkeypatch, app):
+def test_main_widget_embeds_always_visible_stage_file_status_rows(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
@@ -998,17 +1018,11 @@ def test_main_widget_exposes_collapsed_stage_data_status_panels(monkeypatch, app
     displacement_panel = widget._stage_status_panels_by_key["displacement"]
     section = widget._stage_sections_by_key["displacement"]
 
-    assert displacement_panel.objectName() == "stage_displacement_data_status_panel"
-    # Status panel starts collapsed behind the 🔍 toggle.
-    assert section._status_section.is_expanded is False
-    assert not displacement_panel.isVisibleTo(widget)
-    # Stage body stays visible regardless.
-    assert widget.displacement_widget.isVisible()
-
-    # The 🔍 toggle reveals the status panel.
-    section.files_btn.setChecked(True)
-    app.processEvents()
+    assert displacement_panel.objectName() == "stage_displacement_file_status_row"
+    # The status row is always visible now — no 🔍 toggle.
+    assert not hasattr(section, "files_btn")
     assert displacement_panel.isVisibleTo(widget)
+    assert widget.displacement_widget.isVisible()
 
 
 def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
@@ -1025,27 +1039,23 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     panel = widget._stage_status_panels_by_key["preprocessing"]
 
     assert section.status == "not_started"
-    assert panel.artifact_rows["reference"].info_label.text() == "Missing"
+    assert "Missing" in panel.dots["reference"].toolTip()
 
     widget.data_manager.reference = object()
     widget.data_manager.bead_stack = object()
     widget.refresh_stage_statuses()
 
     assert section.status == "ready"
-    assert (
-        "×" in panel.artifact_rows["reference"].info_label.text()
-        or panel.artifact_rows["reference"].info_label.text() == "Loaded"
-    )
+    ref_tip = panel.dots["reference"].toolTip()
+    assert "×" in ref_tip or "Loaded" in ref_tip
 
     widget.data_manager.preprocessed_reference = object()
     widget.data_manager.preprocessed_bead_stack = object()
     widget.refresh_stage_statuses()
 
     assert section.status == "done"
-    assert (
-        "×" in panel.artifact_rows["preprocessed_bead_stack"].info_label.text()
-        or panel.artifact_rows["preprocessed_bead_stack"].info_label.text() == "Loaded"
-    )
+    beads_tip = panel.dots["preprocessed_bead_stack"].toolTip()
+    assert "×" in beads_tip or "Loaded" in beads_tip
 
 
 def test_stage_status_is_done_when_results_are_in_memory(monkeypatch, app, tmp_path):
@@ -1260,7 +1270,7 @@ def test_reconcile_loads_existing_config_from_output_dir(monkeypatch, app, tmp_p
     )
 
     widget.data_manager.set_output_dir(tmp_path)
-    widget.project_section.body.output_dir_changed.emit()  # simulate dir chosen
+    widget.experiments_list.output_dir_changed.emit()  # simulate dir chosen
 
     assert widget.parameter_manager.get_parameter("rolling_ball_radius") == 9
 
@@ -1347,7 +1357,7 @@ def test_reconcile_writes_config_when_absent(monkeypatch, app, tmp_path):
 
     widget = _widget.napariTFMWidget(object())
     widget.data_manager.set_output_dir(tmp_path)
-    widget.project_section.body.output_dir_changed.emit()
+    widget.experiments_list.output_dir_changed.emit()
 
     assert (tmp_path / "napariTFM_config.json").exists()
 
@@ -1509,7 +1519,7 @@ def test_state_round_trips_experiments_and_active(monkeypatch, app):
 def test_single_config_button_label_and_no_params_only_handler(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     # One save lives at the top now; the params-only handler is gone (P0b).
-    assert widget.save_config_btn.text() == "Save Config"
+    assert widget.save_config_btn.text() == "Save"
     assert not hasattr(widget, "_save_parameters")
 
 

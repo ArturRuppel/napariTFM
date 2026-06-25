@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from qtpy.QtCore import QRectF, Qt, Signal
-from qtpy.QtGui import QBrush, QColor, QPainter, QPen
+from qtpy.QtGui import QBrush, QColor, QDoubleValidator, QPainter, QPen
 from qtpy.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -23,13 +23,31 @@ from napariTFM.widgets._icons import stage_action_icon
 from napariTFM.widgets._stage_spine import _node_style
 from napariTFM.widgets._ui_style import (
     COMPACT_SPACING,
+    TEXT_DIM,
+    TEXT_MID,
+    experiment_name_color,
+    experiment_row_style,
+    experiment_status_color,
+    mono_input_style,
     muted_accent,
-    section_label_style,
     stage_accent,
 )
 
 # The four pipeline stages a mini-rail summarises (project/batch are not dots).
 PIPELINE_STAGES = ("preprocessing", "displacement", "force", "stress")
+
+# Project-level calibration, relocated into the aggregation layer. Free-text
+# fields (soft validator, not spinbox stepping); bounds feed the validator.
+_CALIBRATION_SPECS = [
+    ("pixel_size", "Pixel Size (µm)", 0.001, 100.0),
+    ("frame_interval", "Frame Length (min)", 0.001, 1000.0),
+]
+_INPUT_DECIMALS = 6
+
+
+def _format_value(value) -> str:
+    """Compact text for a calibration value — no trailing-zero noise."""
+    return f"{float(value):g}"
 
 
 def _path_ends_with(path: Path, rel: Path) -> bool:
@@ -137,10 +155,13 @@ class ExperimentRow(QWidget):
         super().__init__(parent)
         self._path = path
         self._selected = False
+        # The row paints its own (styled) background — selected rows lift.
+        self.setObjectName("experiment_row")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         layout = QHBoxLayout()
-        layout.setContentsMargins(0, 1, 0, 1)
-        layout.setSpacing(COMPACT_SPACING)
+        layout.setContentsMargins(7, 5, 10, 5)
+        layout.setSpacing(COMPACT_SPACING + 4)
         self.setLayout(layout)
 
         self._selbar = QFrame()
@@ -155,7 +176,13 @@ class ExperimentRow(QWidget):
         layout.addWidget(self.mini_rail)
 
         self._chip = QLabel("queued")
+        self._chip.setFixedWidth(52)
+        self._chip.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._chip.setStyleSheet(f"color: {experiment_status_color('queued')};")
         layout.addWidget(self._chip)
+
+        # Apply the deselected resting style (row + name colors).
+        self.set_selected(False)
 
     @property
     def path(self) -> str:
@@ -174,11 +201,15 @@ class ExperimentRow(QWidget):
         self._selbar.setStyleSheet(
             f"background: {accent};" if on else "background: transparent;"
         )
+        self.setStyleSheet(experiment_row_style(on, accent))
+        self._name_label.setStyleSheet(f"color: {experiment_name_color(on)};")
 
     def set_stage_statuses(self, statuses: dict[str, str]) -> None:
         self.mini_rail.set_statuses(statuses)
         label = overall_status(statuses)
-        self._chip.setText(_CHIP_TEXT[label])
+        text = _CHIP_TEXT[label]
+        self._chip.setText(text)
+        self._chip.setStyleSheet(f"color: {experiment_status_color(text)};")
 
     def _emit_selected(self) -> None:
         self.selected.emit(self._path)
@@ -194,14 +225,19 @@ class ExperimentsList(QWidget):
     experiments_changed = Signal()
     active_changed = Signal(str)
     run_all_requested = Signal()
+    output_dir_changed = Signal()
 
     def __init__(
         self,
         status_fn: Optional[Callable[[str], dict[str, str]]] = None,
+        parameter_manager=None,
+        data_manager=None,
         parent=None,
     ):
         super().__init__(parent)
         self._status_fn = status_fn
+        self._parameter_manager = parameter_manager
+        self._data_manager = data_manager
         self._paths: list[str] = []
         # path -> {"input_files": {...}, "columns": {...}} — the per-row metadata
         # that makes the list the single config table (P0).
@@ -216,8 +252,8 @@ class ExperimentsList(QWidget):
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        label = QLabel("Experiments")
-        label.setStyleSheet(section_label_style())
+        label = QLabel("EXPERIMENTS")
+        label.setStyleSheet(f"color: {TEXT_MID}; font-weight: bold;")
         header.addWidget(label)
         header.addStretch()
         self.add_btn = QToolButton()
@@ -249,22 +285,136 @@ class ExperimentsList(QWidget):
         header.addWidget(self.run_all_btn)
         layout.addLayout(header)
 
+        # Project-level calibration + output directory (the aggregation layer
+        # owns these now; the old Project section is gone).
+        layout.addLayout(self._build_project_strip())
+
         # Staging for the two-step Discover→Commit flow (D2).
         self._discovered: list[str] = []
 
         layout.addLayout(self._build_config_header())
 
         self._staging_label = QLabel("")
+        self._staging_label.setStyleSheet(f"color: {TEXT_DIM};")
         layout.addWidget(self._staging_label)
 
         self._rows_box = QVBoxLayout()
         self._rows_box.setContentsMargins(0, 0, 0, 0)
-        self._rows_box.setSpacing(0)
+        self._rows_box.setSpacing(2)
         layout.addLayout(self._rows_box)
 
         self._meta = QLabel("")
+        self._meta.setStyleSheet(f"color: {TEXT_DIM};")
         layout.addWidget(self._meta)
         self._update_meta()
+
+        if self._parameter_manager is not None:
+            self._parameter_manager.parameter_changed.connect(self._sync_parameter)
+        if self._data_manager is not None:
+            self._data_manager.add_change_callback(self._sync_output_dir)
+            self._sync_output_dir()
+
+    # -- project-level calibration + output (the aggregation layer) -------
+    def _build_project_strip(self) -> QVBoxLayout:
+        """Pixel/frame calibration + an output-directory picker, themed."""
+        box = QVBoxLayout()
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(COMPACT_SPACING)
+
+        self.calibration_controls: dict[str, QLineEdit] = {}
+        cal = QHBoxLayout()
+        cal.setContentsMargins(0, 0, 0, 0)
+        cal.setSpacing(COMPACT_SPACING + 4)
+        for name, label, min_val, max_val in _CALIBRATION_SPECS:
+            field = QLineEdit()
+            validator = QDoubleValidator(min_val, max_val, _INPUT_DECIMALS, field)
+            validator.setNotation(QDoubleValidator.StandardNotation)
+            field.setValidator(validator)
+            field.setObjectName(f"workflow_parameter_{name}")
+            field.setStyleSheet(mono_input_style())
+            if self._parameter_manager is not None:
+                field.setText(
+                    _format_value(self._parameter_manager.get_ui_parameter(name))
+                )
+                field.editingFinished.connect(
+                    lambda n=name, c=field: self._commit_parameter(n, c)
+                )
+            self.calibration_controls[name] = field
+
+            caption = QLabel(label)
+            caption.setStyleSheet(f"color: {TEXT_MID};")
+            cell = QVBoxLayout()
+            cell.setContentsMargins(0, 0, 0, 0)
+            cell.setSpacing(1)
+            cell.addWidget(caption)
+            cell.addWidget(field)
+            cal.addLayout(cell, 1)
+        box.addLayout(cal)
+
+        out = QHBoxLayout()
+        out.setContentsMargins(0, 0, 0, 0)
+        self.choose_output_dir_btn = QToolButton()
+        self.choose_output_dir_btn.setObjectName("experiments_output_dir_button")
+        self.choose_output_dir_btn.setToolTip("Choose output directory")
+        self.choose_output_dir_btn.setIcon(
+            stage_action_icon("files", muted_accent(stage_accent("project")))
+        )
+        self.choose_output_dir_btn.clicked.connect(self._choose_output_dir)
+        self.output_dir_label = QLabel("No output directory")
+        self.output_dir_label.setObjectName("project_output_dir_label")
+        self.output_dir_label.setStyleSheet(f"color: {TEXT_DIM};")
+        out.addWidget(self.choose_output_dir_btn)
+        out.addWidget(self.output_dir_label, 1)
+        box.addLayout(out)
+        return box
+
+    def _commit_parameter(self, name: str, control: QLineEdit) -> None:
+        """Parse a free-text calibration field; revert to last good value if junk."""
+        if self._parameter_manager is None:
+            return
+        try:
+            value = float(control.text().strip())
+        except ValueError:
+            control.setText(
+                _format_value(self._parameter_manager.get_ui_parameter(name))
+            )
+            return
+        self._parameter_manager.set_ui_parameter(name, value)
+
+    def _sync_parameter(self, name: str, value) -> None:
+        control = self.calibration_controls.get(name)
+        if control is None:
+            return
+        control.blockSignals(True)
+        try:
+            control.setText(_format_value(value))
+        finally:
+            control.blockSignals(False)
+
+    def _choose_output_dir(self) -> None:  # pragma: no cover - GUI dialog
+        if self._data_manager is None:
+            return
+        current = self._data_manager.output_dir or Path.home()
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Pipeline Output Directory", str(current)
+        )
+        if path:
+            self._apply_output_dir(path)
+
+    def _apply_output_dir(self, path: str) -> None:
+        """Commit a chosen output dir to the data manager and announce it."""
+        self._data_manager.set_output_dir(path)
+        self.output_dir_changed.emit()
+
+    def _sync_output_dir(self) -> None:
+        path = getattr(self._data_manager, "output_dir", None)
+        if path is None:
+            self.output_dir_label.setText("No output directory")
+            self.output_dir_label.setToolTip("")
+            return
+        text = str(path)
+        self.output_dir_label.setText(text)
+        self.output_dir_label.setToolTip(text)
 
     # -- column config (the table's shared header) -----------------------
     def _build_config_header(self) -> QVBoxLayout:
@@ -284,8 +434,11 @@ class ExperimentsList(QWidget):
             ("masks", "Masks file (optional)", "masks.tif"),
         ):
             field = QLineEdit(default)
+            field.setStyleSheet(mono_input_style())
             self.file_name_inputs[key] = field
-            files.addRow(QLabel(label), field)
+            name = QLabel(label)
+            name.setStyleSheet(f"color: {TEXT_MID};")
+            files.addRow(name, field)
         box.addLayout(files)
 
         # Free-form columns: each is a (name, value) pair copied to every row of
@@ -313,8 +466,10 @@ class ExperimentsList(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         name_edit = QLineEdit(name)
         name_edit.setPlaceholderText("column")
+        name_edit.setStyleSheet(mono_input_style())
         value_edit = QLineEdit(value)
         value_edit.setPlaceholderText("value")
+        value_edit.setStyleSheet(mono_input_style())
         row.addWidget(name_edit, 1)
         row.addWidget(value_edit, 1)
         self._columns_box.addLayout(row)
