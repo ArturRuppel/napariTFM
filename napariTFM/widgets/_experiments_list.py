@@ -300,6 +300,7 @@ class ExperimentsList(QWidget):
         self.add_btn.setIcon(stage_action_icon("plus", muted_accent(stage_accent("displacement"))))
         self.add_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.add_btn.clicked.connect(self._on_add_clicked)
+        self._update_discover_tooltip()
         actions.addWidget(self.add_btn)
 
         self.commit_btn = QToolButton()
@@ -456,6 +457,7 @@ class ExperimentsList(QWidget):
             field = QLineEdit(default)
             field.setStyleSheet(mono_input_style())
             self.file_name_inputs[key] = field
+            field.textChanged.connect(lambda _t: self._update_discover_tooltip())
             name = QLabel(label)
             name.setStyleSheet(f"color: {TEXT_MID};")
             files.addRow(name, field)
@@ -505,6 +507,28 @@ class ExperimentsList(QWidget):
             for key, field in self.file_name_inputs.items()
             if field.text().strip()
         }
+
+    def _discover_tooltip_text(self) -> str:
+        """Plain-language scan description from the filled input-file names."""
+        names = [
+            field.text().strip()
+            for key in ("beads", "reference", "cells", "masks")
+            for field in (self.file_name_inputs[key],)
+            if field.text().strip()
+        ]
+        if not names:
+            return "Choose a folder to scan for experiment subfolders."
+        if len(names) == 1:
+            joined = names[0]
+        else:
+            joined = f"{', '.join(names[:-1])} and {names[-1]}"
+        return (
+            f"napariTFM will scan the chosen folder for subfolders containing "
+            f"{joined}, and initialize each for analysis."
+        )
+
+    def _update_discover_tooltip(self) -> None:
+        self.add_btn.setToolTip(self._discover_tooltip_text())
 
     def column_config(self) -> dict:
         """Current free-form columns as name->value, unnamed rows dropped."""

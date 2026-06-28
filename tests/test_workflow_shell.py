@@ -1710,3 +1710,30 @@ def test_experiment_rows_live_in_a_bounded_scroll_area(monkeypatch, app):
     assert scroll.widgetResizable() is True
     # Capped so a long list scrolls instead of pushing the panel down.
     assert 0 < scroll.maximumHeight() <= 260
+
+
+def test_discover_tooltip_lists_only_filled_inputs(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    el = widget.experiments_list
+    el.file_name_inputs["beads"].setText("beads.tif")
+    el.file_name_inputs["reference"].setText("reference.tif")
+    el.file_name_inputs["cells"].setText("")
+    el.file_name_inputs["masks"].setText("")
+
+    tip = el.add_btn.toolTip()
+    assert "beads.tif" in tip and "reference.tif" in tip
+    assert "and reference.tif" in tip  # two-item grammar
+    assert "cells" not in tip and "masks" not in tip
+
+
+def test_discover_tooltip_includes_present_optionals(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    el = widget.experiments_list
+    el.file_name_inputs["beads"].setText("b.tif")
+    el.file_name_inputs["reference"].setText("r.tif")
+    el.file_name_inputs["cells"].setText("c.tif")
+    el.file_name_inputs["masks"].setText("m.tif")
+
+    tip = el.add_btn.toolTip()
+    # Oxford-free list: "b.tif, r.tif, c.tif and m.tif"
+    assert "b.tif, r.tif, c.tif and m.tif" in tip
