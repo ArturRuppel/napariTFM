@@ -57,7 +57,7 @@ STAGE_DATA_ARTIFACTS = {
     ],
     "stress": [
         DataArtifactSpec("force_results", "Traction map", "force_results", "input"),
-        DataArtifactSpec("mask_stack", "Mask stack", "mask_stack", "input", required=False),
+        DataArtifactSpec("mask_stack", "Mask stack", "mask_stack", "input"),
         DataArtifactSpec("stress_results", "Stress map", "stress_results", "output"),
     ],
 }
@@ -194,8 +194,8 @@ def _build_stress_specs(stress_widget):
             "Mask stack",
             "mask_stack",
             "input",
-            required=False,
-            # Masks are an external input (ROADMAP §2): loaded from the active layer.
+            # Masks are an external input (ROADMAP §2): loaded from the active
+            # layer. Stress can't run without one, so this input is required.
             on_action=lambda: stress_widget.load_result_artifact("mask_stack"),
         ),
         DataArtifactSpec(
@@ -408,6 +408,15 @@ class napariTFMWidget(QWidget):
             title_row.addWidget(_btn)
         container_layout.addLayout(title_row)
 
+        # G0 empty-state hint: shown only before a project is opened.
+        self._empty_hint = QLabel("New Project to begin, or Load Project.")
+        self._empty_hint.setObjectName("empty_state_hint")
+        self._empty_hint.setStyleSheet(section_label_style())
+        container_layout.addWidget(self._empty_hint)
+
+        # Progressive-disclosure gate (G0/G1/G2). No project is open at launch.
+        self._project_open = False
+
         # Initialize managers
         self.data_manager = DataManager()
         self.parameter_manager = ParameterManager()
@@ -584,6 +593,9 @@ class napariTFMWidget(QWidget):
                     }
                 ],
                 optional=True,
+                # Stress needs an external mask, so it stays off until the user
+                # opts in (D1).
+                enabled=False,
             ),
         }
         self._stage_sections = list(self._stage_sections_by_key.values())
@@ -614,6 +626,7 @@ class napariTFMWidget(QWidget):
         self.connect_signals()
         self.data_manager.add_change_callback(self.refresh)
         self.refresh_stage_statuses()
+        self._update_disclosure()
 
     def _make_toolbar_button(self, text: str, tooltip: str) -> QToolButton:
         """A compact auto-raised text button for the title-bar config toolbar."""
@@ -704,6 +717,25 @@ class napariTFMWidget(QWidget):
             if callable(update):
                 update()
         self.refresh_stage_statuses()
+
+    def _update_disclosure(self) -> None:
+        """Reveal only what the current state earns (G0/G1/G2 gated reveal).
+
+        G0 (no project): only the header toolbars + the empty-state hint show.
+        G1 (project open, no row selected): the experiments workspace + the
+        shared status line. G2 (a row selected): additionally the pipeline
+        context label and the four stage pills.
+        """
+        project_open = self._project_open
+        tuning = project_open and self.experiments_list.active() is not None
+
+        self._empty_hint.setVisible(not project_open)
+        self.experiments_list.setVisible(project_open)
+        self.status_label.setVisible(project_open)
+
+        self._pipeline_context_label.setVisible(tuning)
+        for section in self._stage_sections:
+            section.setVisible(tuning)
 
     def _relay_stage_status(self, stage_label: str, message: str) -> None:
         """Render a stage's progress message in the one global status label (P2)."""
@@ -837,6 +869,7 @@ class napariTFMWidget(QWidget):
             self._pipeline_context_label.setText(
                 f"Pipeline · tuning ▸ {Path(self._active_experiment).name}"
             )
+        self._update_disclosure()
         self._write_config()
 
     def _on_experiments_changed(self) -> None:

@@ -396,6 +396,8 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     widget = _widget.napariTFMWidget(object())
     widget.show()
     app.processEvents()
+    _enter_tuning(widget)
+    app.processEvents()
 
     assert widget.findChildren(QTabWidget) == []
     # Every stage body is always visible; only parameter panels collapse.
@@ -431,6 +433,15 @@ def _stub_main_widget(monkeypatch):
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
     return _widget.napariTFMWidget(object())
+
+
+def _enter_tuning(widget, path="/data/exp"):
+    """Drive a stub shell into G2: project open + a selected experiment."""
+    widget._project_open = True
+    widget._update_disclosure()
+    widget.experiments_list.set_experiments([path])
+    widget.experiments_list.set_active(path)
+    return widget
 
 
 def test_stage_sections_are_accented_by_pipeline_key_not_title(monkeypatch, app):
@@ -478,6 +489,7 @@ def _write_stage_ntfm(folder, **arrays):
 
 def test_experiment_stage_status_inputs_only_is_ready_frontier(monkeypatch, app, tmp_path):
     widget = _stub_main_widget(monkeypatch)
+    widget._stage_sections_by_key["stress"].set_enabled(True)
     folder = tmp_path / "exp"
     folder.mkdir()
     (folder / "beads.tif").write_bytes(b"x")
@@ -494,6 +506,7 @@ def test_experiment_stage_status_displacement_only(monkeypatch, app, tmp_path):
     import numpy as np
 
     widget = _stub_main_widget(monkeypatch)
+    widget._stage_sections_by_key["stress"].set_enabled(True)
     folder = tmp_path / "exp"
     folder.mkdir()
     (folder / "beads.tif").write_bytes(b"x")
@@ -512,6 +525,7 @@ def test_experiment_stage_status_through_force(monkeypatch, app, tmp_path):
     import numpy as np
 
     widget = _stub_main_widget(monkeypatch)
+    widget._stage_sections_by_key["stress"].set_enabled(True)
     folder = tmp_path / "exp"
     folder.mkdir()
     _write_stage_ntfm(
@@ -531,6 +545,7 @@ def test_experiment_stage_status_full_pipeline_all_done(monkeypatch, app, tmp_pa
     import numpy as np
 
     widget = _stub_main_widget(monkeypatch)
+    widget._stage_sections_by_key["stress"].set_enabled(True)
     folder = tmp_path / "exp"
     folder.mkdir()
     _write_stage_ntfm(
@@ -542,6 +557,22 @@ def test_experiment_stage_status_full_pipeline_all_done(monkeypatch, app, tmp_pa
 
     statuses = widget._experiment_stage_status(str(folder))
     assert all(statuses[s] == "done" for s in ("preprocessing", "displacement", "force", "stress"))
+
+
+def test_stress_stage_is_disabled_by_default(monkeypatch, app):
+    # Stress needs an external mask, so it stays off until the user opts in (D1).
+    widget = _stub_main_widget(monkeypatch)
+    assert widget._stage_sections_by_key["stress"].is_enabled is False
+    assert widget._disabled_stages() == ["stress"]
+
+
+def test_stress_mask_input_is_required(app):
+    from napariTFM.widgets._widget import STAGE_DATA_ARTIFACTS
+
+    mask_spec = next(
+        spec for spec in STAGE_DATA_ARTIFACTS["stress"] if spec.key == "mask_stack"
+    )
+    assert mask_spec.required is True
 
 
 def test_experiment_stage_status_disabled_stress_reads_off(monkeypatch, app, tmp_path):
@@ -585,6 +616,7 @@ class _FakeBatchAnalysis:
 def test_run_all_builds_config_from_table_and_runs_batch(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
     widget = _stub_main_widget(monkeypatch)
+    widget._stage_sections_by_key["stress"].set_enabled(True)
     widget.experiments_list.add_folders(
         ["/data/exp_a", "/data/exp_b"],
         input_files={"beads": "beads.tif", "reference": "reference.tif"},
@@ -736,6 +768,8 @@ def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, 
     widget = _widget.napariTFMWidget(object())
     widget.show()
     app.processEvents()
+    # Stress is off by default; enable it so its header run button is live.
+    widget._stage_sections_by_key["stress"].set_enabled(True)
 
     # Contract stages: header run invokes the widget's run_action handler.
     contract_cases = [
@@ -764,6 +798,8 @@ def test_main_widget_stress_header_preview_wires_to_frame_preview(monkeypatch, a
     widget = _widget.napariTFMWidget(object())
     widget.show()
     app.processEvents()
+    # Stress is off by default; enable it so its header preview button is live.
+    widget._stage_sections_by_key["stress"].set_enabled(True)
 
     # Header preview invokes the stress widget's preview_action via the contract.
     widget.msm_widget.set_action_states(preview=True)
@@ -970,6 +1006,8 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     widget = _widget.napariTFMWidget(object())
     widget.show()
     app.processEvents()
+    _enter_tuning(widget)
+    app.processEvents()
 
     assert set(widget._stage_parameter_panels_by_key) == {
         "preprocessing",
@@ -1013,6 +1051,8 @@ def test_main_widget_embeds_always_visible_stage_file_status_rows(monkeypatch, a
 
     widget = _widget.napariTFMWidget(object())
     widget.show()
+    app.processEvents()
+    _enter_tuning(widget)
     app.processEvents()
 
     displacement_panel = widget._stage_status_panels_by_key["displacement"]
@@ -1658,3 +1698,43 @@ def test_viz_toggle_is_a_noop_when_viewer_has_no_layers(monkeypatch, app):
 
     section = widget._stage_sections_by_key["force"]
     section.viz_btn.setChecked(False)  # must not raise
+
+
+def test_g0_hides_workspace_and_pipeline_until_project_open(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    # Default state is G0: no project open.
+    assert widget._project_open is False
+    assert not widget.experiments_list.isVisibleTo(widget)
+    assert not widget._pipeline_context_label.isVisibleTo(widget)
+    for section in widget._stage_sections:
+        assert not section.isVisibleTo(widget)
+    assert widget._empty_hint.isVisibleTo(widget)
+
+
+def test_g1_reveals_workspace_but_not_stage_pills(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget._project_open = True
+    widget._update_disclosure()
+    # G1: workspace + status visible; pipeline label + pills still hidden.
+    assert widget.experiments_list.isVisibleTo(widget)
+    assert widget.status_label.isVisibleTo(widget)
+    assert not widget._empty_hint.isVisibleTo(widget)
+    assert not widget._pipeline_context_label.isVisibleTo(widget)
+    for section in widget._stage_sections:
+        assert not section.isVisibleTo(widget)
+
+
+def test_g2_reveals_stage_pills_when_experiment_selected(monkeypatch, app):
+    widget = _enter_tuning(_stub_main_widget(monkeypatch))
+    # G2: a row is selected — pipeline label + every stage pill revealed.
+    assert widget._pipeline_context_label.isVisibleTo(widget)
+    for section in widget._stage_sections:
+        assert section.isVisibleTo(widget)
+
+
+def test_deselecting_experiment_drops_back_to_g1(monkeypatch, app):
+    widget = _enter_tuning(_stub_main_widget(monkeypatch))
+    widget.experiments_list.set_active(None)
+    for section in widget._stage_sections:
+        assert not section.isVisibleTo(widget)
+    assert not widget._pipeline_context_label.isVisibleTo(widget)
