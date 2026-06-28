@@ -648,8 +648,22 @@ class napariTFMWidget(QWidget):
         button.setAutoRaise(True)
         return button
 
+    def _confirm_discard(self) -> bool:
+        """True if it's safe to clear the workspace (clean, no project open, or user said yes)."""
+        if not self._dirty or not self._project_open:
+            return True
+        reply = QMessageBox.question(
+            self,
+            "Discard changes?",
+            "This project has unsaved changes. Discard them?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
+
     def _new_project(self) -> None:
         """Clear to an empty, open workspace (G1): no rows, default knobs."""
+        if not self._confirm_discard():
+            return
         self._applying_state = True
         try:
             self.parameter_manager.reset_all_parameters()
@@ -694,6 +708,8 @@ class napariTFMWidget(QWidget):
 
     def _load_project(self) -> None:
         """Load a project bundle: dataset + run options + analysis parameters."""
+        if not self._confirm_discard():
+            return
         import yaml
 
         try:
@@ -1100,6 +1116,8 @@ class napariTFMWidget(QWidget):
 
     def _on_parameter_changed(self, param_name: str, value: Any):
         """Propagate parameter edits to the widgets that display them."""
+        if not self._applying_state:
+            self._dirty = True
         if param_name in ("pixel_size", "frame_interval"):
             # Calibration affects every stage's displayed/derived values.
             for widget in self._stage_widgets():

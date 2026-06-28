@@ -1737,3 +1737,45 @@ def test_discover_tooltip_includes_present_optionals(monkeypatch, app):
     tip = el.add_btn.toolTip()
     # Oxford-free list: "b.tif, r.tif, c.tif and m.tif"
     assert "b.tif, r.tif, c.tif and m.tif" in tip
+
+
+def test_parameter_edit_marks_project_dirty(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget._new_project()            # opens a clean (not dirty) project
+    assert widget._dirty is False
+    widget.parameter_manager.set_parameter("young_modulus", 7.0)
+    assert widget._dirty is True
+
+
+def test_new_project_on_dirty_workspace_asks_before_discarding(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget._new_project()
+    widget.experiments_list.add_folders(["/data/a"])  # marks dirty
+    assert widget._dirty is True
+
+    asked = {"n": 0}
+
+    def _decline(*a, **k):
+        asked["n"] += 1
+        return _widget.QMessageBox.No
+
+    monkeypatch.setattr(_widget.QMessageBox, "question", staticmethod(_decline))
+
+    widget._new_project()
+    # The user declined: the workspace is left intact.
+    assert asked["n"] == 1
+    assert widget.experiments_list.experiments() == ["/data/a"]
+
+
+def test_new_project_proceeds_when_discard_confirmed(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget._new_project()
+    widget.experiments_list.add_folders(["/data/a"])
+
+    monkeypatch.setattr(
+        _widget.QMessageBox, "question",
+        staticmethod(lambda *a, **k: _widget.QMessageBox.Yes),
+    )
+
+    widget._new_project()
+    assert widget.experiments_list.experiments() == []
