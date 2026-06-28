@@ -69,3 +69,47 @@ def test_results_are_not_marked_dirty(tmp_path):
     dm = DataManager()
     dm.set_force_results(_stub_force_result())
     assert dm.get_artifact("force_results").dirty is False
+
+
+def test_raw_input_available_from_discovery_files_on_disk(tmp_path):
+    # The active experiment's raw inputs read available when the discovery-named
+    # files exist on disk — green before anything is loaded into memory.
+    dm = DataManager()
+    dm.set_active_inputs(tmp_path, {"beads": "b.tif", "reference": "r.tif"})
+
+    assert dm.artifact_available("reference") is False
+    assert dm.artifact_available("bead_stack") is False
+
+    (tmp_path / "r.tif").write_bytes(b"x")
+    assert dm.artifact_available("reference") is True
+    assert dm.artifact_available("bead_stack") is False
+
+    (tmp_path / "b.tif").write_bytes(b"x")
+    assert dm.artifact_available("bead_stack") is True
+
+
+def test_raw_input_disk_check_honours_discovery_names(tmp_path):
+    # Discovery may name the files anything; disk presence follows those names.
+    dm = DataManager()
+    dm.set_active_inputs(tmp_path, {"masks": "segmentation.tif"})
+    assert dm.artifact_available("mask_stack") is False
+    (tmp_path / "segmentation.tif").write_bytes(b"x")
+    assert dm.artifact_available("mask_stack") is True
+
+
+def test_generated_output_never_reads_discovery_disk(tmp_path):
+    # Only raw inputs gain the disk path; generated outputs stay memory-only.
+    dm = DataManager()
+    dm.set_active_inputs(tmp_path, {"beads": "b.tif"})
+    (tmp_path / "b.tif").write_bytes(b"x")
+    assert dm.artifact_available("displacement_results") is False
+
+
+def test_clearing_active_inputs_reverts_to_memory_only(tmp_path):
+    dm = DataManager()
+    dm.set_active_inputs(tmp_path, {"beads": "b.tif"})
+    (tmp_path / "b.tif").write_bytes(b"x")
+    assert dm.artifact_available("bead_stack") is True
+
+    dm.set_active_inputs(None, {})
+    assert dm.artifact_available("bead_stack") is False

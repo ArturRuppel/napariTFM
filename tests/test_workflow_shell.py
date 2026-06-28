@@ -84,6 +84,8 @@ class _StubDataManager:
     def __init__(self):
         self._callbacks = []
         self.output_dir = None
+        self.active_input_folder = None
+        self.active_input_files = {}
         self.bead_stack = None
         self.reference = None
         self.cell_stack = None
@@ -110,6 +112,11 @@ class _StubDataManager:
 
     def set_output_dir(self, path):
         self.output_dir = Path(path).expanduser() if path else None
+        self.notify_changed()
+
+    def set_active_inputs(self, folder, input_files):
+        self.active_input_folder = Path(folder).expanduser() if folder else None
+        self.active_input_files = dict(input_files or {})
         self.notify_changed()
 
     def mark_artifact_error(self, key, error):
@@ -1741,6 +1748,35 @@ def test_column_group_separator_absent_without_columns(monkeypatch, app):
 
     # No columns → no group header, just the row.
     assert _group_separator_texts(el) == []
+
+
+def test_selecting_experiment_points_disk_check_at_its_inputs(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget._project_open = True
+    widget.experiments_list.add_folders(
+        ["/data/exp_a"],
+        input_files={"beads": "b.tif", "reference": "r.tif"},
+    )
+
+    widget.experiments_list.set_active("/data/exp_a")
+
+    dm = widget.data_manager
+    assert dm.active_input_folder == Path("/data/exp_a")
+    assert dm.active_input_files == {"beads": "b.tif", "reference": "r.tif"}
+
+
+def test_deselecting_experiment_clears_disk_check(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget._project_open = True
+    widget.experiments_list.add_folders(
+        ["/data/exp_a"], input_files={"beads": "b.tif"}
+    )
+    widget.experiments_list.set_active("/data/exp_a")
+
+    widget.experiments_list.set_active(None)
+
+    assert widget.data_manager.active_input_folder is None
+    assert widget.data_manager.active_input_files == {}
 
 
 def test_discover_tooltip_lists_only_filled_inputs(monkeypatch, app):

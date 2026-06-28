@@ -42,9 +42,21 @@ class DataManager:
         "mask_stack": "Mask stack",
     }
 
+    # Raw-input artifact key -> the discovery input-file slot that names its file
+    # on disk. These are the only artifacts whose availability can be proven by a
+    # file in the active experiment folder; everything else is in-memory only.
+    RAW_INPUT_FILE_SLOTS = {
+        "reference": "reference",
+        "bead_stack": "beads",
+        "cell_stack": "cells",
+        "mask_stack": "masks",
+    }
+
     def __init__(self):
         self._callbacks = []
         self._output_dir: Optional[Path] = None
+        self._active_input_folder: Optional[Path] = None
+        self._active_input_files: Dict[str, str] = {}
         self._artifacts: Dict[str, ArtifactState] = {
             key: ArtifactState(key=key, label=label)
             for key, label in self.ARTIFACT_LABELS.items()
@@ -79,6 +91,31 @@ class DataManager:
         self._output_dir.mkdir(parents=True, exist_ok=True)
         return self._output_dir
 
+    def set_active_inputs(self, folder, input_files) -> None:
+        """Point the raw-input disk check at the active experiment.
+
+        *folder* is the experiment directory; *input_files* is the discovery
+        config (``{"beads": "beads.tif", "reference": ..., ...}``) naming the raw
+        files inside it. With these set, a raw input reads available the moment
+        its file is on disk — so the preprocessing input dots turn green before
+        anything is loaded into memory. Passing ``None``/``{}`` clears the check.
+        """
+        self._active_input_folder = Path(folder).expanduser() if folder else None
+        self._active_input_files = dict(input_files or {})
+        self._notify_changed()
+
+    def _raw_input_on_disk(self, key: str) -> bool:
+        """True when *key*'s discovery-named file exists in the active folder."""
+        if self._active_input_folder is None:
+            return False
+        slot = self.RAW_INPUT_FILE_SLOTS.get(key)
+        if slot is None:
+            return False
+        name = self._active_input_files.get(slot)
+        if not name:
+            return False
+        return (self._active_input_folder / name).exists()
+
     def get_artifact(self, key: str) -> ArtifactState:
         return self._artifacts[key]
 
@@ -86,10 +123,15 @@ class DataManager:
         """Availability follows the in-memory value (preview-only; ROADMAP §4).
 
         Interactive stage runs hold results in memory and write nothing to disk
-        — batch is the only path to persisted data. So an artifact is "available"
-        exactly when its value is present in memory.
+        — batch is the only path to persisted data. So a generated artifact is
+        "available" exactly when its value is present in memory. The one
+        exception is a *raw input*: its discovery-named file on disk in the
+        active experiment folder also counts, so the input dots read green from
+        the files alone (see :meth:`set_active_inputs`).
         """
-        return self.get_artifact(key).available
+        if self.get_artifact(key).available:
+            return True
+        return self._raw_input_on_disk(key)
 
     def set_artifact(self, key: str, value, path=None, source: str = "", dirty: bool = False) -> None:
         state = self.get_artifact(key)

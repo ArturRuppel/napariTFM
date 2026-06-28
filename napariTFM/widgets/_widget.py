@@ -966,11 +966,18 @@ class napariTFMWidget(QWidget):
         self._active_experiment = path or None
         if self._active_experiment is None:
             self._pipeline_context_label.setText("Pipeline")
+            self.data_manager.set_active_inputs(None, {})
         else:
             from pathlib import Path
 
             self._pipeline_context_label.setText(
                 f"Pipeline · tuning ▸ {Path(self._active_experiment).name}"
+            )
+            # Point the raw-input disk check at the selected experiment so the
+            # preprocessing input dots read green from its discovery files.
+            self.data_manager.set_active_inputs(
+                self._active_experiment,
+                self.experiments_list.input_files_for(self._active_experiment),
             )
         self._update_disclosure()
 

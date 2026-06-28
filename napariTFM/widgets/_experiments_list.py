@@ -605,6 +605,11 @@ class ExperimentsList(QWidget):
     def active(self) -> Optional[str]:
         return self._active
 
+    def input_files_for(self, path: str) -> dict:
+        """The discovery-defined input file names for one row (empty if unknown)."""
+        record = self._records.get(path)
+        return dict(record["input_files"]) if record else {}
+
     def meta_text(self) -> str:
         return self._meta.text()
 
