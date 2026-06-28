@@ -886,6 +886,40 @@ def test_workflow_parameter_panel_syncs_from_parameter_manager(app):
     assert panel.parameter_controls["nscales"].value() == 6
 
 
+def test_intensity_min_max_collapse_into_one_range_slider(app):
+    from superqt import QLabeledDoubleRangeSlider
+
+    panel = _widget.WorkflowParameterPanel(_StubParameterManager())
+
+    bead = panel.parameter_controls["min_intensity_percentile"]
+    # Both bounds map to the very same range control, not two sliders.
+    assert isinstance(bead, QLabeledDoubleRangeSlider)
+    assert panel.parameter_controls["max_intensity_percentile"] is bead
+    cell = panel.parameter_controls["cell_min_intensity_percentile"]
+    assert isinstance(cell, QLabeledDoubleRangeSlider)
+    assert panel.parameter_controls["cell_max_intensity_percentile"] is cell
+
+
+def test_intensity_range_slider_writes_both_bounds(app):
+    manager = _StubParameterManager()
+    panel = _widget.WorkflowParameterPanel(manager)
+
+    panel.parameter_controls["min_intensity_percentile"].setValue((10.0, 90.0))
+
+    assert ("min_intensity_percentile", 10.0) in manager.ui_writes
+    assert ("max_intensity_percentile", 90.0) in manager.ui_writes
+
+
+def test_intensity_range_slider_syncs_from_parameter_manager(app):
+    manager = _StubParameterManager()
+    panel = _widget.WorkflowParameterPanel(manager)
+
+    manager.set_parameter("min_intensity_percentile", 5.0)
+    manager.set_parameter("max_intensity_percentile", 95.0)
+
+    assert panel.parameter_controls["min_intensity_percentile"].value() == (5.0, 95.0)
+
+
 def test_main_widget_does_not_expose_legacy_parameter_panel(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)

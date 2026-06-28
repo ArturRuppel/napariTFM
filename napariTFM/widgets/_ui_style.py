@@ -447,6 +447,21 @@ def add_section_pair_row(grid, row, left_label, left_widget, right_label=None, r
     return left_label_widget, left_widget, right_label_widget, right_widget
 
 
+def add_section_labeled_full_row(grid, row, label_text, widget):
+    """Add a [label-above-widget] cell spanning all 4 columns — for wide
+    controls (e.g. a two-handle range slider) that need the full row width."""
+    container = QWidget()
+    layout = QVBoxLayout(container)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(1)
+    label_widget = _block_label(label_text)
+    label_widget.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+    layout.addWidget(label_widget)
+    layout.addWidget(widget)
+    grid.addWidget(container, row, 0, 1, 4)
+    return container
+
+
 def _add_section_pair_cell(grid, row, column, label_widget, widget):
     container = QWidget()
     layout = QVBoxLayout(container)

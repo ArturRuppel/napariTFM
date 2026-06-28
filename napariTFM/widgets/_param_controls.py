@@ -11,7 +11,7 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from superqt import QLabeledDoubleSlider, QLabeledSlider
+from superqt import QLabeledDoubleRangeSlider, QLabeledDoubleSlider, QLabeledSlider
 
 from napariTFM.widgets._ui_style import mono_font
 
@@ -132,6 +132,27 @@ def dslider(lo, hi, val, step=0.1, decimals=2, tooltip="", *, step_buttons=True)
     s.setToolTip(tooltip)
     s.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     _stack_label_above(s, step_buttons=step_buttons)
+    return s
+
+
+def rslider(lo, hi, low_val, high_val, step=0.1, decimals=2, tooltip=""):
+    """A two-handle range slider for a min/max pair on one track.
+
+    Replaces a separate min slider and max slider — the two draggable handle
+    labels sit above the handles, matching the stacked label of dslider/islider.
+    Emits valueChanged((low, high)); value() returns that tuple.
+    """
+    s = QLabeledDoubleRangeSlider(Qt.Orientation.Horizontal)
+    # Only the two handle labels — no redundant edge (min/max bound) labels.
+    s.setEdgeLabelMode(QLabeledDoubleRangeSlider.EdgeLabelMode.NoLabel)
+    s.setRange(lo, hi)
+    s.setSingleStep(step)
+    s.setDecimals(decimals)
+    s.setValue((low_val, high_val))
+    s.setToolTip(tooltip)
+    s.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    for label in s._handle_labels:
+        label.setFont(mono_font())
     return s
 
 

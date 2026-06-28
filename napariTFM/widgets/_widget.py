@@ -21,9 +21,9 @@ from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec
 from napariTFM.widgets._stage_file_status import StageFileStatusRow
 from napariTFM.widgets._stage_section import StageSection
-from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, section_label_style, TIGHT_SPACING
-from napariTFM.widgets._param_controls import dslider, islider
-from superqt import QLabeledDoubleSlider, QLabeledSlider
+from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, add_section_labeled_full_row, section_label_style, TIGHT_SPACING
+from napariTFM.widgets._param_controls import dslider, islider, rslider
+from superqt import QLabeledDoubleRangeSlider, QLabeledDoubleSlider, QLabeledSlider
 from napariTFM.widgets._experiments_list import ExperimentsList, PIPELINE_STAGES
 from napariTFM.widgets._run_config import (
     build_run_config,
@@ -218,14 +218,14 @@ class WorkflowParameterPanel(QWidget):
         ]),
         ("Preprocessing", [
             ("rolling_ball_radius", "Rolling Ball Radius", "int", 0, 50, 1, 0, None),
-            ("min_intensity_percentile", "Min Intensity (%)", "float", 0.0, 100.0, 0.1, 1, None),
-            ("max_intensity_percentile", "Max Intensity (%)", "float", 0.0, 100.0, 0.1, 1, None),
             ("gaussian_sigma", "Gaussian Sigma", "float", 0.0, 10.0, 0.1, 1, None),
-            ("cell_min_intensity_percentile", "Cell Min Intensity (%)", "float", 0.0, 100.0, 0.1, 1, None),
-            ("cell_max_intensity_percentile", "Cell Max Intensity (%)", "float", 0.0, 100.0, 0.1, 1, None),
+            (("min_intensity_percentile", "max_intensity_percentile"), "Intensity (%)",
+             "range", 0.0, 100.0, 0.1, 1, None),
             ("cell_gaussian_sigma", "Cell Gaussian Sigma", "float", 0.0, 10.0, 0.1, 1, None),
             ("registration_mode", "Registration Mode", "choice", None, None, None, None,
              ["translation", "rigid", "no registration"]),
+            (("cell_min_intensity_percentile", "cell_max_intensity_percentile"), "Cell Intensity (%)",
+             "range", 0.0, 100.0, 0.1, 1, None),
         ]),
         ("Displacement", [
             ("nscales", "Farneback Levels", "int", 1, 50, 1, 0, None),
@@ -280,17 +280,30 @@ class WorkflowParameterPanel(QWidget):
             header.setStyleSheet(section_label_style())
             add_section_header(grid, 0, header)
 
+            # Lay out specs two-per-row, but a range slider takes a full row.
+            # A scalar spec waits in `pending` for a partner; a range spec
+            # flushes any waiting scalar (as a solo row) before its own row.
             row = 1
-            index = 0
-            while index < len(specs):
-                left_label, left_control = self._control_for_spec(specs[index])
-                if index + 1 < len(specs):
-                    right_label, right_control = self._control_for_spec(specs[index + 1])
-                    add_section_pair_row(grid, row, left_label, left_control, right_label, right_control)
+            pending = None
+            for spec in specs:
+                if spec[2] == "range":
+                    if pending is not None:
+                        add_section_pair_row(grid, row, pending[0], pending[1])
+                        row += 1
+                        pending = None
+                    label, control = self._control_for_spec(spec)
+                    add_section_labeled_full_row(grid, row, label, control)
+                    row += 1
+                elif pending is None:
+                    pending = self._control_for_spec(spec)
                 else:
-                    add_section_pair_row(grid, row, left_label, left_control)
+                    label, control = self._control_for_spec(spec)
+                    add_section_pair_row(grid, row, pending[0], pending[1], label, control)
+                    row += 1
+                    pending = None
+            if pending is not None:
+                add_section_pair_row(grid, row, pending[0], pending[1])
                 row += 1
-                index += 2
 
             layout.addLayout(grid)
 
@@ -302,6 +315,27 @@ class WorkflowParameterPanel(QWidget):
         return label, control
 
     def _create_control(self, name, kind, min_val, max_val, step, decimals, choices):
+        if kind == "range":
+            lo_name, hi_name = name
+            control = rslider(
+                min_val, max_val,
+                self.parameter_manager.get_ui_parameter(lo_name),
+                self.parameter_manager.get_ui_parameter(hi_name),
+                step=step, decimals=decimals,
+            )
+            control._range_params = (lo_name, hi_name)
+            control.valueChanged.connect(
+                lambda values, lo=lo_name, hi=hi_name: (
+                    self.parameter_manager.set_ui_parameter(lo, values[0]),
+                    self.parameter_manager.set_ui_parameter(hi, values[1]),
+                )
+            )
+            control.setObjectName(f"workflow_parameter_{lo_name}")
+            # Both names point at this one control so external changes to either
+            # bound re-sync the slider (see _sync_parameter).
+            self.parameter_controls[lo_name] = control
+            self.parameter_controls[hi_name] = control
+            return control
         if kind == "int":
             control = islider(min_val, max_val, self.parameter_manager.get_ui_parameter(name), step=step)
             control.valueChanged.connect(lambda value, n=name: self.parameter_manager.set_ui_parameter(n, value))
@@ -336,7 +370,13 @@ class WorkflowParameterPanel(QWidget):
         display_value = self.parameter_manager.get_ui_parameter(param_name)
         control.blockSignals(True)
         try:
-            if isinstance(control, QComboBox):
+            if isinstance(control, QLabeledDoubleRangeSlider):
+                lo_name, hi_name = control._range_params
+                control.setValue((
+                    self.parameter_manager.get_ui_parameter(lo_name),
+                    self.parameter_manager.get_ui_parameter(hi_name),
+                ))
+            elif isinstance(control, QComboBox):
                 index = control.findText(str(display_value), Qt.MatchFixedString)
                 if index >= 0:
                     control.setCurrentIndex(index)
