@@ -1016,11 +1016,11 @@ class VisualizationManager(ErrorHandlingMixin):
 
                 frame = frames[data_type]
                 if layer_name in self.viewer.layers:
-                    layer = self.viewer.layers[layer_name]
-                    layer.data = frame
-                    layer.visible = True
-                    layer.colormap = colormap
-                    layer.blending = 'additive'
+                    # Re-render (e.g. on parameter change) updates pixels only.
+                    # Visibility, colormap, and blending are the user's to set —
+                    # forcing them here would unhide layers hidden for isolated
+                    # inspection.
+                    self.viewer.layers[layer_name].data = frame
                 else:
                     self.viewer.add_image(
                         frame,

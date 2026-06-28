@@ -416,6 +416,33 @@ def test_visualization_manager_preprocessing_preview_layers_are_separate():
     assert viewer.layers == []
 
 
+def test_preprocessing_preview_update_respects_hidden_layers():
+    # Changing a parameter re-renders the preview. If the user hid a preview
+    # layer to inspect another in isolation, the refresh must NOT force it back
+    # on — re-rendering updates data only, not the user's visibility choice.
+    viewer = _FakeViewer()
+    manager = VisualizationManager(viewer, DataManager())
+
+    frames = {
+        "beads": np.ones((2, 2), dtype=np.float32),
+        "reference": np.ones((2, 2), dtype=np.float32),
+    }
+    manager.handle_preprocessing_preview(frames, enable=True)
+
+    # User hides the beads preview to look at the reference alone.
+    viewer.layers["Preview Beads"].visible = False
+
+    # A parameter change triggers another preview render.
+    frames = {
+        "beads": np.full((2, 2), 2.0, dtype=np.float32),
+        "reference": np.full((2, 2), 2.0, dtype=np.float32),
+    }
+    manager.handle_preprocessing_preview(frames, enable=True)
+
+    assert viewer.layers["Preview Beads"].visible is False
+    assert viewer.layers["Preview Reference"].visible is True
+
+
 def test_param_panel_uses_section_grid_not_groupbox(app):
     from qtpy.QtWidgets import QGridLayout, QGroupBox
     from napariTFM.utilities.parameter_manager import ParameterManager
