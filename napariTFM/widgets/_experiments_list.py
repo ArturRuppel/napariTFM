@@ -226,8 +226,6 @@ class ExperimentsList(QWidget):
     active_changed = Signal(str)
     run_all_requested = Signal()
     output_dir_changed = Signal()
-    save_series_requested = Signal()
-    load_series_requested = Signal()
 
     def __init__(
         self,
@@ -259,50 +257,6 @@ class ExperimentsList(QWidget):
         header.addWidget(label)
         header.addStretch()
 
-        # Series I/O lives with the series it serializes (the list itself):
-        # Open/Save the portable experiment-series file (folders + tags + run
-        # options). Analysis knobs are saved separately as a tfm_params preset.
-        self.load_series_btn = QToolButton()
-        self.load_series_btn.setObjectName("experiments_load_series_button")
-        self.load_series_btn.setText("Open")
-        self.load_series_btn.setToolTip("Open an experiment series (folders + tags)")
-        self.load_series_btn.clicked.connect(self.load_series_requested)
-        header.addWidget(self.load_series_btn)
-
-        self.save_series_btn = QToolButton()
-        self.save_series_btn.setObjectName("experiments_save_series_button")
-        self.save_series_btn.setText("Save")
-        self.save_series_btn.setToolTip("Save this experiment series (folders + tags)")
-        self.save_series_btn.clicked.connect(self.save_series_requested)
-        header.addWidget(self.save_series_btn)
-
-        self.add_btn = QToolButton()
-        self.add_btn.setObjectName("experiments_add_button")
-        self.add_btn.setText("Discover")
-        self.add_btn.setIcon(stage_action_icon("plus", muted_accent(stage_accent("displacement"))))
-        self.add_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.add_btn.clicked.connect(self._on_add_clicked)
-        header.addWidget(self.add_btn)
-
-        self.commit_btn = QToolButton()
-        self.commit_btn.setObjectName("experiments_commit_button")
-        self.commit_btn.setText("Add to list")
-        self.commit_btn.setEnabled(False)
-        self.commit_btn.clicked.connect(self.commit_discovered)
-        header.addWidget(self.commit_btn)
-
-        # Run all (P4): batch is no longer a separate card — running the whole
-        # list is an action on the list itself, walking the rail live.
-        self.run_all_btn = QToolButton()
-        self.run_all_btn.setObjectName("experiments_run_all_button")
-        self.run_all_btn.setText("Run all")
-        self.run_all_btn.setIcon(
-            stage_action_icon("run", muted_accent(stage_accent("force")))
-        )
-        self.run_all_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.run_all_btn.setEnabled(False)
-        self.run_all_btn.clicked.connect(self.run_all_requested)
-        header.addWidget(self.run_all_btn)
         layout.addLayout(header)
 
         # Project-level calibration + output directory (the aggregation layer
@@ -322,6 +276,41 @@ class ExperimentsList(QWidget):
         self._rows_box.setContentsMargins(0, 0, 0, 0)
         self._rows_box.setSpacing(2)
         layout.addLayout(self._rows_box)
+
+        # List actions live at the foot of the list, just above the count:
+        # Discover stages folders, Add to list commits them, Run all walks the
+        # whole list (P4 — batch is an action on the list, not a separate card).
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+
+        self.add_btn = QToolButton()
+        self.add_btn.setObjectName("experiments_add_button")
+        self.add_btn.setText("Discover")
+        self.add_btn.setIcon(stage_action_icon("plus", muted_accent(stage_accent("displacement"))))
+        self.add_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.add_btn.clicked.connect(self._on_add_clicked)
+        actions.addWidget(self.add_btn)
+
+        self.commit_btn = QToolButton()
+        self.commit_btn.setObjectName("experiments_commit_button")
+        self.commit_btn.setText("Add to list")
+        self.commit_btn.setEnabled(False)
+        self.commit_btn.clicked.connect(self.commit_discovered)
+        actions.addWidget(self.commit_btn)
+
+        actions.addStretch()
+
+        self.run_all_btn = QToolButton()
+        self.run_all_btn.setObjectName("experiments_run_all_button")
+        self.run_all_btn.setText("Run all")
+        self.run_all_btn.setIcon(
+            stage_action_icon("run", muted_accent(stage_accent("force")))
+        )
+        self.run_all_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.run_all_btn.setEnabled(False)
+        self.run_all_btn.clicked.connect(self.run_all_requested)
+        actions.addWidget(self.run_all_btn)
+        layout.addLayout(actions)
 
         self._meta = QLabel("")
         self._meta.setStyleSheet(f"color: {TEXT_DIM};")
@@ -474,6 +463,9 @@ class ExperimentsList(QWidget):
         self.add_column_btn = QToolButton()
         self.add_column_btn.setObjectName("experiments_add_column_button")
         self.add_column_btn.setText("+ Add column")
+        self.add_column_btn.setToolTip(
+            "Tag the experiment with metadata, e.g. condition or cell type"
+        )
         self.add_column_btn.clicked.connect(lambda: self.add_column_field())
         add_row.addWidget(self.add_column_btn)
         add_row.addStretch()

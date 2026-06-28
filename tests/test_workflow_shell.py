@@ -1556,14 +1556,19 @@ def test_state_round_trips_experiments_and_active(monkeypatch, app):
     assert fresh.experiments_list.active() == "/data/b"
 
 
-def test_config_split_into_params_preset_and_series_handlers(monkeypatch, app):
+def test_toolbar_exposes_project_and_parameter_buttons(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
-    # Two config files now: the params preset lives in the title bar, the
-    # experiment series in the list header. The old unified handler is gone.
-    assert widget.save_params_btn.text() == "Save params"
-    assert widget.load_params_btn.text() == "Load params"
-    assert widget.experiments_list.save_series_btn.text() == "Save"
-    assert widget.experiments_list.load_series_btn.text() == "Open"
+    # Project front-door buttons live on the brand row.
+    assert widget.new_project_btn.text() == "New Project"
+    assert widget.load_project_btn.text() == "Load Project"
+    assert widget.save_project_btn.text() == "Save Project"
+    # Parameter preset buttons, renamed and reordered (Load, Save, Reset).
+    assert widget.load_params_btn.text() == "Load Params"
+    assert widget.save_params_btn.text() == "Save Params"
+    assert widget.reset_params_btn.text() == "Reset"
+    # The experiments list no longer owns its own series Open/Save.
+    assert not hasattr(widget.experiments_list, "load_series_btn")
+    assert not hasattr(widget.experiments_list, "save_series_btn")
     assert not hasattr(widget, "_save_config")
     assert not hasattr(widget, "_load_config")
 

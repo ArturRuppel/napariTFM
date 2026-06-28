@@ -392,21 +392,31 @@ class napariTFMWidget(QWidget):
         container_layout.setContentsMargins(0, 0, 0, 0)
         container.setLayout(container_layout)
 
-        # Title row: brand + the parameter-preset toolbar. These act on the
-        # analysis knobs only (the portable tfm_params recipe); the experiment
-        # series (folders + tags) has its own Open/Save in the list header.
+        # Brand row + the Project toolbar (the front door): New / Load / Save.
+        # Save Project is always Save-as. Parameters are a separate preset row.
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title = QLabel("napariTFM")
         title.setStyleSheet(title_style())
         title_row.addWidget(title)
         title_row.addStretch()
-        self.save_params_btn = self._make_toolbar_button("Save params", "Save parameters preset")
-        self.load_params_btn = self._make_toolbar_button("Load params", "Load parameters preset")
-        self.reset_params_btn = self._make_toolbar_button("Reset", "Reset parameters")
-        for _btn in (self.save_params_btn, self.load_params_btn, self.reset_params_btn):
+        self.new_project_btn = self._make_toolbar_button("New Project", "Start a new project")
+        self.load_project_btn = self._make_toolbar_button("Load Project", "Load a project")
+        self.save_project_btn = self._make_toolbar_button("Save Project", "Save project as…")
+        for _btn in (self.new_project_btn, self.load_project_btn, self.save_project_btn):
             title_row.addWidget(_btn)
         container_layout.addLayout(title_row)
+
+        # Parameters preset toolbar (recipe only): Load / Save / Reset.
+        params_row = QHBoxLayout()
+        params_row.setContentsMargins(0, 0, 0, 0)
+        params_row.addStretch()
+        self.load_params_btn = self._make_toolbar_button("Load Params", "Load parameters preset")
+        self.save_params_btn = self._make_toolbar_button("Save Params", "Save parameters preset")
+        self.reset_params_btn = self._make_toolbar_button("Reset", "Reset parameters")
+        for _btn in (self.load_params_btn, self.save_params_btn, self.reset_params_btn):
+            params_row.addWidget(_btn)
+        container_layout.addLayout(params_row)
 
         # G0 empty-state hint: shown only before a project is opened.
         self._empty_hint = QLabel("New Project to begin, or Load Project.")
@@ -450,14 +460,14 @@ class napariTFMWidget(QWidget):
 
         self._stage_parameter_panels_by_key = self._create_stage_parameter_panels()
 
-        # Wire the title-bar parameter-preset toolbar; the experiment-series
-        # Open/Save lives on the list header instead.
+        # Parameter preset toolbar (recipe import/export).
         self.save_params_btn.clicked.connect(self._save_params)
         self.load_params_btn.clicked.connect(self._load_params)
         self.reset_params_btn.clicked.connect(self._reset_parameters)
-        self.experiments_list.save_series_requested.connect(self._save_series)
-        self.experiments_list.load_series_requested.connect(self._load_series)
-        self.experiments_list.output_dir_changed.connect(self._reconcile_to_output_dir)
+        # Project toolbar (the front door): handlers defined below.
+        self.new_project_btn.clicked.connect(self._new_project)
+        self.load_project_btn.clicked.connect(self._load_project)
+        self.save_project_btn.clicked.connect(self._save_project)
 
         # Initialize all widgets with parameter_manager
         self.preprocessing_widget = PreprocessingWidget(
@@ -635,6 +645,17 @@ class napariTFMWidget(QWidget):
         button.setToolTip(tooltip)
         button.setAutoRaise(True)
         return button
+
+    def _new_project(self) -> None:
+        self._project_open = True
+        self._update_disclosure()
+
+    def _load_project(self) -> None:
+        self._project_open = True
+        self._update_disclosure()
+
+    def _save_project(self) -> None:
+        pass
 
     def _setup_theme_selector(self, layout):
         footer = QHBoxLayout()
