@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 CONFIG_FILENAME = "napariTFM_config.json"
 STATE_VERSION = 1
+PROJECT_FORMAT_VERSION = 2
 
 
 STAGE_DATA_ARTIFACTS = {
@@ -426,6 +427,7 @@ class napariTFMWidget(QWidget):
 
         # Progressive-disclosure gate (G0/G1/G2). No project is open at launch.
         self._project_open = False
+        self._dirty = False
 
         # Initialize managers
         self.data_manager = DataManager()
@@ -647,15 +649,80 @@ class napariTFMWidget(QWidget):
         return button
 
     def _new_project(self) -> None:
+        """Clear to an empty, open workspace (G1): no rows, default knobs."""
+        self._applying_state = True
+        try:
+            self.parameter_manager.reset_all_parameters()
+            self.experiments_list.set_records([])
+            for key, section in self._stage_sections_by_key.items():
+                if section.enable_btn is not None:
+                    section.set_enabled(False)  # stress is off by default (D1)
+            self.data_manager.set_output_dir(None)
+        finally:
+            self._applying_state = False
         self._project_open = True
-        self._update_disclosure()
-
-    def _load_project(self) -> None:
-        self._project_open = True
+        self._dirty = False
+        self.refresh()
         self._update_disclosure()
 
     def _save_project(self) -> None:
-        pass
+        """Save the whole project — dataset + recipe — to one YAML (Save-as)."""
+        import yaml
+
+        try:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Save project", "project.yaml", "YAML Files (*.yaml *.yml)"
+            )
+            if not file_path:
+                return
+            if not file_path.lower().endswith((".yml", ".yaml")):
+                file_path += ".yaml"
+            config = build_series_config(
+                self.experiments_list.experiment_records(),
+                disabled_stages=self._disabled_stages(),
+                processed_root=self.data_manager.output_dir,
+            )
+            config["format_version"] = PROJECT_FORMAT_VERSION
+            config["parameters"] = self.parameter_manager.get_all_parameters()
+            with open(file_path, "w") as f:
+                yaml.safe_dump(config, f, default_flow_style=False)
+            self._dirty = False
+            QMessageBox.information(self, "Success", "Project saved!")
+        except Exception as e:
+            logger.error(f"Error saving project: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to save project: {str(e)}")
+
+    def _load_project(self) -> None:
+        """Load a project bundle: dataset + run options + analysis parameters."""
+        import yaml
+
+        try:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "Load project", "", "YAML Files (*.yaml *.yml)"
+            )
+            if not file_path:
+                return
+            with open(file_path) as f:
+                config = yaml.safe_load(f) or {}
+            self._applying_state = True
+            try:
+                self._apply_parameters(config.get("parameters", {}) or {})
+                run_options = config.get("run_options", {}) or {}
+                disabled = set(run_options.get("disabled_stages") or [])
+                for key, section in self._stage_sections_by_key.items():
+                    if section.enable_btn is not None:
+                        section.set_enabled(key not in disabled)
+                self.experiments_list.set_records(series_records(config))
+            finally:
+                self._applying_state = False
+            self._project_open = True
+            self._dirty = False
+            self.refresh()
+            self._update_disclosure()
+            QMessageBox.information(self, "Success", "Project loaded!")
+        except Exception as e:
+            logger.error(f"Error loading project: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to load project: {str(e)}")
 
     def _setup_theme_selector(self, layout):
         footer = QHBoxLayout()
@@ -812,7 +879,6 @@ class napariTFMWidget(QWidget):
 
     def _on_stage_enabled_changed(self, key: str) -> None:
         self.refresh_stage_statuses()
-        self._write_config()
 
     def _set_stage_layers_visible(self, key: str, visible: bool) -> None:
         """Show/hide the napari layers a stage paints (header viz glyph, P5)."""
@@ -891,10 +957,10 @@ class napariTFMWidget(QWidget):
                 f"Pipeline · tuning ▸ {Path(self._active_experiment).name}"
             )
         self._update_disclosure()
-        self._write_config()
 
     def _on_experiments_changed(self) -> None:
-        self._write_config()
+        if not self._applying_state:
+            self._dirty = True
 
     def get_state(self) -> dict:
         output_dir = self.data_manager.output_dir
@@ -926,43 +992,6 @@ class napariTFMWidget(QWidget):
         finally:
             self._applying_state = False
         self.refresh()
-
-    def _config_path(self):
-        output_dir = self.data_manager.output_dir
-        return (output_dir / CONFIG_FILENAME) if output_dir else None
-
-    def _read_config(self):
-        path = self._config_path()
-        if path is None or not path.exists():
-            return None
-        try:
-            with open(path) as f:
-                return json.load(f)
-        except Exception as exc:
-            logger.warning("Failed to read config %s: %s", path, exc)
-            return None
-
-    def _write_config(self):
-        if self._applying_state:
-            return
-        path = self._config_path()
-        if path is None:
-            return
-        try:
-            self.data_manager.ensure_output_dir()
-            with open(path, "w") as f:
-                json.dump(self.get_state(), f, indent=2)
-        except Exception as exc:
-            logger.warning("Failed to write config %s: %s", path, exc)
-
-    def _reconcile_to_output_dir(self):
-        """On a new output dir: load its config if present, else claim it."""
-        state = self._read_config()
-        if state is not None:
-            self.set_state(state)   # set_state() calls refresh()
-        else:
-            self._write_config()
-            self.refresh()
 
     def _reset_parameters(self):
         """Reset parameters to default values and notify all widgets."""
@@ -1058,68 +1087,6 @@ class napariTFMWidget(QWidget):
         except Exception as e:
             logger.error(f"Error loading parameters preset: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to load parameters: {str(e)}")
-
-    def _save_series(self):
-        """Save the experiment series: folders + design tags + run options.
-
-        No analysis knobs ride along — those are a separate ``tfm_params``
-        preset, so a series file stays a portable manifest of *what* to run.
-        """
-        import yaml
-
-        try:
-            file_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save experiment series",
-                "tfm_experiment_series.yaml",
-                "YAML Files (*.yaml *.yml)",
-            )
-            if not file_path:
-                return
-            if not file_path.lower().endswith((".yml", ".yaml")):
-                file_path += ".yaml"
-            config = build_series_config(
-                self.experiments_list.experiment_records(),
-                disabled_stages=self._disabled_stages(),
-                processed_root=self.data_manager.output_dir,
-            )
-            with open(file_path, "w") as f:
-                yaml.safe_dump(config, f, default_flow_style=False)
-            QMessageBox.information(self, "Success", "Experiment series saved!")
-        except Exception as e:
-            logger.error(f"Error saving experiment series: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to save series: {str(e)}")
-
-    def _load_series(self):
-        """Load an experiment series: rebuild the table + restore run options."""
-        import yaml
-
-        try:
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Load experiment series",
-                "",
-                "YAML Files (*.yaml *.yml)",
-            )
-            if not file_path:
-                return
-            with open(file_path) as f:
-                config = yaml.safe_load(f) or {}
-
-            run_options = config.get("run_options", {}) or {}
-            disabled = set(run_options.get("disabled_stages") or [])
-            for key, section in self._stage_sections_by_key.items():
-                if section.enable_btn is not None:
-                    section.set_enabled(key not in disabled)
-            # ``processed_root`` is recorded for provenance but intentionally NOT
-            # re-applied here: claiming an output dir reloads *its* autosaved
-            # state, which would clobber the series we just loaded.
-            self.experiments_list.set_records(series_records(config))
-            self.refresh_stage_statuses()
-            QMessageBox.information(self, "Success", "Experiment series loaded!")
-        except Exception as e:
-            logger.error(f"Error loading experiment series: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to load series: {str(e)}")
 
     def connect_signals(self):
         """Connect signals between components"""

@@ -72,6 +72,13 @@ class _StubParameterManager(QObject):
         self.ui_writes.append((name, value))
         self.set_parameter(name, value)
 
+    def reset_all_parameters(self):
+        # Reset all values to the stub defaults (re-initialise from the class-level dict).
+        defaults = _StubParameterManager()._values
+        for name, value in defaults.items():
+            self._values[name] = value
+            self.parameter_changed.emit(name, value)
+
 
 class _StubDataManager:
     def __init__(self):
@@ -1274,46 +1281,6 @@ def test_get_set_state_round_trips_parameters(monkeypatch, app, tmp_path):
     assert widget.parameter_manager.get_parameter("rolling_ball_radius") == 7
 
 
-def test_reconcile_loads_existing_config_from_output_dir(monkeypatch, app, tmp_path):
-    import importlib.util as _ilu
-    import json
-
-    _pm_spec = _ilu.spec_from_file_location(
-        "napariTFM.utilities.parameter_manager_real",
-        Path(__file__).parent.parent / "napariTFM" / "utilities" / "parameter_manager.py",
-    )
-    _pm_mod = _ilu.module_from_spec(_pm_spec)
-    _pm_spec.loader.exec_module(_pm_mod)
-    RealParameterManager = _pm_mod.ParameterManager
-
-    _dm_spec = _ilu.spec_from_file_location(
-        "napariTFM.utilities.data_manager_real",
-        Path(__file__).parent.parent / "napariTFM" / "utilities" / "data_manager.py",
-    )
-    _dm_mod = _ilu.module_from_spec(_dm_spec)
-    _dm_spec.loader.exec_module(_dm_mod)
-    RealDataManager = _dm_mod.DataManager
-
-    monkeypatch.setattr(_widget, "DataManager", RealDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", RealParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    for name in (
-        "PreprocessingWidget", "DisplacementAnalysisWidget",
-        "FTTCWidget", "MSMWidget",
-    ):
-        monkeypatch.setattr(_widget, name, _StubStageWidget)
-
-    widget = _widget.napariTFMWidget(object())
-    (tmp_path / "napariTFM_config.json").write_text(
-        json.dumps({"version": 1, "parameters": {"rolling_ball_radius": 9},
-                    "output_dir": str(tmp_path)})
-    )
-
-    widget.data_manager.set_output_dir(tmp_path)
-    widget.experiments_list.output_dir_changed.emit()  # simulate dir chosen
-
-    assert widget.parameter_manager.get_parameter("rolling_ball_radius") == 9
-
 
 def test_calibration_change_updates_all_stage_widgets(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
@@ -1366,40 +1333,6 @@ def test_unrouted_param_change_updates_no_stage_widget(monkeypatch, app):
     after = [w.update_count for w in widget._stage_widgets()]
     assert after == before
 
-
-def test_reconcile_writes_config_when_absent(monkeypatch, app, tmp_path):
-    import importlib.util as _ilu
-
-    _pm_spec = _ilu.spec_from_file_location(
-        "napariTFM.utilities.parameter_manager_real",
-        Path(__file__).parent.parent / "napariTFM" / "utilities" / "parameter_manager.py",
-    )
-    _pm_mod = _ilu.module_from_spec(_pm_spec)
-    _pm_spec.loader.exec_module(_pm_mod)
-    RealParameterManager = _pm_mod.ParameterManager
-
-    _dm_spec = _ilu.spec_from_file_location(
-        "napariTFM.utilities.data_manager_real",
-        Path(__file__).parent.parent / "napariTFM" / "utilities" / "data_manager.py",
-    )
-    _dm_mod = _ilu.module_from_spec(_dm_spec)
-    _dm_spec.loader.exec_module(_dm_mod)
-    RealDataManager = _dm_mod.DataManager
-
-    monkeypatch.setattr(_widget, "DataManager", RealDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", RealParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    for name in (
-        "PreprocessingWidget", "DisplacementAnalysisWidget",
-        "FTTCWidget", "MSMWidget",
-    ):
-        monkeypatch.setattr(_widget, name, _StubStageWidget)
-
-    widget = _widget.napariTFMWidget(object())
-    widget.data_manager.set_output_dir(tmp_path)
-    widget.experiments_list.output_dir_changed.emit()
-
-    assert (tmp_path / "napariTFM_config.json").exists()
 
 
 def test_shell_theme_button_switches_palette(monkeypatch, app):
@@ -1613,61 +1546,6 @@ def test_load_params_applies_knobs(monkeypatch, app, tmp_path):
     assert widget.parameter_manager.get_parameter("young_modulus") == 9.0
 
 
-def test_save_series_writes_dataset_without_knobs(monkeypatch, app, tmp_path):
-    import yaml
-
-    widget = _stub_main_widget(monkeypatch)
-    widget.experiments_list.add_folders(
-        ["/data/a", "/data/b"],
-        input_files={"beads": "beads.tif", "reference": "reference.tif"},
-        columns={"day": "1"},
-    )
-    out = tmp_path / "tfm_experiment_series.yaml"
-    monkeypatch.setattr(
-        _widget.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), ""))
-    )
-    monkeypatch.setattr(_widget.QMessageBox, "information", staticmethod(lambda *a, **k: None))
-
-    widget._save_series()
-
-    config = yaml.safe_load(out.read_text())
-    assert config["root_folders"] == ["/data/a", "/data/b"]
-    assert config["experiment_metadata"]["/data/a"] == {"day": "1"}
-    assert config["input_files"]["beads"] == "beads.tif"
-    assert "run_options" in config
-    # Analysis knobs stay out of the series file — they are a separate preset.
-    assert "parameters" not in config
-
-
-def test_load_series_rebuilds_table_without_touching_params(monkeypatch, app, tmp_path):
-    import yaml
-
-    config = {
-        "format_version": 1,
-        "root_folders": ["/data/x", "/data/y"],
-        "input_files": {"beads": "beads.tif", "reference": "reference.tif"},
-        "experiment_metadata": {"/data/x": {"day": "1"}, "/data/y": {"day": "2"}},
-        "run_options": {"disabled_stages": [], "processed_root": None},
-    }
-    path = tmp_path / "tfm_experiment_series.yaml"
-    path.write_text(yaml.safe_dump(config))
-
-    widget = _stub_main_widget(monkeypatch)
-    baseline = widget.parameter_manager.get_parameter("young_modulus")
-    monkeypatch.setattr(
-        _widget.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(path), ""))
-    )
-    monkeypatch.setattr(_widget.QMessageBox, "information", staticmethod(lambda *a, **k: None))
-
-    widget._load_series()
-
-    assert widget.experiments_list.experiments() == ["/data/x", "/data/y"]
-    records = widget.experiments_list.experiment_records()
-    assert records[0]["columns"] == {"day": "1"}
-    assert records[1]["columns"] == {"day": "2"}
-    # Loading a series leaves the knobs untouched.
-    assert widget.parameter_manager.get_parameter("young_modulus") == baseline
-
 
 class _FakeLayer:
     def __init__(self, name):
@@ -1743,3 +1621,81 @@ def test_deselecting_experiment_drops_back_to_g1(monkeypatch, app):
     for section in widget._stage_sections:
         assert not section.isVisibleTo(widget)
     assert not widget._pipeline_context_label.isVisibleTo(widget)
+
+
+def test_save_project_bundles_dataset_and_parameters(monkeypatch, app, tmp_path):
+    import yaml
+
+    widget = _stub_main_widget(monkeypatch)
+    widget._project_open = True
+    widget.experiments_list.add_folders(
+        ["/data/a", "/data/b"],
+        input_files={"beads": "beads.tif", "reference": "reference.tif"},
+        columns={"day": "1"},
+    )
+    widget.parameter_manager.set_parameter("young_modulus", 9.0)
+    out = tmp_path / "project.yaml"
+    monkeypatch.setattr(
+        _widget.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), ""))
+    )
+    monkeypatch.setattr(_widget.QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    widget._save_project()
+
+    config = yaml.safe_load(out.read_text())
+    # Dataset side (reuses the series shape) ...
+    assert config["root_folders"] == ["/data/a", "/data/b"]
+    assert config["experiment_metadata"]["/data/a"] == {"day": "1"}
+    assert config["input_files"]["beads"] == "beads.tif"
+    assert "run_options" in config
+    # ... plus the analysis recipe, all in one file.
+    assert config["parameters"]["young_modulus"] == 9.0
+
+
+def test_load_project_restores_dataset_and_parameters(monkeypatch, app, tmp_path):
+    import yaml
+
+    config = {
+        "format_version": 2,
+        "root_folders": ["/data/x", "/data/y"],
+        "input_files": {"beads": "beads.tif", "reference": "reference.tif"},
+        "experiment_metadata": {"/data/x": {"day": "1"}, "/data/y": {"day": "2"}},
+        "run_options": {"disabled_stages": ["stress"], "processed_root": None},
+        "parameters": {"young_modulus": 12.0},
+    }
+    path = tmp_path / "project.yaml"
+    path.write_text(yaml.safe_dump(config))
+
+    widget = _stub_main_widget(monkeypatch)
+    monkeypatch.setattr(
+        _widget.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(path), ""))
+    )
+    monkeypatch.setattr(_widget.QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    widget._load_project()
+
+    assert widget._project_open is True
+    assert widget.experiments_list.experiments() == ["/data/x", "/data/y"]
+    assert widget.experiments_list.experiment_records()[1]["columns"] == {"day": "2"}
+    assert widget.parameter_manager.get_parameter("young_modulus") == 12.0
+    assert widget._stage_sections_by_key["stress"].is_enabled is False
+
+
+def test_new_project_clears_to_empty_open_workspace(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.add_folders(["/data/a"])
+    widget.parameter_manager.set_parameter("young_modulus", 9.0)
+
+    widget._new_project()
+
+    assert widget._project_open is True
+    assert widget.experiments_list.experiments() == []
+    # Stress returns to its default-off state on a clean slate.
+    assert widget._stage_sections_by_key["stress"].is_enabled is False
+
+
+def test_autosave_path_is_gone(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    for attr in ("_write_config", "_read_config", "_reconcile_to_output_dir",
+                 "_config_path", "_save_series", "_load_series"):
+        assert not hasattr(widget, attr)
