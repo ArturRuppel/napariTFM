@@ -1709,7 +1709,38 @@ def test_experiment_rows_live_in_a_bounded_scroll_area(monkeypatch, app):
     assert isinstance(scroll, QScrollArea)
     assert scroll.widgetResizable() is True
     # Capped so a long list scrolls instead of pushing the panel down.
-    assert 0 < scroll.maximumHeight() <= 260
+    assert 0 < scroll.maximumHeight() <= 600
+
+
+def _group_separator_texts(experiments_list):
+    from napariTFM.widgets._experiments_list import QLabel
+
+    box = experiments_list._rows_box
+    texts = []
+    for i in range(box.count()):
+        w = box.itemAt(i).widget()
+        if isinstance(w, QLabel) and w.objectName() == "experiments_group_separator":
+            texts.append(w.text())
+    return texts
+
+
+def test_column_group_separators_title_each_batch(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    el = widget.experiments_list
+    el.add_folders(["/data/ctrl_a", "/data/ctrl_b"], columns={"condition": "Ctrl"})
+    el.add_folders(["/data/ko_a"], columns={"condition": "KO"})
+
+    # One header per distinct column group, in list order.
+    assert _group_separator_texts(el) == ["condition: Ctrl", "condition: KO"]
+
+
+def test_column_group_separator_absent_without_columns(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    el = widget.experiments_list
+    el.add_folders(["/data/a"])
+
+    # No columns → no group header, just the row.
+    assert _group_separator_texts(el) == []
 
 
 def test_discover_tooltip_lists_only_filled_inputs(monkeypatch, app):

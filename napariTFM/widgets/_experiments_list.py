@@ -56,6 +56,15 @@ def _path_ends_with(path: Path, rel: Path) -> bool:
     return path.parts[-len(rel.parts):] == rel.parts
 
 
+def _columns_caption(columns: dict) -> str:
+    """Render a row's free-form columns as a group title, e.g. ``condition: Ctrl``.
+
+    Named columns join with a middle dot; unnamed (blank-key) columns drop out.
+    Empty when the row carries no columns — those rows show no group header.
+    """
+    return "  ·  ".join(f"{k}: {v}" for k, v in columns.items() if k)
+
+
 def discover_experiment_folders(
     root: str | Path,
     required_names: Iterable[Optional[str]],
@@ -283,7 +292,8 @@ class ExperimentsList(QWidget):
         self._rows_scroll = QScrollArea()
         self._rows_scroll.setObjectName("experiments_rows_scroll")
         self._rows_scroll.setWidgetResizable(True)
-        self._rows_scroll.setMaximumHeight(220)
+        self._rows_scroll.setMinimumHeight(300)
+        self._rows_scroll.setMaximumHeight(480)
         self._rows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._rows_scroll.setWidget(rows_container)
         layout.addWidget(self._rows_scroll)
@@ -704,11 +714,27 @@ class ExperimentsList(QWidget):
             if item.widget() is not None:
                 item.widget().deleteLater()
         self._rows = []
+        last_caption: Optional[str] = None
         for path in self._paths:
+            caption = _columns_caption(self._records[path]["columns"])
+            if caption and caption != last_caption:
+                self._rows_box.addWidget(self._group_separator(caption))
+            last_caption = caption
             row = ExperimentRow(path)
             row.selected.connect(self.set_active)
             self._rows_box.addWidget(row)
             self._rows.append(row)
+
+    def _group_separator(self, text: str) -> QLabel:
+        """A bold title divider labelling the column values of the rows below it."""
+        sep = QLabel(text)
+        sep.setObjectName("experiments_group_separator")
+        sep.setStyleSheet(
+            f"color: {TEXT_MID}; font-weight: bold;"
+            f"padding: 6px 2px 3px 2px;"
+            f"border-bottom: 1px solid {TEXT_DIM};"
+        )
+        return sep
 
     def _update_meta(self) -> None:
         n = len(self._paths)
