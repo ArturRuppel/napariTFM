@@ -947,6 +947,127 @@ class VisualizationManager(ErrorHandlingMixin):
     # endregion
 
     # region === Preprocessing Visualization
+    _PREPROCESSED_LAYER_NAMES = {
+        'beads': 'Preprocessed Beads',
+        'reference': 'Preprocessed Reference',
+        'cells': 'Preprocessed Cells',
+    }
+
+    def begin_preprocessing_stream(self) -> None:
+        """Create or reuse the Preprocessed layers so a run can stream into them.
+
+        The controller pre-allocates the output stacks (zeros) and holds them in
+        the data manager; this binds each to its napari layer. Reusing an
+        existing layer preserves the user's contrast limits, colormap, gamma and
+        visibility — only the backing array is swapped — so a re-run never resets
+        the settings the user dialled in. A first-ever run falls back to the
+        normalized [0, 1] defaults.
+        """
+        try:
+            self.colorbar_manager.clear()
+
+            if 'Bead Overlay' in self.viewer.layers:
+                self.viewer.layers.remove('Bead Overlay')
+
+            specs = [
+                ('Preprocessed Cells', self.data_manager.preprocessed_cell_stack, 'gray'),
+                ('Preprocessed Reference', self.data_manager.preprocessed_reference, 'magenta'),
+                ('Preprocessed Beads', self.data_manager.preprocessed_bead_stack, 'green'),
+            ]
+
+            for name, data, colormap in specs:
+                if data is None:
+                    if name in self.viewer.layers:
+                        self.viewer.layers.remove(name)
+                    continue
+
+                if name in self.viewer.layers:
+                    self._rebind_preprocessed_layer(self.viewer.layers[name], data)
+                else:
+                    self.viewer.add_image(
+                        data,
+                        name=name,
+                        colormap=colormap,
+                        blending='additive',
+                        contrast_limits=(0, 1),
+                        visible=True,
+                    )
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to begin preprocessing stream",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check data availability and consistency",
+                original_error=e,
+                source="visualization",
+            )
+            self.handle_error(error)
+
+    def _rebind_preprocessed_layer(self, layer, data: np.ndarray) -> None:
+        """Swap a layer's backing array without disturbing its display settings.
+
+        Setting ``.data`` to a freshly zeroed array can collapse the contrast
+        range, so the prior contrast limits (and their range) are captured and
+        restored — that is what "preserve the user's settings across runs" means.
+        """
+        clim = getattr(layer, 'contrast_limits', None)
+        clim_range = getattr(layer, 'contrast_limits_range', None)
+        with self.viewer.events.blocker_all():
+            layer.data = data
+            if clim_range is not None:
+                try:
+                    layer.contrast_limits_range = clim_range
+                except Exception:
+                    pass
+            if clim is not None:
+                try:
+                    layer.contrast_limits = clim
+                except Exception:
+                    pass
+
+    def stream_preprocessing_frame(self, data_type: str, frame_index: int, image: np.ndarray) -> None:
+        """Write one freshly processed frame into its layer and follow it live.
+
+        The frame is written in place into the pre-allocated stack, the layer is
+        refreshed, and (for stacks) the time slider auto-advances to the frame
+        just computed so the user watches the result fill in.
+        """
+        name = self._PREPROCESSED_LAYER_NAMES.get(data_type)
+        if name is None or name not in self.viewer.layers:
+            return
+
+        try:
+            layer = self.viewer.layers[name]
+            data = layer.data
+            if data.ndim == 3:
+                if frame_index < 0 or frame_index >= data.shape[0]:
+                    return
+                data[frame_index] = image
+                layer.refresh()
+                self._advance_to_frame(frame_index)
+            else:
+                data[...] = image
+                layer.refresh()
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to stream preprocessing frame",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check layer/array consistency",
+                original_error=e,
+                source="visualization",
+            )
+            self.handle_error(error)
+
+    def _advance_to_frame(self, frame_index: int) -> None:
+        """Move the time slider to *frame_index* on axis 0 (best-effort)."""
+        try:
+            self.viewer.dims.set_current_step(0, frame_index)
+        except Exception:
+            pass
+
     def update_preprocessing_visualization(self) -> None:
         """Update visualization after preprocessing."""
         try:

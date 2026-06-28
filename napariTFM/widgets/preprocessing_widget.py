@@ -41,6 +41,11 @@ class PreprocessingController(QObject):
 
         self.preview_enabled = False
 
+        # Live-streaming progress counters: a run fills the output stacks frame
+        # by frame, so progress is "frames done / frames total" across all inputs.
+        self._stream_total = 0
+        self._stream_done = 0
+
         # Sliders emit valueChanged continuously while dragging, so parameter
         # changes arrive in rapid bursts. Recomputing the (rolling-ball-heavy)
         # preview on each one freezes the UI; instead coalesce a burst into a
@@ -78,13 +83,19 @@ class PreprocessingController(QObject):
             if self.data_manager.reference is None:
                 raise ValueError("Reference image must be loaded before preprocessing")
 
+            # Pre-allocate the output stacks and bind them to napari layers up
+            # front, so each processed frame can stream in live (preserving the
+            # contrast/visibility the user has set) and the slider can follow it,
+            # instead of the whole result appearing only when the run finishes.
+            self._begin_stream()
+
             worker = self._create_processing_worker()
             self.active_workers.append(worker)
             self.preprocessing_started.emit()
             self.freeze_ui()
 
-            worker.yielded.connect(lambda x: self.progress_updated.emit(*x))
-            worker.returned.connect(self._handle_preprocessing_results)
+            worker.yielded.connect(self._on_frame_processed)
+            worker.returned.connect(self._finish_streaming)
             worker.errored.connect(self._handle_preprocessing_error)
             worker.start()
 
@@ -93,39 +104,84 @@ class PreprocessingController(QObject):
             QMessageBox.critical(None, "Error", str(e))
             self.unfreeze_ui()
 
+    def _begin_stream(self):
+        """Allocate the output stacks, register them, and create live layers.
+
+        The processed images are normalized to [0, 1] floats, so the stacks are
+        allocated as float32 zeros and filled frame-by-frame by the worker. They
+        are registered with the data manager immediately (dirty, generated) so
+        the layers can be backed by the very arrays the run mutates in place.
+        """
+        bead = self.data_manager.bead_stack
+        ref = self.data_manager.reference
+        cell = self.data_manager.cell_stack
+
+        n_beads = bead.shape[0] if bead is not None else 0
+        n_cells = cell.shape[0] if cell is not None else 0
+        self._stream_total = n_beads + (1 if ref is not None else 0) + n_cells
+        self._stream_done = 0
+
+        if bead is not None:
+            self.data_manager.set_preprocessed_bead_stack(
+                np.zeros(bead.shape, dtype=np.float32), source="generated", dirty=True
+            )
+        if ref is not None:
+            self.data_manager.set_preprocessed_reference(
+                np.zeros(ref.shape, dtype=np.float32), source="generated", dirty=True
+            )
+        if cell is not None:
+            self.data_manager.set_preprocessed_cell_stack(
+                np.zeros(cell.shape, dtype=np.float32), source="generated", dirty=True
+            )
+
+        self.visualization_manager.begin_preprocessing_stream()
+
     @thread_worker
     def _create_processing_worker(self):
-        """Create worker for processing data."""
+        """Process every input frame, yielding each result for live streaming.
+
+        Each yield carries ``(data_type, frame_index, total, processed_image)``;
+        the GUI-thread slot writes it straight into the pre-allocated output
+        stack and advances the viewer, so the stack fills in on screen as the
+        run proceeds rather than all at once at the end.
+        """
         params = self.parameter_manager.get_preprocessing_parameters()
 
-        results = []
-
-        # Process bead stack with generator
         if self.data_manager.bead_stack is not None:
             for result, frame, total in preprocess_stack(
                     image_stack=self.data_manager.bead_stack,
                     params=params,
                     reference_image=self.data_manager.reference
             ):
-                results.append(result)
-                yield frame / total * 100, f"Processing beads: Frame {frame + 1}/{total}"
+                yield 'beads', frame, total, result.processed_image
 
-        # Process reference image
         if self.data_manager.reference is not None:
-            results.append(preprocess_frame(self.data_manager.reference, params))
+            result = preprocess_frame(self.data_manager.reference, params)
+            yield 'reference', 0, 1, result.processed_image
 
-        # Process cell stack if available
         if self.data_manager.cell_stack is not None:
-            start_progress = len(results)
             for result, frame, total in preprocess_stack(
                     image_stack=self.data_manager.cell_stack,
                     params=params,
                     is_cell=True
             ):
-                results.append(result)
-                yield start_progress + frame / total * 100, f"Processing cells: Frame {frame + 1}/{total}"
+                yield 'cells', frame, total, result.processed_image
 
-        return results
+    def _on_frame_processed(self, payload):
+        """Stream one freshly processed frame into the viewer (GUI thread).
+
+        ``worker.yielded`` is a cross-thread Qt signal, so this slot runs on the
+        main thread and may safely touch napari layers.
+        """
+        data_type, frame, total, image = payload
+        self._stream_done += 1
+        progress = int(self._stream_done / max(self._stream_total, 1) * 100)
+        if data_type == 'reference':
+            message = "Processing reference"
+        else:
+            message = f"Processing {data_type}: Frame {frame + 1}/{total}"
+        self.progress_updated.emit(progress, message)
+        self.visualization_manager.stream_preprocessing_frame(data_type, frame, image)
 
     def cancel_all_operations(self):
         """Cancel all running background operations."""
@@ -326,51 +382,27 @@ class PreprocessingController(QObject):
         QMessageBox.critical(None, "Error", error_msg)
         self.unfreeze_ui()
 
-    def _handle_preprocessing_results(self, results):
-        """Handle successful preprocessing results."""
+    def _finish_streaming(self, _result=None):
+        """Finalize a streamed run.
+
+        The output stacks were filled in place as frames arrived and are already
+        on screen, so there is nothing left to assemble — just announce
+        completion. Visibility of other layers is left untouched (the user's to
+        set), and the streamed layers keep whatever contrast/visibility the run
+        inherited.
+
+        Preview-only (ROADMAP §4): preprocessed stacks are held in memory and
+        shown in napari; nothing is written to disk. Batch is the only path to
+        persisted data.
+        """
         try:
-            if results is None:
-                return
-
-            # Process all results at once
-            processed_images = [r.processed_image for r in results]
-
-            # Update data manager
-            if self.data_manager.bead_stack is not None:
-                n_beads = self.data_manager.bead_stack.shape[0]
-                self.data_manager.set_preprocessed_bead_stack(np.stack(processed_images[:n_beads]), source="generated", dirty=True)
-                processed_images = processed_images[n_beads:]
-
-            if self.data_manager.reference is not None:
-                self.data_manager.set_preprocessed_reference(processed_images[0], source="generated", dirty=True)
-                processed_images = processed_images[1:]
-
-            if self.data_manager.cell_stack is not None:
-                n_cells = self.data_manager.cell_stack.shape[0]
-                self.data_manager.set_preprocessed_cell_stack(np.stack(processed_images[:n_cells]), source="generated", dirty=True)
-
-            # Update visualization
-            self.visualization_manager.update_preprocessing_visualization()
-
-            # Manage layer visibility
-            preprocessing_layers = {
-                'Preprocessed Beads',
-                'Preprocessed Reference',
-                'Preprocessed Cells',
-            }
-            for layer in self.viewer.layers:
-                layer.visible = layer.name in preprocessing_layers
-
-            # Get current parameters for the completion signal.
-            # Preview-only (ROADMAP §4): preprocessed stacks are held in memory
-            # and shown in napari; nothing is written to disk. Batch is the only
-            # path to persisted data.
+            self.active_workers.clear()
             current_params = self.parameter_manager.get_preprocessing_parameters()
             self.progress_updated.emit(100, "Preprocessing complete")
             self.preprocessing_completed.emit({'parameters': current_params.__dict__})
 
         except Exception as e:
-            error_msg = f"Error handling preprocessing results: {str(e)}"
+            error_msg = f"Error finalizing preprocessing: {str(e)}"
             self.preprocessing_failed.emit(error_msg)
             QMessageBox.critical(None, "Error", error_msg)
         finally:
