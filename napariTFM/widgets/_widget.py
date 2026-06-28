@@ -975,10 +975,11 @@ class napariTFMWidget(QWidget):
             )
             # Point the raw-input disk check at the selected experiment so the
             # preprocessing input dots read green from its discovery files.
-            self.data_manager.set_active_inputs(
-                self._active_experiment,
-                self.experiments_list.input_files_for(self._active_experiment),
-            )
+            input_files = self.experiments_list.input_files_for(self._active_experiment)
+            self.data_manager.set_active_inputs(self._active_experiment, input_files)
+            # And actually load those files from disk into memory + the viewer, so
+            # Preview and Run (which need the arrays loaded) work on selection.
+            self.preprocessing_widget.load_input_files(self._active_experiment, input_files)
         self._update_disclosure()
 
     def _on_experiments_changed(self) -> None:

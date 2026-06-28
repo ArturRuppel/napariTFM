@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -159,39 +160,89 @@ class PreprocessingController(QObject):
             return
 
         try:
-            data = active_layer.data
-
-            # Handle data based on type
-            if data_type == 'beads':
-                # Convert 2D data to 3D with single frame if needed
-                if data.ndim == 2:
-                    data = data[np.newaxis, ...]
-                elif data.ndim != 3:
-                    raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
-                self.data_manager.set_bead_stack(data)
-
-            elif data_type == 'reference':
-                if data.ndim != 2:
-                    raise ValueError("Reference image must be 2D (height, width)")
-                self.data_manager.set_reference(data)
-
-            elif data_type == 'cells':
-                # Convert 2D data to 3D with single frame if needed
-                if data.ndim == 2:
-                    data = data[np.newaxis, ...]
-                elif data.ndim != 3:
-                    raise ValueError("Cell stack must be 2D or 3D (frames, height, width)")
-                self.data_manager.set_cell_stack(data)
-            else:
-                raise ValueError(f"Invalid data type: {data_type}")
-
-            # Update UI state and emit signal
-            self.data_updated.emit(data_type)
-            if self.preview_enabled:
-                self._update_preview()
-
+            self._set_input_data(data_type, active_layer.data)
         except Exception as e:
             QMessageBox.warning(None, "Error", str(e))
+
+    def _set_input_data(self, data_type: str, data: np.ndarray, path=None):
+        """Validate, shape, and store one raw input, then announce the update.
+
+        Shared by the active-layer path and the disk-loading path so both reshape
+        and notify identically. Emitting ``data_updated`` is what re-enables the
+        Preview and Run actions (the shell listens via ``_update_ui_state``).
+        """
+        if data_type == 'beads':
+            # Convert 2D data to 3D with single frame if needed
+            if data.ndim == 2:
+                data = data[np.newaxis, ...]
+            elif data.ndim != 3:
+                raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
+            self.data_manager.set_bead_stack(data, path=path)
+
+        elif data_type == 'reference':
+            if data.ndim != 2:
+                raise ValueError("Reference image must be 2D (height, width)")
+            self.data_manager.set_reference(data, path=path)
+
+        elif data_type == 'cells':
+            # Convert 2D data to 3D with single frame if needed
+            if data.ndim == 2:
+                data = data[np.newaxis, ...]
+            elif data.ndim != 3:
+                raise ValueError("Cell stack must be 2D or 3D (frames, height, width)")
+            self.data_manager.set_cell_stack(data, path=path)
+        else:
+            raise ValueError(f"Invalid data type: {data_type}")
+
+        # Update UI state and emit signal
+        self.data_updated.emit(data_type)
+        if self.preview_enabled:
+            self._update_preview()
+
+    def load_input_files(self, folder, input_files):
+        """Load an experiment's discovery raw files from disk into memory.
+
+        Reads whichever of the discovery-named raw inputs exist in *folder* and
+        loads them as the in-memory inputs (and as napari image layers, so the
+        user sees what they're tuning). This is what enables Preview and Run,
+        which both require the loaded arrays. Missing or un-named inputs are
+        skipped; a file that won't read pops a warning without aborting the rest.
+        """
+        if not folder:
+            return
+        import tifffile
+
+        folder = Path(folder)
+        input_files = input_files or {}
+        for data_type, slot, layer_name in (
+            ('reference', 'reference', 'Reference'),
+            ('beads', 'beads', 'Bead stack'),
+            ('cells', 'cells', 'Cell stack'),
+        ):
+            name = input_files.get(slot)
+            if not name:
+                continue
+            path = folder / name
+            if not path.exists():
+                continue
+            try:
+                data = tifffile.imread(str(path))
+                self._add_input_layer(layer_name, data)
+                self._set_input_data(data_type, data, path=path)
+            except Exception as exc:
+                QMessageBox.warning(None, "Error", f"Could not load {path.name}: {exc}")
+
+    def _add_input_layer(self, name: str, data: np.ndarray) -> None:
+        """Show a raw input in the viewer, replacing any prior layer of that name."""
+        add_image = getattr(self.viewer, "add_image", None)
+        if add_image is None:
+            return
+        layers = getattr(self.viewer, "layers", None)
+        if layers is not None:
+            for layer in list(layers):
+                if getattr(layer, "name", None) == name:
+                    layers.remove(layer)
+        add_image(data, name=name)
 
     def toggle_preview(self, enabled: bool):
         """Toggle preview mode."""
@@ -478,6 +529,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
     def load_active_layer(self, data_type: str):
         """Delegate input-layer loading to the controller (called by the shell)."""
         self.controller.load_active_layer(data_type)
+
+    def load_input_files(self, folder, input_files):
+        """Delegate disk-loading of an experiment's raw inputs to the controller."""
+        self.controller.load_input_files(folder, input_files)
 
     # endregion
 

@@ -136,3 +136,95 @@ def test_controller_freeze_emits_signal_without_panels(app):
     controller.freeze_ui()
     controller.unfreeze_ui()
     assert seen == [True, False]
+
+
+class _RecordingDataManager:
+    """Captures what the controller stores, so disk-loading is observable."""
+
+    def __init__(self):
+        self.bead_stack = None
+        self.reference = None
+        self.cell_stack = None
+        self.preprocessed_bead_stack = None
+        self.preprocessed_reference = None
+        self.preprocessed_cell_stack = None
+
+    def set_bead_stack(self, data, path=None, source=""):
+        self.bead_stack = data
+
+    def set_reference(self, data, path=None, source=""):
+        self.reference = data
+
+    def set_cell_stack(self, data, path=None, source=""):
+        self.cell_stack = data
+
+
+def _controller_with(dm):
+    return pw.PreprocessingController(
+        viewer=_FakeViewer(),
+        data_manager=dm,
+        parameter_manager=_FakeParameterManager(),
+        visualization_manager=object(),
+    )
+
+
+def test_load_input_files_reads_discovery_files_into_memory(app, tmp_path):
+    # Selecting an experiment must put its raw inputs in memory — that is what
+    # enables Preview and Run, which both require the loaded arrays. The
+    # discovery config names the files; the controller reads them from disk.
+    import numpy as np
+    import tifffile
+
+    tifffile.imwrite(str(tmp_path / "r.tif"), np.zeros((4, 4), dtype=np.float32))
+    tifffile.imwrite(str(tmp_path / "b.tif"), np.zeros((3, 4, 4), dtype=np.float32))
+    dm = _RecordingDataManager()
+    controller = _controller_with(dm)
+    seen = []
+    controller.data_updated.connect(seen.append)
+
+    controller.load_input_files(str(tmp_path), {"beads": "b.tif", "reference": "r.tif"})
+
+    assert dm.reference is not None and dm.reference.shape == (4, 4)
+    assert dm.bead_stack is not None and dm.bead_stack.shape == (3, 4, 4)
+    # data_updated fires per input so the shell re-enables Run/Preview.
+    assert set(seen) >= {"beads", "reference"}
+
+
+def test_load_input_files_promotes_2d_beads_to_a_stack(app, tmp_path):
+    # A single-frame bead image on disk is 2D; the stack contract is 3D.
+    import numpy as np
+    import tifffile
+
+    tifffile.imwrite(str(tmp_path / "b.tif"), np.zeros((4, 4), dtype=np.float32))
+    dm = _RecordingDataManager()
+    controller = _controller_with(dm)
+
+    controller.load_input_files(str(tmp_path), {"beads": "b.tif"})
+
+    assert dm.bead_stack is not None and dm.bead_stack.shape == (1, 4, 4)
+
+
+def test_load_input_files_skips_missing_and_unnamed_inputs(app, tmp_path):
+    # Only the reference is on disk; the un-named cells slot and the missing
+    # bead file are simply skipped — no crash, no partial garbage.
+    import numpy as np
+    import tifffile
+
+    tifffile.imwrite(str(tmp_path / "r.tif"), np.zeros((4, 4), dtype=np.float32))
+    dm = _RecordingDataManager()
+    controller = _controller_with(dm)
+
+    controller.load_input_files(
+        str(tmp_path), {"beads": "b.tif", "reference": "r.tif", "cells": ""}
+    )
+
+    assert dm.reference is not None
+    assert dm.bead_stack is None
+    assert dm.cell_stack is None
+
+
+def test_load_input_files_noop_without_folder(app):
+    dm = _RecordingDataManager()
+    controller = _controller_with(dm)
+    controller.load_input_files(None, {"beads": "b.tif"})  # must not raise
+    assert dm.bead_stack is None

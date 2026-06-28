@@ -158,6 +158,7 @@ class _StubStageWidget(QWidget):
         self.data_panel.setVisible(True)
         self.action_panel.setVisible(True)
         self.loaded_active_layers = []
+        self.loaded_input_files = None
         self.loaded_files = []
         self.update_count = 0
         self.action_calls = {"run": 0, "preview": 0, "cancel": 0}
@@ -200,6 +201,9 @@ class _StubStageWidget(QWidget):
 
     def load_active_layer(self, role):
         self.loaded_active_layers.append(role)
+
+    def load_input_files(self, folder, input_files):
+        self.loaded_input_files = (folder, dict(input_files or {}))
 
     def load_result_artifact(self, key):
         self.loaded_files.append(key)
@@ -1763,6 +1767,25 @@ def test_selecting_experiment_points_disk_check_at_its_inputs(monkeypatch, app):
     dm = widget.data_manager
     assert dm.active_input_folder == Path("/data/exp_a")
     assert dm.active_input_files == {"beads": "b.tif", "reference": "r.tif"}
+
+
+def test_selecting_experiment_loads_its_input_files(monkeypatch, app):
+    # Pointing the disk check is not enough — Preview and Run need the arrays in
+    # memory. Selecting an experiment must hand its folder + discovery filenames
+    # to preprocessing so it loads them from disk.
+    widget = _stub_main_widget(monkeypatch)
+    widget._project_open = True
+    widget.experiments_list.add_folders(
+        ["/data/exp_a"],
+        input_files={"beads": "b.tif", "reference": "r.tif"},
+    )
+
+    widget.experiments_list.set_active("/data/exp_a")
+
+    assert widget.preprocessing_widget.loaded_input_files == (
+        "/data/exp_a",
+        {"beads": "b.tif", "reference": "r.tif"},
+    )
 
 
 def test_deselecting_experiment_clears_disk_check(monkeypatch, app):
