@@ -5,6 +5,7 @@ import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import QObject
+from qtpy.QtCore import QTimer
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (
     QFrame, QCheckBox, QApplication,
@@ -39,6 +40,16 @@ class PreprocessingController(QObject):
         self.active_workers = []
 
         self.preview_enabled = False
+
+        # Sliders emit valueChanged continuously while dragging, so parameter
+        # changes arrive in rapid bursts. Recomputing the (rolling-ball-heavy)
+        # preview on each one freezes the UI; instead coalesce a burst into a
+        # single recompute once the changes settle.
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(150)
+        # Late-bound through a lambda so tests can patch _update_preview.
+        self._preview_timer.timeout.connect(lambda: self._update_preview())
 
         # Connect to parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)
@@ -142,12 +153,12 @@ class PreprocessingController(QObject):
     def _on_parameter_changed(self, param_name: str, value: Any):
         """Handle parameter changes."""
         if self.preview_enabled:
-            self._update_preview()
+            self._preview_timer.start()
 
     def _on_parameters_reset(self, category: ParameterCategory):
         """Handle parameter reset events."""
         if category == ParameterCategory.PREPROCESSING and self.preview_enabled:
-            self._update_preview()
+            self._preview_timer.start()
 
     # endregion === Parameter Handling
 

@@ -228,3 +228,33 @@ def test_load_input_files_noop_without_folder(app):
     controller = _controller_with(dm)
     controller.load_input_files(None, {"beads": "b.tif"})  # must not raise
     assert dm.bead_stack is None
+
+
+def test_parameter_changes_debounce_the_preview(app):
+    # Sliders emit valueChanged continuously while dragging. Recomputing the
+    # (expensive rolling-ball) preview synchronously on each event freezes the
+    # UI. A burst of changes must coalesce into a single deferred recompute.
+    controller = _controller_with(_FakeDataManager())
+    controller.preview_enabled = True
+    calls = []
+    controller._update_preview = lambda: calls.append(1)
+
+    for _ in range(5):
+        controller._on_parameter_changed("gaussian_sigma", 1.0)
+
+    # Nothing recomputes synchronously during the burst...
+    assert calls == []
+    assert controller._preview_timer.isActive()
+
+    # ...and when the debounce settles, exactly one recompute fires.
+    controller._preview_timer.timeout.emit()
+    assert calls == [1]
+
+
+def test_parameter_changes_skip_preview_when_disabled(app):
+    controller = _controller_with(_FakeDataManager())
+    controller.preview_enabled = False
+
+    controller._on_parameter_changed("gaussian_sigma", 1.0)
+
+    assert not controller._preview_timer.isActive()
