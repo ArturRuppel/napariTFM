@@ -1699,3 +1699,14 @@ def test_autosave_path_is_gone(monkeypatch, app):
     for attr in ("_write_config", "_read_config", "_reconcile_to_output_dir",
                  "_config_path", "_save_series", "_load_series"):
         assert not hasattr(widget, attr)
+
+
+def test_experiment_rows_live_in_a_bounded_scroll_area(monkeypatch, app):
+    from qtpy.QtWidgets import QScrollArea
+
+    widget = _stub_main_widget(monkeypatch)
+    scroll = widget.experiments_list._rows_scroll
+    assert isinstance(scroll, QScrollArea)
+    assert scroll.widgetResizable() is True
+    # Capped so a long list scrolls instead of pushing the panel down.
+    assert 0 < scroll.maximumHeight() <= 260

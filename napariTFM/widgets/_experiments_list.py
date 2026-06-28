@@ -13,6 +13,7 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QScrollArea,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -272,10 +273,20 @@ class ExperimentsList(QWidget):
         self._staging_label.setStyleSheet(f"color: {TEXT_DIM};")
         layout.addWidget(self._staging_label)
 
+        # Rows live in a bounded scroll region: a long discovered list scrolls
+        # internally instead of pushing the rest of the panel down.
         self._rows_box = QVBoxLayout()
         self._rows_box.setContentsMargins(0, 0, 0, 0)
         self._rows_box.setSpacing(2)
-        layout.addLayout(self._rows_box)
+        rows_container = QWidget()
+        rows_container.setLayout(self._rows_box)
+        self._rows_scroll = QScrollArea()
+        self._rows_scroll.setObjectName("experiments_rows_scroll")
+        self._rows_scroll.setWidgetResizable(True)
+        self._rows_scroll.setMaximumHeight(220)
+        self._rows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._rows_scroll.setWidget(rows_container)
+        layout.addWidget(self._rows_scroll)
 
         # List actions live at the foot of the list, just above the count:
         # Discover stages folders, Add to list commits them, Run all walks the
