@@ -36,6 +36,7 @@ class StageSection(QWidget):
         parameter_panel: QWidget | None = None,
         parameters_expanded: bool = False,
         optional: bool = False,
+        enabled: bool = True,
         extra_actions: list[dict] | None = None,
     ):
         super().__init__()
@@ -46,7 +47,7 @@ class StageSection(QWidget):
         self._action_states = action_states
         self._status = status
         self._optional = optional
-        self._enabled = True
+        self._enabled = enabled if optional else True
         self.enable_btn = None
         self.status_panel = status_panel
         self.parameter_panel = parameter_panel
@@ -152,9 +153,10 @@ class StageSection(QWidget):
 
         if self._optional:
             self.enable_btn = self._create_glyph_button(
-                "enable", "⏻", f"Disable {title}", "power", checkable=True
+                "enable", "⏻", f"{'Disable' if self._enabled else 'Enable'} {title}",
+                "power", checkable=True
             )
-            self.enable_btn.setChecked(True)
+            self.enable_btn.setChecked(self._enabled)
             self.enable_btn.toggled.connect(self._on_enable_toggled)
             self._action_buttons.append(self.enable_btn)
             self._static_button_icons[self.enable_btn] = "power"
