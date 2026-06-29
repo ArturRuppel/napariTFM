@@ -9,33 +9,13 @@
 
 ## Ranked open work (2026-06-29)
 
-### 1. Fix stage-resume caching: displacement present, yet force can't compute  ·  S–M  (bug)
-Repro: a position shows **displacement done** (data available), but **Force
-Analysis fails to compute**. Root cause is the stage-resume / cache path — force
-reconstructs the displacement field via
-`_resume_field_from_ntfm(tfm_folder, folder, "displacement_field")`
-(`backend/batch_analysis.py`), which returns `None` when the experiment's
-`.ntfm` is missing, lacks the displacement columns, or is **all-NaN** (the writer
-emits every measure column as NaN when a stage didn't run). So even though
-displacement is "available" in memory/UI, the on-disk container force reads from
-doesn't actually carry it. **Audit when/where the `.ntfm` is written vs. read** so
-a computed displacement field is reliably persisted *before* force runs, and the
-path/name force-resume expects matches what the displacement write produced.
-Also **persist the preprocessed images for consistency.** Today the preprocessed
-bead/reference TIFFs (`preprocessed_beads.tif` / `preprocessed_reference.tif`)
-are only an *optional* `save_cache`, while displacement/force/stress always
-persist to `.ntfm`. Give preprocessing the **same persistence guarantee** so
-every stage's output is reliably on disk for the next stage to resume from.
-Closely related to the backlog "Load processed `.ntfm` back into memory on
-selection."
-
-### 2. Unify logging (live = batch)  ·  XS
+### 1. Unify logging (live = batch)  ·  XS
 Batch mode prints its log to the console; live/interactive mode does not. Route
 the interactive path through the **same logger** so live mode prints the **same
 messages batch does** (decision: match batch exactly). Keep writing full detail
 to the run log file as today.
 
-### 3. Per-position "Export to CSV" button  ·  S–M
+### 2. Per-position "Export to CSV" button  ·  S–M
 Each position **row** in the `ExperimentsList` (next to the status dots) gets an
 **Export to CSV** button that writes that position's processed `.ntfm` out as a
 **full per-pixel field dump** — every pixel's `u_x, u_y, F_x, F_y` (and `stress`,
@@ -44,13 +24,13 @@ read-and-flatten-to-CSV op; mind the large file sizes (stream/chunk the write,
 warn if no `.ntfm` exists yet). No-op / disabled when the position isn't
 processed.
 
-### 4. Streaming follows the active position  ·  S
+### 3. Streaming follows the active position  ·  S
 While the batch/live sink streams, the viewer + experiments-list selection should
 **track the position currently being processed**. Add an `experiment_started`
 hook on the sink (`utilities/viewer_sink.py` / `backend/pipeline_sink.py`) that
-drives the `ExperimentsList` selection. Pairs with #5.
+drives the `ExperimentsList` selection. Pairs with #4.
 
-### 5. Per-stage layer isolation during streaming  ·  M
+### 4. Per-stage layer isolation during streaming  ·  M
 During batch streaming **and** live "Run all", the sink should **take over layer
 visibility** and show only the layers relevant to the stage in flight; restore
 prior visibility when the run ends. **Distinct from preview** — preview must
@@ -61,19 +41,19 @@ prior visibility when the run ends. **Distinct from preview** — preview must
 - force → force layers only.
 - stress → stress layers only.
 Reuse the existing `VisualizationManager.isolate_layers` infrastructure; define a
-per-stage active-layer set and apply it on `stage_started`. Build with #4 (both
+per-stage active-layer set and apply it on `stage_started`. Build with #3 (both
 are "the streaming sink takes over the UI to show what it's doing").
 
-### 6. Replace MSM with BISM  ·  M–L
+### 5. Replace MSM with BISM  ·  M–L
 Swap Monolayer Stress Microscopy for the validated **BISM** port
 (`napariTFM/_validation/benchmark_MSM/bism.py`; no material params, gives a
 stress field + uncertainty). BISM needs **no FE mesh**, which **dissolves the
 meshing/mesh-rendering path** — the part of #7 least likely to map onto a napari
 layer. Wire BISM into the production stress stage; confirm downstream consumers
 of the stress products still get what they expect. Retires the FE-mesh overlay
-rendering. **Do this before #7.**
+rendering. **Do this before #6.**
 
-### 7. napari-native visualization engine  ·  L  (after #6)
+### 6. napari-native visualization engine  ·  L  (after #5)
 Swap the bespoke renderer for a **napari-native** path built on
 [`napari-movie-maker`](/home/aruppel/Projects/napari-movie-maker), so viewer and
 exported figures/movies share one rendering path.
@@ -83,12 +63,12 @@ exported figures/movies share one rendering path.
   `QT_QPA_PLATFORM=offscreen` aborts). Add `xvfb` to runtime/CI.
 - napariTFM side: map each `save_*` product to an `export_movie_headless` call —
   a `configure(viewer)` that adds image + vectors/quiver layers with matching
-  colormaps, then sweeps the time axis. After #6 the FE-mesh case is gone, so
+  colormaps, then sweeps the time axis. After #5 the FE-mesh case is gone, so
   every overlay maps cleanly to a napari layer.
 - Retires `backend/batch_analysis_visualizations.py` (`BatchVisualizationSaver`,
   matplotlib + `imageio.mimsave` per stage).
 
-### 8. Parallel batch workers  ·  L
+### 7. Parallel batch workers  ·  L
 Batch config gains a **number-of-workers** parameter; positions are processed in
 parallel, **top positions first** (process in list order).
 - Decision: **workers compute, viewer follows one.** Workers process positions in

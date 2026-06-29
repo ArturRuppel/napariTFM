@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 import napari
@@ -911,8 +912,20 @@ class napariTFMWidget(QWidget):
             section.setVisible(tuning)
 
     def _relay_stage_status(self, stage_label: str, message: str) -> None:
-        """Render a stage's progress message in the one global status label (P2)."""
+        """Render a stage's progress message in the one global status label (P2).
+
+        Interactive runs also echo to the console so live mode prints the same
+        progress batch does (worklist §1): batch redirects stdout through its
+        TeeLogger and ``print()``s timestamped lines, while live stages report
+        only via Qt signals. Mirroring the message to stdout here — in batch's
+        ``[timestamp] message`` format — funnels every interactive stage through
+        the same console path without disturbing the UI label or the batch
+        run-log file. This path never runs under the TeeLogger (run-all reports
+        via ``_on_batch_progress``), so there is no double-timestamping.
+        """
         self.status_label.setText(f"{stage_label} — {message}")
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] {stage_label} — {message}")
 
     def _run_all_experiments(self) -> None:
         """Run the whole config table through the pipeline, walking the rail (P4).
