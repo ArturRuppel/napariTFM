@@ -25,6 +25,7 @@ from napariTFM.backend.displacement_analysis import (
 )
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
 from napariTFM.backend.msm import calculate_stresses, generate_mesh_stack, process_mask_data
+from napariTFM.backend.ntfm_writer import write_experiment_ntfm
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters, UnifiedParameters
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 from napariTFM.utilities import ntfm
@@ -163,14 +164,34 @@ class TeeLogger:
 class BatchAnalysis:
     """Handles batch analysis of TFM data using service layer components."""
 
-    def __init__(self, config: dict, progress_callback=None):
+    def __init__(self, config: dict, progress_callback=None, sink=None):
         self.config = config
         self._tee_logger = None
         # Optional per-folder lifecycle hook (P4): called as
         # ``callback(folder_path, status)`` with status in
         # {"running", "done", "error"} so a live UI can walk the rail.
         self._progress_callback = progress_callback
+        # Optional stage/frame observation surface (worklist §5): a live napari
+        # ``ViewerSink`` streams each stage into the viewer as it runs, so an
+        # in-napari run-all and a headless run share this one code path. A
+        # headless run leaves this ``None`` and the hooks are silent no-ops.
+        self._sink = sink
         self._cancelled = False
+
+    def _emit(self, method: str, *args) -> None:
+        """Notify the optional sink; never let it break a run (worklist §5).
+
+        Mirrors :meth:`_report_progress`: the sink is purely additive
+        observation, so a hook that raises is logged and swallowed rather than
+        aborting the compute.
+        """
+        sink = getattr(self, "_sink", None)
+        if sink is None:
+            return
+        try:
+            getattr(sink, method)(*args)
+        except Exception as e:
+            print(f"Pipeline sink error in {method}: {str(e)}")
 
     def request_cancel(self) -> None:
         """Ask the batch to stop at the next folder boundary (cooperative).
@@ -490,34 +511,33 @@ class BatchAnalysis:
         persisted form of the results — the scattered ``.npy`` files are gone;
         stage-resume reads displacement/force back from this container.
         """
-        if displacement_result is None and force_result is None and stress_result is None:
-            print("No analysis results produced; skipping .ntfm write.")
-            return
-
-        # The mask belongs on the shared analysis grid (the force/displacement
-        # grid). Resize the raw external mask to that grid exactly as MSM does.
-        grid_mask = self._mask_on_grid(mask_data, force_result, displacement_result)
-
-        # Resolved per-experiment config is the source of truth for parameters.
-        config = asdict(self._unified_parameters())
         labels = (self.config.get('labels') or {}).get(str(folder), {})
-        inputs = {'folder': str(folder), 'files': self.config.get('input_files', {})}
-
         ntfm_path = output_dir / f"{folder.name}.ntfm"
+        # Delegate to the one shared writer (also used by interactive per-stage
+        # runs), so batch- and live-saved containers are identical.
         try:
-            ntfm.results_to_ntfm(
+            written = write_experiment_ntfm(
                 ntfm_path,
-                config=config,
+                parameters=self.config.get('parameters', {}),
                 displacement_result=displacement_result,
                 force_result=force_result,
                 stress_result=stress_result,
-                mask=grid_mask,
-                inputs=inputs,
+                mask=mask_data,
+                folder=folder,
+                input_files=self.config.get('input_files', {}),
                 labels=labels,
             )
-            print(f"Saved data artifact: {ntfm_path}")
         except Exception as e:
+            # The .ntfm is the sole persisted artifact (ROADMAP §4): if it cannot
+            # be written the folder produced nothing durable, so this must not be
+            # swallowed. Re-raise so process_all_folders reports the folder as
+            # "error" (red dot) instead of "done" with no output on disk.
             print(f"Could not write .ntfm container: {str(e)}")
+            raise
+        if written is None:
+            print("No analysis results produced; skipping .ntfm write.")
+            return
+        print(f"Saved data artifact: {ntfm_path}")
 
     def _mask_on_grid(
         self,
@@ -613,12 +633,23 @@ class BatchAnalysis:
             except FileNotFoundError:
                 print(f"Warning: Cell image file specified but not found: {self.config['input_files']['cells']}")
 
+        # Tell a live sink the channel shapes up front so it can pre-allocate
+        # the Preprocessed* stacks and bind their layers before frames stream in.
+        self._emit('stage_started', 'preprocessing', int(bead_stack.shape[0]), {
+            'beads_shape': tuple(bead_stack.shape),
+            'reference_shape': tuple(reference.shape),
+            'cells_shape': tuple(cell_stack.shape) if cell_stack is not None else None,
+        })
+
         bead_results = []
         for result, frame, total in preprocess_stack(bead_stack, params, reference):
             bead_results.append(result)
             print(f"Progress (beads): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
+            # ``preprocess_stack`` yields a 0-based frame (the stack index).
+            self._emit('stage_frame', 'preprocessing', frame, {'beads': result.processed_image})
 
         reference_result = preprocess_frame(reference, params)
+        self._emit('stage_frame', 'preprocessing', 0, {'reference': reference_result.processed_image})
 
         # Process cell images if available
         cell_results = []
@@ -627,6 +658,7 @@ class BatchAnalysis:
             for result, frame, total in preprocess_stack(cell_stack, params, reference_image=None, is_cell=True):
                 cell_results.append(result)
                 print(f"Progress (cells): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
+                self._emit('stage_frame', 'preprocessing', frame, {'cells': result.processed_image})
 
         # Save results with calibration
         preprocessed = {
@@ -665,6 +697,7 @@ class BatchAnalysis:
                     frame_interval
                 )
 
+        self._emit('stage_finished', 'preprocessing', preprocessed)
         print(f"Preprocessing completed in {self._format_duration(time() - start_time)}")
         return preprocessed
 
@@ -716,10 +749,19 @@ class BatchAnalysis:
         print("Starting Displacement Analysis...")
         start_time = time()
 
+        disp_params = self._create_displacement_parameters()
+        beads = preprocessed_data['beads']
+        self._emit('stage_started', 'displacement', int(beads.shape[0]), {
+            'v_max': disp_params.d_max,
+            'vector_stride': disp_params.disp_vector_stride,
+            'arrow_scale': disp_params.disp_arrow_scale,
+            'downscale_factor': disp_params.downscale_factor,
+        })
+
         displacement_field_generator = calculate_displacement_field(
             preprocessed_data['reference'],
-            preprocessed_data['beads'],
-            self._create_displacement_parameters(),
+            beads,
+            disp_params,
         )
 
         # Initialize result container
@@ -728,6 +770,9 @@ class BatchAnalysis:
                 # Get next intermediate result
                 displacement_field, frame, total = next(displacement_field_generator)
                 self._log_displacement_progress(displacement_field, frame, total)
+                # The backend yields a 1-based frame number; the viewer (and its
+                # slider) want it 0-based.
+                self._emit('stage_frame', 'displacement', frame - 1, displacement_field)
         except StopIteration as e:
             # Retrieve final result from generator's return value
             displacement_result = e.value
@@ -738,6 +783,7 @@ class BatchAnalysis:
         # No intermediate .npy: the sole persisted result is the experiment's
         # .ntfm (ROADMAP §4), written once all stages finish. Stage-resume reads
         # the displacement field back from that .ntfm.
+        self._emit('stage_finished', 'displacement', displacement_result)
         print(f"Displacement analysis completed in {self._format_duration(time() - start_time)}")
         return displacement_result
 
@@ -799,9 +845,18 @@ class BatchAnalysis:
         print("Starting Force Analysis...")
         start_time = time()
 
+        fttc_params = self._create_fttc_parameters()
+        self._emit('stage_started', 'force',
+                   int(displacement_data.displacement_field.shape[0]), {
+                       'v_max': fttc_params.f_max,
+                       'vector_stride': fttc_params.force_vector_stride,
+                       'arrow_scale': fttc_params.force_arrow_scale,
+                       'downscale_factor': fttc_params.downscale_factor,
+                   })
+
         force_generator = calculate_force_field(
             displacement_data.displacement_field,
-            self._create_fttc_parameters()
+            fttc_params
         )
 
         # Initialize result container
@@ -810,6 +865,8 @@ class BatchAnalysis:
                 # Get next intermediate result
                 force_field, frame, total = next(force_generator)
                 self._log_force_progress(force_field, frame, total)
+                # 1-based from the backend; the viewer wants it 0-based.
+                self._emit('stage_frame', 'force', frame - 1, force_field)
         except StopIteration as e:
             # Retrieve final result from generator's return value
             force_result = e.value
@@ -819,6 +876,7 @@ class BatchAnalysis:
 
         # No intermediate .npy (ROADMAP §4): the .ntfm is the sole persisted
         # result; stage-resume reads the force field back from it.
+        self._emit('stage_finished', 'force', force_result)
         print(f"Force analysis completed in {self._format_duration(time() - start_time)}")
         return force_result
 
@@ -932,6 +990,16 @@ class BatchAnalysis:
 
             # Calculate stress for each frame
             print("Calculating stress fields...")
+            # The downscale factor lives on the force result's parameters (as in
+            # the interactive MSM controller), not on the MSM params; guard the
+            # stage-resume case where force_data is a bare field shim.
+            fr_params = getattr(force_data, 'parameters', None)
+            downscale = getattr(fr_params, 'downscale_factor', 1) if fr_params is not None else 1
+            self._emit('stage_started', 'stress',
+                       int(force_data.force_field.shape[0]), {
+                           'max_stress': params.max_stress,
+                           'downscale_factor': downscale,
+                       })
             # Get the generator
             stress_generator = calculate_stresses(
                 force_field=force_data.force_field,  # Access forces from the dictionary
@@ -945,6 +1013,10 @@ class BatchAnalysis:
                 while True:
                     stress_result, frame, total = next(stress_generator)
                     self._log_stress_progress(stress_result, frame, total)
+                    # ``stress_tensor`` is the cumulative stack; the newest frame
+                    # is its last slice. 1-based frame → 0-based for the viewer.
+                    self._emit('stage_frame', 'stress', frame - 1,
+                               stress_result.stress_tensor[-1])
             except StopIteration as e:
                 # Retrieve final result from generator's return value
                 final_result = e.value
@@ -954,6 +1026,7 @@ class BatchAnalysis:
 
             # No intermediate .npy (ROADMAP §4): the .ntfm is the sole persisted
             # result.
+            self._emit('stage_finished', 'stress', final_result)
             print(f"Stress analysis completed in {self._format_duration(time() - start_time)}")
             return final_result
 

@@ -39,6 +39,7 @@ def build_run_config(
     *,
     disabled_stages: Iterable[str] = (),
     save_cache: bool = False,
+    processed_root: object = None,
 ) -> dict:
     """Assemble the run config from the table's ``records`` + shared ``parameters``.
 
@@ -76,6 +77,10 @@ def build_run_config(
         "metrics_parameters": dict(_METRICS_PARAMETERS),
         "save_cache": bool(save_cache),
         "experiment_metadata": experiment_metadata,
+        # Where derived output lands; ``None`` means in-place (a ``processed/``
+        # bucket inside each input folder). The status dots and interactive
+        # persist resolve against this same value, so all three agree.
+        "processed_root": str(processed_root) if processed_root else None,
     }
 
 

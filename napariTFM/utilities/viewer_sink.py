@@ -1,0 +1,118 @@
+"""A live :class:`PipelineSink` that streams a batch run into the napari viewer.
+
+This is the viewer half of worklist §5: the *same* :class:`BatchAnalysis`
+orchestrator drives both a headless run and the in-napari "Run all". Headless
+attaches no sink; the in-napari run attaches a :class:`ViewerSink`, which turns
+the orchestrator's stage/frame notifications into the very same
+``VisualizationManager`` streaming calls the interactive per-stage controllers
+use — so a run-all walks the rail in the viewer, filling each stage's layers
+frame by frame, exactly as if each stage button were pressed in turn.
+
+No background thread is introduced: the batch runs synchronously on the GUI
+thread (as it already did), and the sink pumps the event loop after each frame
+so the viewer repaints live. That keeps the layer mutations on the GUI thread —
+where napari requires them — without any cross-thread marshalling.
+"""
+
+import numpy as np
+
+from napariTFM.backend.pipeline_sink import PipelineSink
+
+
+class ViewerSink(PipelineSink):
+    """Translate orchestrator hooks into ``VisualizationManager`` streaming.
+
+    Parameters
+    ----------
+    data_manager, visualization_manager
+        The same managers the interactive widgets share, so a run-all leaves the
+        viewer in the same state a manual stage run would.
+    pump
+        Optional zero-arg callable invoked after each streamed frame to repaint
+        the viewer (typically ``QApplication.processEvents``). ``None`` disables
+        pumping — handy in tests.
+    """
+
+    def __init__(self, data_manager, visualization_manager, pump=None):
+        self.data_manager = data_manager
+        self.vis = visualization_manager
+        self._pump = pump
+
+    # --- lifecycle hooks --------------------------------------------------
+
+    def stage_started(self, stage, num_frames, info=None):
+        info = info or {}
+        if stage == 'preprocessing':
+            self._begin_preprocessing(info)
+        elif stage in ('displacement', 'force'):
+            self.vis.begin_vector_field_stream(stage, num_frames, {
+                'v_max': info['v_max'],
+                'vector_stride': info['vector_stride'],
+                'arrow_scale': info['arrow_scale'],
+                'downscale_factor': info['downscale_factor'],
+            })
+        elif stage == 'stress':
+            self.vis.begin_stress_stream(
+                num_frames=num_frames,
+                max_stress=info['max_stress'],
+                downscale_factor=info['downscale_factor'],
+            )
+        self._repaint()
+
+    def stage_frame(self, stage, frame_index, frame):
+        if stage == 'preprocessing':
+            # ``frame`` is a {channel: image} mapping (one key per yield).
+            for channel, image in frame.items():
+                self.vis.stream_preprocessing_frame(channel, frame_index, image)
+        elif stage in ('displacement', 'force'):
+            self.vis.stream_vector_field_frame(stage, frame_index, frame)
+        elif stage == 'stress':
+            self.vis.stream_stress_frame(frame_index, frame)
+        self._repaint()
+
+    def stage_finished(self, stage, result):
+        # Store the full result so interactive frame-scrubbing and any downstream
+        # stage see it — mirrors what each per-stage controller does on
+        # completion. Preprocessing needs nothing here: its stacks were allocated
+        # in the data manager up front and filled in place as frames streamed.
+        if result is None:
+            return
+        if stage == 'displacement':
+            self.data_manager.set_displacement_results(result, source="generated", dirty=True)
+        elif stage == 'force':
+            self.data_manager.set_force_results(result, source="generated", dirty=True)
+        elif stage == 'stress':
+            self.data_manager.set_stress_results(result, source="generated", dirty=True)
+
+    # --- helpers ----------------------------------------------------------
+
+    def _begin_preprocessing(self, info):
+        """Pre-allocate the Preprocessed* stacks, then bind their layers.
+
+        Mirrors ``PreprocessingController._begin_stream``: the stacks are
+        registered with the data manager as zeroed float32 arrays (generated,
+        dirty) so the layers are backed by the very arrays the run fills in
+        place; ``begin_preprocessing_stream`` then creates/reuses the layers.
+        """
+        beads_shape = info.get('beads_shape')
+        reference_shape = info.get('reference_shape')
+        cells_shape = info.get('cells_shape')
+
+        if beads_shape is not None:
+            self.data_manager.set_preprocessed_bead_stack(
+                np.zeros(beads_shape, dtype=np.float32), source="generated", dirty=True
+            )
+        if reference_shape is not None:
+            self.data_manager.set_preprocessed_reference(
+                np.zeros(reference_shape, dtype=np.float32), source="generated", dirty=True
+            )
+        if cells_shape is not None:
+            self.data_manager.set_preprocessed_cell_stack(
+                np.zeros(cells_shape, dtype=np.float32), source="generated", dirty=True
+            )
+
+        self.vis.begin_preprocessing_stream()
+
+    def _repaint(self):
+        if self._pump is not None:
+            self._pump()

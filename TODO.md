@@ -1,114 +1,112 @@
 # napariTFM — Open Worklist
 
-> Accomplished items have been pruned (see git history / prior commits for the
-> completed UI-redesign slices P0–P8, the UI-Coherence roadmap, and the BISM
-> port). What remains below is **open work only**.
+> Accomplished items are pruned (see git history for completed UI-redesign
+> slices P0–P8, the UI-Coherence roadmap, the BISM port, and the 2026-06-29
+> batch/cancel/colorbar/sink work). What remains below is **open work only**,
+> ranked easy-wins-first.
 
 ---
 
-## New requests (2026-06-29)
+## Ranked open work (2026-06-29)
 
-### 1. Cancel button on all stages ✅ DONE
-Every stage (preprocessing, displacement, FTTC, MSM — and any long-running
-"Run all") should expose a **Cancel** control that aborts the in-flight
-computation cleanly. Cancel scaffolding exists in some widgets already; make it
-present, wired, and consistent across **all** stages.
+### 1. Colorbar geometry polish  ·  XS
+Tighten the viewer colorbar layout (`napariTFM/utilities/viewer_colorbar.py`):
+- Move the **bar closer to the image** (reduce the horizontal gap).
+- Move the **min/max labels closer to the bar** (reduce label x-offset).
+- **Flush-align** the labels to the bar's edges: max to the **top** edge, min to
+  the **bottom** edge (current anchoring leaves them slightly inset).
+Isolated, low-risk geometry tweak.
 
-### 2. Colorbar in the preview ✅ DONE
-The viewer colorbar should also render in **preview** mode, not just the
-committed/result view — so previews show the same scale legend the final
-visualization does. (`napariTFM/utilities/viewer_colorbar.py`.)
-- Root cause: the preview path hid the legend. Each stage preview adds the
-  colorbar, then `VisualizationManager.isolate_layers` (and each widget's own
-  visibility loop) set every layer except the two stage layers to
-  `visible=False`, hiding the colorbar — while the committed/result path never
-  isolates, so its colorbar survived.
-- Fix: `ViewerColorbarManager` now exposes `layer_names` / `is_colorbar_layer`;
-  `isolate_layers` keeps the active legend layers visible, and the
-  displacement/force/stress preview visibility loops skip colorbar layers.
+### 2. Unify logging (live = batch)  ·  XS
+Batch mode prints its log to the console; live/interactive mode does not. Route
+the interactive path through the **same logger** so live mode prints the **same
+messages batch does** (decision: match batch exactly). Keep writing full detail
+to the run log file as today.
 
-### 3. Min/max scale labels on the colorbar ✅ DONE
-Add the scale's **min and max numbers** to the colorbar: min at the **bottom**,
-max at the **top** of the scale bar, each **centered horizontally** on the bar.
-Just the two endpoints — no intermediate ticks.
-- `ViewerColorbarManager.show_for_layer` now adds two text-only points layers,
-  `"… Colorbar Max"` / `"… Colorbar Min"`, each sitting just right of the bar
-  and flush with one end: max top-anchored (`upper_left`) to the bar's top, min
-  bottom-anchored (`lower_left`) to the bar's bottom. Two layers are needed
-  because napari's text anchor is per-layer. The range is read from the
-  reference layer's `contrast_limits` (data min/max fallback), so no call site
-  changed. `format_scale_value` keeps the numbers compact across µm / Pa /
-  signed mN·m⁻¹ ranges. Both layers are tracked in `layer_names`, so
-  `isolate_layers` keeps them visible in preview.
+### 3. Per-position "Export to CSV" button  ·  S–M
+Each position **row** in the `ExperimentsList` (next to the status dots) gets an
+**Export to CSV** button that writes that position's processed `.ntfm` out as a
+**full per-pixel field dump** — every pixel's `u_x, u_y, F_x, F_y` (and `stress`,
+`mask` when present) per frame. The `.ntfm` is a parquet container, so this is a
+read-and-flatten-to-CSV op; mind the large file sizes (stream/chunk the write,
+warn if no `.ntfm` exists yet). No-op / disabled when the position isn't
+processed.
 
-### 4. Replace the visualization engine with a napari-native one
+### 4. Streaming follows the active position  ·  S
+While the batch/live sink streams, the viewer + experiments-list selection should
+**track the position currently being processed**. Add an `experiment_started`
+hook on the sink (`utilities/viewer_sink.py` / `backend/pipeline_sink.py`) that
+drives the `ExperimentsList` selection. Pairs with #5.
+
+### 5. Per-stage layer isolation during streaming  ·  M
+During batch streaming **and** live "Run all", the sink should **take over layer
+visibility** and show only the layers relevant to the stage in flight; restore
+prior visibility when the run ends. **Distinct from preview** — preview must
+*never* take control of layer state.
+- preprocessing → **beads + ref only**, additive blending in the two colors;
+  then **cell only**.
+- displacement → displacement layers only.
+- force → force layers only.
+- stress → stress layers only.
+Reuse the existing `VisualizationManager.isolate_layers` infrastructure; define a
+per-stage active-layer set and apply it on `stage_started`. Build with #4 (both
+are "the streaming sink takes over the UI to show what it's doing").
+
+### 6. Replace MSM with BISM  ·  M–L
+Swap Monolayer Stress Microscopy for the validated **BISM** port
+(`napariTFM/_validation/benchmark_MSM/bism.py`; no material params, gives a
+stress field + uncertainty). BISM needs **no FE mesh**, which **dissolves the
+meshing/mesh-rendering path** — the part of #7 least likely to map onto a napari
+layer. Wire BISM into the production stress stage; confirm downstream consumers
+of the stress products still get what they expect. Retires the FE-mesh overlay
+rendering. **Do this before #7.**
+
+### 7. napari-native visualization engine  ·  L  (after #6)
 Swap the bespoke renderer for a **napari-native** path built on
-[`napari-movie-maker`](/home/aruppel/Projects/napari-movie-maker), so the viewer
-and any exported figures/movies share one rendering path.
-- **Headless renderer — already DONE in napari-movie-maker**
-  (`export_movie_headless` / `offscreen_viewer` / `ensure_offscreen_qt`).
-  **Deployment note:** napari renders via OpenGL, so the process must run under a
-  GL-capable display — `xvfb-run -a python …` (bare `QT_QPA_PLATFORM=offscreen`
-  has no GL context and aborts). Add `xvfb` to the runtime/CI.
-- **Remaining (napariTFM side).** Map each current `save_*` product to an
-  `export_movie_headless` call: a `configure(viewer)` that adds the right layers
-  (image + vectors/quiver + labels/mesh) with matching colormaps, then sweep the
-  time axis. Confirm the **quiver** and **FE-mesh** overlays have napari-layer
-  equivalents (the parts least likely to map 1:1 from the matplotlib renderer).
+[`napari-movie-maker`](/home/aruppel/Projects/napari-movie-maker), so viewer and
+exported figures/movies share one rendering path.
+- Headless renderer already DONE in napari-movie-maker (`export_movie_headless` /
+  `offscreen_viewer` / `ensure_offscreen_qt`). **Deployment:** napari renders via
+  OpenGL — run under a GL-capable display (`xvfb-run -a python …`; bare
+  `QT_QPA_PLATFORM=offscreen` aborts). Add `xvfb` to runtime/CI.
+- napariTFM side: map each `save_*` product to an `export_movie_headless` call —
+  a `configure(viewer)` that adds image + vectors/quiver layers with matching
+  colormaps, then sweeps the time axis. After #6 the FE-mesh case is gone, so
+  every overlay maps cleanly to a napari layer.
 - Retires `backend/batch_analysis_visualizations.py` (`BatchVisualizationSaver`,
   matplotlib + `imageio.mimsave` per stage).
 
-### 5. Batch mode = sequential in-napari run, not a console mode
-Batch should **not** be a separate mode that runs in the console. It should
-simply **walk every step inside napari** — as if each stage button were pressed
-sequentially. Make "run all" drive the live napari pipeline end to end rather
-than spawning/processing outside the viewer.
-- *Note:* earlier slices already removed the run-in-console radios and added a
-  "Run all" that walks the rail; verify whether any console/out-of-viewer path
-  still survives and finish converting it to a pure in-napari sequential run.
-
-### 6. Collapsible file list ✅ DONE
-The experiments/file list should be **collapsible to a single row**, so it can be
-folded away to reclaim vertical space when not actively browsing experiments.
-- `ExperimentsList` header gained a caret toggle (`experiments_collapse_button`).
-  Everything below the header now lives in one `self._body` container, so
-  `set_collapsed`/`toggle_collapsed` fold the whole list with a single
-  `setVisible`. While collapsed the header shows a compact count summary
-  (`experiments_header_summary`, kept current by `_update_meta`) so the single
-  remaining row still says how many experiments are hidden.
+### 8. Parallel batch workers  ·  L
+Batch config gains a **number-of-workers** parameter; positions are processed in
+parallel, **top positions first** (process in list order).
+- Decision: **workers compute, viewer follows one.** Workers process positions in
+  parallel headless (no per-worker sink); the viewer streams/shows only the
+  top/selected position as results complete. Keeps §5's "viewer is an optional
+  sink" model intact — parallelism lives in the headless compute layer, the
+  single viewer never tries to show N positions at once.
+- Note the tension with the current synchronous-on-GUI-thread batch; this is the
+  most architectural item — design the worker pool + result hand-off before
+  coding.
 
 ---
 
-## Bugs
+## Backlog
 
-### Status circles in the file list are not working properly
-The per-row status dots in the experiments/file list don't reflect the true
-stage state. Audit the status pipeline (`populated_measures` /
-`_experiment_stage_status` → the row dots) and fix so each row's dots correctly
-show done/ready/off per stage.
-
-### Stage runners are not saving output files
-Running a stage does not write its output to disk. The runners must persist
-their results (the `.ntfm` measures / cache) so downstream stages and the
-status dots can see them. Likely couples with the status-circles bug above
-(no output → dots can never read "done").
-
----
-
-## Backlog — data / output
+### Load processed `.ntfm` back into memory on selection
+Follow-up from the "stage runners weren't saving" fix: selecting an
+already-processed experiment reads "done" from disk, but the viewer layers stay
+empty until a stage re-runs. On selection, **load its `.ntfm` back into memory**
+so the viewer shows the stored result.
 
 ### Apply-mask-on-save option in the batch config
-Add an opt-in flag (e.g. `apply_mask_on_save`) that, when a mask layer is present
-for an experiment, **zeroes every map pixel where the mask is background
-(label 0)** before writing the `.ntfm` — `u_x, u_y, F_x, F_y` (and stress, if
-present) set to `0.0` wherever `mask == 0`. The `mask` column records which
-pixels were zeroed, so the result is self-documenting.
-- **Why.** Off-cell substrate displacement/traction is noise; zeroing it cleans
-  the field and compresses enormously. Measured on `Ctrl/pos_00` (8.3% on-cell):
-  unmasked `.ntfm` **177 MB** → masked **20.5 MB** (~8×). Long runs of exact
-  zeros crush under snappy/zstd — no special codec needed.
-- **Scope.** Opt-in, default **off** (deliberately *lossy*: background values are
-  discarded irreversibly; only the `mask` column survives to say so). No-op when
-  no mask is present.
-- **Where.** Batch write step (`backend/batch_analysis.py` → `ntfm.results_to_ntfm`),
-  a pre-write array op on the result fields. Interactive/preview path unaffected.
+Opt-in `apply_mask_on_save` flag: when a mask layer is present, **zero every map
+pixel where the mask is background (label 0)** before writing the `.ntfm` —
+`u_x, u_y, F_x, F_y` (and stress, if present) set to `0.0` wherever `mask == 0`.
+The `mask` column records which pixels were zeroed (self-documenting).
+- **Why.** Off-cell substrate signal is noise; zeroing it cleans the field and
+  compresses ~8× (measured `Ctrl/pos_00`, 8.3% on-cell: 177 MB → 20.5 MB). Long
+  runs of exact zeros crush under snappy/zstd.
+- **Scope.** Opt-in, default **off** (deliberately lossy — background values are
+  discarded irreversibly; only the `mask` column survives). No-op without a mask.
+- **Where.** Batch write step (`backend/batch_analysis.py` →
+  `ntfm.results_to_ntfm`), a pre-write array op. Interactive/preview unaffected.

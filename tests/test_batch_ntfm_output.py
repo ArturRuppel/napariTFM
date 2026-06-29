@@ -58,6 +58,27 @@ def test_no_results_skips_ntfm(tmp_path):
     assert not (tmp_path / "exp.ntfm").exists()
 
 
+def test_write_failure_propagates(tmp_path, monkeypatch):
+    """A failed .ntfm write must not be swallowed: the .ntfm is the sole
+    persisted artifact, so the error has to surface (-> folder reported error)
+    rather than leaving the folder looking 'done' with nothing on disk."""
+    import pytest
+
+    from napariTFM.utilities import ntfm
+
+    scale = {"grid_spacing": 1.0, "time_interval": 1.0}
+    disp = _Result(displacement_field=np.ones((1, 3, 3, 2)), physical_scale=scale)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("pyarrow missing")
+
+    monkeypatch.setattr(ntfm, "results_to_ntfm", _boom)
+
+    analysis = _analysis()
+    with pytest.raises(RuntimeError, match="pyarrow missing"):
+        analysis._write_experiment_ntfm(tmp_path, tmp_path / "exp", disp, None, None, None)
+
+
 def test_load_mask_returns_none_when_absent(tmp_path):
     analysis = _analysis(input_files={"beads": "b.tif"})
     assert analysis._load_mask(tmp_path) is None

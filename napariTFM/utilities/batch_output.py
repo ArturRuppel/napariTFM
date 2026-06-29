@@ -79,6 +79,27 @@ def resolve_output_plan(
     return OutputPlan(output_dirs, warnings)
 
 
+def experiment_output_dir(
+    experiment_path: str, processed_root: Optional[str] = None
+) -> Path:
+    """The single directory that holds one experiment's derived output.
+
+    The one resolver every consumer must share: the batch writer, the
+    experiments-list status dots, and the interactive persist path all call this
+    so they can never disagree about *where* an experiment's ``.ntfm`` lives.
+    """
+    plan = resolve_output_plan([str(experiment_path)], processed_root)
+    return plan.output_dirs[str(experiment_path)]
+
+
+def experiment_ntfm_path(
+    experiment_path: str, processed_root: Optional[str] = None
+) -> Path:
+    """The canonical ``.ntfm`` path for one experiment (basename names the file)."""
+    out_dir = experiment_output_dir(experiment_path, processed_root)
+    return out_dir / f"{Path(experiment_path).name}.ntfm"
+
+
 def _mirror_base(input_folders: Sequence[str], warnings: List[str]) -> Optional[Path]:
     """Longest common parent of all folders, or ``None`` to signal basename fallback."""
     if len(input_folders) < 2:

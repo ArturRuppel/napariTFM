@@ -123,6 +123,24 @@ class _StubDataManager:
         self.active_input_files = dict(input_files or {})
         self.notify_changed()
 
+    def clear_generated_results(self):
+        # Mirror the real DataManager: drop derived results on experiment switch.
+        changed = False
+        for attr in (
+            "preprocessed_bead_stack",
+            "preprocessed_reference",
+            "preprocessed_cell_stack",
+            "displacement_results",
+            "force_results",
+            "stress_results",
+            "mask_stack",
+        ):
+            if getattr(self, attr, None) is not None:
+                changed = True
+            setattr(self, attr, None)
+        if changed:
+            self.notify_changed()
+
     def mark_artifact_error(self, key, error):
         self.artifact_errors.append((key, error))
 
@@ -499,15 +517,18 @@ def test_stage_progress_feeds_one_global_status_label(monkeypatch, app):
 
 
 def _write_stage_ntfm(folder, **arrays):
-    # Write a real .ntfm into the experiment's TFM_data folder (P3 truth source).
+    # Write a real .ntfm at the canonical resolve_output_plan location — exactly
+    # where the batch writes and the status dots read (P3 truth source). In-place
+    # mode (no processed_root) puts it in the experiment's processed/ bucket.
     import numpy as np  # noqa: F401  (kept local; arrays passed by caller)
 
     from napariTFM.utilities import ntfm
+    from napariTFM.utilities.batch_output import experiment_ntfm_path
 
-    tfm = folder / "TFM_data"
-    tfm.mkdir(parents=True, exist_ok=True)
+    ntfm_path = experiment_ntfm_path(str(folder), None)
+    ntfm_path.parent.mkdir(parents=True, exist_ok=True)
     df = ntfm.arrays_to_tidy(grid_spacing=1.0, frame_interval=1.0, **arrays)
-    ntfm.write_ntfm(tfm / f"{folder.name}.ntfm", df, ntfm.build_metadata(config={}))
+    ntfm.write_ntfm(ntfm_path, df, ntfm.build_metadata(config={}))
 
 
 def test_experiment_stage_status_inputs_only_is_ready_frontier(monkeypatch, app, tmp_path):
@@ -617,15 +638,97 @@ def test_experiment_stage_status_disabled_stress_reads_off(monkeypatch, app, tmp
     assert statuses["force"] == "done"
 
 
+class _StubResult:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+def _select(widget, folder):
+    widget._project_open = True
+    widget._update_disclosure()
+    widget.experiments_list.set_experiments([str(folder)])
+    widget.experiments_list.set_active(str(folder))
+
+
+def test_interactive_run_persists_ntfm_and_syncs_both_dot_rows(monkeypatch, app, tmp_path):
+    import numpy as np
+
+    from napariTFM.utilities.batch_output import experiment_ntfm_path
+
+    widget = _stub_main_widget(monkeypatch)
+    widget._stage_sections_by_key["stress"].set_enabled(True)
+    folder = tmp_path / "pos_00"
+    folder.mkdir()
+    _select(widget, folder)
+    try:
+        # Displacement + force just ran interactively: results live in memory.
+        scale = {"grid_spacing": 1.0, "time_interval": 1.0}
+        widget.data_manager.displacement_results = _StubResult(
+            displacement_field=np.ones((1, 3, 3, 2)), physical_scale=scale
+        )
+        widget.data_manager.force_results = _StubResult(
+            force_field=np.ones((1, 3, 3, 2)) * 5.0, physical_scale=scale
+        )
+
+        # The force-finished hook auto-persists, then reconciles the dots.
+        widget._on_stage_persisted("force")
+
+        # Written at the same canonical path the batch uses (not preview-only).
+        ntfm_path = experiment_ntfm_path(str(folder), None)
+        assert ntfm_path.exists()
+
+        # The on-disk truth now reports displacement + force done...
+        statuses = widget._experiment_stage_status(str(folder))
+        assert statuses["displacement"] == "done"
+        assert statuses["force"] == "done"
+        # ...and every section spine (below) reads that same per-stage verdict as
+        # the experiment's row dots (above) — true top/bottom sync.
+        for key, section in widget._stage_sections_by_key.items():
+            assert section._effective_status() == statuses[key], key
+    finally:
+        widget.close()
+        widget.deleteLater()
+
+
+def test_all_nan_stage_reads_not_done_in_both_dot_rows(monkeypatch, app, tmp_path):
+    import numpy as np
+
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_00"
+    folder.mkdir()
+    _select(widget, folder)
+    try:
+        # Force came out all-NaN (e.g. a divide-by-zero run): displacement is real.
+        scale = {"grid_spacing": 1.0, "time_interval": 1.0}
+        widget.data_manager.displacement_results = _StubResult(
+            displacement_field=np.ones((1, 3, 3, 2)), physical_scale=scale
+        )
+        widget.data_manager.force_results = _StubResult(
+            force_field=np.full((1, 3, 3, 2), np.nan), physical_scale=scale
+        )
+        widget._on_stage_persisted("force")
+
+        statuses = widget._experiment_stage_status(str(folder))
+        # All-NaN force is honestly NOT done — the next-frontier "ready" instead.
+        assert statuses["displacement"] == "done"
+        assert statuses["force"] == "ready"
+        # The section dot agrees (no green-below / grey-above split).
+        assert widget._stage_sections_by_key["force"]._effective_status() == "ready"
+    finally:
+        widget.close()
+        widget.deleteLater()
+
+
 class _FakeBatchAnalysis:
     """Records its config and replays per-folder lifecycle to the callback."""
 
     last_config = None
     last_instance = None
 
-    def __init__(self, config, progress_callback=None):
+    def __init__(self, config, progress_callback=None, sink=None):
         self.config = config
         self.progress_callback = progress_callback
+        self.sink = sink
         type(self).last_config = config
         type(self).last_instance = self
 

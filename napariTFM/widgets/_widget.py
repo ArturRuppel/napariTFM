@@ -31,6 +31,9 @@ from napariTFM.widgets._run_config import (
     series_records,
 )
 from napariTFM.backend.batch_analysis import BatchAnalysis
+from napariTFM.backend.ntfm_writer import write_experiment_ntfm
+from napariTFM.utilities.batch_output import experiment_ntfm_path
+from napariTFM.utilities.viewer_sink import ViewerSink
 
 logger = logging.getLogger(__name__)
 
@@ -926,8 +929,22 @@ class napariTFMWidget(QWidget):
             records,
             self.parameter_manager.get_all_parameters(),
             disabled_stages=self._disabled_stages(),
+            processed_root=self.data_manager.output_dir,
         )
-        analyzer = BatchAnalysis(config, progress_callback=self._on_batch_progress)
+        # Stream each stage into the live viewer as it runs (worklist §5): the
+        # same BatchAnalysis that drives a headless run now also walks the rail
+        # in napari via a ViewerSink. Frames repaint live because the batch runs
+        # synchronously on the GUI thread and the sink pumps the event loop.
+        sink = ViewerSink(
+            self.data_manager,
+            self.visualization_manager,
+            pump=QApplication.processEvents,
+        )
+        analyzer = BatchAnalysis(
+            config,
+            progress_callback=self._on_batch_progress,
+            sink=sink,
+        )
         self._active_batch = analyzer
         self.experiments_list.set_run_all_active(True)
         try:
@@ -939,6 +956,53 @@ class napariTFMWidget(QWidget):
             self._active_batch = None
             self.experiments_list.set_run_all_active(False)
             self.refresh_stage_statuses()
+
+    def _on_stage_persisted(self, stage_key: str) -> None:
+        """A stage finished interactively: persist it, then reconcile the dots.
+
+        Interactive runs are no longer preview-only — a finished stage writes the
+        same ``.ntfm`` a batch run would, at the same canonical path, so the row
+        dots (top) and the section dots (below) both read the one on-disk truth.
+        """
+        self._persist_active_experiment(stage_key)
+        self.refresh()
+
+    def _persist_active_experiment(self, stage_key: str) -> None:
+        """Write the active experiment's results to its canonical ``.ntfm``.
+
+        Gathers whatever analysis results are currently in memory (displacement /
+        force / stress + mask) and writes them through the same shared writer the
+        batch uses. A no-op when nothing is selected or no results exist yet.
+        Preprocessing has no ``.ntfm`` column of its own (and the batch caches its
+        tiffs only on opt-in), so it persists nothing — its dot turns "done" once
+        displacement is written, exactly as in a batch run.
+        """
+        if stage_key == "preprocessing":
+            return
+        path = self._active_experiment
+        if not path:
+            return
+        try:
+            labels = {}
+            for record in self.experiments_list.experiment_records():
+                if record.get("path") == path:
+                    labels = dict(record.get("columns", {}))
+                    break
+            ntfm_path = experiment_ntfm_path(path, self.data_manager.output_dir)
+            write_experiment_ntfm(
+                ntfm_path,
+                parameters=self.parameter_manager.get_all_parameters(),
+                displacement_result=self.data_manager.displacement_results,
+                force_result=self.data_manager.force_results,
+                stress_result=self.data_manager.stress_results,
+                mask=self.data_manager.mask_stack,
+                folder=path,
+                input_files=self.experiments_list.input_files_for(path),
+                labels=labels,
+            )
+        except Exception as exc:
+            logger.exception("Could not persist results for %s", path)
+            self.status_label.setText(f"Save failed: {exc}")
 
     def _cancel_run_all(self) -> None:
         """Ask the live batch to stop at the next folder boundary (P4 / item 1).
@@ -987,8 +1051,21 @@ class napariTFMWidget(QWidget):
             self.refresh_stage_statuses()
 
     def refresh_stage_statuses(self):
+        # The section dots (below) mirror the same persisted-.ntfm truth as the
+        # experiments-list row dots (top), so the two can never disagree for the
+        # active experiment — including treating an all-NaN stage (e.g. a failed
+        # force) as not-done in both. Each panel still refreshes to update its
+        # per-artifact file dots and tooltips (in-memory cache state), but the
+        # stage's overall spine verdict comes from disk. With no experiment
+        # selected there is no disk truth, so the in-memory verdict stands.
+        disk_status = (
+            self._experiment_stage_status(self._active_experiment)
+            if self._active_experiment
+            else None
+        )
         for key, panel in self._stage_status_panels_by_key.items():
-            status = panel.refresh()
+            memory_status = panel.refresh()
+            status = disk_status.get(key, memory_status) if disk_status else memory_status
             self._stage_sections_by_key[key].set_status(status)
         self.experiments_list.refresh_statuses()
 
@@ -1015,13 +1092,22 @@ class napariTFMWidget(QWidget):
         from pathlib import Path
 
         from napariTFM.utilities import ntfm as _ntfm
+        from napariTFM.utilities.batch_output import experiment_output_dir
 
         folder = Path(path)
-        tfm_folder = folder / "TFM_data"
-        ntfm_path = tfm_folder / f"{folder.name}.ntfm"
+        # Resolve the .ntfm exactly where the batch writes it (and where an
+        # interactive run persists it): the shared resolve_output_plan bucket.
+        # Reading any other path is how the row dots silently went stale.
+        out_dir = experiment_output_dir(path, self.data_manager.output_dir)
+        ntfm_path = out_dir / f"{folder.name}.ntfm"
+        tfm_folder = out_dir
         measures = _ntfm.populated_measures(ntfm_path)
-        inputs_ready = (folder / "beads.tif").exists() and (
-            folder / "reference.tif"
+        # Inputs live in the experiment folder under their discovery names.
+        input_files = self.experiments_list.input_files_for(path) or {}
+        beads_name = input_files.get("beads", "beads.tif")
+        reference_name = input_files.get("reference", "reference.tif")
+        inputs_ready = (folder / beads_name).exists() and (
+            folder / reference_name
         ).exists()
         # Preprocessing leaves no measure column of its own; a cached image or any
         # downstream measure both prove it ran.
@@ -1053,6 +1139,11 @@ class napariTFMWidget(QWidget):
 
     def _on_active_experiment_changed(self, path: str) -> None:
         self._active_experiment = path or None
+        # Switching experiments drops the previous one's in-memory results so they
+        # can never be persisted into the newly selected experiment's .ntfm. The
+        # dots fall back to the new experiment's on-disk truth (which may already
+        # read "done" from a prior batch/interactive run).
+        self.data_manager.clear_generated_results()
         if self._active_experiment is None:
             self._pipeline_context_label.setText("Pipeline")
             self.data_manager.set_active_inputs(None, {})
@@ -1203,10 +1294,19 @@ class napariTFMWidget(QWidget):
 
     def connect_signals(self):
         """Connect signals between components"""
+        # A finished stage persists to the active experiment's .ntfm (auto-save),
+        # then refreshes so both dot rows reflect the new on-disk truth.
+        # Preprocessing only refreshes — it has nothing of its own to persist.
         self.preprocessing_widget.preprocessing_completed.connect(lambda *_: self.refresh())
-        self.displacement_widget.displacement_calculated.connect(lambda *_: self.refresh())
-        self.force_widget.force_calculated.connect(lambda *_: self.refresh())
-        self.msm_widget.stress_calculated.connect(lambda *_: self.refresh())
+        self.displacement_widget.displacement_calculated.connect(
+            lambda *_: self._on_stage_persisted("displacement")
+        )
+        self.force_widget.force_calculated.connect(
+            lambda *_: self._on_stage_persisted("force")
+        )
+        self.msm_widget.stress_calculated.connect(
+            lambda *_: self._on_stage_persisted("stress")
+        )
 
         # Connect parameter manager signals
         self.parameter_manager.parameter_changed.connect(self._on_parameter_changed)

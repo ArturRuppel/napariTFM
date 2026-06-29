@@ -182,13 +182,60 @@ class DataManager:
         self._validate_input_stack(data, "mask stack")
         self.set_artifact("mask_stack", data, path=path, source=source)
 
+    # Pipeline dependency chain: (re)computing or clearing a stage makes every
+    # stage downstream of it stale. Invalidating them keeps a stale result from
+    # being shown or — now that interactive runs persist — written into a .ntfm
+    # alongside a freshly recomputed upstream stage.
+    _DOWNSTREAM = {
+        "displacement_results": ("force_results", "stress_results"),
+        "force_results": ("stress_results",),
+    }
+
+    def _invalidate_downstream(self, key: str) -> None:
+        for downstream in self._DOWNSTREAM.get(key, ()):
+            if self.get_artifact(downstream).value is not None:
+                self.set_artifact(downstream, None)
+
+    def clear_generated_results(self) -> None:
+        """Drop every in-memory derived result (preprocessing, analyses, mask).
+
+        Called when the active experiment changes so one experiment's results can
+        never bleed into the next experiment's persisted ``.ntfm``. Raw inputs are
+        left for the new experiment's load to overwrite; the output dir is kept.
+
+        Mutates state in place and fires a single change notification at the end
+        (not one per artifact), so observers reconcile once.
+        """
+        changed = False
+        for key in (
+            "preprocessed_bead_stack",
+            "preprocessed_reference",
+            "preprocessed_cell_stack",
+            "displacement_results",
+            "force_results",
+            "stress_results",
+            "mask_stack",
+        ):
+            state = self.get_artifact(key)
+            if state.value is not None or state.error:
+                changed = True
+            state.value = None
+            state.path = None
+            state.source = ""
+            state.dirty = False
+            state.error = ""
+        if changed:
+            self._notify_changed()
+
     def set_displacement_results(self, results: DisplacementResult, path=None, source: str = "", dirty: bool = False) -> None:
         """Store displacement results and invalidate dependent analyses."""
         self.set_artifact("displacement_results", results, path=path, source=source, dirty=dirty)
+        self._invalidate_downstream("displacement_results")
 
     def set_force_results(self, results: FTTCResult, path=None, source: str = "", dirty: bool = False) -> None:
         """Store force results and invalidate dependent analyses."""
         self.set_artifact("force_results", results, path=path, source=source, dirty=dirty)
+        self._invalidate_downstream("force_results")
 
     def set_stress_results(self, results: MSMResult, path=None, source: str = "", dirty: bool = False) -> None:
         """Store stress results."""
