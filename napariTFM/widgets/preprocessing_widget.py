@@ -19,6 +19,21 @@ from napariTFM.widgets._base_widget import BaseAnalysisWidget
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 
+
+def _open_lazy(path):
+    """Open a TIFF lazily via memmap; fall back to imread for compressed files.
+
+    memmap returns a real np.ndarray subclass backed by the file in ~1 ms for
+    uncompressed TIFFs. imread is only reached if memmap fails (e.g. tiled or
+    compressed data), which preserves behaviour for all existing file types.
+    """
+    import tifffile
+    try:
+        return tifffile.memmap(str(path))
+    except Exception:
+        return tifffile.imread(str(path))
+
+
 class PreprocessingController(QObject):
     """Controller coordinating UI components and data processing."""
 
@@ -45,6 +60,11 @@ class PreprocessingController(QObject):
         # by frame, so progress is "frames done / frames total" across all inputs.
         self._stream_total = 0
         self._stream_done = 0
+
+        # Load-token: incremented on every load_input_files call so that yields
+        # from a superseded (stale) load worker are silently dropped.
+        self._load_token = 0
+        self._load_worker = None
 
         # Sliders emit valueChanged continuously while dragging, so parameter
         # changes arrive in rapid bursts. Recomputing the (rolling-ball-heavy)
@@ -267,20 +287,90 @@ class PreprocessingController(QObject):
             self._update_preview()
 
     def load_input_files(self, folder, input_files):
-        """Load an experiment's discovery raw files from disk into memory.
+        """Load an experiment's raw input files lazily and off the UI thread.
 
-        Reads whichever of the discovery-named raw inputs exist in *folder* and
-        loads them as the in-memory inputs (and as napari image layers, so the
-        user sees what they're tuning). This is what enables Preview and Run,
-        which both require the loaded arrays. Missing or un-named inputs are
-        skipped; a file that won't read pops a warning without aborting the rest.
+        Supersedes any in-flight load (stale yields are silently dropped via a
+        monotonic load-token), freezes the UI while loading, then unfreezes on
+        completion. Missing or un-named inputs are skipped; a file that fails
+        to open pops a warning without aborting the rest.
         """
         if not folder:
             return
-        import tifffile
+
+        # Supersede any in-flight load from a previous row click. A quit
+        # generator-worker may emit neither returned nor errored, so drop it
+        # from active_workers here to keep the list from growing on rapid clicks.
+        self._load_token += 1
+        token = self._load_token
+        if self._load_worker is not None:
+            try:
+                self._load_worker.quit()
+            except Exception:
+                pass
+            try:
+                self.active_workers.remove(self._load_worker)
+            except ValueError:
+                pass
+            self._load_worker = None
 
         folder = Path(folder)
         input_files = input_files or {}
+
+        worker = self._create_input_load_worker(folder, input_files, token)
+        self._load_worker = worker
+        self.active_workers.append(worker)
+
+        self.progress_updated.emit(0, "Loading inputs...")
+
+        worker.yielded.connect(self._on_input_loaded)
+        worker.returned.connect(
+            lambda _=None, _token=token: self._finish_input_load(_token)
+        )
+        worker.errored.connect(
+            lambda exc, _token=token: self._handle_input_load_error(exc, _token)
+        )
+        worker.start()
+
+    def _add_input_layer(self, name: str, data: np.ndarray) -> None:
+        """Show a raw input in the viewer, replacing any prior layer of that name.
+
+        Explicit contrast_limits are computed from a single representative frame
+        so napari does not scan the full stack on add, which prevents the 3-8 s
+        freeze caused by reading a 250 MB stack just to infer the display range.
+        """
+        add_image = getattr(self.viewer, "add_image", None)
+        if add_image is None:
+            return
+        layers = getattr(self.viewer, "layers", None)
+        if layers is not None:
+            for layer in list(layers):
+                if getattr(layer, "name", None) == name:
+                    layers.remove(layer)
+
+        # Compute contrast limits from a single frame to avoid scanning the
+        # full stack. Guard against degenerate (flat) data by nudging hi up.
+        contrast_limits = None
+        try:
+            frame = data[0] if data.ndim == 3 else data
+            lo, hi = int(frame.min()), int(frame.max())
+            contrast_limits = (lo, hi) if lo < hi else (lo, lo + 1)
+        except Exception:
+            pass
+
+        if contrast_limits is not None:
+            add_image(data, name=name, contrast_limits=contrast_limits)
+        else:
+            add_image(data, name=name)
+
+    @thread_worker
+    def _create_input_load_worker(self, folder, input_files, token):
+        """Open raw input TIFFs lazily, yielding each array for GUI-thread painting.
+
+        Runs entirely off the UI thread. memmap opens large uncompressed TIFFs
+        in ~1 ms; imread is the fallback for compressed files. Each yield
+        carries ``(token, data_type, layer_name, path, array)`` so the
+        GUI-thread slot can stale-check before touching napari layers.
+        """
         for data_type, slot, layer_name in (
             ('reference', 'reference', 'Reference'),
             ('beads', 'beads', 'Bead stack'),
@@ -292,24 +382,60 @@ class PreprocessingController(QObject):
             path = folder / name
             if not path.exists():
                 continue
-            try:
-                data = tifffile.imread(str(path))
-                self._add_input_layer(layer_name, data)
-                self._set_input_data(data_type, data, path=path)
-            except Exception as exc:
-                QMessageBox.warning(None, "Error", f"Could not load {path.name}: {exc}")
+            array = _open_lazy(path)
+            yield token, data_type, layer_name, path, array
 
-    def _add_input_layer(self, name: str, data: np.ndarray) -> None:
-        """Show a raw input in the viewer, replacing any prior layer of that name."""
-        add_image = getattr(self.viewer, "add_image", None)
-        if add_image is None:
+    def _on_input_loaded(self, payload):
+        """Paint one loaded input into the viewer (GUI thread).
+
+        Connected to ``worker.yielded``; stale-checks the token before touching
+        napari so a superseded load cannot overwrite layers for the current row.
+        A failed file pops a warning but does not abort the remaining yields.
+        """
+        token, data_type, layer_name, path, array = payload
+        if token != self._load_token:
             return
-        layers = getattr(self.viewer, "layers", None)
-        if layers is not None:
-            for layer in list(layers):
-                if getattr(layer, "name", None) == name:
-                    layers.remove(layer)
-        add_image(data, name=name)
+        try:
+            self._add_input_layer(layer_name, array)
+            self._set_input_data(data_type, array, path=path)
+        except Exception as exc:
+            QMessageBox.warning(None, "Error", f"Could not load {path.name}: {exc}")
+
+    def _finish_input_load(self, token):
+        """Finalize an input load run (GUI thread).
+
+        No-ops for stale tokens so a superseded load cannot emit a status
+        message that belongs to the current row.
+        """
+        if token != self._load_token:
+            return
+        worker = self._load_worker
+        self._load_worker = None
+        if worker is not None:
+            try:
+                self.active_workers.remove(worker)
+            except ValueError:
+                pass
+        self.progress_updated.emit(100, "Inputs loaded")
+
+    def _handle_input_load_error(self, exc, token):
+        """Handle a fatal error from the input load worker (GUI thread).
+
+        No-ops for stale tokens. Shows the error so the user knows a load
+        failed.
+        """
+        if token != self._load_token:
+            return
+        worker = self._load_worker
+        self._load_worker = None
+        if worker is not None:
+            try:
+                self.active_workers.remove(worker)
+            except ValueError:
+                pass
+        error_msg = str(exc)
+        self.progress_updated.emit(0, f"Error loading inputs: {error_msg}")
+        QMessageBox.critical(None, "Error", error_msg)
 
     def toggle_preview(self, enabled: bool):
         """Toggle preview mode."""

@@ -35,11 +35,22 @@ def _display_shape(data: np.ndarray) -> Tuple[int, int]:
     return int(shape[-2]), int(shape[-1])
 
 
+# Bar spans this fraction of the image height, centred vertically.
+COLORBAR_HEIGHT_FRACTION = 1.0
+
+# How far the endpoint numbers ("1.00" / "0") are inset from the bar's ends,
+# as a fraction of the bar height. 0.0 == flush with the ends; raise it to pull
+# the two numbers closer together vertically without resizing the bar.
+LABEL_INSET_FRACTION = 0.0
+
+
 def _colorbar_dimensions(image_height: int, image_width: int) -> Tuple[int, int, int, int]:
+    bar_height = max(2, int(round(image_height * COLORBAR_HEIGHT_FRACTION)))
     bar_width = max(4, int(round(image_width * 0.035)))
-    gap = max(4, int(round(image_width * 0.04)))
+    # Snug the bar up against the image; only a hairline of clear space.
+    gap = max(2, int(round(image_width * 0.012)))
     label_gap = max(12, int(round(image_width * 0.04)))
-    return image_height, bar_width, gap, label_gap
+    return bar_height, bar_width, gap, label_gap
 
 
 def _value_range(reference_layer) -> Tuple[float, float]:
@@ -116,6 +127,14 @@ class ViewerColorbarManager:
         bar_center_x = colorbar_x + bar_width / 2.0
         # Numbers sit just off the right edge of the bar, flush with its ends.
         number_x = colorbar_x + bar_width + max(3.0, bar_width * 0.5)
+        # Centre the (shorter-than-image) bar vertically over the image.
+        bar_top = (image_height - bar_height) / 2.0
+        bar_bottom = bar_top + bar_height
+        # Pull the endpoint numbers in from the bar ends to tighten their
+        # vertical spacing without resizing the bar. 0.0 == flush with the ends.
+        inset = bar_height * LABEL_INSET_FRACTION
+        number_top_y = bar_top + inset
+        number_bottom_y = bar_bottom - inset
         vmin, vmax = _value_range(reference_layer)
 
         colorbar_layer = self.viewer.add_image(
@@ -123,7 +142,7 @@ class ViewerColorbarManager:
             name=colorbar_name,
             rgb=True,
             scale=(scale_y, scale_x),
-            translate=(translate_y, translate_x + colorbar_x * scale_x),
+            translate=(translate_y + bar_top * scale_y, translate_x + colorbar_x * scale_x),
             blending="translucent",
             visible=True,
         )
@@ -155,11 +174,11 @@ class ViewerColorbarManager:
         # bottom-left to the bar's bottom. A separate layer per number is needed
         # because napari's text anchor is per-layer, not per-point.
         max_layer = self._add_scale_number(
-            max_name, format_scale_value(vmax), 0.0, number_x,
+            max_name, format_scale_value(vmax), number_top_y, number_x,
             "upper_left", (scale_y, scale_x), (translate_y, translate_x),
         )
         min_layer = self._add_scale_number(
-            min_name, format_scale_value(vmin), float(image_height), number_x,
+            min_name, format_scale_value(vmin), number_bottom_y, number_x,
             "lower_left", (scale_y, scale_x), (translate_y, translate_x),
         )
 

@@ -9,13 +9,25 @@
 
 ## Ranked open work (2026-06-29)
 
-### 1. Colorbar geometry polish  ·  XS
-Tighten the viewer colorbar layout (`napariTFM/utilities/viewer_colorbar.py`):
-- Move the **bar closer to the image** (reduce the horizontal gap).
-- Move the **min/max labels closer to the bar** (reduce label x-offset).
-- **Flush-align** the labels to the bar's edges: max to the **top** edge, min to
-  the **bottom** edge (current anchoring leaves them slightly inset).
-Isolated, low-risk geometry tweak.
+### 1. Fix stage-resume caching: displacement present, yet force can't compute  ·  S–M  (bug)
+Repro: a position shows **displacement done** (data available), but **Force
+Analysis fails to compute**. Root cause is the stage-resume / cache path — force
+reconstructs the displacement field via
+`_resume_field_from_ntfm(tfm_folder, folder, "displacement_field")`
+(`backend/batch_analysis.py`), which returns `None` when the experiment's
+`.ntfm` is missing, lacks the displacement columns, or is **all-NaN** (the writer
+emits every measure column as NaN when a stage didn't run). So even though
+displacement is "available" in memory/UI, the on-disk container force reads from
+doesn't actually carry it. **Audit when/where the `.ntfm` is written vs. read** so
+a computed displacement field is reliably persisted *before* force runs, and the
+path/name force-resume expects matches what the displacement write produced.
+Also **persist the preprocessed images for consistency.** Today the preprocessed
+bead/reference TIFFs (`preprocessed_beads.tif` / `preprocessed_reference.tif`)
+are only an *optional* `save_cache`, while displacement/force/stress always
+persist to `.ntfm`. Give preprocessing the **same persistence guarantee** so
+every stage's output is reliably on disk for the next stage to resume from.
+Closely related to the backlog "Load processed `.ntfm` back into memory on
+selection."
 
 ### 2. Unify logging (live = batch)  ·  XS
 Batch mode prints its log to the console; live/interactive mode does not. Route
@@ -91,6 +103,25 @@ parallel, **top positions first** (process in list order).
 ---
 
 ## Backlog
+
+### Polish colorbar + progressive per-stage loading bar
+Two threads of viewer-legend / progress polish:
+- **Polish the colorbar** legend (spacing, label alignment, endpoint-number
+  placement — the `viewer_colorbar.py` knobs `COLORBAR_HEIGHT_FRACTION` /
+  `LABEL_INSET_FRACTION` are the levers).
+- **Progressive loading bar** for both **live** mode and **batch** mode: each
+  status circle/node should **fill up progressively** as its stage runs (not just
+  flip empty→done). One implementation that serves both modes.
+  **Investigate complexity first** — driving a smooth per-stage fill needs
+  intra-stage progress signals from the pipeline (the sink currently emits
+  stage-level start/finish, not fractional progress), so scope what granularity is
+  actually available before committing to a design.
+
+### Adding rows to an empty list should preload the first row
+When the `ExperimentsList` is empty and the user adds rows, the first added row
+should be **preloaded/selected automatically** (rather than leaving the list with
+no active selection). Saves a click and gives an active position for downstream
+actions to target.
 
 ### Load processed `.ntfm` back into memory on selection
 Follow-up from the "stage runners weren't saving" fix: selecting an

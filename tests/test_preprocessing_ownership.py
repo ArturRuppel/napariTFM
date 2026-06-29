@@ -168,6 +168,22 @@ def _controller_with(dm):
     )
 
 
+def _wait_for_load(app, controller, timeout=5.0):
+    """Spin the event loop until the async input-load worker finishes.
+
+    load_input_files now loads off the UI thread; the worker clears
+    ``_load_worker`` in its finish slot, so poll that while delivering the
+    queued yielded/returned signals via processEvents.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while controller._load_worker is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    app.processEvents()
+
+
 def test_load_input_files_reads_discovery_files_into_memory(app, tmp_path):
     # Selecting an experiment must put its raw inputs in memory — that is what
     # enables Preview and Run, which both require the loaded arrays. The
@@ -183,6 +199,7 @@ def test_load_input_files_reads_discovery_files_into_memory(app, tmp_path):
     controller.data_updated.connect(seen.append)
 
     controller.load_input_files(str(tmp_path), {"beads": "b.tif", "reference": "r.tif"})
+    _wait_for_load(app, controller)
 
     assert dm.reference is not None and dm.reference.shape == (4, 4)
     assert dm.bead_stack is not None and dm.bead_stack.shape == (3, 4, 4)
@@ -200,6 +217,7 @@ def test_load_input_files_promotes_2d_beads_to_a_stack(app, tmp_path):
     controller = _controller_with(dm)
 
     controller.load_input_files(str(tmp_path), {"beads": "b.tif"})
+    _wait_for_load(app, controller)
 
     assert dm.bead_stack is not None and dm.bead_stack.shape == (1, 4, 4)
 
@@ -217,6 +235,7 @@ def test_load_input_files_skips_missing_and_unnamed_inputs(app, tmp_path):
     controller.load_input_files(
         str(tmp_path), {"beads": "b.tif", "reference": "r.tif", "cells": ""}
     )
+    _wait_for_load(app, controller)
 
     assert dm.reference is not None
     assert dm.bead_stack is None

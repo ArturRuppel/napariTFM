@@ -130,6 +130,8 @@ def test_viewer_colorbar_is_added_to_right_of_reference_layer():
 
     assert len(viewer.added_images) == 1
     colorbar_data, colorbar_kwargs = viewer.added_images[0]
+    # Bar spans the full image height (40) and starts flush with the image top,
+    # so its translate matches the reference's translate_y (10).
     assert colorbar_data.shape[0] == 40
     assert colorbar_data.shape[2] == 4
     assert colorbar_kwargs["name"] == "Displacement (um) Colorbar"
@@ -151,9 +153,9 @@ def test_viewer_colorbar_is_added_to_right_of_reference_layer():
     assert label_kwargs["text"]["rotation"] == -90
 
     # Scale endpoints: each is its own layer, sitting just right of the bar and
-    # flush with one end — max top-anchored to the top row (y == 0), min
-    # bottom-anchored to the bottom row (y == image height). Both sit to the
-    # right of the bar's centre column (the label's x), reading left-to-right.
+    # flush with one end — max top-anchored to the bar's top, min bottom-anchored
+    # to the bar's bottom. The bar is full height (40), so the ends are at y == 0
+    # and y == 40. Both sit to the right of the bar's centre column (label's x).
     max_data, max_kwargs = viewer.added_points[1]
     min_data, min_kwargs = viewer.added_points[2]
     assert max_data.shape == (1, 2)
