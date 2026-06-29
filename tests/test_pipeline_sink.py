@@ -23,6 +23,9 @@ class RecordingSink(PipelineSink):
     def __init__(self):
         self.events = []
 
+    def experiment_started(self, path):
+        self.events.append(("experiment", path))
+
     def stage_started(self, stage, num_frames, info=None):
         self.events.append(("start", stage, num_frames, info))
 
@@ -67,9 +70,27 @@ def test_emit_swallows_sink_errors(capsys):
 
 def test_null_sink_accepts_every_hook():
     sink = NullSink()
+    sink.experiment_started("/data/pos_00")
     sink.stage_started("force", 1, {})
     sink.stage_frame("force", 0, None)
     sink.stage_finished("force", None)
+
+
+def test_process_all_folders_emits_experiment_started_per_folder(tmp_path, monkeypatch):
+    """Each folder fires one experiment_started before its stages (§3)."""
+    a, b = str(tmp_path / "a"), str(tmp_path / "b")
+    sink = RecordingSink()
+    analysis = BatchAnalysis.__new__(BatchAnalysis)
+    analysis.config = {"root_folders": [a, b]}
+    analysis._progress_callback = None
+    analysis._sink = sink
+    analysis._cancelled = False
+
+    # Skip the real per-folder work; we only care about the experiment hook here.
+    monkeypatch.setattr(analysis, "process_folder", lambda folder, output_dir: None)
+    analysis.process_all_folders()
+
+    assert sink.events == [("experiment", a), ("experiment", b)]
 
 
 # --- displacement / force share one generator-driven shape ----------------

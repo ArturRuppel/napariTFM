@@ -309,6 +309,9 @@ class BatchAnalysis:
                 self._report_progress(folder, "cancelled")
                 break
             self._report_progress(folder, "running")
+            # Tell a live sink which position is now streaming so the viewer +
+            # experiments-list selection follow the rail (worklist §3).
+            self._emit('experiment_started', folder)
             try:
                 self.process_folder(folder, plan.output_dirs[folder])
             except Exception as e:

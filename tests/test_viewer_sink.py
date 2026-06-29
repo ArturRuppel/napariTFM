@@ -64,9 +64,9 @@ class FakeData:
         self.calls.append(("stress_results", results))
 
 
-def _sink(pump=None):
+def _sink(pump=None, on_experiment=None):
     vis, data = FakeVis(), FakeData()
-    return ViewerSink(data, vis, pump=pump), vis, data
+    return ViewerSink(data, vis, pump=pump, on_experiment=on_experiment), vis, data
 
 
 # --- displacement / force ------------------------------------------------
@@ -162,3 +162,24 @@ def test_stage_finished_with_none_result_is_noop():
     sink, vis, data = _sink()
     sink.stage_finished("force", None)
     assert data.calls == []
+
+
+# --- experiment tracking (§3) --------------------------------------------
+
+def test_experiment_started_forwards_path_to_callback():
+    seen = []
+    sink, vis, data = _sink(on_experiment=seen.append)
+    sink.experiment_started("/data/pos_03")
+    assert seen == ["/data/pos_03"]
+
+
+def test_experiment_started_without_callback_is_noop():
+    sink, vis, data = _sink()
+    sink.experiment_started("/data/pos_03")  # must not raise
+
+
+def test_experiment_started_pumps_the_event_loop():
+    pumps = []
+    sink, vis, data = _sink(pump=lambda: pumps.append(1))
+    sink.experiment_started("/data/pos_03")
+    assert pumps == [1]

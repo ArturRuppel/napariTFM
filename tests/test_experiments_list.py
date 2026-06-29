@@ -206,6 +206,34 @@ def test_set_active_ignores_unknown_path(app):
     assert seen == []
 
 
+def test_follow_streaming_highlights_row_without_emitting(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b"])
+    seen = []
+    widget.active_changed.connect(seen.append)
+
+    widget.follow_streaming("/data/b")
+
+    # Row highlight + active pointer track the streamed position...
+    assert widget.active() == "/data/b"
+    rows = widget._rows
+    assert rows[1].is_selected() is True
+    assert rows[0].is_selected() is False
+    # ...but no active_changed fires (the sink owns the viewer mid-run, so the
+    # heavy clear-and-reload that signal drives must not happen).
+    assert seen == []
+
+
+def test_follow_streaming_ignores_unknown_path(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    widget.set_active("/data/a")
+
+    widget.follow_streaming("/data/not-in-list")
+
+    assert widget.active() == "/data/a"  # unchanged
+
+
 def test_set_experiments_clears_stale_active(app):
     widget = ExperimentsList()
     widget.set_experiments(["/data/a", "/data/b"])

@@ -2,19 +2,14 @@
 
 > Accomplished items are pruned (see git history for completed UI-redesign
 > slices P0–P8, the UI-Coherence roadmap, the BISM port, the 2026-06-29
-> batch/cancel/colorbar/sink work, and the 2026-06-30 unified-logging (§1) +
-> per-position Export-to-CSV (§2) work). What remains below is **open work
-> only**, ranked easy-wins-first.
+> batch/cancel/colorbar/sink work, the 2026-06-30 unified-logging (§1) +
+> per-position Export-to-CSV (§2) work, and the §3 streaming-follows-active-
+> position work). What remains below is **open work only**, ranked
+> easy-wins-first.
 
 ---
 
 ## Ranked open work (2026-06-29)
-
-### 3. Streaming follows the active position  ·  S
-While the batch/live sink streams, the viewer + experiments-list selection should
-**track the position currently being processed**. Add an `experiment_started`
-hook on the sink (`utilities/viewer_sink.py` / `backend/pipeline_sink.py`) that
-drives the `ExperimentsList` selection. Pairs with #4.
 
 ### 4. Per-stage layer isolation during streaming  ·  M
 During batch streaming **and** live "Run all", the sink should **take over layer
@@ -27,8 +22,10 @@ prior visibility when the run ends. **Distinct from preview** — preview must
 - force → force layers only.
 - stress → stress layers only.
 Reuse the existing `VisualizationManager.isolate_layers` infrastructure; define a
-per-stage active-layer set and apply it on `stage_started`. Build with #3 (both
-are "the streaming sink takes over the UI to show what it's doing").
+per-stage active-layer set and apply it on `stage_started`. Builds on the §3
+`experiment_started`/sink-takeover plumbing (both are "the streaming sink takes
+over the UI to show what it's doing") — the sink already follows the active
+position; this extends it to take over layer visibility per stage.
 
 ### 5. Replace MSM with BISM  ·  M–L
 Swap Monolayer Stress Microscopy for the validated **BISM** port

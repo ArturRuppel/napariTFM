@@ -31,14 +31,28 @@ class ViewerSink(PipelineSink):
         Optional zero-arg callable invoked after each streamed frame to repaint
         the viewer (typically ``QApplication.processEvents``). ``None`` disables
         pumping — handy in tests.
+    on_experiment
+        Optional one-arg callable ``callback(path)`` invoked when the run enters
+        a new experiment folder (worklist §3), so the shell can make the
+        experiments-list selection follow the position being processed. ``None``
+        disables tracking.
     """
 
-    def __init__(self, data_manager, visualization_manager, pump=None):
+    def __init__(self, data_manager, visualization_manager, pump=None, on_experiment=None):
         self.data_manager = data_manager
         self.vis = visualization_manager
         self._pump = pump
+        self._on_experiment = on_experiment
 
     # --- lifecycle hooks --------------------------------------------------
+
+    def experiment_started(self, path):
+        # Drive the experiments-list selection to the streaming position (§3).
+        # The viewer itself already follows because we stream its frames below;
+        # this only moves the list's row highlight to match.
+        if self._on_experiment is not None:
+            self._on_experiment(path)
+        self._repaint()
 
     def stage_started(self, stage, num_frames, info=None):
         info = info or {}

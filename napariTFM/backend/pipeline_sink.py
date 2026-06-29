@@ -33,6 +33,15 @@ class PipelineSink:
     sink that swallows its own errors keeps the run output clean.
     """
 
+    def experiment_started(self, path: str) -> None:
+        """A new experiment folder is about to stream (worklist §3).
+
+        Fires once per folder, before its first ``stage_started``, with the
+        folder path the orchestrator is entering. A live sink uses it to make
+        the viewer + experiments-list selection *follow* the position being
+        processed, so a batch/run-all walks the list as it walks the rail.
+        """
+
     def stage_started(self, stage: str, num_frames: int, info: Optional[dict] = None) -> None:
         """A stage is about to stream ``num_frames`` frames.
 

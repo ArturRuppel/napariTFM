@@ -955,6 +955,7 @@ class napariTFMWidget(QWidget):
             self.data_manager,
             self.visualization_manager,
             pump=QApplication.processEvents,
+            on_experiment=self._on_experiment_streaming,
         )
         analyzer = BatchAnalysis(
             config,
@@ -1085,6 +1086,27 @@ class napariTFMWidget(QWidget):
         if self._active_batch is not None:
             self._active_batch.request_cancel()
             self.status_label.setText("Batch — cancelling…")
+
+    def _on_experiment_streaming(self, path: str) -> None:
+        """Make the UI follow the position a live run is now streaming (§3).
+
+        The sink calls this as the batch enters each folder. We move the
+        experiments-list row highlight and the active-experiment pointer to that
+        position so the list tracks the rail, and reveal the pipeline context so
+        the label names the position being processed. We deliberately do **not**
+        go through ``set_active`` / ``_on_active_experiment_changed``: that path
+        clears in-memory results and reloads from disk, which would fight the
+        very frames the sink is streaming into the viewer.
+        """
+        from pathlib import Path
+
+        self._active_experiment = path or None
+        self.experiments_list.follow_streaming(path)
+        if self._active_experiment:
+            self._pipeline_context_label.setText(
+                f"Pipeline · running ▸ {Path(self._active_experiment).name}"
+            )
+        self._update_disclosure()
 
     def _on_batch_progress(self, folder: str, status: str) -> None:
         """Live per-folder feedback for Run-all: walk the rail, then refresh (P4)."""

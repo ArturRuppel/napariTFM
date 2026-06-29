@@ -857,6 +857,22 @@ class ExperimentsList(QWidget):
             row.set_stage_statuses(self._status_fn(row.path))
         self._update_meta()
 
+    def follow_streaming(self, path: str) -> None:
+        """Track the position a live run is processing (worklist §3).
+
+        Highlights *path* as the active row so the list follows the streaming
+        sink. Unlike :meth:`set_active` this emits **no** ``active_changed`` and
+        does no disk reload: the sink already owns the viewer's content during a
+        run, and reloading from disk would fight the frames it is streaming in.
+        A no-op for a path not in the table.
+        """
+        if path not in self._paths:
+            return
+        self._active = path
+        self._selected_paths = {path}
+        self._apply_selection_styles()
+        self._update_delete_btn()
+
     def mark_running(self, path: str) -> None:
         """Flip one experiment's enabled stage dots to 'running' (live, P4).
 
