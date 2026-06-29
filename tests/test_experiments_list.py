@@ -117,6 +117,46 @@ def test_experiment_row_set_selected_toggles_state(app):
     assert row.is_selected() is True
 
 
+def test_export_button_disabled_until_a_stage_is_done(app):
+    row = ExperimentRow("/data/Ctrl/pos_00")
+    assert row.export_btn.isEnabled() is False
+    row.set_stage_statuses(
+        {"preprocessing": "ready", "displacement": "not_started",
+         "force": "not_started", "stress": "off"}
+    )
+    assert row.export_btn.isEnabled() is False
+    row.set_stage_statuses(
+        {"preprocessing": "done", "displacement": "done",
+         "force": "ready", "stress": "off"}
+    )
+    assert row.export_btn.isEnabled() is True
+
+
+_DONE = {"preprocessing": "done", "displacement": "done",
+         "force": "done", "stress": "done"}
+
+
+def test_export_button_emits_path(app):
+    row = ExperimentRow("/data/Ctrl/pos_00")
+    row.set_stage_statuses(_DONE)  # enable the (otherwise disabled) button
+    seen = []
+    row.export_requested.connect(seen.append)
+    row.export_btn.click()
+    assert seen == ["/data/Ctrl/pos_00"]
+
+
+def test_experiments_list_reemits_row_export(app):
+    from napariTFM.widgets._experiments_list import ExperimentsList
+
+    widget = ExperimentsList()
+    widget.add_folders(["/data/Ctrl/pos_00"])
+    widget._rows[0].set_stage_statuses(_DONE)
+    seen = []
+    widget.export_requested.connect(seen.append)
+    widget._rows[0].export_btn.click()
+    assert seen == ["/data/Ctrl/pos_00"]
+
+
 from napariTFM.widgets._experiments_list import ExperimentsList
 
 

@@ -1,28 +1,14 @@
 # napariTFM — Open Worklist
 
 > Accomplished items are pruned (see git history for completed UI-redesign
-> slices P0–P8, the UI-Coherence roadmap, the BISM port, and the 2026-06-29
-> batch/cancel/colorbar/sink work). What remains below is **open work only**,
-> ranked easy-wins-first.
+> slices P0–P8, the UI-Coherence roadmap, the BISM port, the 2026-06-29
+> batch/cancel/colorbar/sink work, and the 2026-06-30 unified-logging (§1) +
+> per-position Export-to-CSV (§2) work). What remains below is **open work
+> only**, ranked easy-wins-first.
 
 ---
 
 ## Ranked open work (2026-06-29)
-
-### 1. Unify logging (live = batch)  ·  XS
-Batch mode prints its log to the console; live/interactive mode does not. Route
-the interactive path through the **same logger** so live mode prints the **same
-messages batch does** (decision: match batch exactly). Keep writing full detail
-to the run log file as today.
-
-### 2. Per-position "Export to CSV" button  ·  S–M
-Each position **row** in the `ExperimentsList` (next to the status dots) gets an
-**Export to CSV** button that writes that position's processed `.ntfm` out as a
-**full per-pixel field dump** — every pixel's `u_x, u_y, F_x, F_y` (and `stress`,
-`mask` when present) per frame. The `.ntfm` is a parquet container, so this is a
-read-and-flatten-to-CSV op; mind the large file sizes (stream/chunk the write,
-warn if no `.ntfm` exists yet). No-op / disabled when the position isn't
-processed.
 
 ### 3. Streaming follows the active position  ·  S
 While the batch/live sink streams, the viewer + experiments-list selection should

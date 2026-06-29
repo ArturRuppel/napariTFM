@@ -37,6 +37,12 @@ _ICON_BODIES = {
     ),
     # plus — "add folders"
     "plus": '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+    # down-arrow onto a baseline — "export this row to a CSV file"
+    "export": (
+        '<line x1="12" y1="3" x2="12" y2="14"/>'
+        '<path d="M8 10 L12 14 L16 10"/>'
+        '<line x1="5" y1="19" x2="19" y2="19"/>'
+    ),
     # crosshair target — "auto-select the optimal regularization (GCV)"
     "gcv": (
         '<circle cx="12" cy="12" r="6.5"/>'

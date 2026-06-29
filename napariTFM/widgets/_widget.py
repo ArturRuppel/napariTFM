@@ -504,6 +504,9 @@ class napariTFMWidget(QWidget):
         )
         self.experiments_list.run_all_requested.connect(self._run_all_experiments)
         self.experiments_list.cancel_run_all_requested.connect(self._cancel_run_all)
+        self.experiments_list.export_requested.connect(
+            self._on_export_experiment_csv
+        )
         self._active_batch = None
         container_layout.addWidget(self.experiments_list)
 
@@ -1204,6 +1207,49 @@ class napariTFMWidget(QWidget):
             return "ready" if ready_when.get(stage, False) else "not_started"
 
         return {stage: _status(stage) for stage in PIPELINE_STAGES}
+
+    def _on_export_experiment_csv(self, path: str) -> None:
+        """Dump one position's processed ``.ntfm`` to a full per-pixel CSV (§2).
+
+        Reads the canonical container the batch/interactive writer produced and
+        streams every grid sample's ``u_x, u_y, F_x, F_y`` (plus ``sigma_*`` and
+        ``mask`` when present), per frame, to a user-chosen CSV. The row's button
+        is disabled until a stage is done, but we still guard the no-``.ntfm``
+        case (e.g. a stale row) rather than write an empty file.
+        """
+        from pathlib import Path
+
+        from napariTFM.utilities import ntfm as _ntfm
+        from napariTFM.utilities.batch_output import experiment_ntfm_path
+
+        name = Path(path).name
+        ntfm_path = experiment_ntfm_path(path, self.data_manager.output_dir)
+        if not ntfm_path.exists():
+            self.status_label.setText(f"Export — no processed .ntfm for {name} yet")
+            QMessageBox.information(
+                self,
+                "Export to CSV",
+                f"{name} has not been processed yet — nothing to export.",
+            )
+            return
+
+        default = str(Path(path) / f"{name}.csv")
+        csv_path, _ = QFileDialog.getSaveFileName(
+            self, f"Export {name} to CSV", default, "CSV files (*.csv)"
+        )
+        if not csv_path:
+            return
+
+        try:
+            self.status_label.setText(f"Export — writing {name} to CSV…")
+            _ntfm.export_ntfm_to_csv(ntfm_path, csv_path)
+        except Exception as exc:
+            logger.exception("CSV export failed for %s", path)
+            self.status_label.setText(f"Export failed: {exc}")
+            QMessageBox.critical(self, "Export to CSV", f"Export failed: {exc}")
+            return
+
+        self.status_label.setText(f"Export — wrote {Path(csv_path).name}")
 
     def _load_active_experiment_results(self, path: str) -> None:
         """Restore previously-computed results from an experiment's .ntfm into memory.

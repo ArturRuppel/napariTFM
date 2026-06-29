@@ -167,6 +167,7 @@ class MiniRail(QWidget):
 _SELBAR_W = 3
 _RAIL_W = MiniRail.DOT_GAP * len(PIPELINE_STAGES)
 _CHIP_W = 52
+_EXPORT_W = 22
 
 
 def overall_status(statuses: dict[str, str]) -> str:
@@ -187,6 +188,7 @@ class ExperimentRow(QWidget):
 
     selected = Signal(str)  # legacy single-select (kept for back-compat callers)
     clicked = Signal(str, int)  # path, modifier flag: 0 plain, 1 ctrl, 2 shift
+    export_requested = Signal(str)  # path — "dump this position's .ntfm to CSV"
 
     def __init__(self, path: str, values: Optional[list[str]] = None, parent=None):
         super().__init__(parent)
@@ -225,6 +227,21 @@ class ExperimentRow(QWidget):
         self._chip.setStyleSheet(f"color: {experiment_status_color('queued')};")
         layout.addWidget(self._chip)
 
+        # Per-row "Export to CSV" — a full per-pixel field dump of this position's
+        # processed .ntfm. Disabled until at least one stage is done (no .ntfm to
+        # dump yet); the shell resolves the path, picks a destination and writes.
+        self.export_btn = QToolButton()
+        self.export_btn.setObjectName("experiment_row_export_button")
+        self.export_btn.setFixedWidth(_EXPORT_W)
+        self.export_btn.setIcon(
+            stage_action_icon("export", muted_accent(stage_accent("project")), size=14)
+        )
+        self.export_btn.setToolTip("Export this position's processed data to CSV")
+        self.export_btn.setAutoRaise(True)
+        self.export_btn.setEnabled(False)
+        self.export_btn.clicked.connect(lambda: self.export_requested.emit(self._path))
+        layout.addWidget(self.export_btn)
+
         # Apply the deselected resting style (row + name colors).
         self.set_selected(False)
 
@@ -256,6 +273,8 @@ class ExperimentRow(QWidget):
         text = _CHIP_TEXT[label]
         self._chip.setText(text)
         self._chip.setStyleSheet(f"color: {experiment_status_color(text)};")
+        # Export is meaningful only once something has been written to the .ntfm.
+        self.export_btn.setEnabled(any(v == "done" for v in statuses.values()))
 
     def _emit_selected(self) -> None:
         self.selected.emit(self._path)
@@ -281,6 +300,7 @@ class ExperimentsList(QWidget):
     run_all_requested = Signal()
     cancel_run_all_requested = Signal()
     output_dir_changed = Signal()
+    export_requested = Signal(str)  # path — re-emitted from a row's Export button
 
     def __init__(
         self,
@@ -953,6 +973,9 @@ class ExperimentsList(QWidget):
         chip = QWidget()
         chip.setFixedWidth(_CHIP_W)
         row.addWidget(chip)
+        export = QWidget()
+        export.setFixedWidth(_EXPORT_W)
+        row.addWidget(export)
         return widget
 
     def _rebuild_table(self) -> None:
@@ -969,6 +992,7 @@ class ExperimentsList(QWidget):
             ]
             row = ExperimentRow(path, values or None)
             row.clicked.connect(self._on_row_clicked)
+            row.export_requested.connect(self.export_requested)
             row.set_selected(path in self._selected_paths)
             self._rows_box.addWidget(row)
             self._rows.append(row)

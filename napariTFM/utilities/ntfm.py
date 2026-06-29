@@ -554,6 +554,91 @@ def write_csv(path, df: pd.DataFrame, drop_displacement: bool = False) -> Path:
     return path
 
 
+def _csv_export_columns(pf) -> list:
+    """Pick the CSV columns from a parquet file: ids always, measures when present.
+
+    Identifier columns are always emitted. A measure column is kept only when it
+    carries real data (so a stage that never ran — its column is all-NaN — is
+    dropped, and an all-zero ``mask`` from a no-mask run is dropped too), giving
+    the "stress / mask when present" behaviour. Presence is judged from row-group
+    statistics (no full-table read); when stats are unavailable the column is
+    conservatively kept. Returned in canonical ``COLUMNS`` order.
+    """
+    md = pf.metadata
+    names = pf.schema_arrow.names
+    keep: list = []
+    for col in COLUMNS:
+        if col not in names:
+            continue
+        if col in ID_COLUMNS:
+            keep.append(col)
+            continue
+        ci = names.index(col)
+        if col == "mask":
+            # Keep mask only when some sample is non-zero (a real mask exists).
+            present = False
+            for rg in range(md.num_row_groups):
+                st = md.row_group(rg).column(ci).statistics
+                if st is None or not st.has_min_max:
+                    present = True  # can't tell -> keep
+                    break
+                if st.min != 0 or st.max != 0:
+                    present = True
+                    break
+            if present:
+                keep.append(col)
+            continue
+        # Measure column: keep when at least one value is non-null.
+        nulls = 0
+        have_stats = True
+        for rg in range(md.num_row_groups):
+            st = md.row_group(rg).column(ci).statistics
+            if st is None:
+                have_stats = False
+                break
+            nulls += st.null_count
+        if not have_stats or nulls < md.num_rows:
+            keep.append(col)
+    return keep
+
+
+def export_ntfm_to_csv(ntfm_path, csv_path, *, chunk_rows: int = 200_000) -> Path:
+    """Stream a ``.ntfm``'s tidy table to a full per-pixel CSV dump.
+
+    Writes every ``(t, y, x)`` grid sample's measures — ``u_x, u_y, F_x, F_y``
+    (plus ``sigma_*`` and ``mask`` *when present*) — for every frame. The parquet
+    inside the container is read and the CSV written in row-batches, so the whole
+    CSV text is never materialised in memory at once (these dumps can be large).
+
+    Columns absent from the data are omitted (see :func:`_csv_export_columns`).
+    Raises ``FileNotFoundError`` when no container exists yet.
+    """
+    import pyarrow.parquet as pq
+
+    ntfm_path = Path(ntfm_path)
+    csv_path = Path(csv_path)
+    if not ntfm_path.exists():
+        raise FileNotFoundError(f"No .ntfm container to export at {ntfm_path}")
+
+    with zipfile.ZipFile(ntfm_path, "r") as zf:
+        data = zf.read(_SAMPLES_NAME)
+    pf = pq.ParquetFile(io.BytesIO(data))
+
+    keep = _csv_export_columns(pf)
+
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    first = True
+    with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+        for batch in pf.iter_batches(batch_size=chunk_rows, columns=keep):
+            frame = batch.to_pandas()
+            frame = frame[[c for c in keep if c in frame.columns]]
+            frame.to_csv(fh, header=first, index=False)
+            first = False
+        if first:  # no rows at all — still emit a header row for the schema
+            pd.DataFrame(columns=keep).to_csv(fh, index=False)
+    return csv_path
+
+
 # ---------------------------------------------------------------------------
 # Result-dataclass adapter (bridges the analysis pipeline to the converter)
 # ---------------------------------------------------------------------------
