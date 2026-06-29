@@ -1757,35 +1757,25 @@ def test_experiment_rows_live_in_a_bounded_scroll_area(monkeypatch, app):
     assert 0 < scroll.maximumHeight() <= 600
 
 
-def _group_separator_texts(experiments_list):
-    from napariTFM.widgets._experiments_list import QLabel
-
-    box = experiments_list._rows_box
-    texts = []
-    for i in range(box.count()):
-        w = box.itemAt(i).widget()
-        if isinstance(w, QLabel) and w.objectName() == "experiments_group_separator":
-            texts.append(w.text())
-    return texts
-
-
-def test_column_group_separators_title_each_batch(monkeypatch, app):
+def test_column_header_fields_reflect_the_table_columns(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     el = widget.experiments_list
     el.add_folders(["/data/ctrl_a", "/data/ctrl_b"], columns={"condition": "Ctrl"})
     el.add_folders(["/data/ko_a"], columns={"condition": "KO"})
 
-    # One header per distinct column group, in list order.
-    assert _group_separator_texts(el) == ["condition: Ctrl", "condition: KO"]
+    # The shared, editable column header carries one field per column.
+    assert el.column_names() == ["condition"]
+    assert [f.text() for f in el._header_fields] == ["condition"]
 
 
-def test_column_group_separator_absent_without_columns(monkeypatch, app):
+def test_column_header_is_placeholder_without_columns(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     el = widget.experiments_list
     el.add_folders(["/data/a"])
 
-    # No columns → no group header, just the row.
-    assert _group_separator_texts(el) == []
+    # No columns → no editable header fields, just the rows.
+    assert el.column_names() == []
+    assert el._header_fields == []
 
 
 def test_selecting_experiment_points_disk_check_at_its_inputs(monkeypatch, app):
