@@ -237,31 +237,10 @@ def test_input_file_config_drops_blank_fields(app):
     assert "cells" not in widget.input_file_config()
 
 
-def test_add_column_field_then_config_reads_name_value(app):
-    widget = ExperimentsList()
-    widget.add_column_field("condition", "WT")
-    assert widget.column_config() == {"condition": "WT"}
-
-
-def test_column_config_drops_rows_without_a_name(app):
-    widget = ExperimentsList()
-    widget.add_column_field("", "orphan")  # no column name -> ignored
-    widget.add_column_field("condition", "WT")
-    assert widget.column_config() == {"condition": "WT"}
-
-
-def test_add_column_button_spawns_one_empty_field(app):
-    widget = ExperimentsList()
-    before = len(widget._column_fields)
-    widget.add_column_btn.click()
-    assert len(widget._column_fields) == before + 1
-    assert widget.column_config() == {}  # the new field is blank
-
-
 def _make_qualifying(tmp_path, *names):
     for name in names:
         d = tmp_path / name
-        d.mkdir()
+        d.mkdir(parents=True)
         (d / "beads.tif").write_bytes(b"x")
         (d / "reference.tif").write_bytes(b"x")
 
@@ -275,22 +254,38 @@ def test_discover_stages_folders_without_adding_them(app, tmp_path):
     assert widget.experiments() == []  # discovery never adds on its own
 
 
-def test_commit_adds_discovered_with_current_column_config(app, tmp_path):
-    _make_qualifying(tmp_path, "a")
+def test_commit_adds_discovered_with_nesting_columns(app, tmp_path):
+    _make_qualifying(tmp_path, "Ctrl/pos_00")
     widget = ExperimentsList()
     widget.file_name_inputs["cells"].setText("")
     widget.file_name_inputs["masks"].setText("")
-    widget.add_column_field("condition", "WT")
     widget.discover(tmp_path)
     widget.commit_discovered()
     records = widget.experiment_records()
     assert len(records) == 1
-    assert records[0]["columns"] == {"condition": "WT"}
+    # Each nesting level under the discovery root becomes a column.
+    assert records[0]["columns"] == {"Level 1": "Ctrl", "Level 2": "pos_00"}
+    assert widget.column_names() == ["Level 1", "Level 2"]
     assert records[0]["input_files"] == {
         "beads": "beads.tif",
         "reference": "reference.tif",
     }
     assert widget.discovered() == []  # staging cleared after commit
+
+
+def test_commit_columns_pad_to_max_nesting_depth(app, tmp_path):
+    # Ragged depths: a shallow folder leaves deeper columns blank, not missing.
+    _make_qualifying(tmp_path, "Ctrl/pos_00")
+    _make_qualifying(tmp_path, "solo")
+    widget = ExperimentsList()
+    widget.file_name_inputs["cells"].setText("")
+    widget.file_name_inputs["masks"].setText("")
+    widget.discover(tmp_path)
+    widget.commit_discovered()
+    assert widget.column_names() == ["Level 1", "Level 2"]
+    by_leaf = {Path(r["path"]).name: r["columns"] for r in widget.experiment_records()}
+    assert by_leaf["pos_00"] == {"Level 1": "Ctrl", "Level 2": "pos_00"}
+    assert by_leaf["solo"] == {"Level 1": "solo", "Level 2": ""}
 
 
 def test_commit_button_enables_only_after_discovery(app, tmp_path):
@@ -417,6 +412,106 @@ def test_masks_field_blank_is_dropped_from_config(app):
     widget = ExperimentsList()
     widget.file_name_inputs["masks"].setText("")
     assert "masks" not in widget.input_file_config()
+
+
+# ── editable columns, multi-select & delete ─────────────────────────────
+
+def test_add_folders_with_columns_builds_shared_header(app):
+    widget = ExperimentsList()
+    widget.add_folders(["/data/a", "/data/b"], columns={"condition": "WT"})
+    assert widget.column_names() == ["condition"]
+
+
+def test_rename_column_renames_table_wide_and_keeps_values(app):
+    widget = ExperimentsList()
+    widget.add_folders(["/data/a"], columns={"Level 1": "Ctrl"})
+    widget.add_folders(["/data/b"], columns={"Level 1": "KO"})
+    widget.rename_column(0, "condition")
+    assert widget.column_names() == ["condition"]
+    by_path = {r["path"]: r["columns"] for r in widget.experiment_records()}
+    assert by_path == {
+        "/data/a": {"condition": "Ctrl"},
+        "/data/b": {"condition": "KO"},
+    }
+
+
+def test_blank_column_name_drops_from_records(app):
+    widget = ExperimentsList()
+    widget.add_folders(["/data/a"], columns={"Level 1": "Ctrl"})
+    widget.rename_column(0, "")
+    assert widget.experiment_records()[0]["columns"] == {}
+
+
+def test_header_field_edit_renames_column(app):
+    widget = ExperimentsList()
+    widget.add_folders(["/data/a"], columns={"Level 1": "Ctrl"})
+    field = widget._header_fields[0]
+    field.setText("position")
+    field.editingFinished.emit()
+    assert widget.column_names() == ["position"]
+    assert widget.experiment_records()[0]["columns"] == {"position": "Ctrl"}
+
+
+def test_plain_click_single_selects_and_activates(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b", "/data/c"])
+    seen = []
+    widget.active_changed.connect(seen.append)
+    widget._on_row_clicked("/data/b", 0)
+    assert widget.active() == "/data/b"
+    assert widget.selected_rows() == ["/data/b"]
+    assert seen == ["/data/b"]
+
+
+def test_ctrl_click_toggles_multi_selection(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b", "/data/c"])
+    widget._on_row_clicked("/data/a", 0)  # plain: select a
+    widget._on_row_clicked("/data/c", 1)  # ctrl: add c
+    assert widget.selected_rows() == ["/data/a", "/data/c"]
+    widget._on_row_clicked("/data/a", 1)  # ctrl: remove a
+    assert widget.selected_rows() == ["/data/c"]
+
+
+def test_shift_click_selects_inclusive_range(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b", "/data/c", "/data/d"])
+    widget._on_row_clicked("/data/b", 0)  # anchor at b
+    widget._on_row_clicked("/data/d", 2)  # shift: b..d
+    assert widget.selected_rows() == ["/data/b", "/data/c", "/data/d"]
+
+
+def test_delete_selected_removes_rows(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b", "/data/c"])
+    widget._on_row_clicked("/data/a", 0)
+    widget._on_row_clicked("/data/c", 1)
+    widget.delete_selected()
+    assert widget.experiments() == ["/data/b"]
+    assert widget.selected_rows() == []
+
+
+def test_delete_selected_clears_active_when_active_deleted(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b"])
+    widget._on_row_clicked("/data/a", 0)
+    assert widget.active() == "/data/a"
+    widget.delete_selected()
+    assert widget.active() is None
+
+
+def test_delete_button_enables_only_with_a_selection(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    assert widget.delete_btn.isEnabled() is False
+    widget._on_row_clicked("/data/a", 0)
+    assert widget.delete_btn.isEnabled() is True
+
+
+def test_column_header_has_one_editable_field_per_level(app):
+    widget = ExperimentsList()
+    widget.add_folders(["/data/a"], columns={"Level 1": "Ctrl", "Level 2": "pos_00"})
+    assert [f.text() for f in widget._header_fields] == ["Level 1", "Level 2"]
 
 
 # ── styling fidelity (mockup v2 aggregation layer) ──────────────────────

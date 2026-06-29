@@ -1,4 +1,13 @@
-"""Experiments list (top-of-panel substrate): mini-rails + selectable rows."""
+"""Experiments list (top-of-panel substrate): an editable column table of rows.
+
+Each discovered experiment is one row. The columns are *derived from the folder
+nesting* under the chosen discovery root: every nesting level becomes a column
+and the folder name at that level is the row's value for it (root ``/data`` and
+folder ``/data/Ctrl/pos_00`` → ``Level 1 = Ctrl``, ``Level 2 = pos_00``). The
+column *names* are an editable, table-wide header; the *values* are read-only
+(they are the folder names). Rows are multi-selectable (Ctrl/Shift-click) and
+deletable.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -56,13 +65,23 @@ def _path_ends_with(path: Path, rel: Path) -> bool:
     return path.parts[-len(rel.parts):] == rel.parts
 
 
-def _columns_caption(columns: dict) -> str:
-    """Render a row's free-form columns as a group title, e.g. ``condition: Ctrl``.
+def nesting_columns(folder: str | Path, root: str | Path) -> dict[str, str]:
+    """Derive a row's columns from *folder*'s nesting under *root*.
 
-    Named columns join with a middle dot; unnamed (blank-key) columns drop out.
-    Empty when the row carries no columns — those rows show no group header.
+    Every path component of *folder* relative to *root* becomes a column named
+    ``Level 1``, ``Level 2`` … (left to right) whose value is that component's
+    folder name. A folder that is not actually under *root* (or equals it) falls
+    back to a single ``Level 1`` column holding the leaf folder name, so a row
+    always carries at least one column.
     """
-    return "  ·  ".join(f"{k}: {v}" for k, v in columns.items() if k)
+    folder = Path(folder)
+    try:
+        parts = folder.resolve().relative_to(Path(root).resolve()).parts
+    except (ValueError, OSError):
+        parts = ()
+    if not parts:
+        parts = (folder.name,)
+    return {f"Level {i + 1}": part for i, part in enumerate(parts)}
 
 
 def discover_experiment_folders(
@@ -143,6 +162,13 @@ class MiniRail(QWidget):
         painter.end()
 
 
+# Fixed widths of the non-column cells, shared by the header and every data row
+# so the editable column headers line up over their value cells.
+_SELBAR_W = 3
+_RAIL_W = MiniRail.DOT_GAP * len(PIPELINE_STAGES)
+_CHIP_W = 52
+
+
 def overall_status(statuses: dict[str, str]) -> str:
     """Collapse a stage-status map into a single chip label."""
     values = [v for k, v in statuses.items() if v != "off"]
@@ -157,11 +183,12 @@ _CHIP_TEXT = {"running": "run", "done": "done", "queued": "queued"}
 
 
 class ExperimentRow(QWidget):
-    """One experiment: accent select-bar, name, mini-rail, overall-status chip."""
+    """One experiment: accent select-bar, per-column value cells, mini-rail, chip."""
 
-    selected = Signal(str)
+    selected = Signal(str)  # legacy single-select (kept for back-compat callers)
+    clicked = Signal(str, int)  # path, modifier flag: 0 plain, 1 ctrl, 2 shift
 
-    def __init__(self, path: str, parent=None):
+    def __init__(self, path: str, values: Optional[list[str]] = None, parent=None):
         super().__init__(parent)
         self._path = path
         self._selected = False
@@ -175,18 +202,25 @@ class ExperimentRow(QWidget):
         self.setLayout(layout)
 
         self._selbar = QFrame()
-        self._selbar.setFixedWidth(3)
+        self._selbar.setFixedWidth(_SELBAR_W)
         self._selbar.setStyleSheet("background: transparent;")
         layout.addWidget(self._selbar)
 
-        self._name_label = QLabel(self.name)
-        layout.addWidget(self._name_label, 1)
+        # One value cell per column; falls back to the leaf folder name when the
+        # table has no columns yet (e.g. rows added without a discovery root).
+        cells = list(values) if values else [self.name]
+        self._value_labels: list[QLabel] = []
+        for text in cells:
+            label = QLabel(text)
+            layout.addWidget(label, 1)
+            self._value_labels.append(label)
+        self._name_label = self._value_labels[0]
 
         self.mini_rail = MiniRail()
         layout.addWidget(self.mini_rail)
 
         self._chip = QLabel("queued")
-        self._chip.setFixedWidth(52)
+        self._chip.setFixedWidth(_CHIP_W)
         self._chip.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._chip.setStyleSheet(f"color: {experiment_status_color('queued')};")
         layout.addWidget(self._chip)
@@ -212,7 +246,9 @@ class ExperimentRow(QWidget):
             f"background: {accent};" if on else "background: transparent;"
         )
         self.setStyleSheet(experiment_row_style(on, accent))
-        self._name_label.setStyleSheet(f"color: {experiment_name_color(on)};")
+        color = experiment_name_color(on)
+        for label in self._value_labels:
+            label.setStyleSheet(f"color: {color};")
 
     def set_stage_statuses(self, statuses: dict[str, str]) -> None:
         self.mini_rail.set_statuses(statuses)
@@ -225,12 +261,20 @@ class ExperimentRow(QWidget):
         self.selected.emit(self._path)
 
     def mousePressEvent(self, event) -> None:  # pragma: no cover - GUI event
+        mods = event.modifiers()
+        if mods & Qt.ControlModifier:
+            flag = 1
+        elif mods & Qt.ShiftModifier:
+            flag = 2
+        else:
+            flag = 0
+        self.clicked.emit(self._path, flag)
         self._emit_selected()
         super().mousePressEvent(event)
 
 
 class ExperimentsList(QWidget):
-    """Top-of-panel list of experiments; the shared substrate for all three jobs."""
+    """Top-of-panel table of experiments; the shared substrate for all three jobs."""
 
     experiments_changed = Signal()
     active_changed = Signal(str)
@@ -250,10 +294,17 @@ class ExperimentsList(QWidget):
         self._data_manager = data_manager
         self._paths: list[str] = []
         # path -> {"input_files": {...}, "columns": {...}} — the per-row metadata
-        # that makes the list the single config table (P0).
+        # that makes the list the single config table (P0). A row's ``columns``
+        # are keyed by the table-wide, editable column names in ``_column_names``.
         self._records: dict[str, dict] = {}
+        # Ordered, editable column names shared by every row (the table header).
+        self._column_names: list[str] = []
         self._rows: list[ExperimentRow] = []
         self._active: Optional[str] = None
+        # Multi-selection for delete (Ctrl/Shift-click); ``_anchor`` is the
+        # range-select pivot (the last plainly-clicked row).
+        self._selected_paths: set[str] = set()
+        self._anchor: Optional[str] = None
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -273,8 +324,10 @@ class ExperimentsList(QWidget):
         # owns these now; the old Project section is gone).
         layout.addLayout(self._build_project_strip())
 
-        # Staging for the two-step Discover→Commit flow (D2).
+        # Staging for the two-step Discover→Commit flow (D2). The root is kept so
+        # committed rows can derive their columns from the nesting under it.
         self._discovered: list[str] = []
+        self._discover_root: Optional[str] = None
 
         layout.addLayout(self._build_config_header())
 
@@ -283,7 +336,9 @@ class ExperimentsList(QWidget):
         layout.addWidget(self._staging_label)
 
         # Rows live in a bounded scroll region: a long discovered list scrolls
-        # internally instead of pushing the rest of the panel down.
+        # internally instead of pushing the rest of the panel down. The editable
+        # column header is the first item inside, so it always aligns with the
+        # value cells (and shares the scrollbar gutter).
         self._rows_box = QVBoxLayout()
         self._rows_box.setContentsMargins(0, 0, 0, 0)
         self._rows_box.setSpacing(2)
@@ -297,10 +352,12 @@ class ExperimentsList(QWidget):
         self._rows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._rows_scroll.setWidget(rows_container)
         layout.addWidget(self._rows_scroll)
+        self._rebuild_table()
 
         # List actions live at the foot of the list, just above the count:
-        # Discover stages folders, Add to list commits them, Run all walks the
-        # whole list (P4 — batch is an action on the list, not a separate card).
+        # Discover stages folders, Add to list commits them, Delete removes the
+        # selected rows, Run all walks the whole list (P4 — batch is an action on
+        # the list, not a separate card).
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
 
@@ -319,6 +376,16 @@ class ExperimentsList(QWidget):
         self.commit_btn.setEnabled(False)
         self.commit_btn.clicked.connect(self.commit_discovered)
         actions.addWidget(self.commit_btn)
+
+        self.delete_btn = QToolButton()
+        self.delete_btn.setObjectName("experiments_delete_button")
+        self.delete_btn.setText("Delete selected")
+        self.delete_btn.setToolTip(
+            "Remove the selected rows (Ctrl/Shift-click to select several)"
+        )
+        self.delete_btn.setEnabled(False)
+        self.delete_btn.clicked.connect(self.delete_selected)
+        actions.addWidget(self.delete_btn)
 
         actions.addStretch()
 
@@ -447,9 +514,13 @@ class ExperimentsList(QWidget):
         self.output_dir_label.setText(text)
         self.output_dir_label.setToolTip(text)
 
-    # -- column config (the table's shared header) -----------------------
+    # -- input-file config (the discovery requirements) ------------------
     def _build_config_header(self) -> QVBoxLayout:
-        """Input file names + free-form columns — the config copied to each batch."""
+        """Input file names — the discovery requirements copied to each batch.
+
+        Columns are no longer configured here; they are derived from the folder
+        nesting at discovery time and edited in the table header itself.
+        """
         box = QVBoxLayout()
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(COMPACT_SPACING)
@@ -472,43 +543,7 @@ class ExperimentsList(QWidget):
             name.setStyleSheet(f"color: {TEXT_MID};")
             files.addRow(name, field)
         box.addLayout(files)
-
-        # Free-form columns: each is a (name, value) pair copied to every row of
-        # the next committed batch (D2).
-        self._column_fields: list[tuple[QLineEdit, QLineEdit]] = []
-        self._columns_box = QVBoxLayout()
-        self._columns_box.setContentsMargins(0, 0, 0, 0)
-        self._columns_box.setSpacing(2)
-        box.addLayout(self._columns_box)
-
-        add_row = QHBoxLayout()
-        add_row.setContentsMargins(0, 0, 0, 0)
-        self.add_column_btn = QToolButton()
-        self.add_column_btn.setObjectName("experiments_add_column_button")
-        self.add_column_btn.setText("+ Add column")
-        self.add_column_btn.setToolTip(
-            "Tag the experiment with metadata, e.g. condition or cell type"
-        )
-        self.add_column_btn.clicked.connect(lambda: self.add_column_field())
-        add_row.addWidget(self.add_column_btn)
-        add_row.addStretch()
-        box.addLayout(add_row)
         return box
-
-    def add_column_field(self, name: str = "", value: str = "") -> None:
-        """Append a (name, value) column-config field; the +Add column action."""
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        name_edit = QLineEdit(name)
-        name_edit.setPlaceholderText("column")
-        name_edit.setStyleSheet(mono_input_style())
-        value_edit = QLineEdit(value)
-        value_edit.setPlaceholderText("value")
-        value_edit.setStyleSheet(mono_input_style())
-        row.addWidget(name_edit, 1)
-        row.addWidget(value_edit, 1)
-        self._columns_box.addLayout(row)
-        self._column_fields.append((name_edit, value_edit))
 
     def input_file_config(self) -> dict:
         """Current input file names, blanks dropped (cells is optional)."""
@@ -540,25 +575,48 @@ class ExperimentsList(QWidget):
     def _update_discover_tooltip(self) -> None:
         self.add_btn.setToolTip(self._discover_tooltip_text())
 
-    def column_config(self) -> dict:
-        """Current free-form columns as name->value, unnamed rows dropped."""
-        config: dict[str, str] = {}
-        for name_edit, value_edit in self._column_fields:
-            name = name_edit.text().strip()
-            if name:
-                config[name] = value_edit.text().strip()
-        return config
+    # -- columns (the editable table header) -----------------------------
+    def column_names(self) -> list[str]:
+        """The ordered, editable column names shared by every row."""
+        return list(self._column_names)
+
+    def rename_column(self, index: int, new_name: str) -> None:
+        """Rename column *index* table-wide, carrying each row's value across.
+
+        Editing one header field renames that column for every row — the columns
+        are a shared table header, not per-row tags. Blank names are allowed but
+        drop out of the metadata emitted by :meth:`experiment_records`.
+        """
+        if not 0 <= index < len(self._column_names):
+            return
+        old = self._column_names[index]
+        new = new_name.strip()
+        if new == old:
+            return
+        self._column_names[index] = new
+        for path in self._paths:
+            cols = self._records[path]["columns"]
+            if old in cols:
+                cols[new] = cols.pop(old)
+
+    def _ensure_columns(self, names: Iterable[str]) -> None:
+        """Append any column names not already present, preserving order."""
+        for name in names:
+            if name not in self._column_names:
+                self._column_names.append(name)
 
     # -- two-step Discover -> Commit (D2) --------------------------------
     def discover(self, root: str | Path) -> list[str]:
         """Step 1: stage the folders under *root* that hold the required inputs.
 
         Folder-presence only — required inputs are beads + reference (cells is
-        optional and excluded from the requirement). Staging never mutates the
-        list; the second Commit step does.
+        optional and excluded from the requirement). The root is remembered so
+        committed rows can derive their columns from the nesting under it.
+        Staging never mutates the list; the second Commit step does.
         """
         cfg = self.input_file_config()
         required = [cfg.get("beads"), cfg.get("reference")]
+        self._discover_root = str(root)
         self._discovered = discover_experiment_folders(root, required)
         self._update_staging()
         return list(self._discovered)
@@ -567,14 +625,12 @@ class ExperimentsList(QWidget):
         return list(self._discovered)
 
     def commit_discovered(self) -> None:
-        """Step 2: add the staged folders, copying the column config onto each."""
+        """Step 2: add the staged folders with columns from the folder nesting."""
         if not self._discovered:
             return
-        self.add_folders(
-            self._discovered,
-            input_files=self.input_file_config(),
-            columns=self.column_config(),
-        )
+        root = self._discover_root
+        pairs = [(path, nesting_columns(path, root)) for path in self._discovered]
+        self._add_records(pairs, self.input_file_config())
         self._discovered = []
         self._update_staging()
 
@@ -592,18 +648,30 @@ class ExperimentsList(QWidget):
         return list(self._paths)
 
     def experiment_records(self) -> list[dict]:
-        """Ordered per-row config records: path + input_files + free-form columns."""
+        """Ordered per-row config records: path + input_files + columns.
+
+        A row's columns are projected onto the shared, ordered column names;
+        blank-named columns are dropped so the emitted metadata stays clean.
+        """
         return [
             {
                 "path": path,
                 "input_files": dict(self._records[path]["input_files"]),
-                "columns": dict(self._records[path]["columns"]),
+                "columns": {
+                    name: self._records[path]["columns"].get(name, "")
+                    for name in self._column_names
+                    if name.strip()
+                },
             }
             for path in self._paths
         ]
 
     def active(self) -> Optional[str]:
         return self._active
+
+    def selected_rows(self) -> list[str]:
+        """The paths currently multi-selected for deletion, in row order."""
+        return [path for path in self._paths if path in self._selected_paths]
 
     def input_files_for(self, path: str) -> dict:
         """The discovery-defined input file names for one row (empty if unknown)."""
@@ -621,12 +689,36 @@ class ExperimentsList(QWidget):
             path: self._records.get(path, {"input_files": {}, "columns": {}})
             for path in self._paths
         }
-        self._rebuild_rows()
+        self._selected_paths &= set(self._paths)
+        self._rebuild_table()
         if self._active not in self._paths:
             self._active = None
         self.refresh_statuses()
         self._update_meta()
+        self._update_delete_btn()
         self.experiments_changed.emit()
+
+    def _add_records(self, pairs, input_files: Optional[dict] = None) -> None:
+        """Append ``(path, columns)`` rows, extending the shared column header.
+
+        Each new row carries its own columns dict (derived from folder nesting,
+        or supplied directly); any new column names extend the table-wide header.
+        Existing rows keep their own metadata.
+        """
+        new = [(p, dict(cols)) for p, cols in pairs if p not in self._paths]
+        # de-dup within the incoming batch, keeping the first occurrence
+        seen: set[str] = set()
+        new = [(p, c) for p, c in new if not (p in seen or seen.add(p))]
+        if not new:
+            return
+        for _, cols in new:
+            self._ensure_columns(cols.keys())
+        for path, cols in new:
+            self._records[path] = {
+                "input_files": dict(input_files or {}),
+                "columns": cols,
+            }
+        self.set_experiments(self._paths + [p for p, _ in new])
 
     def add_folders(
         self,
@@ -637,56 +729,75 @@ class ExperimentsList(QWidget):
     ) -> None:
         """Append new folders, copying the given column config onto each new row.
 
-        This is the *commit* half of the two-step Discover→Commit flow (D2): the
-        current column config (input file names + free-form name/value pairs) is
-        copied — not shared — onto every freshly added row. Existing rows keep
-        their own metadata.
+        The *commit* half of the Discover→Commit flow uses :meth:`commit_discovered`
+        (which derives columns from nesting). This entry point applies one shared
+        ``columns`` dict to every added row and is used by the saved-state/load
+        paths and tests.
         """
-        new_paths = [p for p in dict.fromkeys(paths) if p not in self._paths]
-        if not new_paths:
-            return
-        for path in new_paths:
-            self._records[path] = {
-                "input_files": dict(input_files or {}),
-                "columns": dict(columns or {}),
-            }
-        self.set_experiments(self._paths + new_paths)
+        pairs = [(path, dict(columns or {})) for path in dict.fromkeys(paths)]
+        self._add_records(pairs, input_files)
 
     def set_records(self, records: list[dict]) -> None:
         """Rebuild the whole table from saved records (the load path, P4.5).
 
         Each record is ``{"path", "input_files", "columns"}`` — the same shape
         ``experiment_records`` emits. Replaces every row (paths + per-row
-        metadata), seeds the input-file header from the first record so a
-        round-tripped config keeps its file names, then refreshes statuses.
+        metadata), rebuilds the shared column header from the union of column
+        names (first-seen order), seeds the input-file header from the first
+        record, then refreshes statuses.
         """
         self._paths = list(dict.fromkeys(r["path"] for r in records))
         self._records = {}
+        self._column_names = []
+        self._selected_paths = set()
         for record in records:
             path = record["path"]
+            cols = dict(record.get("columns") or {})
+            self._ensure_columns(cols.keys())
             self._records[path] = {
                 "input_files": dict(record.get("input_files") or {}),
-                "columns": dict(record.get("columns") or {}),
+                "columns": cols,
             }
         if records:
             first_files = self._records[records[0]["path"]]["input_files"]
             for key, field in self.file_name_inputs.items():
                 if key in first_files:
                     field.setText(first_files[key])
-        self._rebuild_rows()
+        self._rebuild_table()
         if self._active not in self._paths:
             self._active = None
         self.refresh_statuses()
         self._update_meta()
+        self._update_delete_btn()
         self.experiments_changed.emit()
 
-    def set_active(self, path: Optional[str]) -> None:
+    def set_active(self, path: Optional[str], *, selection=None) -> None:
+        """Set the single active (downstream-driving) row.
+
+        Unless *selection* is given, the multi-selection collapses to just the
+        active row, so a plain click both activates a row and clears any prior
+        multi-selection.
+        """
         if path is not None and path not in self._paths:
             return
         self._active = path
-        for row in self._rows:
-            row.set_selected(row.path == path)
+        if selection is None:
+            self._selected_paths = {path} if path else set()
+        else:
+            self._selected_paths = {p for p in selection if p in self._paths}
+        self._apply_selection_styles()
+        self._update_delete_btn()
         self.active_changed.emit(path or "")
+
+    def delete_selected(self) -> None:
+        """Remove every multi-selected row from the table."""
+        if not self._selected_paths:
+            return
+        remaining = [p for p in self._paths if p not in self._selected_paths]
+        if self._active in self._selected_paths:
+            self._active = None
+        self._selected_paths = set()
+        self.set_experiments(remaining)
 
     def refresh_statuses(self) -> None:
         if self._status_fn is None:
@@ -713,33 +824,101 @@ class ExperimentsList(QWidget):
             return
 
     # -- internals -------------------------------------------------------
-    def _rebuild_rows(self) -> None:
+    def _on_row_clicked(self, path: str, flag: int) -> None:
+        """Resolve a row click into the new active row + multi-selection.
+
+        flag 0 = plain (select only), 1 = Ctrl (toggle), 2 = Shift (range from
+        the anchor). The clicked row becomes active so the parameter panel
+        follows the click even while several rows stay selected for deletion.
+        """
+        if flag == 1:  # Ctrl-click: toggle this row in/out of the selection
+            selection = set(self._selected_paths)
+            if path in selection:
+                selection.discard(path)
+            else:
+                selection.add(path)
+            self._anchor = path
+            active = path if path in selection else next(iter(selection), None)
+            self.set_active(active, selection=selection)
+        elif flag == 2 and self._anchor in self._paths:  # Shift-click: range
+            lo, hi = sorted(
+                (self._paths.index(self._anchor), self._paths.index(path))
+            )
+            self.set_active(path, selection=set(self._paths[lo : hi + 1]))
+        else:  # plain click: single select + activate
+            self._anchor = path
+            self.set_active(path)
+
+    def _apply_selection_styles(self) -> None:
+        for row in self._rows:
+            row.set_selected(row.path in self._selected_paths)
+
+    def _update_delete_btn(self) -> None:
+        if hasattr(self, "delete_btn"):
+            self.delete_btn.setEnabled(bool(self._selected_paths))
+
+    def keyPressEvent(self, event) -> None:  # pragma: no cover - GUI event
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and self._selected_paths:
+            self.delete_selected()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _build_header_widget(self) -> QWidget:
+        """The editable column-name header, aligned over the value cells."""
+        widget = QWidget()
+        widget.setObjectName("experiments_table_header")
+        row = QHBoxLayout()
+        row.setContentsMargins(7, 5, 10, 5)
+        row.setSpacing(COMPACT_SPACING + 4)
+        widget.setLayout(row)
+
+        lead = QWidget()
+        lead.setFixedWidth(_SELBAR_W)
+        row.addWidget(lead)
+
+        self._header_fields: list[QLineEdit] = []
+        if self._column_names:
+            for index, name in enumerate(self._column_names):
+                field = QLineEdit(name)
+                field.setObjectName(f"experiments_column_header_{index}")
+                field.setStyleSheet(mono_input_style())
+                field.editingFinished.connect(
+                    lambda i=index, f=field: self.rename_column(i, f.text())
+                )
+                row.addWidget(field, 1)
+                self._header_fields.append(field)
+        else:
+            placeholder = QLineEdit("Folder")
+            placeholder.setEnabled(False)
+            placeholder.setStyleSheet(mono_input_style())
+            row.addWidget(placeholder, 1)
+
+        rail = QWidget()
+        rail.setFixedWidth(_RAIL_W)
+        row.addWidget(rail)
+        chip = QWidget()
+        chip.setFixedWidth(_CHIP_W)
+        row.addWidget(chip)
+        return widget
+
+    def _rebuild_table(self) -> None:
         while self._rows_box.count():
             item = self._rows_box.takeAt(0)
             if item.widget() is not None:
                 item.widget().deleteLater()
         self._rows = []
-        last_caption: Optional[str] = None
+        self._rows_box.addWidget(self._build_header_widget())
         for path in self._paths:
-            caption = _columns_caption(self._records[path]["columns"])
-            if caption and caption != last_caption:
-                self._rows_box.addWidget(self._group_separator(caption))
-            last_caption = caption
-            row = ExperimentRow(path)
-            row.selected.connect(self.set_active)
+            values = [
+                self._records[path]["columns"].get(name, "")
+                for name in self._column_names
+            ]
+            row = ExperimentRow(path, values or None)
+            row.clicked.connect(self._on_row_clicked)
+            row.set_selected(path in self._selected_paths)
             self._rows_box.addWidget(row)
             self._rows.append(row)
-
-    def _group_separator(self, text: str) -> QLabel:
-        """A bold title divider labelling the column values of the rows below it."""
-        sep = QLabel(text)
-        sep.setObjectName("experiments_group_separator")
-        sep.setStyleSheet(
-            f"color: {TEXT_MID}; font-weight: bold;"
-            f"padding: 6px 2px 3px 2px;"
-            f"border-bottom: 1px solid {TEXT_DIM};"
-        )
-        return sep
 
     def _update_meta(self) -> None:
         n = len(self._paths)
