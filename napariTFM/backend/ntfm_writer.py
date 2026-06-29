@@ -92,6 +92,8 @@ def write_experiment_ntfm(
 
     ntfm_path = Path(ntfm_path)
     ntfm_path.parent.mkdir(parents=True, exist_ok=True)
+    # merge_existing defaults to True: a force- or stress-only second write
+    # preserves previously-saved displacement/force data from the existing container.
     ntfm.results_to_ntfm(
         ntfm_path,
         config=config,

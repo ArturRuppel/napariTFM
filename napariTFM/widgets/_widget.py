@@ -968,19 +968,25 @@ class napariTFMWidget(QWidget):
         self.refresh()
 
     def _persist_active_experiment(self, stage_key: str) -> None:
-        """Write the active experiment's results to its canonical ``.ntfm``.
+        """Write the active experiment's results to disk.
 
-        Gathers whatever analysis results are currently in memory (displacement /
-        force / stress + mask) and writes them through the same shared writer the
-        batch uses. A no-op when nothing is selected or no results exist yet.
-        Preprocessing has no ``.ntfm`` column of its own (and the batch caches its
-        tiffs only on opt-in), so it persists nothing — its dot turns "done" once
-        displacement is written, exactly as in a batch run.
+        For preprocessing: writes ``preprocessed_beads.tif`` /
+        ``preprocessed_reference.tif`` (and ``preprocessed_cells.tif`` when
+        available) to the canonical output dir using the same shared writer the
+        batch uses, giving the preprocessing dot the same persistence guarantee
+        every downstream stage has.
+
+        For displacement / force / stress: gathers results from memory and
+        writes them through the shared ``.ntfm`` writer.
+
+        A no-op when nothing is selected or the relevant arrays are absent.
         """
-        if stage_key == "preprocessing":
-            return
         path = self._active_experiment
         if not path:
+            return
+
+        if stage_key == "preprocessing":
+            self._persist_preprocessed_tiffs(path)
             return
         try:
             labels = {}
@@ -1002,6 +1008,55 @@ class napariTFMWidget(QWidget):
             )
         except Exception as exc:
             logger.exception("Could not persist results for %s", path)
+            self.status_label.setText(f"Save failed: {exc}")
+
+    def _persist_preprocessed_tiffs(self, path: str) -> None:
+        """Write preprocessed TIFFs for *path* to the canonical output dir.
+
+        Uses the same :func:`~napariTFM.backend.batch_analysis.save_calibrated_tiff`
+        the batch pipeline uses so interactive and batch outputs are byte-identical.
+        Silently skips any array that is not in memory yet; logs + sets a status
+        message on write failure without propagating the exception.
+        """
+        from pathlib import Path
+
+        from napariTFM.backend.batch_analysis import save_calibrated_tiff
+        from napariTFM.utilities.batch_output import experiment_output_dir
+
+        try:
+            out_dir = experiment_output_dir(path, self.data_manager.output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            params = self.parameter_manager.get_all_parameters()
+            pixel_size = params.get("pixel_size", 1.0)
+            frame_interval = params.get("frame_interval", 1.0)
+
+            beads = self.data_manager.preprocessed_bead_stack
+            reference = self.data_manager.preprocessed_reference
+            cells = self.data_manager.preprocessed_cell_stack
+
+            if beads is not None:
+                save_calibrated_tiff(
+                    beads,
+                    out_dir / "preprocessed_beads.tif",
+                    pixel_size,
+                    frame_interval,
+                )
+            if reference is not None:
+                save_calibrated_tiff(
+                    reference,
+                    out_dir / "preprocessed_reference.tif",
+                    pixel_size,
+                    frame_interval,
+                )
+            if cells is not None:
+                save_calibrated_tiff(
+                    cells,
+                    out_dir / "preprocessed_cells.tif",
+                    pixel_size,
+                    frame_interval,
+                )
+        except Exception as exc:
+            logger.exception("Could not persist preprocessed TIFFs for %s", path)
             self.status_label.setText(f"Save failed: {exc}")
 
     def _cancel_run_all(self) -> None:
@@ -1137,6 +1192,147 @@ class napariTFMWidget(QWidget):
 
         return {stage: _status(stage) for stage in PIPELINE_STAGES}
 
+    def _load_active_experiment_results(self, path: str) -> None:
+        """Restore previously-computed results from an experiment's .ntfm into memory.
+
+        Called when a processed experiment is selected so downstream widgets
+        (Force, Stress) see their prerequisites and enable their Run buttons
+        without requiring the user to re-run upstream stages in this session.
+
+        Reads the canonical .ntfm at the same path that the batch writer and
+        the stage-status dots use.  Silently returns if the file does not
+        exist or is unreadable.
+        """
+        import types
+
+        import numpy as np
+
+        from napariTFM.utilities import ntfm as _ntfm
+        from napariTFM.utilities.batch_output import experiment_output_dir
+        from pathlib import Path
+
+        try:
+            ntfm_path = (
+                experiment_output_dir(path, self.data_manager.output_dir)
+                / f"{Path(path).name}.ntfm"
+            )
+            if not ntfm_path.exists():
+                return
+
+            df, metadata = _ntfm.read_ntfm(ntfm_path)
+            arrays = _ntfm.tidy_to_arrays(df)
+
+            # Recover physical_scale from stored config (UnifiedParameters asdict).
+            config = metadata.get("config", {})
+
+            # Reconstruct each stage's parameter dataclass from the stored config
+            # so the viewer's visualize_* methods (which read
+            # parameters.downscale_factor, d_max/f_max/max_stress,
+            # *_vector_stride, *_arrow_scale) work on a freshly-selected
+            # experiment without a re-run. Rebuild UnifiedParameters exactly as
+            # config_from_parameters does (filter to valid field names so unknown
+            # keys are ignored and missing keys default), then derive per stage.
+            # A malformed/empty config falls back to UnifiedParameters defaults.
+            from dataclasses import fields as _fields
+
+            from napariTFM.backend.parameter_dataclasses import UnifiedParameters
+
+            try:
+                _valid = {f.name for f in _fields(UnifiedParameters)}
+                unified = UnifiedParameters(
+                    **{k: v for k, v in (config or {}).items() if k in _valid}
+                )
+            except Exception:
+                unified = UnifiedParameters()
+            disp_params = unified.to_displacement_parameters()
+            force_params = unified.to_fttc_parameters()
+            stress_params = unified.to_msm_parameters()
+
+            pixel_size = float(config.get("pixel_size", 0.0))
+            downscale_factor = float(config.get("downscale_factor", 0))
+            frame_interval = float(config.get("frame_interval", 0.0))
+
+            # Fallback: derive grid_spacing from the tidy table's coordinate columns.
+            if pixel_size <= 0 or downscale_factor <= 0:
+                rows_nonzero = df[df["row"] > 0]
+                if not rows_nonzero.empty:
+                    grid_spacing = float(
+                        rows_nonzero["y[µm]"].iloc[0]
+                        / rows_nonzero["row"].iloc[0]
+                    )
+                else:
+                    grid_spacing = 1.0
+            else:
+                grid_spacing = pixel_size * downscale_factor
+
+            # Fallback: derive frame_interval from the tidy table's time column.
+            if frame_interval <= 0:
+                unique_t = np.sort(df["t[min]"].unique())
+                frame_interval = float(unique_t[1] - unique_t[0]) if len(unique_t) > 1 else 1.0
+
+            physical_scale = {
+                "pixel_size": pixel_size,
+                "grid_spacing": grid_spacing,
+                "time_interval": frame_interval,
+                "grid_spacing_units": "µm",
+                "time_interval_units": "min",
+            }
+
+            def _present(arr):
+                """True when an array has at least one non-NaN value."""
+                return arr is not None and not np.all(np.isnan(arr))
+
+            # Restore stages in dependency order (displacement → force → stress)
+            # so the downstream-invalidation in set_displacement_results never
+            # clears a stage we are about to set.
+            disp = arrays.get("displacement_field")
+            if _present(disp):
+                result = types.SimpleNamespace(
+                    displacement_field=disp,
+                    physical_scale=physical_scale,
+                    original_shape=disp.shape[1:3],
+                    displacement_field_shape=disp.shape[1:3],
+                    parameters=disp_params,
+                )
+                self.data_manager.set_displacement_results(
+                    result, source="loaded", dirty=False
+                )
+
+            force = arrays.get("force_field")
+            if _present(force):
+                result = types.SimpleNamespace(
+                    force_field=force,
+                    physical_scale=physical_scale,
+                    original_shape=force.shape[1:3],
+                    force_shape=force.shape[1:3],
+                    parameters=force_params,
+                )
+                self.data_manager.set_force_results(
+                    result, source="loaded", dirty=False
+                )
+
+            stress = arrays.get("stress_tensor")
+            if _present(stress):
+                result = types.SimpleNamespace(
+                    stress_tensor=stress,
+                    physical_scale=physical_scale,
+                    original_shape=stress.shape[1:3],
+                    stress_shape=stress.shape[1:3],
+                    nodes=[],
+                    elements=[],
+                    condition_number=0.0,
+                    residual=0.0,
+                    parameters=stress_params,
+                )
+                self.data_manager.set_stress_results(
+                    result, source="loaded", dirty=False
+                )
+
+        except Exception:
+            logger.exception(
+                "Failed to load results from .ntfm for %s", path
+            )
+
     def _on_active_experiment_changed(self, path: str) -> None:
         self._active_experiment = path or None
         # Switching experiments drops the previous one's in-memory results so they
@@ -1160,6 +1356,10 @@ class napariTFMWidget(QWidget):
             # And actually load those files from disk into memory + the viewer, so
             # Preview and Run (which need the arrays loaded) work on selection.
             self.preprocessing_widget.load_input_files(self._active_experiment, input_files)
+            # Restore any previously-computed results from the experiment's .ntfm
+            # so downstream stages (Force, Stress) see their inputs and enable
+            # their Run buttons without requiring a re-run of upstream stages.
+            self._load_active_experiment_results(self._active_experiment)
         self._update_disclosure()
 
     def _on_experiments_changed(self) -> None:

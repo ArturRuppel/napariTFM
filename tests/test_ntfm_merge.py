@@ -1,0 +1,305 @@
+"""Tests for tidy-table merge: prior-run stage preservation on re-write."""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from napariTFM.utilities import ntfm
+from napariTFM.backend.ntfm_writer import write_experiment_ntfm
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+class _FakeResult:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+def _disp_result(arr, scale=None):
+    scale = scale or {"grid_spacing": 1.0, "time_interval": 1.0}
+    return _FakeResult(displacement_field=arr, physical_scale=scale)
+
+
+def _force_result(arr, scale=None):
+    scale = scale or {"grid_spacing": 1.0, "time_interval": 1.0}
+    return _FakeResult(force_field=arr, physical_scale=scale)
+
+
+# ---------------------------------------------------------------------------
+# 1. merge_tidy_preserving: fills absent stage from old
+# ---------------------------------------------------------------------------
+
+def test_merge_fills_absent_displacement_from_old():
+    """A force-only new_df should inherit displacement columns from old_df."""
+    rng = np.random.default_rng(42)
+    nt, ny, nx = 2, 3, 4
+    disp = rng.standard_normal((nt, ny, nx, 2))
+    force = rng.standard_normal((nt, ny, nx, 2)) * 10.0
+
+    # new_df has only force (displacement columns are all-NaN)
+    new_df = ntfm.arrays_to_tidy(force_field=force, grid_spacing=1.0, frame_interval=1.0)
+    # old_df has displacement (force columns are all-NaN)
+    old_df = ntfm.arrays_to_tidy(displacement_field=disp, grid_spacing=1.0, frame_interval=1.0)
+
+    merged = ntfm.merge_tidy_preserving(new_df, old_df)
+
+    # Displacement should be filled from old_df
+    assert not merged["u_x[µm]"].isna().all()
+    assert not merged["u_y[µm]"].isna().all()
+    # Force should still come from new_df (unchanged)
+    np.testing.assert_allclose(merged["F_x[Pa]"].to_numpy(), new_df["F_x[Pa]"].to_numpy())
+    # Column order should match COLUMNS
+    assert list(merged.columns) == ntfm.COLUMNS
+
+
+def test_merge_fills_absent_force_from_old():
+    """A displacement-only new_df should inherit force columns from old_df."""
+    rng = np.random.default_rng(10)
+    nt, ny, nx = 2, 3, 3
+    disp = rng.standard_normal((nt, ny, nx, 2))
+    force = rng.standard_normal((nt, ny, nx, 2)) * 5.0
+
+    new_df = ntfm.arrays_to_tidy(displacement_field=disp, grid_spacing=1.0, frame_interval=1.0)
+    old_df = ntfm.arrays_to_tidy(force_field=force, grid_spacing=1.0, frame_interval=1.0)
+
+    merged = ntfm.merge_tidy_preserving(new_df, old_df)
+
+    assert not merged["F_x[Pa]"].isna().all()
+    assert not merged["F_y[Pa]"].isna().all()
+    np.testing.assert_allclose(merged["u_x[µm]"].to_numpy(), new_df["u_x[µm]"].to_numpy())
+
+
+# ---------------------------------------------------------------------------
+# 2. merge_tidy_preserving: does NOT overwrite stage present in new
+# ---------------------------------------------------------------------------
+
+def test_merge_does_not_overwrite_displacement_present_in_new():
+    """When new_df already has displacement, old_df's values must not override it."""
+    rng = np.random.default_rng(7)
+    nt, ny, nx = 2, 3, 3
+    disp_new = rng.standard_normal((nt, ny, nx, 2))
+    disp_old = rng.standard_normal((nt, ny, nx, 2)) + 1000.0  # clearly different
+
+    new_df = ntfm.arrays_to_tidy(displacement_field=disp_new, grid_spacing=1.0, frame_interval=1.0)
+    old_df = ntfm.arrays_to_tidy(displacement_field=disp_old, grid_spacing=1.0, frame_interval=1.0)
+
+    merged = ntfm.merge_tidy_preserving(new_df, old_df)
+
+    # new_df values must be unchanged — old_df must not overwrite them
+    np.testing.assert_allclose(merged["u_x[µm]"].to_numpy(), new_df["u_x[µm]"].to_numpy())
+    # Sanity: none of the large old values leaked in
+    assert not np.any(merged["u_x[µm]"].to_numpy() > 100.0)
+
+
+def test_merge_does_not_overwrite_force_present_in_new():
+    """When new_df has force, old_df's force must not override it."""
+    rng = np.random.default_rng(13)
+    nt, ny, nx = 2, 3, 3
+    force_new = rng.standard_normal((nt, ny, nx, 2)) * 1.0
+    force_old = rng.standard_normal((nt, ny, nx, 2)) * 1000.0
+
+    new_df = ntfm.arrays_to_tidy(force_field=force_new, grid_spacing=1.0, frame_interval=1.0)
+    old_df = ntfm.arrays_to_tidy(force_field=force_old, grid_spacing=1.0, frame_interval=1.0)
+
+    merged = ntfm.merge_tidy_preserving(new_df, old_df)
+
+    np.testing.assert_allclose(merged["F_x[Pa]"].to_numpy(), new_df["F_x[Pa]"].to_numpy())
+
+
+# ---------------------------------------------------------------------------
+# 3. merge_tidy_preserving: grid mismatch → returns new_df unchanged, no crash
+# ---------------------------------------------------------------------------
+
+def test_merge_grid_mismatch_different_row_extent_returns_new_unchanged():
+    """Different row max → merge skipped, new_df returned unchanged."""
+    nt, ny, nx = 2, 3, 4
+    disp = np.ones((nt, ny, nx, 2))
+
+    new_df = ntfm.arrays_to_tidy(displacement_field=disp, grid_spacing=1.0, frame_interval=1.0)
+    # old_df has an extra row
+    old_df = ntfm.arrays_to_tidy(
+        displacement_field=np.ones((nt, ny + 1, nx, 2)), grid_spacing=1.0, frame_interval=1.0
+    )
+
+    merged = ntfm.merge_tidy_preserving(new_df, old_df)
+
+    pd.testing.assert_frame_equal(merged, new_df)
+
+
+def test_merge_grid_mismatch_different_t_values_returns_new_unchanged():
+    """Different t[min] values → merge skipped, new_df returned unchanged."""
+    nt, ny, nx = 2, 3, 4
+    disp = np.ones((nt, ny, nx, 2))
+
+    new_df = ntfm.arrays_to_tidy(
+        displacement_field=disp, grid_spacing=1.0, frame_interval=1.0
+    )
+    old_df = ntfm.arrays_to_tidy(
+        displacement_field=disp, grid_spacing=1.0, frame_interval=5.0  # different time step
+    )
+
+    merged = ntfm.merge_tidy_preserving(new_df, old_df)
+
+    pd.testing.assert_frame_equal(merged, new_df)
+
+
+def test_merge_grid_mismatch_no_crash():
+    """Grid mismatch must never raise; it just logs and returns new_df."""
+    disp_new = np.ones((1, 3, 3, 2))
+    disp_old = np.ones((1, 4, 3, 2))
+
+    new_df = ntfm.arrays_to_tidy(displacement_field=disp_new, grid_spacing=1.0, frame_interval=1.0)
+    old_df = ntfm.arrays_to_tidy(displacement_field=disp_old, grid_spacing=1.0, frame_interval=1.0)
+
+    # Must not raise
+    merged = ntfm.merge_tidy_preserving(new_df, old_df)
+    assert merged is not None
+    assert len(merged) == len(new_df)
+
+
+# ---------------------------------------------------------------------------
+# 4. Container: displacement-only write, then force-only second write preserves
+#    displacement (via results_to_ntfm, the core integration path)
+# ---------------------------------------------------------------------------
+
+def test_results_to_ntfm_force_second_write_preserves_displacement(tmp_path):
+    """Force-only second write must not erase previously-saved displacement."""
+    rng = np.random.default_rng(0)
+    nt, ny, nx = 2, 3, 3
+    scale = {"grid_spacing": 1.0, "time_interval": 1.0}
+    disp_arr = rng.standard_normal((nt, ny, nx, 2))
+    force_arr = rng.standard_normal((nt, ny, nx, 2)) * 10.0
+
+    disp_result = _disp_result(disp_arr, scale)
+    force_result = _force_result(force_arr, scale)
+
+    ntfm_path = tmp_path / "exp.ntfm"
+
+    # First write: displacement only
+    ntfm.results_to_ntfm(ntfm_path, config={}, displacement_result=disp_result)
+    assert ntfm.populated_measures(ntfm_path) == {"displacement"}
+
+    # Second write: force only (merge_existing=True by default)
+    ntfm.results_to_ntfm(ntfm_path, config={}, force_result=force_result)
+
+    # Both stages must be reported as populated
+    measures = ntfm.populated_measures(ntfm_path)
+    assert "displacement" in measures, "displacement was erased by force-only write"
+    assert "force" in measures
+
+    # The actual displacement data must be intact
+    df, _ = ntfm.read_ntfm(ntfm_path)
+    arrays = ntfm.tidy_to_arrays(df)
+    np.testing.assert_allclose(arrays["displacement_field"], disp_arr)
+
+
+# ---------------------------------------------------------------------------
+# 5. Container: grid-mismatch on second write → no crash, new data wins
+# ---------------------------------------------------------------------------
+
+def test_results_to_ntfm_grid_mismatch_no_crash_new_data_wins(tmp_path):
+    """A second write with a different grid must not crash; new data wins."""
+    nt = 2
+    scale = {"grid_spacing": 1.0, "time_interval": 1.0}
+    disp_arr = np.ones((nt, 3, 3, 2))
+    # Different spatial grid for the second write
+    force_arr = np.ones((nt, 4, 3, 2)) * 5.0
+
+    disp_result = _disp_result(disp_arr, scale)
+    force_result = _force_result(force_arr, scale)
+
+    ntfm_path = tmp_path / "exp.ntfm"
+
+    # First write
+    ntfm.results_to_ntfm(ntfm_path, config={}, displacement_result=disp_result)
+
+    # Second write with a different grid must not raise
+    ntfm.results_to_ntfm(ntfm_path, config={}, force_result=force_result)
+
+    # New data must be present in the file
+    measures = ntfm.populated_measures(ntfm_path)
+    assert "force" in measures
+
+
+# ---------------------------------------------------------------------------
+# 6. results_to_ntfm(..., merge_existing=False) → pure overwrite, old stage erased
+# ---------------------------------------------------------------------------
+
+def test_results_to_ntfm_merge_existing_false_erases_old_stage(tmp_path):
+    """merge_existing=False must perform a pure overwrite, erasing prior stages."""
+    rng = np.random.default_rng(55)
+    nt, ny, nx = 2, 3, 3
+    scale = {"grid_spacing": 1.0, "time_interval": 1.0}
+    disp_arr = rng.standard_normal((nt, ny, nx, 2))
+    force_arr = rng.standard_normal((nt, ny, nx, 2)) * 10.0
+
+    disp_result = _disp_result(disp_arr, scale)
+    force_result = _force_result(force_arr, scale)
+
+    ntfm_path = tmp_path / "exp.ntfm"
+
+    # First write: displacement only
+    ntfm.results_to_ntfm(ntfm_path, config={}, displacement_result=disp_result)
+    assert "displacement" in ntfm.populated_measures(ntfm_path)
+
+    # Second write: force only WITH merge_existing=False → displacement must be erased
+    ntfm.results_to_ntfm(
+        ntfm_path, config={}, force_result=force_result, merge_existing=False
+    )
+
+    measures = ntfm.populated_measures(ntfm_path)
+    assert "displacement" not in measures, (
+        "displacement should have been erased by merge_existing=False overwrite"
+    )
+    assert "force" in measures
+
+
+# ---------------------------------------------------------------------------
+# 7. write_experiment_ntfm end-to-end: force-only second write preserves displacement
+# ---------------------------------------------------------------------------
+
+def test_write_experiment_ntfm_preserves_displacement_on_force_only_rewrite(tmp_path):
+    """Full stack: write_experiment_ntfm with force only must not erase displacement."""
+    rng = np.random.default_rng(99)
+    nt, ny, nx = 2, 3, 3
+    scale = {"grid_spacing": 1.0, "time_interval": 1.0}
+    disp_arr = rng.standard_normal((nt, ny, nx, 2))
+    force_arr = rng.standard_normal((nt, ny, nx, 2)) * 50.0
+
+    disp_result = _disp_result(disp_arr, scale)
+    force_result = _force_result(force_arr, scale)
+
+    ntfm_path = tmp_path / "exp.ntfm"
+    params = {"pixel_size": 0.1, "downscale_factor": 4}
+
+    # First write: displacement only
+    written = write_experiment_ntfm(
+        ntfm_path,
+        parameters=params,
+        displacement_result=disp_result,
+    )
+    assert written == ntfm_path
+    assert "displacement" in ntfm.populated_measures(ntfm_path)
+
+    # Second write: force only — displacement_result=None, merge must preserve prior data
+    write_experiment_ntfm(
+        ntfm_path,
+        parameters=params,
+        force_result=force_result,
+    )
+
+    measures = ntfm.populated_measures(ntfm_path)
+    assert "displacement" in measures, "displacement erased by force-only second write"
+    assert "force" in measures
+
+    # Verify actual array values are preserved
+    df, _ = ntfm.read_ntfm(ntfm_path)
+    arrays = ntfm.tidy_to_arrays(df)
+    np.testing.assert_allclose(
+        arrays["displacement_field"], disp_arr, err_msg="displacement_field not preserved"
+    )
+    np.testing.assert_allclose(
+        arrays["force_field"], force_arr, err_msg="force_field not preserved"
+    )

@@ -690,6 +690,53 @@ def test_interactive_run_persists_ntfm_and_syncs_both_dot_rows(monkeypatch, app,
         widget.deleteLater()
 
 
+def test_interactive_preprocessing_persists_tiffs(monkeypatch, app, tmp_path):
+    """_persist_active_experiment('preprocessing') writes the preprocessed TIFFs."""
+    import numpy as np
+
+    from napariTFM.utilities.batch_output import experiment_output_dir
+
+    written = {}
+
+    def _fake_save_tiff(data, filepath, pixel_size, frame_interval):
+        from pathlib import Path
+        written[Path(filepath).name] = data
+
+    monkeypatch.setattr(
+        "napariTFM.backend.batch_analysis.save_calibrated_tiff", _fake_save_tiff
+    )
+
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_01"
+    folder.mkdir()
+    _select(widget, folder)
+    try:
+        # Place preprocessed arrays in the data manager (as the preprocessing
+        # widget would after a successful interactive run).
+        widget.data_manager.preprocessed_bead_stack = np.ones((2, 4, 4), dtype=np.float32)
+        widget.data_manager.preprocessed_reference = np.zeros((4, 4), dtype=np.float32)
+        # No cell stack — only the two mandatory TIFFs should be written.
+
+        widget._on_stage_persisted("preprocessing")
+
+        assert "preprocessed_beads.tif" in written, "bead TIFF not written"
+        assert "preprocessed_reference.tif" in written, "reference TIFF not written"
+        assert "preprocessed_cells.tif" not in written, "cell TIFF should not be written when absent"
+
+        # The preprocessing dot must now read as "done" from the on-disk TIFFs.
+        # We simulate file presence since _fake_save_tiff doesn't touch disk.
+        out_dir = experiment_output_dir(str(folder), None)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "preprocessed_beads.tif").write_bytes(b"x")
+        (out_dir / "preprocessed_reference.tif").write_bytes(b"x")
+
+        statuses = widget._experiment_stage_status(str(folder))
+        assert statuses["preprocessing"] == "done"
+    finally:
+        widget.close()
+        widget.deleteLater()
+
+
 def test_all_nan_stage_reads_not_done_in_both_dot_rows(monkeypatch, app, tmp_path):
     import numpy as np
 

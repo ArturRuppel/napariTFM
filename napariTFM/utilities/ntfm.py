@@ -366,6 +366,17 @@ _STAGE_MEASURE_COLUMN = {
     "stress": "sigma_xx[mN/m]",
 }
 
+# All measure columns belonging to each stage.
+# Keys match _STAGE_MEASURE_COLUMN; used by merge_tidy_preserving.
+_STAGE_COLUMNS = {
+    "displacement": ["u_x[µm]", "u_y[µm]"],
+    "force": ["F_x[Pa]", "F_y[Pa]"],
+    "stress": ["sigma_xx[mN/m]", "sigma_yy[mN/m]", "sigma_shear[mN/m]"],
+}
+
+# Key columns used when aligning rows between two tidy tables during merge.
+_MERGE_KEYS = ["t[min]", "row", "col"]
+
 
 _populated_measures_cache: dict = {}
 
@@ -434,6 +445,96 @@ def populated_measures(path) -> set:
 
     _populated_measures_cache[cache_key] = frozenset(present)
     return set(present)
+
+
+# ---------------------------------------------------------------------------
+# Tidy-table merge (preserve prior-run stages on re-write)
+# ---------------------------------------------------------------------------
+
+def merge_tidy_preserving(new_df: pd.DataFrame, old_df: pd.DataFrame) -> pd.DataFrame:
+    """Merge two tidy tables, preserving prior-run stages absent from the new run.
+
+    When a pipeline stage is re-run with some upstream stages absent (e.g. a
+    force-only resume where ``displacement_result`` is ``None``),
+    ``arrays_to_tidy`` fills all-NaN placeholders for the missing stages.  A
+    naive overwrite would PERMANENTLY ERASE previously-saved data.
+
+    This helper fills each stage column-group that is all-NaN (or absent) in
+    ``new_df`` but PRESENT and NOT all-NaN (or not all-zero for ``mask``) in
+    ``old_df`` with values from ``old_df``.  Stages already populated in
+    ``new_df`` are never touched — the new run always wins.
+
+    Merge is performed via a left-join on ``(t[min], row, col)`` so
+    row-ordering differences between the two tables do not matter.
+
+    Grid compatibility: the two tables must share the same set of unique
+    ``t[min]`` values (within a small float tolerance) and the same ``row``/
+    ``col`` max extents.  On mismatch a warning is printed and ``new_df`` is
+    returned unchanged (new data wins, no crash).
+
+    Stage column groups (displacement / force / stress) use
+    ``_STAGE_MEASURE_COLUMN`` as the representative-column presence indicator
+    and ``_STAGE_COLUMNS`` for the full list of columns to copy.  ``mask``
+    uses an all-zero / absence check.
+
+    Args:
+        new_df: The tidy table produced by the current run.
+        old_df: The tidy table read from the existing on-disk container.
+
+    Returns:
+        A tidy DataFrame with ``COLUMNS`` column order, possibly enriched with
+        preserved stages from ``old_df``.
+    """
+    # --- Grid compatibility check ---
+    new_t = np.sort(new_df["t[min]"].unique())
+    old_t = np.sort(old_df["t[min]"].unique())
+    if len(new_t) != len(old_t) or not np.allclose(new_t, old_t, atol=1e-9):
+        print(
+            "merge_tidy_preserving: t[min] values differ between new and existing "
+            "containers — skipping merge, new data wins."
+        )
+        return new_df
+
+    new_row_max = int(new_df["row"].max())
+    old_row_max = int(old_df["row"].max())
+    new_col_max = int(new_df["col"].max())
+    old_col_max = int(old_df["col"].max())
+    if new_row_max != old_row_max or new_col_max != old_col_max:
+        print(
+            f"merge_tidy_preserving: grid extents differ "
+            f"(new row/col max {new_row_max}/{new_col_max}, "
+            f"existing {old_row_max}/{old_col_max}) — skipping merge, new data wins."
+        )
+        return new_df
+
+    # Align old_df rows to new_df's ordering via a left-join on the mesh keys.
+    old_aligned = new_df[_MERGE_KEYS].merge(
+        old_df, on=_MERGE_KEYS, how="left", suffixes=("", "_old")
+    )
+
+    result_df = new_df.copy()
+
+    # Fill measure stages (displacement / force / stress).
+    for stage, rep_col in _STAGE_MEASURE_COLUMN.items():
+        stage_cols = _STAGE_COLUMNS[stage]
+        # Stage absent or all-NaN in new_df?
+        new_absent = (rep_col not in new_df.columns) or new_df[rep_col].isna().all()
+        # Stage present (non-NaN) in old_df?
+        old_present = (rep_col in old_df.columns) and (not old_df[rep_col].isna().all())
+        if new_absent and old_present:
+            for col in stage_cols:
+                if col in old_aligned.columns:
+                    result_df[col] = old_aligned[col].to_numpy()
+
+    # Fill mask (all-zero / absence check).
+    new_mask_absent = ("mask" not in new_df.columns) or (new_df["mask"] == 0).all()
+    old_mask_present = ("mask" in old_df.columns) and not (old_df["mask"] == 0).all()
+    if new_mask_absent and old_mask_present and "mask" in old_aligned.columns:
+        result_df["mask"] = old_aligned["mask"].to_numpy()
+
+    # Preserve COLUMNS ordering, include only columns present.
+    ordered_cols = [c for c in COLUMNS if c in result_df.columns]
+    return result_df[ordered_cols]
 
 
 # ---------------------------------------------------------------------------
@@ -512,12 +613,19 @@ def results_to_ntfm(
     inputs: Optional[Dict] = None,
     labels: Optional[Dict] = None,
     repo_path: Optional[Path] = None,
+    merge_existing: bool = True,
 ) -> Path:
     """End-to-end: write one experiment's results to a ``.ntfm`` container.
 
     ``config`` is the resolved per-experiment run config (``asdict`` of the
     effective ``UnifiedParameters``). ``labels`` are the per-experiment
     design tags the §5 aggregator groups by.
+
+    When ``merge_existing`` is ``True`` (the default) and ``path`` already
+    exists, the existing container is read and any stage that is absent/all-NaN
+    in the new data but present in the existing container is preserved via
+    ``merge_tidy_preserving``.  Set ``merge_existing=False`` to force a pure
+    overwrite (previously-saved stages will be erased).
     """
     df = dataframe_from_results(
         displacement_result=displacement_result,
@@ -525,6 +633,17 @@ def results_to_ntfm(
         stress_result=stress_result,
         mask=mask,
     )
+
+    if merge_existing and Path(path).exists():
+        try:
+            old_df, _ = read_ntfm(path)
+            df = merge_tidy_preserving(df, old_df)
+        except Exception as e:
+            print(
+                f"results_to_ntfm: could not read existing container for merge "
+                f"({path!r}): {e!r} — writing new data without merging."
+            )
+
     metadata = build_metadata(
         config=config, inputs=inputs, labels=labels, repo_path=repo_path
     )

@@ -1,8 +1,8 @@
-"""Batch caching is opt-in and stage-resume reads from the ``.ntfm`` (ROADMAP §4).
+"""Batch stage-resume reads from the ``.ntfm`` (ROADMAP §4).
 
-The ``.ntfm`` is the sole persisted result: displacement/force/stress are no
-longer cached as ``.npy``. Stage-resume reconstructs the upstream field from the
-prior run's ``.ntfm``. The only opt-in cache is the preprocessed ``.tif``.
+The ``.ntfm`` is the sole persisted result for displacement/force/stress.
+Preprocessed ``.tif`` images are now always written (unconditionally) so that
+preprocessing has the same persistence guarantee as every downstream stage.
 """
 
 from types import SimpleNamespace
@@ -92,9 +92,9 @@ def test_stress_handler_skips_when_no_ntfm(tmp_path):
     assert result is None
 
 
-# --- preprocessed .tif cache is opt-in -------------------------------------
+# --- preprocessed .tif files are always persisted --------------------------
 
-def _drive_preprocessing(tmp_path, monkeypatch, save_cache):
+def _drive_preprocessing(tmp_path, monkeypatch, save_cache=False):
     analysis = _analysis(
         input_files={"beads": "beads.tif", "reference": "ref.tif"},
         save_cache=save_cache,
@@ -116,11 +116,13 @@ def _drive_preprocessing(tmp_path, monkeypatch, save_cache):
     return saved
 
 
-def test_preprocessing_cache_off_by_default(tmp_path, monkeypatch):
+def test_preprocessing_tiffs_always_written(tmp_path, monkeypatch):
+    # TIFFs are written unconditionally; save_cache no longer gates them.
     saved = _drive_preprocessing(tmp_path, monkeypatch, save_cache=False)
-    assert saved == []
+    assert [p.name for p in saved] == ["preprocessed_beads.tif", "preprocessed_reference.tif"]
 
 
-def test_preprocessing_cache_written_when_enabled(tmp_path, monkeypatch):
+def test_preprocessing_tiffs_written_with_save_cache_true(tmp_path, monkeypatch):
+    # Behaviour is unchanged when save_cache=True — still written.
     saved = _drive_preprocessing(tmp_path, monkeypatch, save_cache=True)
     assert [p.name for p in saved] == ["preprocessed_beads.tif", "preprocessed_reference.tif"]

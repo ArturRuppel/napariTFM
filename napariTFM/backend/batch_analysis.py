@@ -32,6 +32,72 @@ from napariTFM.utilities import ntfm
 from napariTFM.utilities.batch_output import resolve_output_plan
 
 
+def save_calibrated_tiff(data: np.ndarray, filepath: Path, pixel_size: float,
+                         frame_interval: float) -> None:
+    """Save *data* as a calibrated TIFF with ImageJ-compatible metadata.
+
+    This is the shared writer used by both the batch pipeline and the
+    interactive widget so that preprocessed images are byte-identical
+    regardless of how they were produced.
+
+    Args:
+        data: numpy array to save
+        filepath: path where to save the file
+        pixel_size: spatial calibration in µm/pixel
+        frame_interval: temporal calibration in minutes/frame
+    """
+    if data is None:
+        return
+
+    # Convert to 16-bit
+    data_normalized = data.astype(float)
+    data_normalized = (data_normalized - data_normalized.min()) / (
+            data_normalized.max() - data_normalized.min())
+    data_16bit = (data_normalized * 65535).astype(np.uint16)
+
+    # Create ImageJ-compatible metadata
+    imagej_metadata = {
+        'ImageJ': '1.53c',
+        'spacing': pixel_size,
+        'unit': 'um',
+        'frame_interval': frame_interval,
+        'frame_interval_unit': 'minute'
+    }
+
+    # For Z-stacks or time series, specify dimensions
+    if data.ndim > 2:
+        imagej_metadata.update({
+            'frames': data.shape[0],
+            'slices': 1,
+            'channels': 1
+        })
+
+    # Combine metadata for compatibility
+    metadata = {
+        'PhysicalSizeX': pixel_size,
+        'PhysicalSizeXUnit': 'um',
+        'PhysicalSizeY': pixel_size,
+        'PhysicalSizeYUnit': 'um',
+        'TimeIncrement': frame_interval,
+        'TimeIncrementUnit': 'min',
+        **imagej_metadata
+    }
+
+    # Save with metadata using tifffile
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    tifffile.imwrite(
+        str(filepath),
+        data_16bit,
+        imagej=True,
+        metadata=metadata,
+        resolution=(1 / pixel_size, 1 / pixel_size),  # resolution in pixels per unit
+        photometric='minisblack'
+    )
+
+    print(f"Saved calibrated TIFF: {filepath}")
+
+
 # TODO black image when only one frame for cell-force overlay visualization
 class TeeLogger:
     """Custom logger that captures print statements and logging output to both console and file."""
@@ -670,32 +736,32 @@ class BatchAnalysis:
         if cell_results:
             preprocessed['cells'] = np.stack([r.processed_image for r in cell_results])
 
-        # Preprocessed images are the one cache item the .ntfm does NOT hold
-        # (they live upstream of the analysis grid). They are written only as an
-        # opt-in stage-resume cache (ROADMAP §4); off by default.
-        if self.config.get('save_cache', False):
-            pixel_size = self.config['parameters']['pixel_size']
-            frame_interval = self.config['parameters']['frame_interval']
+        # Preprocessed images give preprocessing the same persistence guarantee
+        # every downstream stage has: they are always written so that the
+        # preprocessing dot reliably shows "done" on reload and stage-resume can
+        # skip straight to displacement without re-running preprocessing.
+        pixel_size = self.config['parameters']['pixel_size']
+        frame_interval = self.config['parameters']['frame_interval']
 
+        self._save_calibrated_tiff(
+            preprocessed['beads'],
+            tfm_folder / "preprocessed_beads.tif",
+            pixel_size,
+            frame_interval
+        )
+        self._save_calibrated_tiff(
+            preprocessed['reference'],
+            tfm_folder / "preprocessed_reference.tif",
+            pixel_size,
+            frame_interval
+        )
+        if 'cells' in preprocessed:
             self._save_calibrated_tiff(
-                preprocessed['beads'],
-                tfm_folder / "preprocessed_beads.tif",
+                preprocessed['cells'],
+                tfm_folder / "preprocessed_cells.tif",
                 pixel_size,
                 frame_interval
             )
-            self._save_calibrated_tiff(
-                preprocessed['reference'],
-                tfm_folder / "preprocessed_reference.tif",
-                pixel_size,
-                frame_interval
-            )
-            if 'cells' in preprocessed:
-                self._save_calibrated_tiff(
-                    preprocessed['cells'],
-                    tfm_folder / "preprocessed_cells.tif",
-                    pixel_size,
-                    frame_interval
-                )
 
         self._emit('stage_finished', 'preprocessing', preprocessed)
         print(f"Preprocessing completed in {self._format_duration(time() - start_time)}")
@@ -1195,63 +1261,8 @@ class BatchAnalysis:
 
     def _save_calibrated_tiff(self, data: np.ndarray, filepath: Path, pixel_size: float,
                               frame_interval: float) -> None:
-        """
-        Save data as calibrated TIFF file with ImageJ-compatible metadata.
-
-        Args:
-            data: numpy array to save
-            filepath: path where to save the file
-            pixel_size: spatial calibration in µm/pixel
-            frame_interval: temporal calibration in minutes/frame
-        """
-        if data is None:
-            return
-
-        # Convert to 16-bit
-        data_normalized = data.astype(float)
-        data_normalized = (data_normalized - data_normalized.min()) / (
-                data_normalized.max() - data_normalized.min())
-        data_16bit = (data_normalized * 65535).astype(np.uint16)
-
-        # Create ImageJ-compatible metadata
-        imagej_metadata = {
-            'ImageJ': '1.53c',
-            'spacing': pixel_size,
-            'unit': 'um',
-            'frame_interval': frame_interval,
-            'frame_interval_unit': 'minute'
-        }
-
-        # For Z-stacks or time series, specify dimensions
-        if data.ndim > 2:
-            imagej_metadata.update({
-                'frames': data.shape[0],
-                'slices': 1,
-                'channels': 1
-            })
-
-        # Combine metadata for compatibility
-        metadata = {
-            'PhysicalSizeX': pixel_size,
-            'PhysicalSizeXUnit': 'um',
-            'PhysicalSizeY': pixel_size,
-            'PhysicalSizeYUnit': 'um',
-            'TimeIncrement': frame_interval,
-            'TimeIncrementUnit': 'min',
-            **imagej_metadata
-        }
-
-        # Save with metadata using tifffile
-        tifffile.imwrite(
-            str(filepath),
-            data_16bit,
-            imagej=True,
-            metadata=metadata,
-            resolution=(1 / pixel_size, 1 / pixel_size),  # resolution in pixels per unit
-            photometric='minisblack'
-        )
-
-        print(f"Saved calibrated TIFF: {filepath}")
+        """Delegate to the module-level :func:`save_calibrated_tiff`."""
+        save_calibrated_tiff(data, filepath, pixel_size, frame_interval)
 
     def _cleanup(self) -> None:
         """Clean up resources."""
