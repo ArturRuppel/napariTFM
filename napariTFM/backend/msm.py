@@ -49,20 +49,12 @@ from napariTFM.backend.mesh_generator import MeshGenerator
 from napariTFM.backend.msm_numba_functions import *
 from napariTFM.backend.parameter_dataclasses import MeshParameters, MSMParameters
 from napariTFM.backend.parameter_validation import validate_msm_parameters
+from napariTFM.backend.stress import StressResult
 
-
-@dataclass
-class MSMResult:
-    """Results from Monolayer Stress Microscopy calculations."""
-    stress_tensor: np.ndarray
-    nodes: List[np.ndarray]
-    elements: List[np.ndarray]
-    condition_number: float
-    residual: float
-    parameters: MSMParameters
-    physical_scale: dict
-    original_shape: tuple
-    stress_shape: tuple
+# MSM is one of two interchangeable stress engines; both return the unified
+# :class:`StressResult` (see :mod:`napariTFM.backend.stress`). ``MSMResult`` is
+# kept as a back-compat alias so existing imports keep resolving.
+MSMResult = StressResult
 
 
 def process_mask_data(
@@ -206,7 +198,7 @@ def calculate_stresses(
         condition_numbers.append(condition_number)
         residuals.append(residual)
 
-        yield MSMResult(
+        yield StressResult(
             stress_tensor=stress_stack[:frame + 1],
             nodes=nodes,
             elements=elements,
@@ -215,10 +207,11 @@ def calculate_stresses(
             parameters=params,
             physical_scale=physical_scale,
             original_shape=force_field.shape[1:3],
-            stress_shape=stress_stack.shape[1:3]
+            stress_shape=stress_stack.shape[1:3],
+            method="MSM",
         ), frame + 1, total_frames
 
-    return MSMResult(
+    return StressResult(
         stress_tensor=stress_stack,
         nodes=nodes_stack,
         elements=elements_stack,
@@ -227,7 +220,8 @@ def calculate_stresses(
         parameters=params,
         physical_scale=physical_scale,
         original_shape=force_field.shape[1:3],
-        stress_shape=stress_stack.shape[1:3]
+        stress_shape=stress_stack.shape[1:3],
+        method="MSM",
     )
 
 

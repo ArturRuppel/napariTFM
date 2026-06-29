@@ -252,6 +252,8 @@ class WorkflowParameterPanel(QWidget):
             ("f_max", "Max Force (Pa)", "float", 0.1, 10000.0, 1.0, 1, None),
         ]),
         ("Stress", [
+            ("stress_method", "Method", "choice", None, None, None, None,
+             ["MSM", "BISM"]),
             ("density_factor", "Density Factor", "float", 0.005, 0.1, 0.001, 3, None),
             ("mesh_algorithm", "Mesh Algorithm", "choice", None, None, None, None,
              ["Frontal-Del.", "Delaunay", "MeshAdapt", "BAMG", "FD Quads", "Para. Pack"]),
@@ -964,12 +966,16 @@ class napariTFMWidget(QWidget):
         )
         self._active_batch = analyzer
         self.experiments_list.set_run_all_active(True)
+        # The sink takes over layer visibility per stage while it streams
+        # (worklist §4); snapshot now so end_run restores it however the run ends.
+        sink.begin_run()
         try:
             analyzer.process_all_folders()
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Run-all failed")
             QMessageBox.critical(self, "Run all", f"Batch run failed: {exc}")
         finally:
+            sink.end_run()
             self._active_batch = None
             self.experiments_list.set_run_all_active(False)
             self.refresh_stage_statuses()

@@ -135,6 +135,27 @@ class VisualizationManager(ErrorHandlingMixin):
         for layer in self.viewer.layers:
             layer.visible = layer.name in keep
 
+    def capture_layer_visibility(self) -> dict:
+        """Snapshot ``{layer_name: visible}`` for every layer in the viewer.
+
+        Paired with :meth:`restore_layer_visibility` to make the streaming
+        sink's per-stage :meth:`isolate_layers` takeover reversible (worklist
+        §4): the shell snapshots before a run-all and restores after.
+        """
+        return {layer.name: layer.visible for layer in self.viewer.layers}
+
+    def restore_layer_visibility(self, snapshot: dict) -> None:
+        """Restore the visibility recorded by :meth:`capture_layer_visibility`.
+
+        Only layers present in *snapshot* are touched, so a layer the run
+        created (e.g. the final stage's result) keeps whatever visibility the
+        last :meth:`isolate_layers` left it with — the user's original layers
+        come back exactly as they were, and the run's last stage stays shown.
+        """
+        for layer in self.viewer.layers:
+            if layer.name in snapshot:
+                layer.visible = snapshot[layer.name]
+
     def _upscale_field(self, field: np.ndarray, downscale_factor: int) -> np.ndarray:
         """Upscale a vector field for visualization."""
         if downscale_factor <= 1:

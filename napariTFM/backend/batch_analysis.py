@@ -24,6 +24,7 @@ from napariTFM.backend.displacement_analysis import (
     calculate_displacement_field,
 )
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
+from napariTFM.backend.bism import calculate_bism_stresses
 from napariTFM.backend.msm import calculate_stresses, generate_mesh_stack, process_mask_data
 from napariTFM.backend.ntfm_writer import write_experiment_ntfm
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters, UnifiedParameters
@@ -1034,6 +1035,10 @@ class BatchAnalysis:
             ])
             print(f"After resize - Mask pixels > 0: {np.sum(mask_data > 0)}")
 
+        # BISM is mesh-free; it skips the whole mesh-generation phase below.
+        if params.stress_method == "BISM":
+            return self._run_bism_stress(force_data, mask_data, params, start_time)
+
         try:
             # Initialize mesh generation
             print("Generating meshes for all frames...")
@@ -1101,6 +1106,51 @@ class BatchAnalysis:
 
         except Exception as e:
             print(f"Error during stress analysis: {str(e)}")
+            return None
+
+    def _run_bism_stress(self, force_data, mask_data, params, start_time):
+        """BISM stress stage: mesh-free Bayesian inversion.
+
+        Emits the same ``stage_started``/``stage_frame``/``stage_finished`` events
+        as the MSM path so the sink, viewer stream and ``.ntfm`` writer stay
+        engine-agnostic — only the compute differs (no mesh phase).
+        """
+        try:
+            fr_params = getattr(force_data, 'parameters', None)
+            downscale = getattr(fr_params, 'downscale_factor', 1) if fr_params is not None else 1
+            self._emit('stage_started', 'stress',
+                       int(force_data.force_field.shape[0]), {
+                           'max_stress': params.max_stress,
+                           'downscale_factor': downscale,
+                       })
+
+            stress_generator = calculate_bism_stresses(
+                force_field=force_data.force_field,
+                masks=mask_data,
+                params=params,
+            )
+
+            final_result = None
+            try:
+                while True:
+                    stress_result, frame, total = next(stress_generator)
+                    self._log_stress_progress(stress_result, frame, total)
+                    # Cumulative stack; newest frame is its last slice. 1-based → 0.
+                    self._emit('stage_frame', 'stress', frame - 1,
+                               stress_result.stress_tensor[-1])
+            except StopIteration as e:
+                final_result = e.value
+
+            if final_result is None:
+                raise RuntimeError("BISM stress calculation failed")
+
+            self._emit('stage_finished', 'stress', final_result)
+            print(f"Stress analysis (BISM) completed in "
+                  f"{self._format_duration(time() - start_time)}")
+            return final_result
+
+        except Exception as e:
+            print(f"Error during BISM stress analysis: {str(e)}")
             return None
 
     def _unified_parameters(self) -> UnifiedParameters:
@@ -1248,7 +1298,9 @@ class BatchAnalysis:
                         plot_normal_stress=self.config['visualizations']['normal_stress']
                     )
 
-                if self.config['visualizations']['mesh']:
+                # BISM is mesh-free (data.nodes is None); only the FEM MSM engine
+                # has a mesh to render.
+                if self.config['visualizations']['mesh'] and getattr(data, 'nodes', None) is not None:
                     print("Generating mesh visualization...")
                     viz_saver.save_mesh_visualization(data)
 

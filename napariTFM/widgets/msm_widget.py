@@ -7,6 +7,7 @@ from qtpy.QtCore import Signal, QObject
 from qtpy.QtWidgets import QApplication, QHBoxLayout, QMessageBox
 
 from napariTFM.backend.parameter_dataclasses import MSMParameters
+from napariTFM.backend.bism import calculate_bism_stresses
 from napariTFM.backend.msm import (
     calculate_stresses,
     generate_mesh_stack,
@@ -69,30 +70,33 @@ class MSMController(QObject):
             if force_results is None:
                 raise ValueError("No force data available")
 
-            # First generate all meshes in the main thread
-            print("Generating meshes for all frames...")
-            mesh_generator = generate_mesh_stack(masks, params)
-            mesh_data = []
+            use_bism = params.stress_method == "BISM"
 
-            # Process mesh generation results in main thread
-            try:
-                while True:
-                    nodes, elements, quality_metrics, frame, total = next(mesh_generator)
-                    mesh_data.append((nodes, elements, quality_metrics))
-                    self._update_progress(
-                        int((frame + 1) / total * 45),  # Use first 45% for mesh generation
-                        f"Generating mesh: Frame {frame + 1}/{total}"
-                    )
-                    # Keep UI responsive
-                    QApplication.processEvents()
-            except StopIteration as e:
-                # Get the final mesh results if returned
-                final_mesh_results = e.value
-                if final_mesh_results:
-                    mesh_data = final_mesh_results
+            # MSM needs a per-frame FE mesh; BISM is mesh-free, so it skips this
+            # whole phase. Mesh generation runs in the main thread for MSM.
+            mesh_data = None
+            if not use_bism:
+                print("Generating meshes for all frames...")
+                mesh_generator = generate_mesh_stack(masks, params)
+                mesh_data = []
+                try:
+                    while True:
+                        nodes, elements, quality_metrics, frame, total = next(mesh_generator)
+                        mesh_data.append((nodes, elements, quality_metrics))
+                        self._update_progress(
+                            int((frame + 1) / total * 45),  # First 45% for mesh generation
+                            f"Generating mesh: Frame {frame + 1}/{total}"
+                        )
+                        # Keep UI responsive
+                        QApplication.processEvents()
+                except StopIteration as e:
+                    # Get the final mesh results if returned
+                    final_mesh_results = e.value
+                    if final_mesh_results:
+                        mesh_data = final_mesh_results
 
-            # Update status for numba compilation
-            QApplication.processEvents()
+                # Update status for numba compilation
+                QApplication.processEvents()
 
             # Bind the three stress layers up front so each frame streams in live
             # (preserving the contrast/visibility the user set) and the slider
@@ -108,13 +112,20 @@ class MSMController(QObject):
             @thread_worker
             def stress_calculation_worker():
                 try:
-                    # Get stress generator with pre-generated meshes
-                    stress_generator = calculate_stresses(
-                        force_field=force_results.force_field,
-                        masks=masks,
-                        params=params,
-                        mesh_data=mesh_data
-                    )
+                    # BISM solves on the grid (no mesh); MSM uses the pre-built meshes.
+                    if use_bism:
+                        stress_generator = calculate_bism_stresses(
+                            force_field=force_results.force_field,
+                            masks=masks,
+                            params=params,
+                        )
+                    else:
+                        stress_generator = calculate_stresses(
+                            force_field=force_results.force_field,
+                            masks=masks,
+                            params=params,
+                            mesh_data=mesh_data
+                        )
 
                     while True:
                         result, current_frame, total = next(stress_generator)
@@ -144,12 +155,21 @@ class MSMController(QObject):
                 # downstream steps. Other layers' visibility is left untouched.
                 self.data_manager.set_stress_results(final_result, source="generated", dirty=True)
 
-                # Update status with final metrics
-                status_msg = (
-                    f"Analysis completed successfully\n"
-                    f"Average condition number: {final_result.condition_number:.1e}\n"
-                    f"Average residual: {final_result.residual:.1e}"
-                )
+                # Update status with engine-appropriate final metrics: MSM reports
+                # FEM solver stability, BISM reports traction-reconstruction R².
+                if final_result.method == "BISM":
+                    r2 = final_result.r2_traction
+                    r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
+                    status_msg = (
+                        f"Analysis completed successfully (BISM)\n"
+                        f"Mean traction-reconstruction R²: {r2_text}"
+                    )
+                else:
+                    status_msg = (
+                        f"Analysis completed successfully\n"
+                        f"Average condition number: {final_result.condition_number:.1e}\n"
+                        f"Average residual: {final_result.residual:.1e}"
+                    )
                 self._update_progress(100, status_msg)
 
                 self.analysis_completed.emit(final_result)
@@ -209,12 +229,19 @@ class MSMController(QObject):
             mask = masks[current_frame] if masks.ndim > 2 else masks
             force_field = force_results.force_field[current_frame] if force_results.force_field.ndim > 3 else force_results.force_field
 
-            # Calculate stress field for current frame
-            stress_generator = calculate_stresses(
-                force_field=force_field[np.newaxis, ...],
-                masks=mask[np.newaxis, ...],
-                params=params,
-            )
+            # Calculate stress field for current frame (mesh-free for BISM)
+            if params.stress_method == "BISM":
+                stress_generator = calculate_bism_stresses(
+                    force_field=force_field[np.newaxis, ...],
+                    masks=mask[np.newaxis, ...],
+                    params=params,
+                )
+            else:
+                stress_generator = calculate_stresses(
+                    force_field=force_field[np.newaxis, ...],
+                    masks=mask[np.newaxis, ...],
+                    params=params,
+                )
 
             try:
                 # Get stress results
@@ -265,12 +292,20 @@ class MSMController(QObject):
                     if current_index != len(self.viewer.layers) - 1:  # -1 position (top)
                         self.viewer.layers.move(current_index, -1)
 
-                # Create status message with key metrics
-                status_msg = (
-                    f"Stress preview generated for frame {current_frame}\n"
-                    f"Condition number: {result.condition_number:.1e}\n"
-                    f"Residual: {result.residual:.1e}"
-                )
+                # Create status message with engine-appropriate metrics.
+                if result.method == "BISM":
+                    r2 = result.r2_traction
+                    r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
+                    status_msg = (
+                        f"Stress preview generated for frame {current_frame} (BISM)\n"
+                        f"Traction-reconstruction R²: {r2_text}"
+                    )
+                else:
+                    status_msg = (
+                        f"Stress preview generated for frame {current_frame}\n"
+                        f"Condition number: {result.condition_number:.1e}\n"
+                        f"Residual: {result.residual:.1e}"
+                    )
 
                 self._update_progress(100, status_msg)
                 return result
@@ -490,7 +525,7 @@ class MSMWidget(BaseAnalysisWidget):
     def _handle_parameter_change(self, param_name: str, value: Any):
         """Refresh cached MSM parameters when an individual parameter changes."""
         stress_params = {
-            'density_factor', 'mesh_algorithm', 'use_optimization',
+            'stress_method', 'density_factor', 'mesh_algorithm', 'use_optimization',
             'poisson_ratio_cells', 'max_stress'
         }
         if param_name in stress_params:

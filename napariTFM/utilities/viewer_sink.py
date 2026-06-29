@@ -38,11 +38,51 @@ class ViewerSink(PipelineSink):
         disables tracking.
     """
 
+    # Per-stage active-layer sets (worklist §4). While a stage streams, the sink
+    # takes over layer visibility and shows only its own layers, so a run-all
+    # never blends the stage in flight with the previous stage's overlay.
+    # Preprocessing is two-phase: beads + reference stream first, then cells.
+    _STAGE_LAYERS = {
+        'displacement': ['Displacement Magnitude', 'Displacement Vectors'],
+        'force': ['Force Magnitude', 'Force Vectors'],
+        'stress': ['Normal Stress XX', 'Normal Stress YY', 'Average Normal Stress'],
+    }
+    _PREPROC_BEADS_REF = ['Preprocessed Beads', 'Preprocessed Reference']
+    _PREPROC_CELLS = ['Preprocessed Cells']
+
     def __init__(self, data_manager, visualization_manager, pump=None, on_experiment=None):
         self.data_manager = data_manager
         self.vis = visualization_manager
         self._pump = pump
         self._on_experiment = on_experiment
+        # Set once the preprocessing stage has flipped to its cell-only phase, so
+        # the flip fires on the first cell frame and never repeats mid-stage.
+        self._preproc_cells_isolated = False
+        # Pre-run visibility snapshot, held between begin_run/end_run; ``None``
+        # outside a run so end_run is a safe no-op (and idempotent).
+        self._restore_visibility = None
+
+    # --- run boundary (§4) ------------------------------------------------
+
+    def begin_run(self):
+        """Snapshot layer visibility before the run takes the viewer over.
+
+        The shell calls this once before the orchestrator starts so the
+        per-stage isolation below is reversible: ``end_run`` puts every
+        pre-existing layer back the way the user had it.
+        """
+        self._restore_visibility = self.vis.capture_layer_visibility()
+
+    def end_run(self):
+        """Hand visibility back to the user (restore the ``begin_run`` snapshot).
+
+        A no-op if no snapshot is held (no ``begin_run``, or already restored),
+        so the shell can call it unconditionally in its ``finally``.
+        """
+        if self._restore_visibility is None:
+            return
+        self.vis.restore_layer_visibility(self._restore_visibility)
+        self._restore_visibility = None
 
     # --- lifecycle hooks --------------------------------------------------
 
@@ -58,6 +98,9 @@ class ViewerSink(PipelineSink):
         info = info or {}
         if stage == 'preprocessing':
             self._begin_preprocessing(info)
+            # Start in the beads+reference phase; the first cell frame flips it.
+            self._preproc_cells_isolated = False
+            self.vis.isolate_layers(self._PREPROC_BEADS_REF)
         elif stage in ('displacement', 'force'):
             self.vis.begin_vector_field_stream(stage, num_frames, {
                 'v_max': info['v_max'],
@@ -65,19 +108,26 @@ class ViewerSink(PipelineSink):
                 'arrow_scale': info['arrow_scale'],
                 'downscale_factor': info['downscale_factor'],
             })
+            self.vis.isolate_layers(self._STAGE_LAYERS[stage])
         elif stage == 'stress':
             self.vis.begin_stress_stream(
                 num_frames=num_frames,
                 max_stress=info['max_stress'],
                 downscale_factor=info['downscale_factor'],
             )
+            self.vis.isolate_layers(self._STAGE_LAYERS['stress'])
         self._repaint()
 
     def stage_frame(self, stage, frame_index, frame):
         if stage == 'preprocessing':
-            # ``frame`` is a {channel: image} mapping (one key per yield).
+            # ``frame`` is a {channel: image} mapping (one key per yield). The
+            # first cell frame flips isolation from beads+reference to cells-only
+            # (worklist §4) — beads and reference stream before any cell frame.
             for channel, image in frame.items():
                 self.vis.stream_preprocessing_frame(channel, frame_index, image)
+                if channel == 'cells' and not self._preproc_cells_isolated:
+                    self._preproc_cells_isolated = True
+                    self.vis.isolate_layers(self._PREPROC_CELLS)
         elif stage in ('displacement', 'force'):
             self.vis.stream_vector_field_frame(stage, frame_index, frame)
         elif stage == 'stress':

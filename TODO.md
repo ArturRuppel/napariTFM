@@ -3,38 +3,26 @@
 > Accomplished items are pruned (see git history for completed UI-redesign
 > slices P0–P8, the UI-Coherence roadmap, the BISM port, the 2026-06-29
 > batch/cancel/colorbar/sink work, the 2026-06-30 unified-logging (§1) +
-> per-position Export-to-CSV (§2) work, and the §3 streaming-follows-active-
-> position work). What remains below is **open work only**, ranked
-> easy-wins-first.
+> per-position Export-to-CSV (§2) work, the §3 streaming-follows-active-
+> position work, and the §4 per-stage layer isolation during streaming). What
+> remains below is **open work only**, ranked easy-wins-first.
 
 ---
 
 ## Ranked open work (2026-06-29)
 
-### 4. Per-stage layer isolation during streaming  ·  M
-During batch streaming **and** live "Run all", the sink should **take over layer
-visibility** and show only the layers relevant to the stage in flight; restore
-prior visibility when the run ends. **Distinct from preview** — preview must
-*never* take control of layer state.
-- preprocessing → **beads + ref only**, additive blending in the two colors;
-  then **cell only**.
-- displacement → displacement layers only.
-- force → force layers only.
-- stress → stress layers only.
-Reuse the existing `VisualizationManager.isolate_layers` infrastructure; define a
-per-stage active-layer set and apply it on `stage_started`. Builds on the §3
-`experiment_started`/sink-takeover plumbing (both are "the streaming sink takes
-over the UI to show what it's doing") — the sink already follows the active
-position; this extends it to take over layer visibility per stage.
-
-### 5. Replace MSM with BISM  ·  M–L
-Swap Monolayer Stress Microscopy for the validated **BISM** port
-(`napariTFM/_validation/benchmark_MSM/bism.py`; no material params, gives a
-stress field + uncertainty). BISM needs **no FE mesh**, which **dissolves the
-meshing/mesh-rendering path** — the part of #7 least likely to map onto a napari
-layer. Wire BISM into the production stress stage; confirm downstream consumers
-of the stress products still get what they expect. Retires the FE-mesh overlay
-rendering. **Do this before #6.**
+### 5. BISM as a selectable stress engine  ·  DONE (2026-06-30)
+~~Replace MSM with BISM~~ → **added BISM alongside MSM** (user's call: keep MSM
+intact, switch via a **Stress Method** dropdown). The validated BISM core moved
+to `napariTFM/backend/bism.py`; a unified `backend/stress.py::StressResult` both
+engines return (`MSMResult` is now an alias). `params.stress_method` ("MSM"/"BISM")
+dispatches in the batch (`_run_bism_stress`) and interactive (`MSMController`)
+runners; BISM skips the mesh phase. **FE mesh kept** (it's MSM's, still works).
+Deferred follow-ups: persist BISM's per-pixel **uncertainty** into the `.ntfm`
+columns + a viewer layer; optionally retire the now-redundant FE-material params
+from the UI. Note: BISM still leaves the meshing path in place, so #7's
+"mesh doesn't map onto a napari layer" tension is **not** dissolved — revisit if
+BISM becomes the default.
 
 ### 6. napari-native visualization engine  ·  L  (after #5)
 Swap the bespoke renderer for a **napari-native** path built on

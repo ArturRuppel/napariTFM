@@ -160,8 +160,8 @@ class ParameterManager(QObject):
                 'force_vector_stride', 'force_arrow_scale', 'f_max'
             ],
             ParameterCategory.STRESS: [
-                'density_factor', 'mesh_algorithm', 'use_optimization',
-                'poisson_ratio_cells', 'max_stress'
+                'stress_method', 'density_factor', 'mesh_algorithm',
+                'use_optimization', 'poisson_ratio_cells', 'max_stress'
             ],
         }
 

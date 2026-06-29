@@ -87,7 +87,12 @@ MSM_YOUNG_MODULUS: float = 1.0
 
 @dataclass
 class MSMParameters:
-    """Parameters for MSM calculations"""
+    """Parameters for stress calculations (MSM or BISM engine)."""
+    # Engine selector: "MSM" (FEM, material params + mesh) or "BISM" (Bayesian,
+    # mesh-free, no material params). The mesh/material fields below are read
+    # only by the MSM engine.
+    stress_method: str = "MSM"
+
     # Mesh parameters
     density_factor: float = 0.01
     mesh_algorithm: str = 'Frontal-Del.'
@@ -150,6 +155,7 @@ class UnifiedParameters:
     f_max: float = 500.0  # Pa
 
     # Stress parameters
+    stress_method: str = "MSM"   # "MSM" (FEM) or "BISM" (Bayesian, mesh-free)
     density_factor: float = 0.01
     mesh_algorithm: str = 'Frontal-Del.'
     use_optimization: bool = True
@@ -207,6 +213,7 @@ class UnifiedParameters:
     def to_msm_parameters(self) -> MSMParameters:
         """Create MSMParameters from unified parameters"""
         return MSMParameters(
+            stress_method=self.stress_method,
             density_factor=self.density_factor,
             mesh_algorithm=self.mesh_algorithm,
             use_optimization=self.use_optimization,

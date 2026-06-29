@@ -47,6 +47,7 @@ class _StubParameterManager(QObject):
             "threshold": 0.0,
             "dilation": 10,
             "smoothing_sigma": 10.0,
+            "stress_method": "MSM",
             "density_factor": 0.01,
             "mesh_algorithm": "Frontal-Del.",
             "use_optimization": True,
@@ -149,6 +150,14 @@ class _StubVisualizationManager:
     def __init__(self, viewer, data_manager):
         self.viewer = viewer
         self.data_manager = data_manager
+
+    # Run-all snapshots/restores layer visibility around the streaming
+    # takeover (worklist §4); the stub has no real viewer, so these no-op.
+    def capture_layer_visibility(self):
+        return {}
+
+    def restore_layer_visibility(self, snapshot):
+        pass
 
 
 class _StubController(QObject):

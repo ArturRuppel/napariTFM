@@ -15,6 +15,20 @@ from napariTFM.utilities.viewer_sink import ViewerSink
 class FakeVis:
     def __init__(self):
         self.calls = []
+        # Visibility-takeover (worklist §4): isolate calls are recorded
+        # separately so per-stage ordering assertions on ``calls`` stay stable.
+        self.isolations = []
+        self.visibility = {}
+        self.restored = None
+
+    def isolate_layers(self, keep_names):
+        self.isolations.append(list(keep_names))
+
+    def capture_layer_visibility(self):
+        return dict(self.visibility)
+
+    def restore_layer_visibility(self, snapshot):
+        self.restored = dict(snapshot)
 
     def begin_vector_field_stream(self, kind, num_frames, vis_params):
         self.calls.append(("begin_vector", kind, num_frames, vis_params))
@@ -183,3 +197,98 @@ def test_experiment_started_pumps_the_event_loop():
     sink, vis, data = _sink(pump=lambda: pumps.append(1))
     sink.experiment_started("/data/pos_03")
     assert pumps == [1]
+
+
+# --- per-stage layer isolation (§4) --------------------------------------
+
+def test_displacement_stage_isolates_displacement_layers():
+    sink, vis, data = _sink()
+    sink.stage_started("displacement", 1, {
+        "v_max": 1.0, "vector_stride": 1, "arrow_scale": 1.0, "downscale_factor": 1,
+    })
+    assert vis.isolations == [["Displacement Magnitude", "Displacement Vectors"]]
+
+
+def test_force_stage_isolates_force_layers():
+    sink, vis, data = _sink()
+    sink.stage_started("force", 1, {
+        "v_max": 1.0, "vector_stride": 1, "arrow_scale": 1.0, "downscale_factor": 1,
+    })
+    assert vis.isolations == [["Force Magnitude", "Force Vectors"]]
+
+
+def test_stress_stage_isolates_stress_layers():
+    sink, vis, data = _sink()
+    sink.stage_started("stress", 1, {"max_stress": 1.0, "downscale_factor": 1})
+    assert vis.isolations == [
+        ["Normal Stress XX", "Normal Stress YY", "Average Normal Stress"],
+    ]
+
+
+def test_preprocessing_isolates_beads_ref_then_cells():
+    """Beads+reference stream first under their own isolation; the first cell
+    frame flips isolation to cells-only (worklist §4)."""
+    sink, vis, data = _sink()
+    sink.stage_started("preprocessing", 2, {
+        "beads_shape": (2, 4, 4),
+        "reference_shape": (4, 4),
+        "cells_shape": (2, 4, 4),
+    })
+    # On stage start: beads + reference only.
+    assert vis.isolations == [["Preprocessed Beads", "Preprocessed Reference"]]
+
+    sink.stage_frame("preprocessing", 0, {"beads": np.zeros((4, 4))})
+    sink.stage_frame("preprocessing", 0, {"reference": np.zeros((4, 4))})
+    # Bead/reference frames don't re-isolate.
+    assert vis.isolations == [["Preprocessed Beads", "Preprocessed Reference"]]
+
+    sink.stage_frame("preprocessing", 0, {"cells": np.zeros((4, 4))})
+    sink.stage_frame("preprocessing", 1, {"cells": np.zeros((4, 4))})
+    # First cell frame flips to cells-only; subsequent cell frames don't repeat.
+    assert vis.isolations == [
+        ["Preprocessed Beads", "Preprocessed Reference"],
+        ["Preprocessed Cells"],
+    ]
+
+
+def test_preprocessing_cell_phase_resets_each_experiment():
+    """A second preprocessing stage starts back in the beads+ref phase, so the
+    cell flip from the prior position can't leak across positions."""
+    sink, vis, data = _sink()
+    info = {"beads_shape": (1, 4, 4), "reference_shape": (4, 4), "cells_shape": (1, 4, 4)}
+    sink.stage_started("preprocessing", 1, info)
+    sink.stage_frame("preprocessing", 0, {"cells": np.zeros((4, 4))})
+    sink.stage_started("preprocessing", 1, info)
+    sink.stage_frame("preprocessing", 0, {"cells": np.zeros((4, 4))})
+    assert vis.isolations == [
+        ["Preprocessed Beads", "Preprocessed Reference"],
+        ["Preprocessed Cells"],
+        ["Preprocessed Beads", "Preprocessed Reference"],
+        ["Preprocessed Cells"],
+    ]
+
+
+# --- run-boundary visibility restore (§4) --------------------------------
+
+def test_begin_run_snapshots_and_end_run_restores_visibility():
+    sink, vis, data = _sink()
+    vis.visibility = {"Preprocessed Beads": True, "Force Magnitude": False}
+    sink.begin_run()
+    sink.end_run()
+    assert vis.restored == {"Preprocessed Beads": True, "Force Magnitude": False}
+
+
+def test_end_run_without_begin_is_noop():
+    sink, vis, data = _sink()
+    sink.end_run()  # must not raise
+    assert vis.restored is None
+
+
+def test_end_run_is_idempotent():
+    sink, vis, data = _sink()
+    vis.visibility = {"Force Magnitude": True}
+    sink.begin_run()
+    sink.end_run()
+    vis.restored = None
+    sink.end_run()  # second restore is a no-op
+    assert vis.restored is None

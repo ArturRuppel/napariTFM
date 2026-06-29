@@ -60,6 +60,7 @@ class _StubParameterManager(QObject):
             "threshold": 0.0,
             "dilation": 10,
             "smoothing_sigma": 10.0,
+            "stress_method": "MSM",
             "density_factor": 0.01,
             "mesh_algorithm": "Frontal-Del.",
             "use_optimization": True,
