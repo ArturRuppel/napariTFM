@@ -36,6 +36,11 @@ class DisplacementController(QObject):
         self.visualization_manager = visualization_manager
         self.active_workers = []
 
+        # Live-streaming progress counters: a run fills the magnitude stack and
+        # vector cache frame by frame, so progress is "frames done / total".
+        self._stream_total = 0
+        self._stream_done = 0
+
     # endregion === Initialization
 
     # region === Processing Execution
@@ -149,6 +154,12 @@ class DisplacementController(QObject):
 
             params = self.parameter_manager.get_displacement_parameters()
 
+            # Bind the magnitude + vectors layers up front so each frame can
+            # stream in live (preserving the contrast/visibility the user set)
+            # and the slider can follow it, instead of the whole result landing
+            # only when the run finishes.
+            self._begin_stream(params)
+
             # Create worker for processing
             worker = self._create_displacement_worker(
                 self.data_manager.preprocessed_reference,
@@ -159,7 +170,7 @@ class DisplacementController(QObject):
             self.active_workers.append(worker)
             self.analysis_started.emit()
 
-            worker.yielded.connect(self._handle_progress)
+            worker.yielded.connect(self._on_frame_processed)
             worker.returned.connect(self._handle_analysis_results)
             worker.errored.connect(self._handle_error)
             worker.start()
@@ -168,26 +179,51 @@ class DisplacementController(QObject):
             self._handle_error(str(e))
             self.unfreeze_ui()
 
+    def _begin_stream(self, params):
+        """Allocate the live displacement layers and reset the frame counters."""
+        self._stream_total = self.data_manager.preprocessed_bead_stack.shape[0]
+        self._stream_done = 0
+        vis_params = {
+            'v_max': params.d_max,
+            'vector_stride': params.disp_vector_stride,
+            'arrow_scale': params.disp_arrow_scale,
+            'downscale_factor': params.downscale_factor,
+        }
+        self.visualization_manager.begin_vector_field_stream(
+            'displacement', self._stream_total, vis_params
+        )
+
     @thread_worker
     def _create_displacement_worker(self, reference, bead_stack, params):
-        """Create worker for processing data."""
+        """Process every frame, yielding each displacement field for live streaming."""
         try:
             displacement_generator = calculate_displacement_field(reference, bead_stack, params)
 
-            # Process all frames through the generator
+            # Process all frames through the generator, streaming each one.
             try:
                 while True:
                     displacement_field, frame, total = next(displacement_generator)
-                    yield {
-                        'progress': (frame + 1) / total * 100,
-                        'message': f"Processing frame {frame + 1}/{total}"
-                    }
+                    # The backend yields a 1-based frame number; the stack index
+                    # (and the slider) want it 0-based.
+                    yield frame - 1, total, displacement_field
             except StopIteration as e:
                 # Return the final result from the generator
                 return e.value
 
         except Exception as e:
             raise ValueError(f"Displacement calculation failed: {str(e)}")
+
+    def _on_frame_processed(self, payload):
+        """Stream one freshly computed displacement frame into the viewer (GUI thread)."""
+        frame_index, total, flow_frame = payload
+        self._stream_done += 1
+        progress = int(self._stream_done / max(self._stream_total, 1) * 100)
+        self.progress_updated.emit(
+            progress, f"Processing frame {frame_index + 1}/{total}"
+        )
+        self.visualization_manager.stream_vector_field_frame(
+            'displacement', frame_index, flow_frame
+        )
 
     def cancel_operation(self):
         """Cancel all running operations."""
@@ -257,44 +293,19 @@ class DisplacementController(QObject):
         return True
 
     def _handle_analysis_results(self, result: DisplacementResult):
-        """Handle completed analysis results."""
+        """Finalize a streamed run.
+
+        The magnitude stack and vector cache were filled in place as frames
+        arrived and are already on screen, so there is nothing left to assemble —
+        just store the full result for downstream steps and announce completion.
+        Visibility of other layers is left untouched (the user's to set).
+        """
         try:
             if result is None:
                 raise RuntimeError("Analysis failed to produce results")
 
-            # Update data manager
+            # Store the full result; the live layers already reflect it.
             self.data_manager.set_displacement_results(result, source="generated", dirty=True)
-
-            # Update visualization
-            self.visualization_manager.visualize_displacement_results()
-
-            # Manage layer visibility and order
-            vector_layer = None
-            magnitude_layer = None
-
-            # First pass: find the displacement layers and disable all others
-            for layer in self.viewer.layers:
-                if layer.name == 'Displacement Vectors':
-                    vector_layer = layer
-                    layer.visible = True
-                elif layer.name == 'Displacement Magnitude':
-                    magnitude_layer = layer
-                    layer.visible = True
-                else:
-                    layer.visible = False
-
-            # Move layers to desired positions if they exist
-            if magnitude_layer is not None:
-                current_index = self.viewer.layers.index(magnitude_layer)
-                # Move magnitude layer to second from top (-2)
-                if current_index != -2:
-                    self.viewer.layers.move(current_index, -2)
-
-            if vector_layer is not None:
-                current_index = self.viewer.layers.index(vector_layer)
-                # Move vector layer to top (-1)
-                if current_index != -1:
-                    self.viewer.layers.move(current_index, -1)
 
             self.progress_updated.emit(100, "Analysis completed successfully")
             self.analysis_completed.emit(result)

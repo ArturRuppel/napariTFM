@@ -94,6 +94,16 @@ class MSMController(QObject):
             # Update status for numba compilation
             QApplication.processEvents()
 
+            # Bind the three stress layers up front so each frame streams in live
+            # (preserving the contrast/visibility the user set) and the slider
+            # follows it, instead of the whole stack landing only at the end.
+            total_frames = force_results.force_field.shape[0]
+            self.visualization_manager.begin_stress_stream(
+                num_frames=total_frames,
+                max_stress=params.max_stress,
+                downscale_factor=force_results.parameters.downscale_factor,
+            )
+
             # Now calculate stress using the pre-generated meshes
             @thread_worker
             def stress_calculation_worker():
@@ -107,9 +117,10 @@ class MSMController(QObject):
                     )
 
                     while True:
-                        result, current_frame, total_frames = next(stress_generator)
-                        progress = 50 + int(current_frame / total_frames * 50)  # Start from 50%
-                        yield (progress, f"Calculating stress: Frame {current_frame}/{total_frames}", result)
+                        result, current_frame, total = next(stress_generator)
+                        # ``stress_tensor`` is the cumulative stack; the newest
+                        # frame is its last slice. Hand it off 0-based.
+                        yield current_frame - 1, total, result.stress_tensor[-1]
 
                 except StopIteration as e:
                     return e.value
@@ -119,57 +130,19 @@ class MSMController(QObject):
             self.active_workers.append(worker)
 
             def on_yielded(data):
-                progress, status, result = data
-                self._update_progress(progress, status)
-                if progress == 51:  # First frame after mesh generation
-                    # Update visualization for first frame
-                    self.visualization_manager.visualize_stress_preview(
-                        result.stress_tensor,
-                        max_stress=params.max_stress,
-                        downscale_factor=force_results.parameters.downscale_factor
-                    )
+                frame_index, total, stress_tensor_frame = data
+                # Mesh generation took the first 50%; stress fills the rest.
+                progress = 50 + int((frame_index + 1) / max(total, 1) * 50)
+                self._update_progress(
+                    progress, f"Calculating stress: Frame {frame_index + 1}/{total}"
+                )
+                self.visualization_manager.stream_stress_frame(frame_index, stress_tensor_frame)
 
             def on_returned(final_result):
-                # Store the complete results
+                # The three stress stacks were filled in place as frames arrived
+                # and are already on screen; just store the full result for
+                # downstream steps. Other layers' visibility is left untouched.
                 self.data_manager.set_stress_results(final_result, source="generated", dirty=True)
-
-                # Update visualization with all frames
-                self.visualization_manager.visualize_stress_results()
-
-                # Manage layer visibility and ordering
-                xx_layer = None
-                yy_layer = None
-                avg_layer = None
-
-                # First pass: find the stress layers and disable all others
-                for layer in self.viewer.layers:
-                    if layer.name == 'Normal Stress XX':
-                        xx_layer = layer
-                        layer.visible = False
-                    elif layer.name == 'Normal Stress YY':
-                        yy_layer = layer
-                        layer.visible = False
-                    elif layer.name == 'Average Normal Stress':
-                        avg_layer = layer
-                        layer.visible = True
-                    else:
-                        layer.visible = False
-
-                # Second pass: reorder layers
-                if xx_layer is not None:
-                    current_index = self.viewer.layers.index(xx_layer)
-                    if current_index != len(self.viewer.layers) - 3:  # -3 position
-                        self.viewer.layers.move(current_index, -3)
-
-                if yy_layer is not None:
-                    current_index = self.viewer.layers.index(yy_layer)
-                    if current_index != len(self.viewer.layers) - 2:  # -2 position
-                        self.viewer.layers.move(current_index, -2)
-
-                if avg_layer is not None:
-                    current_index = self.viewer.layers.index(avg_layer)
-                    if current_index != len(self.viewer.layers) - 1:  # -1 position (top)
-                        self.viewer.layers.move(current_index, -1)
 
                 # Update status with final metrics
                 status_msg = (

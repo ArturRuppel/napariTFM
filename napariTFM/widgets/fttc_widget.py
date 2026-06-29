@@ -31,6 +31,11 @@ class FTTCController(QObject):
         self.visualization_manager = visualization_manager
         self.active_workers = []
 
+        # Live-streaming progress counters: a run fills the magnitude stack and
+        # vector cache frame by frame, so progress is "frames done / total".
+        self._stream_total = 0
+        self._stream_done = 0
+
     def preview_force(self):
         """Preview force calculation for current frame."""
 
@@ -78,12 +83,18 @@ class FTTCController(QObject):
 
             # Create worker for processing
             displacement_field = self.data_manager.displacement_results.displacement_field
+
+            # Bind the force magnitude + vectors layers up front so each frame
+            # streams in live (preserving the contrast/visibility the user set)
+            # and the slider follows it, rather than landing all at once.
+            self._begin_stream(displacement_field, params)
+
             worker = self._create_force_worker(displacement_field, params)
 
             self.active_workers.append(worker)
             self.analysis_started.emit()
 
-            worker.yielded.connect(self._handle_progress)
+            worker.yielded.connect(self._on_frame_processed)
             worker.returned.connect(self._handle_analysis_results)
             worker.errored.connect(self._handle_error)
             worker.start()
@@ -91,6 +102,32 @@ class FTTCController(QObject):
         except Exception as e:
             self._handle_error(str(e))
             self.unfreeze_ui()
+
+    def _begin_stream(self, displacement_field, params):
+        """Allocate the live force layers and reset the frame counters."""
+        self._stream_total = displacement_field.shape[0]
+        self._stream_done = 0
+        vis_params = {
+            'v_max': params.f_max,
+            'vector_stride': params.force_vector_stride,
+            'arrow_scale': params.force_arrow_scale,
+            'downscale_factor': params.downscale_factor,
+        }
+        self.visualization_manager.begin_vector_field_stream(
+            'force', self._stream_total, vis_params
+        )
+
+    def _on_frame_processed(self, payload):
+        """Stream one freshly computed force frame into the viewer (GUI thread)."""
+        frame_index, total, force_frame = payload
+        self._stream_done += 1
+        progress = int(self._stream_done / max(self._stream_total, 1) * 100)
+        self.progress_updated.emit(
+            progress, f"Processing frame {frame_index + 1}/{total}"
+        )
+        self.visualization_manager.stream_vector_field_frame(
+            'force', frame_index, force_frame
+        )
 
     def calculate_optimal_regularization(self):
         """Calculate optimal regularization parameter using GCV."""
@@ -153,18 +190,17 @@ class FTTCController(QObject):
 
     @thread_worker
     def _create_force_worker(self, displacement_field, params):
-        """Create worker for full force calculation."""
+        """Process every frame, yielding each force field for live streaming."""
         try:
             force_generator = calculate_force_field(displacement_field, params)
 
-            # Process all frames through the generator
+            # Process all frames through the generator, streaming each one.
             try:
                 while True:
                     force_field, frame, total = next(force_generator)
-                    yield {
-                        'progress': frame / total * 100,
-                        'message': f"Processing frame {frame}/{total}"
-                    }
+                    # The backend yields a 1-based frame number; the stack index
+                    # (and the slider) want it 0-based.
+                    yield frame - 1, total, force_field
             except StopIteration as e:
                 # Return the final result from the generator
                 return e.value
@@ -238,48 +274,22 @@ class FTTCController(QObject):
             self._handle_error(str(e))
 
     def _handle_analysis_results(self, result: FTTCResult):
-        """Handle complete analysis results."""
+        """Finalize a streamed run.
+
+        The magnitude stack and vector cache were filled in place as frames
+        arrived and are already on screen, so just store the full result for
+        downstream steps and announce completion. Visibility of other layers is
+        left untouched (the user's to set).
+        """
         try:
             if result is None:
                 raise RuntimeError("Analysis failed to produce results")
 
-            # Update data manager
+            # Store the full result; the live layers already reflect it.
             self.data_manager.set_force_results(result, source="generated", dirty=True)
-
-            # Update visualization
-            self.visualization_manager.visualize_force_results()
-
-            # Manage layer visibility and order
-            vector_layer = None
-            magnitude_layer = None
-
-            # First pass: find the force layers and disable all others
-            for layer in self.viewer.layers:
-                if layer.name == 'Force Vectors':
-                    vector_layer = layer
-                    layer.visible = True
-                elif layer.name == 'Force Magnitude':
-                    magnitude_layer = layer
-                    layer.visible = True
-                else:
-                    layer.visible = False
-
-            # Move layers to desired positions if they exist
-            if magnitude_layer is not None:
-                current_index = self.viewer.layers.index(magnitude_layer)
-                # Move magnitude layer to second from top (-2)
-                if current_index != -2:
-                    self.viewer.layers.move(current_index, -2)
-
-            if vector_layer is not None:
-                current_index = self.viewer.layers.index(vector_layer)
-                # Move vector layer to top (-1)
-                if current_index != -1:
-                    self.viewer.layers.move(current_index, -1)
 
             self.progress_updated.emit(100, "Analysis completed successfully")
             self.analysis_completed.emit(result)
-
 
         except Exception as e:
             self._handle_error(str(e))

@@ -982,7 +982,7 @@ class VisualizationManager(ErrorHandlingMixin):
                     continue
 
                 if name in self.viewer.layers:
-                    self._rebind_preprocessed_layer(self.viewer.layers[name], data)
+                    self._rebind_image_layer(self.viewer.layers[name], data)
                 else:
                     self.viewer.add_image(
                         data,
@@ -1004,12 +1004,13 @@ class VisualizationManager(ErrorHandlingMixin):
             )
             self.handle_error(error)
 
-    def _rebind_preprocessed_layer(self, layer, data: np.ndarray) -> None:
-        """Swap a layer's backing array without disturbing its display settings.
+    def _rebind_image_layer(self, layer, data: np.ndarray) -> None:
+        """Swap an image layer's backing array without disturbing its settings.
 
         Setting ``.data`` to a freshly zeroed array can collapse the contrast
         range, so the prior contrast limits (and their range) are captured and
         restored — that is what "preserve the user's settings across runs" means.
+        Used by every streamed step that re-runs into an existing image layer.
         """
         clim = getattr(layer, 'contrast_limits', None)
         clim_range = getattr(layer, 'contrast_limits_range', None)
@@ -1067,6 +1068,272 @@ class VisualizationManager(ErrorHandlingMixin):
             self.viewer.dims.set_current_step(0, frame_index)
         except Exception:
             pass
+
+    # --- vector-field streaming (displacement / force) --------------------
+    _VECTOR_FIELD_CONFIG = {
+        'displacement': {
+            'magnitude_layer': 'Displacement Magnitude',
+            'vectors_layer': 'Displacement Vectors',
+            'magnitude_key': 'displacement_magnitude',
+            'vectors_key': 'displacement_vectors',
+            'cache_attr': 'displacement_vector_cache',
+            'magnitude_colormap': 'viridis',
+            'vector_colormap': 'viridis',
+            'colorbar_label': 'Displacement (µm)',
+        },
+        'force': {
+            'magnitude_layer': 'Force Magnitude',
+            'vectors_layer': 'Force Vectors',
+            'magnitude_key': 'force_magnitude',
+            'vectors_key': 'force_vectors',
+            'cache_attr': 'force_vector_cache',
+            'magnitude_colormap': 'inferno',
+            'vector_colormap': 'inferno',
+            'colorbar_label': 'Force (Pa)',
+        },
+    }
+
+    def begin_vector_field_stream(self, kind: str, num_frames: int, vis_params: dict) -> None:
+        """Prepare the magnitude + vectors layers so *kind* can stream frame by frame.
+
+        The magnitude image stack and the per-frame vector cache are allocated
+        lazily on the first frame (when the upscaled resolution is known); here
+        we just reset the cache and drop any stale vectors layer, remembering
+        whether the user had hidden it. The magnitude image layer is reused on a
+        re-run so its contrast/visibility survive (see ``_rebind_image_layer``).
+
+        ``vis_params`` carries ``v_max`` (d_max/f_max), ``vector_stride``,
+        ``arrow_scale`` and ``downscale_factor``.
+        """
+        try:
+            cfg = self._VECTOR_FIELD_CONFIG[kind]
+
+            vec_name = cfg['vectors_layer']
+            vec_visible = True
+            if vec_name in self.viewer.layers:
+                vec_visible = getattr(self.viewer.layers[vec_name], 'visible', True)
+                self.viewer.layers.remove(vec_name)
+            self._layers[cfg['vectors_key']] = None
+
+            cache = {
+                'data': [None] * num_frames,
+                'colors': [None] * num_frames,
+                'parameters': dict(vis_params),
+                'original_resolution': None,
+                'num_frames': num_frames,
+                'vectors_visible': vec_visible,
+                'magnitude_ready': False,
+            }
+            setattr(self.data_manager, cfg['cache_attr'], cache)
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to begin vector-field stream",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check data availability and consistency",
+                original_error=e,
+                source="visualization",
+            )
+            self.handle_error(error)
+
+    def stream_vector_field_frame(self, kind: str, frame_index: int, field_frame: np.ndarray) -> None:
+        """Render one freshly computed displacement/force frame and follow it live.
+
+        The frame is upscaled, reduced to a magnitude written in place into the
+        pre-allocated stack, turned into a vector overlay (cached for later
+        scrubbing), and the slider auto-advances to it.
+        """
+        try:
+            cfg = self._VECTOR_FIELD_CONFIG[kind]
+            cache = getattr(self.data_manager, cfg['cache_attr'], None)
+            if cache is None:
+                return
+
+            vis = cache['parameters']
+            downscale = vis.get('downscale_factor', 1)
+            vmax = vis['v_max']
+
+            display_field = self._upscale_field(field_frame, downscale)
+            magnitude = np.sqrt(np.sum(display_field ** 2, axis=-1))
+
+            if not cache['magnitude_ready']:
+                self._allocate_vector_field_magnitude(cfg, cache, magnitude.shape, vmax)
+                cache['original_resolution'] = field_frame.shape[:2]
+                cache['magnitude_ready'] = True
+
+            mag_layer = self._layers.get(cfg['magnitude_key'])
+            if mag_layer is None:
+                return
+            magnitudes = mag_layer.data
+            if frame_index < 0 or frame_index >= magnitudes.shape[0]:
+                return
+            magnitudes[frame_index] = magnitude
+
+            field_scaled = display_field * vis['arrow_scale'] / vmax * 50
+            vectors, colors = self._create_vector_visualization(
+                field_scaled, display_field, vis['vector_stride'], vmax,
+                colormap=cfg['vector_colormap'],
+            )
+            cache['data'][frame_index] = vectors
+            cache['colors'][frame_index] = colors
+
+            with self.viewer.events.blocker_all():
+                self._set_streamed_vectors(cfg, vectors, colors, cache['vectors_visible'])
+            mag_layer.refresh()
+            self._advance_to_frame(frame_index)
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to stream vector-field frame",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check layer/array consistency",
+                original_error=e,
+                source="visualization",
+            )
+            self.handle_error(error)
+
+    def _allocate_vector_field_magnitude(self, cfg, cache, upscaled_shape, vmax) -> None:
+        """Allocate the magnitude stack and (re)bind its image layer + colorbar."""
+        magnitudes = np.zeros((cache['num_frames'], *upscaled_shape), dtype=np.float32)
+        mag_name = cfg['magnitude_layer']
+        with self.viewer.events.blocker_all():
+            if mag_name in self.viewer.layers:
+                mag_layer = self.viewer.layers[mag_name]
+                self._rebind_image_layer(mag_layer, magnitudes)
+            else:
+                mag_layer = self.viewer.add_image(
+                    magnitudes, name=mag_name,
+                    colormap=cfg['magnitude_colormap'], blending='additive',
+                    contrast_limits=(0, vmax), visible=True,
+                )
+        self._layers[cfg['magnitude_key']] = mag_layer
+        self.colorbar_manager.show_for_layer(
+            mag_layer, colormap_name=cfg['magnitude_colormap'],
+            label=cfg['colorbar_label'],
+        )
+
+    def _set_streamed_vectors(self, cfg, vectors, colors, visible: bool) -> None:
+        """Show this frame's vectors, creating the layer on the first non-empty frame."""
+        vec_layer = self._layers.get(cfg['vectors_key'])
+        if vec_layer is not None and cfg['vectors_layer'] in self.viewer.layers:
+            if len(vectors) > 0:
+                vec_layer.data = vectors
+                vec_layer.edge_color = colors
+            return
+        if len(vectors) == 0:
+            return
+        vec_layer = self.viewer.add_vectors(
+            vectors, name=cfg['vectors_layer'], edge_color=colors,
+            edge_width=2, vector_style='arrow', blending='additive', length=1,
+            visible=visible,
+        )
+        self._layers[cfg['vectors_key']] = vec_layer
+
+    # --- stress streaming (MSM) -------------------------------------------
+    def begin_stress_stream(self, num_frames: int, max_stress: float, downscale_factor: int) -> None:
+        """Prepare the three stress image layers so MSM can stream frame by frame.
+
+        The XX / YY / average-normal stacks are allocated lazily on the first
+        frame; existing layers are reused so their contrast/visibility survive a
+        re-run.
+        """
+        self._stress_stream = {
+            'num_frames': num_frames,
+            'max_stress': max_stress,
+            'downscale': downscale_factor,
+            'ready': False,
+        }
+
+    def stream_stress_frame(self, frame_index: int, stress_tensor_frame: np.ndarray) -> None:
+        """Render one freshly computed stress frame (XX, YY, average) and follow it live."""
+        try:
+            cfg = getattr(self, '_stress_stream', None)
+            if cfg is None:
+                return
+
+            downscale = cfg['downscale']
+            max_stress = cfg['max_stress']
+
+            def upscale(component):
+                if downscale > 1:
+                    return cv2.resize(
+                        component,
+                        (component.shape[1] * downscale, component.shape[0] * downscale),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+                return component
+
+            sigma_xx = upscale(np.squeeze(stress_tensor_frame[..., 0, 0]))
+            sigma_yy = upscale(np.squeeze(stress_tensor_frame[..., 1, 1]))
+            sigma_normal = (sigma_xx + sigma_yy) / 2
+
+            if not cfg['ready']:
+                self._allocate_stress_stacks(cfg, sigma_xx.shape, max_stress)
+                cfg['ready'] = True
+
+            components = self.data_manager.stress_components
+            if components is None:
+                return
+            if frame_index < 0 or frame_index >= components['num_frames']:
+                return
+            components['sigma_xx'][frame_index] = sigma_xx
+            components['sigma_yy'][frame_index] = sigma_yy
+            components['sigma_normal'][frame_index] = sigma_normal
+
+            for key in ('stress_xx', 'stress_yy', 'stress_normal'):
+                layer = self._layers.get(key)
+                if layer is not None:
+                    layer.refresh()
+            self._advance_to_frame(frame_index)
+
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to stream stress frame",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check layer/array consistency",
+                original_error=e,
+                source="visualization",
+            )
+            self.handle_error(error)
+
+    def _allocate_stress_stacks(self, cfg, upscaled_shape, max_stress) -> None:
+        """Allocate the XX/YY/normal stacks and (re)bind their seismic layers."""
+        num_frames = cfg['num_frames']
+        sigma_xx = np.zeros((num_frames, *upscaled_shape), dtype=np.float32)
+        sigma_yy = np.zeros((num_frames, *upscaled_shape), dtype=np.float32)
+        sigma_normal = np.zeros((num_frames, *upscaled_shape), dtype=np.float32)
+
+        self.data_manager.stress_components = {
+            'sigma_xx': sigma_xx,
+            'sigma_yy': sigma_yy,
+            'sigma_normal': sigma_normal,
+            'num_frames': num_frames,
+            'max_stress': max_stress,
+        }
+
+        specs = [
+            ('stress_xx', 'Normal Stress XX', sigma_xx),
+            ('stress_yy', 'Normal Stress YY', sigma_yy),
+            ('stress_normal', 'Average Normal Stress', sigma_normal),
+        ]
+        with self.viewer.events.blocker_all():
+            for key, name, data in specs:
+                if name in self.viewer.layers:
+                    layer = self.viewer.layers[name]
+                    self._rebind_image_layer(layer, data)
+                else:
+                    layer = self.viewer.add_image(
+                        data, name=name, colormap='seismic', blending='additive',
+                        contrast_limits=(-max_stress, max_stress), visible=True,
+                    )
+                self._layers[key] = layer
+        self.colorbar_manager.show_for_layer(
+            self._layers['stress_normal'], colormap_name='seismic',
+            label='Stress (mN/m)',
+        )
 
     def update_preprocessing_visualization(self) -> None:
         """Update visualization after preprocessing."""
