@@ -86,6 +86,40 @@ def test_displacement_analyzer_calls_standard_opencv_farneback(monkeypatch):
     }
 
 
+def test_displacement_analyzer_forwards_farneback_internals(monkeypatch):
+    captured = {}
+
+    def fake_farneback(reference, moving, initial_flow, pyr_scale, levels,
+                       winsize, iterations, poly_n, poly_sigma, flags):
+        captured.update(
+            pyr_scale=pyr_scale,
+            poly_n=poly_n,
+            poly_sigma=poly_sigma,
+            flags=flags,
+        )
+        return np.zeros((*reference.shape, 2), dtype=np.float32)
+
+    monkeypatch.setattr(
+        "napariTFM.backend.displacement_analysis.cv2.calcOpticalFlowFarneback",
+        fake_farneback,
+    )
+    params = DisplacementParameters(
+        pyr_scale=0.4, poly_n=7, poly_sigma=1.5, use_gaussian_window=True
+    )
+    analyzer = DisplacementAnalyzer(params)
+
+    analyzer.calculate_flow(np.zeros((8, 8)), np.ones((8, 8)))
+
+    import cv2
+
+    assert captured == {
+        "pyr_scale": 0.4,
+        "poly_n": 7,
+        "poly_sigma": 1.5,
+        "flags": cv2.OPTFLOW_FARNEBACK_GAUSSIAN,
+    }
+
+
 def test_backend_validates_displacement_images():
     assert validate_displacement_image(None) == (False, "No image data provided")
     assert validate_displacement_image([[1, 2], [3, 4]]) == (False, "Image must be a numpy array")

@@ -37,11 +37,6 @@ _ICON_BODIES = {
     ),
     # plus — "add folders"
     "plus": '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
-    # stacked layers — "show / hide this stage's overlay layers"
-    "viz": (
-        '<path d="M12 3 L21 8 L12 13 L3 8 Z"/>'
-        '<path d="M3 12 L12 17 L21 12"/>'
-    ),
     # crosshair target — "auto-select the optimal regularization (GCV)"
     "gcv": (
         '<circle cx="12" cy="12" r="6.5"/>'

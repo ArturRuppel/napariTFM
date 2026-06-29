@@ -223,9 +223,13 @@ class _ParameterManager(QObject):
 class _FakeVisualizationManager:
     def __init__(self):
         self.preview_calls = []
+        self.isolated = []
 
     def handle_preprocessing_preview(self, frames, enable=True):
         self.preview_calls.append((frames, enable))
+
+    def isolate_layers(self, keep_names):
+        self.isolated.append(list(keep_names))
 
     def update_preprocessing_visualization(self):
         pass
@@ -441,6 +445,38 @@ def test_preprocessing_preview_update_respects_hidden_layers():
 
     assert viewer.layers["Preview Beads"].visible is False
     assert viewer.layers["Preview Reference"].visible is True
+
+
+def test_isolate_layers_shows_only_kept_layers_hiding_the_rest():
+    viewer = _FakeViewer()
+    manager = VisualizationManager(viewer, DataManager())
+    for name in ("Preview Beads", "Preview Reference", "Force Magnitude"):
+        viewer.add_image(np.ones((2, 2), dtype=np.float32), name=name)
+
+    manager.isolate_layers(["Preview Beads"])
+
+    assert viewer.layers["Preview Beads"].visible is True
+    assert viewer.layers["Preview Reference"].visible is False
+    assert viewer.layers["Force Magnitude"].visible is False
+
+
+def test_preprocessing_preview_isolates_to_beads_on_enable(app):
+    viewer = _FakeViewer()
+    data_manager = DataManager()
+    data_manager.bead_stack = np.ones((2, 2), dtype=np.float32)
+    data_manager.reference = np.ones((2, 2), dtype=np.float32)
+    data_manager.cell_stack = np.ones((2, 2), dtype=np.float32)
+    manager = VisualizationManager(viewer, data_manager)
+    controller = preprocessing_widget.PreprocessingController(
+        viewer, data_manager, _ParameterManager(), manager
+    )
+
+    controller.toggle_preview(True)
+
+    # All three preview layers are rendered, but only the beads are left visible.
+    assert viewer.layers["Preview Beads"].visible is True
+    assert viewer.layers["Preview Reference"].visible is False
+    assert viewer.layers["Preview Cells"].visible is False
 
 
 def test_param_panel_uses_section_grid_not_groupbox(app):

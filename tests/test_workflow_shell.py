@@ -27,6 +27,10 @@ class _StubParameterManager(QObject):
             "inner_iterations": 15,
             "outer_iterations": 5,
             "median_filtering": 9,
+            "pyr_scale": 0.5,
+            "poly_n": 5,
+            "poly_sigma": 1.2,
+            "use_gaussian_window": False,
             "downscale_factor": 4,
             "disp_vector_stride": 20,
             "disp_arrow_scale": 1.0,
@@ -1426,6 +1430,24 @@ def test_workflow_parameter_panel_uses_sliders_for_numeric(app):
     assert type(panel.parameter_controls["disp_arrow_scale"]).__name__ == "QLabeledDoubleSlider"
 
 
+def test_displacement_panel_exposes_grouped_farneback_internals(app):
+    from qtpy.QtWidgets import QLabel
+
+    from napariTFM.widgets._widget import WorkflowParameterPanel
+
+    pm = _real_parameter_manager()
+    panel = WorkflowParameterPanel(pm, section_titles=("Displacement",))
+
+    # New Farneback internals are exposed as editable controls.
+    for name in ("pyr_scale", "poly_n", "poly_sigma", "use_gaussian_window"):
+        assert name in panel.parameter_controls
+
+    # They live under an "Advanced" sub-group; visualization knobs under
+    # "Visualization". Both sub-headers render inside the single section.
+    labels = {w.text() for w in panel.findChildren(QLabel)}
+    assert {"Advanced", "Visualization"}.issubset(labels)
+
+
 def test_workflow_parameter_panel_slider_writes_through(app):
     from napariTFM.widgets._widget import WorkflowParameterPanel
 
@@ -1592,42 +1614,6 @@ def test_load_params_applies_knobs(monkeypatch, app, tmp_path):
 
 
 
-class _FakeLayer:
-    def __init__(self, name):
-        self.name = name
-        self.visible = True
-
-
-class _FakeViewer:
-    def __init__(self, layers):
-        self.layers = layers
-
-
-def test_viz_toggle_hides_and_shows_only_that_stages_layers(monkeypatch, app):
-    widget = _stub_main_widget(monkeypatch)
-    layers = [
-        _FakeLayer("Displacement Vectors"),
-        _FakeLayer("Displacement Magnitude"),
-        _FakeLayer("Force Vectors"),
-    ]
-    widget.viewer = _FakeViewer(layers)
-
-    section = widget._stage_sections_by_key["displacement"]
-    section.viz_btn.setChecked(False)
-    assert [layer.visible for layer in layers] == [False, False, True]
-
-    section.viz_btn.setChecked(True)
-    assert [layer.visible for layer in layers] == [True, True, True]
-
-
-def test_viz_toggle_is_a_noop_when_viewer_has_no_layers(monkeypatch, app):
-    widget = _stub_main_widget(monkeypatch)
-    widget.viewer = object()  # no .layers attribute
-
-    section = widget._stage_sections_by_key["force"]
-    section.viz_btn.setChecked(False)  # must not raise
-
-
 def test_g0_hides_workspace_and_pipeline_until_project_open(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     # Default state is G0: no project open.
@@ -1636,7 +1622,6 @@ def test_g0_hides_workspace_and_pipeline_until_project_open(monkeypatch, app):
     assert not widget._pipeline_context_label.isVisibleTo(widget)
     for section in widget._stage_sections:
         assert not section.isVisibleTo(widget)
-    assert widget._empty_hint.isVisibleTo(widget)
 
 
 def test_g1_reveals_workspace_but_not_stage_pills(monkeypatch, app):
@@ -1646,7 +1631,6 @@ def test_g1_reveals_workspace_but_not_stage_pills(monkeypatch, app):
     # G1: workspace + status visible; pipeline label + pills still hidden.
     assert widget.experiments_list.isVisibleTo(widget)
     assert widget.status_label.isVisibleTo(widget)
-    assert not widget._empty_hint.isVisibleTo(widget)
     assert not widget._pipeline_context_label.isVisibleTo(widget)
     for section in widget._stage_sections:
         assert not section.isVisibleTo(widget)

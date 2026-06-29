@@ -6,7 +6,7 @@ import napari
 from qtpy.QtCore import Qt, QObject
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox,
-    QHBoxLayout, QSpinBox, QComboBox, QFileDialog, QCheckBox,
+    QHBoxLayout, QGridLayout, QSpinBox, QComboBox, QFileDialog, QCheckBox,
     QMenu, QToolButton, QApplication
 )
 
@@ -21,7 +21,7 @@ from napariTFM.widgets.msm_widget import MSMWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec
 from napariTFM.widgets._stage_file_status import StageFileStatusRow
 from napariTFM.widgets._stage_section import StageSection
-from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, add_section_labeled_full_row, section_label_style, TIGHT_SPACING
+from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, add_section_labeled_full_row, section_label_style, section_subheader_style, TIGHT_SPACING
 from napariTFM.widgets._param_controls import dslider, islider, rslider
 from superqt import QLabeledDoubleRangeSlider, QLabeledDoubleSlider, QLabeledSlider
 from napariTFM.widgets._experiments_list import ExperimentsList, PIPELINE_STAGES
@@ -62,19 +62,6 @@ STAGE_DATA_ARTIFACTS = {
         DataArtifactSpec("stress_results", "Stress map", "stress_results", "output"),
     ],
 }
-
-# napari layer names each stage paints, toggled by the header viz glyph (P5).
-STAGE_LAYER_NAMES = {
-    "preprocessing": (
-        "Preprocessed Beads",
-        "Preprocessed Reference",
-        "Preprocessed Cells",
-    ),
-    "displacement": ("Displacement Vectors", "Displacement Magnitude"),
-    "force": ("Force Vectors", "Force Magnitude"),
-    "stress": ("Normal Stress XX", "Normal Stress YY", "Average Normal Stress"),
-}
-
 
 def _build_preprocessing_specs(preprocessing_widget, visualization_manager):
     def assign(role: str):
@@ -208,6 +195,12 @@ def _build_stress_specs(stress_widget):
     ]
 
 
+# Sentinel marking a sub-group heading inside a section's spec list. A spec of
+# the form (GROUP, "Advanced") renders a muted sub-header and starts a fresh
+# two-per-row run; it is not a parameter control.
+GROUP = object()
+
+
 class WorkflowParameterPanel(QWidget):
     """Single visible parameter editor for the workflow shell."""
 
@@ -228,10 +221,16 @@ class WorkflowParameterPanel(QWidget):
              "range", 0.0, 100.0, 0.1, 1, None),
         ]),
         ("Displacement", [
-            ("nscales", "Farneback Levels", "int", 1, 50, 1, 0, None),
-            ("inner_iterations", "Farneback Iterations", "int", 1, 50, 1, 0, None),
             ("median_filtering", "Window Size", "int", 1, 51, 2, 0, None),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
+            (GROUP, "Advanced"),
+            ("nscales", "Farneback Levels", "int", 1, 50, 1, 0, None),
+            ("inner_iterations", "Farneback Iterations", "int", 1, 50, 1, 0, None),
+            ("pyr_scale", "Pyramid Scale", "float", 0.1, 0.9, 0.05, 2, None),
+            ("poly_n", "Poly N", "int", 1, 21, 2, 0, None),
+            ("poly_sigma", "Poly Sigma", "float", 0.1, 5.0, 0.1, 1, None),
+            ("use_gaussian_window", "Gaussian Window", "bool", None, None, None, None, None),
+            (GROUP, "Visualization"),
             ("disp_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("disp_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
             ("d_max", "Max Displacement (um)", "float", 0.1, 200.0, 0.1, 1, None),
@@ -243,6 +242,7 @@ class WorkflowParameterPanel(QWidget):
             ("lanczos_exp", "Lanczos Exponent", "int", 0, 5, 1, 0, None),
             ("regularization", "Regularization (10^x)", "float", -21.0, 0.0, 0.5, 1, None),
             ("auto_gcv", "Auto-GCV per frame", "bool", None, None, None, None, None),
+            (GROUP, "Visualization"),
             ("force_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("force_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
             ("f_max", "Max Force (Pa)", "float", 0.1, 10000.0, 1.0, 1, None),
@@ -253,6 +253,7 @@ class WorkflowParameterPanel(QWidget):
              ["Frontal-Del.", "Delaunay", "MeshAdapt", "BAMG", "FD Quads", "Para. Pack"]),
             ("use_optimization", "Mesh Optimization", "bool", None, None, None, None, None),
             ("poisson_ratio_cells", "Poisson Ratio", "float", 0.0, 0.5, 0.01, 2, None),
+            (GROUP, "Visualization"),
             ("max_stress", "Max Stress (mN/m)", "float", 0.01, 1000.0, 0.1, 2, None),
         ]),
     ]
@@ -286,7 +287,16 @@ class WorkflowParameterPanel(QWidget):
             row = 1
             pending = None
             for spec in specs:
-                if spec[2] == "range":
+                if spec[0] is GROUP:
+                    if pending is not None:
+                        add_section_pair_row(grid, row, pending[0], pending[1])
+                        row += 1
+                        pending = None
+                    subheader = QLabel(spec[1])
+                    subheader.setStyleSheet(section_subheader_style())
+                    add_section_header(grid, row, subheader)
+                    row += 1
+                elif spec[2] == "range":
                     if pending is not None:
                         add_section_pair_row(grid, row, pending[0], pending[1])
                         row += 1
@@ -420,7 +430,9 @@ class napariTFMWidget(QWidget):
         from qtpy.QtCore import QTimer
         QTimer.singleShot(0, install_filter_on_inputs)
 
-        # Width is determined by the host dock; no fixed width.
+        # Give the dock a comfortable default/minimum width so the toolbar's
+        # three columns fit without truncating "Save Project" → "Save".
+        self.setMinimumWidth(400)
 
         # Create scroll area for widgets
         scroll = QScrollArea()
@@ -430,40 +442,41 @@ class napariTFMWidget(QWidget):
         # Create container widget for scroll area
         container = QWidget()
         container_layout = QVBoxLayout()
-        container_layout.setContentsMargins(0, 0, 0, 0)
+        # Right margin keeps content clear of the scroll area's vertical
+        # scrollbar instead of butting right up against it.
+        container_layout.setContentsMargins(0, 0, 8, 0)
         container.setLayout(container_layout)
 
-        # Brand row + the Project toolbar (the front door): New / Load / Save.
-        # Save Project is always Save-as. Parameters are a separate preset row.
+        # Brand row + the Project/Parameters toolbar (the front door), laid out
+        # as a 3x2 grid: New / Load / Save Project on top, Load / Save Params /
+        # Reset below. Save Project is always Save-as; the lower row is presets.
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title = QLabel("napariTFM")
         title.setStyleSheet(title_style())
         title_row.addWidget(title)
         title_row.addStretch()
+        container_layout.addLayout(title_row)
+
         self.new_project_btn = self._make_toolbar_button("New Project", "Start a new project")
         self.load_project_btn = self._make_toolbar_button("Load Project", "Load a project")
         self.save_project_btn = self._make_toolbar_button("Save Project", "Save project as…")
-        for _btn in (self.new_project_btn, self.load_project_btn, self.save_project_btn):
-            title_row.addWidget(_btn)
-        container_layout.addLayout(title_row)
-
-        # Parameters preset toolbar (recipe only): Load / Save / Reset.
-        params_row = QHBoxLayout()
-        params_row.setContentsMargins(0, 0, 0, 0)
-        params_row.addStretch()
         self.load_params_btn = self._make_toolbar_button("Load Params", "Load parameters preset")
         self.save_params_btn = self._make_toolbar_button("Save Params", "Save parameters preset")
         self.reset_params_btn = self._make_toolbar_button("Reset", "Reset parameters")
-        for _btn in (self.load_params_btn, self.save_params_btn, self.reset_params_btn):
-            params_row.addWidget(_btn)
-        container_layout.addLayout(params_row)
 
-        # G0 empty-state hint: shown only before a project is opened.
-        self._empty_hint = QLabel("New Project to begin, or Load Project.")
-        self._empty_hint.setObjectName("empty_state_hint")
-        self._empty_hint.setStyleSheet(section_label_style())
-        container_layout.addWidget(self._empty_hint)
+        toolbar_grid = QGridLayout()
+        toolbar_grid.setContentsMargins(0, 0, 0, 0)
+        grid_buttons = (
+            self.new_project_btn, self.load_project_btn, self.save_project_btn,
+            self.load_params_btn, self.save_params_btn, self.reset_params_btn,
+        )
+        for _idx, _btn in enumerate(grid_buttons):
+            toolbar_grid.addWidget(_btn, _idx // 3, _idx % 3)
+        # Park all surplus width in a trailing empty column so the buttons stay
+        # compact and left-aligned instead of spreading out when the panel grows.
+        toolbar_grid.setColumnStretch(3, 1)
+        container_layout.addLayout(toolbar_grid)
 
         # Progressive-disclosure gate (G0/G1/G2). No project is open at launch.
         self._project_open = False
@@ -657,9 +670,6 @@ class napariTFMWidget(QWidget):
                 section.enabled_changed.connect(
                     lambda _enabled, k=key: self._on_stage_enabled_changed(k)
                 )
-            section.visualization_toggled.connect(
-                lambda visible, k=key: self._set_stage_layers_visible(k, visible)
-            )
 
         container_layout.setSpacing(0)
         for section in self._stage_sections:
@@ -873,7 +883,6 @@ class napariTFMWidget(QWidget):
         project_open = self._project_open
         tuning = project_open and self.experiments_list.active() is not None
 
-        self._empty_hint.setVisible(not project_open)
         self.experiments_list.setVisible(project_open)
         self.status_label.setVisible(project_open)
 
@@ -935,16 +944,6 @@ class napariTFMWidget(QWidget):
 
     def _on_stage_enabled_changed(self, key: str) -> None:
         self.refresh_stage_statuses()
-
-    def _set_stage_layers_visible(self, key: str, visible: bool) -> None:
-        """Show/hide the napari layers a stage paints (header viz glyph, P5)."""
-        names = set(STAGE_LAYER_NAMES.get(key, ()))
-        layers = getattr(self.viewer, "layers", None)
-        if not names or layers is None:
-            return
-        for layer in layers:
-            if layer.name in names:
-                layer.visible = visible
 
     def _disabled_stages(self) -> list[str]:
         return [

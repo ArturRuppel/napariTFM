@@ -318,6 +318,12 @@ class PreprocessingController(QObject):
 
             if enabled:
                 self._update_preview()
+                # Starting the preview isolates the beads channel: hide every
+                # other layer (including the reference/cells previews) so the
+                # beads are inspected on their own. Later re-renders leave the
+                # user's visibility choices alone (see _update_preview).
+                if self.preview_enabled:
+                    self.visualization_manager.isolate_layers(['Preview Beads'])
             else:
                 self.visualization_manager.handle_preprocessing_preview({}, enable=False)
 

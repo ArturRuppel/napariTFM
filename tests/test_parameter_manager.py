@@ -71,6 +71,7 @@ def test_displacement_category_omits_tvl1_only_parameters():
 
     assert STALE_TVL1_PARAMETERS.isdisjoint(params)
     assert {"nscales", "inner_iterations", "median_filtering"}.issubset(params)
+    assert {"pyr_scale", "poly_n", "poly_sigma", "use_gaussian_window"}.issubset(params)
     assert "outer_iterations" not in params
 
 
@@ -122,6 +123,14 @@ def test_validation_helpers_return_compatible_results():
     assert validate_displacement_parameters(
         DisplacementParameters(nscales=0)
     ) == (False, "nscales must be at least 1")
+
+    assert validate_displacement_parameters(
+        DisplacementParameters(pyr_scale=1.0)
+    ) == (False, "pyr_scale must be between 0 and 1 (exclusive)")
+
+    assert validate_displacement_parameters(
+        DisplacementParameters(poly_sigma=0)
+    ) == (False, "poly_sigma must be positive")
 
     assert validate_fttc_parameters(
         FTTCParameters(young_modulus=0)

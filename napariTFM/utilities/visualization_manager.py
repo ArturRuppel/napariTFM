@@ -120,6 +120,18 @@ class VisualizationManager(ErrorHandlingMixin):
                     if name in self._layers:
                         self._layers[name] = None
 
+    def isolate_layers(self, keep_names) -> None:
+        """Show only ``keep_names``; hide every other layer in the viewer.
+
+        A stage preview calls this when it starts so its output is inspected on
+        its own rather than blended with the previous stage's layers. Re-renders
+        (e.g. a live preview reacting to a parameter change) must not call this:
+        once isolated, the user's own visibility tweaks are theirs to keep.
+        """
+        keep = set(keep_names)
+        for layer in self.viewer.layers:
+            layer.visible = layer.name in keep
+
     def _upscale_field(self, field: np.ndarray, downscale_factor: int) -> np.ndarray:
         """Upscale a vector field for visualization."""
         if downscale_factor <= 1:
@@ -469,6 +481,8 @@ class VisualizationManager(ErrorHandlingMixin):
                         length=1
                     )
 
+            self.isolate_layers(['Displacement Magnitude', 'Displacement Vectors'])
+
         except Exception as e:
             error = self.create_error(
                 message="Failed to visualize displacement preview",
@@ -691,6 +705,8 @@ class VisualizationManager(ErrorHandlingMixin):
                         blending='additive',
                         length=1
                     )
+
+            self.isolate_layers(['Force Magnitude', 'Force Vectors'])
 
         except Exception as e:
             error = self.create_error(
@@ -932,6 +948,12 @@ class VisualizationManager(ErrorHandlingMixin):
                     label='Stress (mN/m)'
                 )
 
+            self.isolate_layers([
+                'Normal Stress XX',
+                'Normal Stress YY',
+                'Average Normal Stress',
+            ])
+
         except Exception as e:
             error = self.create_error(
                 message="Failed to visualize stress preview",
@@ -1004,16 +1026,29 @@ class VisualizationManager(ErrorHandlingMixin):
             )
             self.handle_error(error)
 
-    def _rebind_image_layer(self, layer, data: np.ndarray) -> None:
+    def _rebind_image_layer(self, layer, data: np.ndarray):
         """Swap an image layer's backing array without disturbing its settings.
 
         Setting ``.data`` to a freshly zeroed array can collapse the contrast
         range, so the prior contrast limits (and their range) are captured and
         restored — that is what "preserve the user's settings across runs" means.
         Used by every streamed step that re-runs into an existing image layer.
+
+        Returns the layer to keep using. When the new array's dimensionality
+        differs from the layer's current one (e.g. a 2D preview layer being
+        rebound to a 3D stream stack), the layer is *recreated* rather than
+        swapped in place: napari never refreshes a vispy layer's cached
+        ``_world_to_layer_units_scale`` on an ndim change, so assigning ``.data``
+        with a different ndim leaves a stale, too-short scale tuple and the next
+        slice raises ``IndexError`` in vispy. A fresh layer gets a correctly
+        sized scale tuple, side-stepping that napari bug.
         """
         clim = getattr(layer, 'contrast_limits', None)
         clim_range = getattr(layer, 'contrast_limits_range', None)
+
+        if np.ndim(data) != getattr(layer, 'ndim', np.ndim(data)):
+            return self._recreate_image_layer(layer, data, clim, clim_range)
+
         with self.viewer.events.blocker_all():
             layer.data = data
             if clim_range is not None:
@@ -1026,6 +1061,49 @@ class VisualizationManager(ErrorHandlingMixin):
                     layer.contrast_limits = clim
                 except Exception:
                     pass
+        return layer
+
+    def _recreate_image_layer(self, layer, data: np.ndarray, clim, clim_range):
+        """Replace *layer* with a fresh image layer backed by *data*.
+
+        Preserves the visible settings that survive a re-run (name, colormap,
+        blending, contrast, visibility, opacity, gamma, scale, translate) and
+        restores the layer's position in the stack. Used when the data's ndim
+        changes (see :meth:`_rebind_image_layer`).
+        """
+        name = layer.name
+        kwargs = {'name': name}
+        for attr in ('colormap', 'blending', 'visible', 'opacity', 'gamma',
+                     'scale', 'translate'):
+            value = getattr(layer, attr, None)
+            if value is not None:
+                kwargs[attr] = value
+        if clim is not None:
+            kwargs['contrast_limits'] = clim
+
+        with self.viewer.events.blocker_all():
+            try:
+                index = self.viewer.layers.index(layer)
+            except (ValueError, KeyError):
+                index = None
+            self.viewer.layers.remove(layer)
+            new_layer = self.viewer.add_image(data, **kwargs)
+            if index is not None:
+                try:
+                    self.viewer.layers.move(self.viewer.layers.index(new_layer), index)
+                except (AttributeError, ValueError, KeyError):
+                    pass
+            if clim_range is not None:
+                try:
+                    new_layer.contrast_limits_range = clim_range
+                except Exception:
+                    pass
+            if clim is not None:
+                try:
+                    new_layer.contrast_limits = clim
+                except Exception:
+                    pass
+        return new_layer
 
     def stream_preprocessing_frame(self, data_type: str, frame_index: int, image: np.ndarray) -> None:
         """Write one freshly processed frame into its layer and follow it live.
@@ -1201,7 +1279,7 @@ class VisualizationManager(ErrorHandlingMixin):
         with self.viewer.events.blocker_all():
             if mag_name in self.viewer.layers:
                 mag_layer = self.viewer.layers[mag_name]
-                self._rebind_image_layer(mag_layer, magnitudes)
+                mag_layer = self._rebind_image_layer(mag_layer, magnitudes)
             else:
                 mag_layer = self.viewer.add_image(
                     magnitudes, name=mag_name,

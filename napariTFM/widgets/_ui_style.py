@@ -376,6 +376,11 @@ def section_label_style() -> str:
     return "font-weight: bold;"
 
 
+def section_subheader_style() -> str:
+    """Stylesheet for a sub-group heading inside a section (e.g. "Advanced")."""
+    return f"color: {MUTED_TEXT_COLOR}; font-weight: bold; font-size: 9pt;"
+
+
 def caption_style() -> str:
     """Stylesheet for a small, muted caption label."""
     return f"color: {MUTED_TEXT_COLOR}; font-size: 9pt;"

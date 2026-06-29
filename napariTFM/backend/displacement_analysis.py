@@ -27,11 +27,6 @@ class DisplacementAnalyzer:
     manipulating, and applying flow fields.
     """
 
-    FARNEBACK_PYR_SCALE = 0.5
-    FARNEBACK_POLY_N = 5
-    FARNEBACK_POLY_SIGMA = 1.2
-    FARNEBACK_FLAGS = 0
-
     def __init__(self, params: Optional[DisplacementParameters] = None):
         """Initialize Farneback optical flow analyzer.
 
@@ -40,6 +35,8 @@ class DisplacementAnalyzer:
                 - nscales: Number of pyramid levels
                 - inner_iterations: Farneback iteration count
                 - median_filtering: Farneback window size
+                - pyr_scale / poly_n / poly_sigma: Farneback internals
+                - use_gaussian_window: Gaussian vs. box windowing
                 If None, uses default parameters.
         """
         self.params = params or DisplacementParameters()
@@ -69,17 +66,18 @@ class DisplacementAnalyzer:
         ref_image = self._normalize_for_optical_flow(reference)
         mov_image = self._normalize_for_optical_flow(moving)
 
+        flags = cv2.OPTFLOW_FARNEBACK_GAUSSIAN if self.params.use_gaussian_window else 0
         return cv2.calcOpticalFlowFarneback(
             ref_image,
             mov_image,
             None,
-            self.FARNEBACK_PYR_SCALE,
+            float(self.params.pyr_scale),
             max(1, self.params.nscales),
             self._farneback_window_size(),
             max(1, self.params.inner_iterations),
-            self.FARNEBACK_POLY_N,
-            self.FARNEBACK_POLY_SIGMA,
-            self.FARNEBACK_FLAGS,
+            max(1, int(self.params.poly_n)),
+            float(self.params.poly_sigma),
+            flags,
         ).astype(np.float32, copy=False)
 
     def _farneback_window_size(self) -> int:

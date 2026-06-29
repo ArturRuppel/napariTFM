@@ -50,6 +50,10 @@ class _FakeLayer:
         self.contrast_limits_range = list(self.contrast_limits)
         self.refresh_count = 0
 
+    @property
+    def ndim(self):
+        return np.ndim(self.data)
+
     def refresh(self):
         self.refresh_count += 1
 
@@ -208,6 +212,47 @@ def test_vector_field_rerun_preserves_magnitude_settings():
     assert same is mag                      # reused, not recreated
     assert same.contrast_limits == [0.2, 0.6]  # contrast preserved
     assert same.visible is False            # visibility preserved
+
+
+def test_vector_field_rerun_recreates_magnitude_when_ndim_changes():
+    """A 2D preview magnitude layer rebound to a 3D stream stack must be
+    recreated, not swapped in place.
+
+    napari never refreshes a vispy layer's cached ``_world_to_layer_units_scale``
+    on an ndim change, so assigning ``.data`` with a different ndim leaves a
+    stale, too-short scale tuple and the next slice raises ``IndexError`` deep in
+    vispy. Recreating the layer side-steps that. See ``_rebind_image_layer``.
+    """
+    viewer = _FakeViewer()
+    dm = _DataManager()
+    manager = _make_manager(viewer, dm)
+
+    # Simulate a single-frame preview having created a 2D magnitude layer.
+    preview = viewer.add_image(
+        np.ones((4, 4), dtype=np.float32),
+        name='Displacement Magnitude',
+        colormap='viridis',
+        contrast_limits=(0.0, 5.0),
+        visible=True,
+    )
+    preview.contrast_limits = [0.1, 0.9]
+    preview.visible = False
+    assert preview.ndim == 2
+
+    # Full stream rebinds the same name to a 3D (num_frames, H, W) stack.
+    manager.begin_vector_field_stream('displacement', num_frames=3, vis_params=_vis_params())
+    manager.stream_vector_field_frame('displacement', 0, np.ones((4, 4, 2), dtype=np.float32))
+
+    mag = viewer.layers['Displacement Magnitude']
+    assert mag is not preview                 # recreated, not swapped
+    assert mag.ndim == 3
+    assert mag.data.shape == (3, 4, 4)
+    assert manager._layers['displacement_magnitude'] is mag  # cache points at new layer
+    # The settings that survive a re-run are preserved.
+    assert mag.contrast_limits == [0.1, 0.9]
+    assert mag.visible is False
+    # Exactly one magnitude layer remains (the stale 2D one was removed).
+    assert sum(layer.name == 'Displacement Magnitude' for layer in viewer.layers) == 1
 
 
 def test_vector_field_leaves_unrelated_layers_untouched():

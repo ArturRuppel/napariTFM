@@ -187,35 +187,3 @@ def test_no_files_toggle_button(app):
     assert not hasattr(section, "files_btn")
 
 
-def test_section_exposes_viz_btn_checkable_and_visible_by_default(app):
-    section = StageSection("Preprocessing", QWidget())
-
-    assert section.viz_btn.objectName() == "stage_preprocessing_viz_button"
-    assert section.viz_btn.isCheckable()
-    assert section.viz_btn.isChecked() is True
-
-
-def test_viz_btn_toggle_emits_visualization_toggled_with_state(app):
-    section = StageSection("Preprocessing", QWidget())
-    emitted = []
-    section.visualization_toggled.connect(emitted.append)
-
-    section.viz_btn.setChecked(False)
-    section.viz_btn.setChecked(True)
-
-    assert emitted == [False, True]
-
-
-def test_viz_btn_uses_vector_icon_not_text(app):
-    section = StageSection("Preprocessing", QWidget())
-
-    assert section.viz_btn.text() == ""
-    assert not section.viz_btn.icon().isNull()
-
-
-def test_viz_btn_tooltip_reflects_visibility_state(app):
-    section = StageSection("Preprocessing", QWidget())
-    assert "Hide" in section.viz_btn.toolTip()
-
-    section.viz_btn.setChecked(False)
-    assert "Show" in section.viz_btn.toolTip()

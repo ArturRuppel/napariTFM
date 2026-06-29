@@ -27,6 +27,14 @@ class DisplacementParameters:
     inner_iterations: int = 10
     median_filtering: int = 9
 
+    # Farneback internals (defaults match OpenCV's typical values; previously
+    # hardcoded as DisplacementAnalyzer constants). use_gaussian_window selects
+    # the OPTFLOW_FARNEBACK_GAUSSIAN flag (Gaussian vs. box windowing).
+    pyr_scale: float = 0.5
+    poly_n: int = 5
+    poly_sigma: float = 1.2
+    use_gaussian_window: bool = False
+
     # Analysis parameters
     downscale_factor: int = 4
     pixel_size: float = 0.1
@@ -121,6 +129,10 @@ class UnifiedParameters:
     nscales: int = 10
     inner_iterations: int = 10
     median_filtering: int = 9
+    pyr_scale: float = 0.5
+    poly_n: int = 5
+    poly_sigma: float = 1.2
+    use_gaussian_window: bool = False
     downscale_factor: int = 4
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0
@@ -163,6 +175,10 @@ class UnifiedParameters:
             nscales=self.nscales,
             inner_iterations=self.inner_iterations,
             median_filtering=self.median_filtering,
+            pyr_scale=self.pyr_scale,
+            poly_n=self.poly_n,
+            poly_sigma=self.poly_sigma,
+            use_gaussian_window=self.use_gaussian_window,
             downscale_factor=self.downscale_factor,
             pixel_size=self.pixel_size,
             frame_interval=self.frame_interval,

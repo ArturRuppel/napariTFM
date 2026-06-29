@@ -150,7 +150,8 @@ class ParameterManager(QObject):
             ],
             ParameterCategory.DISPLACEMENT: [
                 'nscales', 'inner_iterations',
-                'median_filtering', 'downscale_factor',
+                'median_filtering', 'pyr_scale', 'poly_n', 'poly_sigma',
+                'use_gaussian_window', 'downscale_factor',
                 'disp_vector_stride', 'disp_arrow_scale', 'd_max'
             ],
             ParameterCategory.FORCE: [

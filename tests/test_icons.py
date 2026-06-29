@@ -26,7 +26,7 @@ def _opaque_count(pixmap):
 
 def test_icon_names_cover_the_header_action_set():
     assert set(ICON_NAMES) == {
-        "files", "params", "preview", "run", "cancel", "power", "plus", "viz",
+        "files", "params", "preview", "run", "cancel", "power", "plus",
         "gcv", "mesh",
     }
 

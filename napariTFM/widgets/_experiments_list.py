@@ -333,6 +333,7 @@ class ExperimentsList(QWidget):
 
         self._staging_label = QLabel("")
         self._staging_label.setStyleSheet(f"color: {TEXT_DIM};")
+        self._staging_label.setVisible(False)
         layout.addWidget(self._staging_label)
 
         # Rows live in a bounded scroll region: a long discovered list scrolls
@@ -642,6 +643,8 @@ class ExperimentsList(QWidget):
             if n
             else ""
         )
+        # Don't reserve a blank line when nothing is staged.
+        self._staging_label.setVisible(n > 0)
 
     # -- queries ---------------------------------------------------------
     def experiments(self) -> list[str]:
@@ -919,6 +922,13 @@ class ExperimentsList(QWidget):
             row.set_selected(path in self._selected_paths)
             self._rows_box.addWidget(row)
             self._rows.append(row)
+        self._update_table_visibility()
+
+    def _update_table_visibility(self) -> None:
+        """Collapse the empty table so the action bar sits flush under the
+        input-file form. The bounded scroll region (and its "Folder" header
+        placeholder) only earns its 300px once there are rows to show."""
+        self._rows_scroll.setVisible(bool(self._paths))
 
     def _update_meta(self) -> None:
         n = len(self._paths)
