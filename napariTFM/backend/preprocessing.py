@@ -316,8 +316,14 @@ class ImageProcessor:
         warp_mode = cv2.MOTION_TRANSLATION if mode == 'translation' else cv2.MOTION_EUCLIDEAN
         warp_matrix = np.eye(2, 3, dtype=np.float32)
 
-        # Define termination criteria
-        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 1000, 1e-10)
+        # Define termination criteria. ECC stops at whichever comes first: the
+        # iteration cap or an inter-iteration correlation improvement below eps.
+        # eps must be reachable in the uint8 ECC working precision — 1e-10 never
+        # is, so frames that don't lock on immediately previously burned the full
+        # iteration budget (each iteration warps the whole image), stalling the
+        # run on hard-to-register frames. 100 iters at 1e-6 keeps sub-pixel
+        # accuracy on convergent frames while bounding the worst-case cost.
+        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 100, 1e-6)
 
         try:
             cc, warp_matrix = cv2.findTransformECC(

@@ -135,6 +135,7 @@ class _StubVisualizationManager:
 
 class _StubController(QObject):
     progress_updated = Signal(int, str)
+    ui_frozen = Signal(bool)
 
 
 class _StubStageWidget(QWidget):
@@ -682,6 +683,59 @@ def test_run_all_progress_marks_running_then_refreshes(monkeypatch, app, tmp_pat
     # running -> mark_running; done -> refresh from disk.
     assert ("run", "/data/exp_a") in seen
     assert ("refresh",) in seen
+
+
+def test_stage_freeze_surfaces_cancel_button(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    section = widget._stage_sections_by_key["displacement"]
+
+    # A frozen controller (run or preview in flight) pins the pill to 'running',
+    # which is what flips the header button into the wired Cancel control.
+    widget.displacement_widget.controller.ui_frozen.emit(True)
+    assert section.status == "running"
+    assert section.run_cancel_btn.isEnabled() is True
+    assert "Cancel" in section.run_cancel_btn.toolTip()
+
+    # Clicking the surfaced button while running invokes the cancel handler.
+    section.run_cancel_btn.click()
+    assert widget.displacement_widget.action_calls["cancel"] == 1
+
+
+def test_stage_unfreeze_refreshes_statuses(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    refreshed = []
+    monkeypatch.setattr(
+        widget, "refresh_stage_statuses", lambda: refreshed.append(True)
+    )
+
+    widget.force_widget.controller.ui_frozen.emit(False)
+    assert refreshed == [True]
+
+
+def test_run_all_toggles_cancel_button_and_cancels_batch(monkeypatch, app):
+    cancelled = []
+
+    class _CancellableBatch(_FakeBatchAnalysis):
+        def process_all_folders(self):
+            # Mid-run, the active button is a Cancel; clicking it must reach
+            # the live batch's request_cancel.
+            assert self.parent_list.run_all_btn.text() == "Cancel"
+            self.parent_list._on_run_all_clicked()
+
+        def request_cancel(self):
+            cancelled.append(True)
+
+    monkeypatch.setattr(_widget, "BatchAnalysis", _CancellableBatch)
+    widget = _stub_main_widget(monkeypatch)
+    _CancellableBatch.parent_list = widget.experiments_list
+    widget.experiments_list.add_folders(["/data/exp_a"])
+
+    widget.experiments_list.run_all_requested.emit()
+
+    assert cancelled == [True]
+    # The button is restored once the run returns.
+    assert widget.experiments_list.run_all_btn.text() == "Run all"
+    assert widget._active_batch is None
 
 
 def test_run_all_with_no_experiments_is_a_noop(monkeypatch, app):

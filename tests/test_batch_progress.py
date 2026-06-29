@@ -9,6 +9,7 @@ def _analysis(callback, root_folders):
     analysis = BatchAnalysis.__new__(BatchAnalysis)
     analysis.config = {"root_folders": root_folders}
     analysis._progress_callback = callback
+    analysis._cancelled = False
     return analysis
 
 
@@ -51,6 +52,28 @@ def test_failure_reports_error_and_continues(tmp_path, monkeypatch):
     assert events == [
         (a, "running"), (a, "error"),
         (b, "running"), (b, "done"),
+    ]
+
+
+def test_request_cancel_halts_at_next_folder_boundary(tmp_path, monkeypatch):
+    a, b, c = (str(tmp_path / n) for n in ("a", "b", "c"))
+    events = []
+    analysis = _analysis(
+        lambda folder, status: events.append((folder, status)), [a, b, c]
+    )
+
+    # Cancel is requested while the first folder is "running" (as a live Cancel
+    # click would land via the pumped event loop); the run stops before folder b.
+    def _cancel_after_a(folder, output_dir):
+        if folder == a:
+            analysis.request_cancel()
+
+    monkeypatch.setattr(analysis, "process_folder", _cancel_after_a)
+    analysis.process_all_folders()
+
+    assert events == [
+        (a, "running"), (a, "done"),
+        (b, "cancelled"),
     ]
 
 

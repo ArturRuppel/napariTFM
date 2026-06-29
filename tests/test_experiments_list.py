@@ -335,6 +335,32 @@ def test_run_all_button_click_emits_run_all_requested(app):
     assert seen == [True]
 
 
+def test_run_all_button_becomes_cancel_while_active(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    assert widget.run_all_btn.text() == "Run all"
+
+    widget.set_run_all_active(True)
+    assert widget.run_all_btn.text() == "Cancel"
+    assert widget.run_all_btn.isEnabled() is True
+
+    widget.set_run_all_active(False)
+    assert widget.run_all_btn.text() == "Run all"
+
+
+def test_active_run_all_button_click_emits_cancel_not_run(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a"])
+    runs, cancels = [], []
+    widget.run_all_requested.connect(lambda: runs.append(True))
+    widget.cancel_run_all_requested.connect(lambda: cancels.append(True))
+
+    widget.set_run_all_active(True)
+    widget.run_all_btn.click()
+    assert runs == []
+    assert cancels == [True]
+
+
 def test_mark_running_sets_that_rows_enabled_dots_to_running(app):
     def status_fn(path):
         return {"preprocessing": "ready", "displacement": "not_started",
@@ -627,3 +653,40 @@ def test_apply_output_dir_sets_manager_and_emits(app, tmp_path):
 def test_output_dir_button_has_expected_object_name(app):
     widget = ExperimentsList(data_manager=_StubDM())
     assert widget.choose_output_dir_btn.objectName() == "experiments_output_dir_button"
+
+
+def test_experiments_list_starts_expanded(app):
+    widget = ExperimentsList()
+    assert widget.is_collapsed() is False
+    assert widget._body.isHidden() is False
+    assert widget._header_summary.isHidden() is True
+
+
+def test_toggle_collapsed_folds_body_and_shows_summary(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b"])
+
+    widget.toggle_collapsed()
+    assert widget.is_collapsed() is True
+    assert widget._body.isHidden() is True
+    # The header keeps a compact count so the single folded row stays informative.
+    assert widget._header_summary.isHidden() is False
+    assert widget._header_summary.text() == "2 experiments"
+
+    widget.toggle_collapsed()
+    assert widget.is_collapsed() is False
+    assert widget._body.isHidden() is False
+    assert widget._header_summary.isHidden() is True
+
+
+def test_collapsed_summary_tracks_experiment_count(app):
+    widget = ExperimentsList()
+    widget.set_collapsed(True)
+    assert widget._header_summary.text() == "0 experiments"
+    widget.set_experiments(["/data/a"])
+    assert widget._header_summary.text() == "1 experiment"
+
+
+def test_collapse_button_has_expected_object_name(app):
+    widget = ExperimentsList()
+    assert widget.collapse_btn.objectName() == "experiments_collapse_button"

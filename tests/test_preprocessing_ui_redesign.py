@@ -460,6 +460,32 @@ def test_isolate_layers_shows_only_kept_layers_hiding_the_rest():
     assert viewer.layers["Force Magnitude"].visible is False
 
 
+def test_isolate_layers_keeps_colorbar_legend_visible():
+    viewer = _FakeViewer()
+    manager = VisualizationManager(viewer, DataManager())
+    for name in (
+        "Displacement Magnitude",
+        "Displacement Vectors",
+        "Displacement (µm) Colorbar",
+        "Displacement (µm) Colorbar Label",
+    ):
+        viewer.add_image(np.ones((2, 2), dtype=np.float32), name=name)
+    # Pretend the colorbar manager has rendered its legend layers for this preview.
+    manager.colorbar_manager._layer_names = [
+        "Displacement (µm) Colorbar",
+        "Displacement (µm) Colorbar Label",
+    ]
+
+    manager.isolate_layers(["Displacement Magnitude", "Displacement Vectors"])
+
+    # The previewed stage layers stay on, and the legend rides along with them
+    # instead of being hidden as an "other" layer.
+    assert viewer.layers["Displacement Magnitude"].visible is True
+    assert viewer.layers["Displacement Vectors"].visible is True
+    assert viewer.layers["Displacement (µm) Colorbar"].visible is True
+    assert viewer.layers["Displacement (µm) Colorbar Label"].visible is True
+
+
 def test_preprocessing_preview_isolates_to_beads_on_enable(app):
     viewer = _FakeViewer()
     data_manager = DataManager()

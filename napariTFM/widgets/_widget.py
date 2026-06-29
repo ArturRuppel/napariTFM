@@ -499,6 +499,8 @@ class napariTFMWidget(QWidget):
             self._on_experiments_changed
         )
         self.experiments_list.run_all_requested.connect(self._run_all_experiments)
+        self.experiments_list.cancel_run_all_requested.connect(self._cancel_run_all)
+        self._active_batch = None
         container_layout.addWidget(self.experiments_list)
 
         self._active_experiment: str | None = None
@@ -670,6 +672,21 @@ class napariTFMWidget(QWidget):
                 section.enabled_changed.connect(
                     lambda _enabled, k=key: self._on_stage_enabled_changed(k)
                 )
+
+        # While a stage's controller has the UI frozen for a long-running op, flip
+        # that stage's pill into 'running' so the header's run/cancel button shows
+        # the Cancel control (the cancel handler is always wired). On unfreeze,
+        # re-read disk truth so the dots settle back to done/ready/off.
+        self._freeze_widgets_by_key = {
+            "preprocessing": self.preprocessing_widget,
+            "displacement": self.displacement_widget,
+            "force": self.force_widget,
+            "stress": self.msm_widget,
+        }
+        for key, stage_widget in self._freeze_widgets_by_key.items():
+            stage_widget.controller.ui_frozen.connect(
+                lambda frozen, k=key: self._on_stage_freeze(k, frozen)
+            )
 
         container_layout.setSpacing(0)
         for section in self._stage_sections:
@@ -911,13 +928,28 @@ class napariTFMWidget(QWidget):
             disabled_stages=self._disabled_stages(),
         )
         analyzer = BatchAnalysis(config, progress_callback=self._on_batch_progress)
+        self._active_batch = analyzer
+        self.experiments_list.set_run_all_active(True)
         try:
             analyzer.process_all_folders()
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Run-all failed")
             QMessageBox.critical(self, "Run all", f"Batch run failed: {exc}")
         finally:
+            self._active_batch = None
+            self.experiments_list.set_run_all_active(False)
             self.refresh_stage_statuses()
+
+    def _cancel_run_all(self) -> None:
+        """Ask the live batch to stop at the next folder boundary (P4 / item 1).
+
+        The batch runs synchronously on the GUI thread; the per-folder progress
+        callback pumps the event loop (``processEvents``), so this click is
+        delivered between folders and the cooperative flag halts the next one.
+        """
+        if self._active_batch is not None:
+            self._active_batch.request_cancel()
+            self.status_label.setText("Batch — cancelling…")
 
     def _on_batch_progress(self, folder: str, status: str) -> None:
         """Live per-folder feedback for Run-all: walk the rail, then refresh (P4)."""
@@ -933,8 +965,26 @@ class napariTFMWidget(QWidget):
         elif status == "error":
             self.experiments_list.refresh_statuses()
             self.status_label.setText(f"Batch — failed {name}")
+        elif status == "cancelled":
+            self.experiments_list.refresh_statuses()
+            self.status_label.setText("Batch — cancelled")
         # Keep the rail repainting between folders during the in-process run.
         QApplication.processEvents()
+
+    def _on_stage_freeze(self, key: str, frozen: bool) -> None:
+        """Surface the Cancel control while a stage runs, then re-read disk truth.
+
+        A frozen controller means a stage (run *or* preview) is in flight; pinning
+        the pill to 'running' is what flips the header's run/cancel button to the
+        wired Cancel. On unfreeze we refresh from disk so the dots settle.
+        """
+        section = self._stage_sections_by_key.get(key)
+        if section is None:
+            return
+        if frozen:
+            section.set_status("running")
+        else:
+            self.refresh_stage_statuses()
 
     def refresh_stage_statuses(self):
         for key, panel in self._stage_status_panels_by_key.items():

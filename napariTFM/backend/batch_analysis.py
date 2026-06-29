@@ -170,6 +170,16 @@ class BatchAnalysis:
         # ``callback(folder_path, status)`` with status in
         # {"running", "done", "error"} so a live UI can walk the rail.
         self._progress_callback = progress_callback
+        self._cancelled = False
+
+    def request_cancel(self) -> None:
+        """Ask the batch to stop at the next folder boundary (cooperative).
+
+        Set by a Cancel control during a Run-all; the folder loop checks the flag
+        before starting each folder, so an in-flight folder finishes but no
+        further folders are processed.
+        """
+        self._cancelled = True
 
     def _format_duration(self, seconds: float) -> str:
         """Format duration in appropriate units (seconds or minutes)."""
@@ -208,6 +218,9 @@ class BatchAnalysis:
             print(f"WARNING: {warning}")
 
         for folder in self.config['root_folders']:
+            if getattr(self, "_cancelled", False):
+                self._report_progress(folder, "cancelled")
+                break
             self._report_progress(folder, "running")
             try:
                 self.process_folder(folder, plan.output_dirs[folder])

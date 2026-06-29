@@ -42,12 +42,48 @@ def _colorbar_dimensions(image_height: int, image_width: int) -> Tuple[int, int,
     return image_height, bar_width, gap, label_gap
 
 
+def _value_range(reference_layer) -> Tuple[float, float]:
+    """Best-effort (min, max) for the colorbar scale from the reference layer."""
+    limits = getattr(reference_layer, "contrast_limits", None)
+    if limits is not None and len(limits) >= 2:
+        return float(limits[0]), float(limits[1])
+
+    data = np.asarray(reference_layer.data)
+    if data.size == 0:
+        return 0.0, 1.0
+    return float(np.nanmin(data)), float(np.nanmax(data))
+
+
+def format_scale_value(value: float) -> str:
+    """Format a colorbar endpoint compactly with sensible precision."""
+    value = float(value)
+    magnitude = abs(value)
+    if magnitude == 0:
+        return "0"
+    if magnitude >= 100:
+        return f"{value:.0f}"
+    if magnitude >= 10:
+        return f"{value:.1f}"
+    if magnitude >= 1:
+        return f"{value:.2f}"
+    return f"{value:.3g}"
+
+
 class ViewerColorbarManager:
     """Render simple colorbar legends as napari viewer layers."""
 
     def __init__(self, viewer):
         self.viewer = viewer
         self._layer_names = []
+
+    @property
+    def layer_names(self) -> Tuple[str, ...]:
+        """Names of the colorbar layers (legend + label) currently in the viewer."""
+        return tuple(self._layer_names)
+
+    def is_colorbar_layer(self, name: str) -> bool:
+        """True if ``name`` is one of this manager's rendered legend layers."""
+        return name in self._layer_names
 
     def clear(self) -> None:
         if self.viewer is None:
@@ -74,7 +110,13 @@ class ViewerColorbarManager:
 
         colorbar_name = f"{label} Colorbar"
         label_name = f"{label} Colorbar Label"
+        max_name = f"{label} Colorbar Max"
+        min_name = f"{label} Colorbar Min"
         colorbar_x = image_width + gap
+        bar_center_x = colorbar_x + bar_width / 2.0
+        # Numbers sit just off the right edge of the bar, flush with its ends.
+        number_x = colorbar_x + bar_width + max(3.0, bar_width * 0.5)
+        vmin, vmax = _value_range(reference_layer)
 
         colorbar_layer = self.viewer.add_image(
             make_vertical_colorbar_image(colormap_name, bar_height, bar_width),
@@ -87,7 +129,7 @@ class ViewerColorbarManager:
         )
 
         label_position = np.array(
-            [[image_height / 2.0, colorbar_x + bar_width + label_gap]],
+            [[image_height / 2.0, bar_center_x]],
             dtype=float
         )
         label_layer = self.viewer.add_points(
@@ -104,7 +146,46 @@ class ViewerColorbarManager:
                 "size": 14,
                 "color": "white",
                 "anchor": "center",
+                "rotation": -90,
             },
         )
 
-        self._layer_names = [colorbar_layer.name, label_layer.name]
+        # Endpoint numbers: each sits just right of the bar and flush with one
+        # end — max anchored by its top-left to the bar's top, min by its
+        # bottom-left to the bar's bottom. A separate layer per number is needed
+        # because napari's text anchor is per-layer, not per-point.
+        max_layer = self._add_scale_number(
+            max_name, format_scale_value(vmax), 0.0, number_x,
+            "upper_left", (scale_y, scale_x), (translate_y, translate_x),
+        )
+        min_layer = self._add_scale_number(
+            min_name, format_scale_value(vmin), float(image_height), number_x,
+            "lower_left", (scale_y, scale_x), (translate_y, translate_x),
+        )
+
+        self._layer_names = [
+            colorbar_layer.name,
+            label_layer.name,
+            max_layer.name,
+            min_layer.name,
+        ]
+
+    def _add_scale_number(self, name, text, y, x, anchor, scale, translate):
+        """Add one flush colorbar endpoint number as a text-only points layer."""
+        return self.viewer.add_points(
+            np.array([[y, x]], dtype=float),
+            name=name,
+            size=0.01,
+            face_color=[0.0, 0.0, 0.0, 0.0],
+            border_color=[0.0, 0.0, 0.0, 0.0],
+            scale=scale,
+            translate=translate,
+            blending="translucent",
+            text={
+                "string": [text],
+                "size": 12,
+                "color": "white",
+                "anchor": anchor,
+                "rotation": 0,
+            },
+        )

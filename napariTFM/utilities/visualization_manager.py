@@ -127,8 +127,11 @@ class VisualizationManager(ErrorHandlingMixin):
         its own rather than blended with the previous stage's layers. Re-renders
         (e.g. a live preview reacting to a parameter change) must not call this:
         once isolated, the user's own visibility tweaks are theirs to keep.
+
+        The active colorbar legend always rides along with the kept layers, so a
+        preview shows the same scale legend the committed/result view does.
         """
-        keep = set(keep_names)
+        keep = set(keep_names) | set(self.colorbar_manager.layer_names)
         for layer in self.viewer.layers:
             layer.visible = layer.name in keep
 

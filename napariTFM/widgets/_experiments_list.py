@@ -279,6 +279,7 @@ class ExperimentsList(QWidget):
     experiments_changed = Signal()
     active_changed = Signal(str)
     run_all_requested = Signal()
+    cancel_run_all_requested = Signal()
     output_dir_changed = Signal()
 
     def __init__(
@@ -311,30 +312,56 @@ class ExperimentsList(QWidget):
         layout.setSpacing(COMPACT_SPACING)
         self.setLayout(layout)
 
+        # Header: a collapse caret, the section label, and a compact summary
+        # that only earns its place while the list is folded away.
+        self._collapsed = False
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
+        self.collapse_btn = QToolButton()
+        self.collapse_btn.setObjectName("experiments_collapse_button")
+        self.collapse_btn.setArrowType(Qt.DownArrow)
+        self.collapse_btn.setAutoRaise(True)
+        self.collapse_btn.setToolTip("Collapse the experiments list")
+        self.collapse_btn.clicked.connect(self.toggle_collapsed)
+        header.addWidget(self.collapse_btn)
         label = QLabel("EXPERIMENTS")
         label.setStyleSheet(f"color: {TEXT_MID}; font-weight: bold;")
         header.addWidget(label)
+        self._header_summary = QLabel("")
+        self._header_summary.setObjectName("experiments_header_summary")
+        self._header_summary.setStyleSheet(f"color: {TEXT_DIM};")
+        self._header_summary.setVisible(False)
+        header.addSpacing(COMPACT_SPACING)
+        header.addWidget(self._header_summary)
         header.addStretch()
 
         layout.addLayout(header)
 
+        # Everything below the header lives in one collapsible body, so folding
+        # the list is a single setVisible on the container.
+        self._body = QWidget()
+        self._body.setObjectName("experiments_body")
+        body_layout = QVBoxLayout()
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(COMPACT_SPACING)
+        self._body.setLayout(body_layout)
+        layout.addWidget(self._body)
+
         # Project-level calibration + output directory (the aggregation layer
         # owns these now; the old Project section is gone).
-        layout.addLayout(self._build_project_strip())
+        body_layout.addLayout(self._build_project_strip())
 
         # Staging for the two-step Discover→Commit flow (D2). The root is kept so
         # committed rows can derive their columns from the nesting under it.
         self._discovered: list[str] = []
         self._discover_root: Optional[str] = None
 
-        layout.addLayout(self._build_config_header())
+        body_layout.addLayout(self._build_config_header())
 
         self._staging_label = QLabel("")
         self._staging_label.setStyleSheet(f"color: {TEXT_DIM};")
         self._staging_label.setVisible(False)
-        layout.addWidget(self._staging_label)
+        body_layout.addWidget(self._staging_label)
 
         # Rows live in a bounded scroll region: a long discovered list scrolls
         # internally instead of pushing the rest of the panel down. The editable
@@ -352,7 +379,7 @@ class ExperimentsList(QWidget):
         self._rows_scroll.setMaximumHeight(480)
         self._rows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._rows_scroll.setWidget(rows_container)
-        layout.addWidget(self._rows_scroll)
+        body_layout.addWidget(self._rows_scroll)
         self._rebuild_table()
 
         # List actions live at the foot of the list, just above the count:
@@ -390,6 +417,7 @@ class ExperimentsList(QWidget):
 
         actions.addStretch()
 
+        self._run_all_active = False
         self.run_all_btn = QToolButton()
         self.run_all_btn.setObjectName("experiments_run_all_button")
         self.run_all_btn.setText("Run all")
@@ -398,13 +426,13 @@ class ExperimentsList(QWidget):
         )
         self.run_all_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.run_all_btn.setEnabled(False)
-        self.run_all_btn.clicked.connect(self.run_all_requested)
+        self.run_all_btn.clicked.connect(self._on_run_all_clicked)
         actions.addWidget(self.run_all_btn)
-        layout.addLayout(actions)
+        body_layout.addLayout(actions)
 
         self._meta = QLabel("")
         self._meta.setStyleSheet(f"color: {TEXT_DIM};")
-        layout.addWidget(self._meta)
+        body_layout.addWidget(self._meta)
         self._update_meta()
 
         if self._parameter_manager is not None:
@@ -826,6 +854,28 @@ class ExperimentsList(QWidget):
             row.set_stage_statuses(statuses)
             return
 
+    def _on_run_all_clicked(self) -> None:
+        """One button, two roles: start a Run-all, or cancel the live one."""
+        if self._run_all_active:
+            self.cancel_run_all_requested.emit()
+        else:
+            self.run_all_requested.emit()
+
+    def set_run_all_active(self, active: bool) -> None:
+        """Toggle the Run-all button between 'Run all' and a live 'Cancel'.
+
+        While active the button stays enabled (independent of row count) so the
+        in-flight batch can always be cancelled.
+        """
+        self._run_all_active = active
+        icon = "cancel" if active else "run"
+        self.run_all_btn.setText("Cancel" if active else "Run all")
+        self.run_all_btn.setIcon(
+            stage_action_icon(icon, muted_accent(stage_accent("force")))
+        )
+        if active:
+            self.run_all_btn.setEnabled(True)
+
     # -- internals -------------------------------------------------------
     def _on_row_clicked(self, path: str, flag: int) -> None:
         """Resolve a row click into the new active row + multi-selection.
@@ -934,6 +984,35 @@ class ExperimentsList(QWidget):
         n = len(self._paths)
         self._meta.setText(f"{n} experiment{'s' if n != 1 else ''}")
         self.run_all_btn.setEnabled(n > 0)
+        # Keep the folded-away summary current even while collapsed.
+        self._header_summary.setText(self._meta.text())
+
+    # -- collapse / expand ----------------------------------------------
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Fold the list down to its header row (or restore it).
+
+        Collapsing hides the whole body — calibration, input-file config, the
+        rows table, the action bar and the count — leaving only the header,
+        which then shows a compact experiment-count summary so the single
+        remaining row still says how much is hidden.
+        """
+        self._collapsed = bool(collapsed)
+        self._body.setVisible(not self._collapsed)
+        self._header_summary.setVisible(self._collapsed)
+        self.collapse_btn.setArrowType(
+            Qt.RightArrow if self._collapsed else Qt.DownArrow
+        )
+        self.collapse_btn.setToolTip(
+            "Expand the experiments list"
+            if self._collapsed
+            else "Collapse the experiments list"
+        )
+
+    def toggle_collapsed(self) -> None:
+        self.set_collapsed(not self._collapsed)
 
     def _on_add_clicked(self) -> None:  # pragma: no cover - GUI dialog
         dialog = QFileDialog(self, "Discover experiments under a root folder")

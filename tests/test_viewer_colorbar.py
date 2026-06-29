@@ -11,14 +11,18 @@ SPEC.loader.exec_module(viewer_colorbar)
 
 ViewerColorbarManager = viewer_colorbar.ViewerColorbarManager
 make_vertical_colorbar_image = viewer_colorbar.make_vertical_colorbar_image
+format_scale_value = viewer_colorbar.format_scale_value
 
 
 class _FakeLayer:
-    def __init__(self, name, data, scale=(1.0, 1.0), translate=(0.0, 0.0)):
+    def __init__(self, name, data, scale=(1.0, 1.0), translate=(0.0, 0.0),
+                 contrast_limits=None):
         self.name = name
         self.data = data
         self.scale = scale
         self.translate = translate
+        if contrast_limits is not None:
+            self.contrast_limits = contrast_limits
 
 
 class _FakeLayers(list):
@@ -88,6 +92,29 @@ def test_make_vertical_colorbar_image_returns_rgba_gradient():
     assert np.allclose(image[..., 3], 1.0)
 
 
+def test_format_scale_value_picks_compact_precision():
+    assert format_scale_value(0) == "0"
+    assert format_scale_value(1500) == "1500"      # large forces: no decimals
+    assert format_scale_value(-250) == "-250"      # signed stress endpoint
+    assert format_scale_value(42.0) == "42.0"
+    assert format_scale_value(1.5) == "1.50"
+    assert format_scale_value(0.0123) == "0.0123"  # small displacement (um)
+
+
+def test_viewer_colorbar_uses_data_range_when_contrast_limits_absent():
+    viewer = _FakeViewer()
+    data = np.array([[0.0, 2.0], [4.0, 8.0]], dtype=float)
+    reference = _FakeLayer(name="Force Magnitude", data=data)  # no contrast_limits
+    manager = ViewerColorbarManager(viewer)
+
+    manager.show_for_layer(reference, colormap_name="inferno", label="Force (Pa)")
+
+    _, max_kwargs = viewer.added_points[1]
+    _, min_kwargs = viewer.added_points[2]
+    assert max_kwargs["text"]["string"] == ["8.00"]
+    assert min_kwargs["text"]["string"] == ["0"]
+
+
 def test_viewer_colorbar_is_added_to_right_of_reference_layer():
     viewer = _FakeViewer()
     reference = _FakeLayer(
@@ -95,6 +122,7 @@ def test_viewer_colorbar_is_added_to_right_of_reference_layer():
         data=np.zeros((2, 40, 80), dtype=float),
         scale=(2.0, 3.0),
         translate=(10.0, 20.0),
+        contrast_limits=(0.0, 1.5),
     )
     manager = ViewerColorbarManager(viewer)
 
@@ -110,13 +138,64 @@ def test_viewer_colorbar_is_added_to_right_of_reference_layer():
     assert colorbar_kwargs["translate"][0] == 10.0
     assert colorbar_kwargs["translate"][1] > 20.0 + 80 * 3.0
 
-    assert len(viewer.added_points) == 1
+    assert len(viewer.added_points) == 3
     label_data, label_kwargs = viewer.added_points[0]
     assert label_data.shape == (1, 2)
+    # Label is rotated -90 degrees and centred over the colorbar column so it
+    # reads vertically along the bar without the glyphs appearing mirrored on
+    # napari's y-down canvas.
     assert label_data[0, 0] == 20
     assert label_data[0, 1] > 80
     assert label_kwargs["name"] == "Displacement (um) Colorbar Label"
     assert label_kwargs["text"]["string"] == ["Displacement (um)"]
+    assert label_kwargs["text"]["rotation"] == -90
+
+    # Scale endpoints: each is its own layer, sitting just right of the bar and
+    # flush with one end — max top-anchored to the top row (y == 0), min
+    # bottom-anchored to the bottom row (y == image height). Both sit to the
+    # right of the bar's centre column (the label's x), reading left-to-right.
+    max_data, max_kwargs = viewer.added_points[1]
+    min_data, min_kwargs = viewer.added_points[2]
+    assert max_data.shape == (1, 2)
+    assert min_data.shape == (1, 2)
+    assert max_kwargs["name"] == "Displacement (um) Colorbar Max"
+    assert min_kwargs["name"] == "Displacement (um) Colorbar Min"
+    assert max_data[0, 0] == 0           # flush with the top of the bar
+    assert min_data[0, 0] == 40          # flush with the bottom of the bar
+    assert max_data[0, 1] > label_data[0, 1]   # off to the right of the bar
+    assert min_data[0, 1] == max_data[0, 1]    # same column for both numbers
+    assert max_kwargs["text"]["string"] == ["1.50"]
+    assert max_kwargs["text"]["anchor"] == "upper_left"
+    assert min_kwargs["text"]["string"] == ["0"]
+    assert min_kwargs["text"]["anchor"] == "lower_left"
+    assert max_kwargs["text"]["rotation"] == 0
+
+
+def test_colorbar_layer_names_track_rendered_legend_layers():
+    viewer = _FakeViewer()
+    reference = _FakeLayer(name="Force Magnitude", data=np.zeros((30, 60), dtype=float))
+    manager = ViewerColorbarManager(viewer)
+
+    assert manager.layer_names == ()
+    assert manager.is_colorbar_layer("Force (Pa) Colorbar") is False
+
+    manager.show_for_layer(reference, colormap_name="inferno", label="Force (Pa)")
+
+    assert manager.layer_names == (
+        "Force (Pa) Colorbar",
+        "Force (Pa) Colorbar Label",
+        "Force (Pa) Colorbar Max",
+        "Force (Pa) Colorbar Min",
+    )
+    assert manager.is_colorbar_layer("Force (Pa) Colorbar") is True
+    assert manager.is_colorbar_layer("Force (Pa) Colorbar Label") is True
+    assert manager.is_colorbar_layer("Force (Pa) Colorbar Max") is True
+    assert manager.is_colorbar_layer("Force (Pa) Colorbar Min") is True
+    assert manager.is_colorbar_layer("Force Magnitude") is False
+
+    manager.clear()
+    assert manager.layer_names == ()
+    assert manager.is_colorbar_layer("Force (Pa) Colorbar") is False
 
 
 def test_viewer_colorbar_replaces_existing_legend_layers():
@@ -128,7 +207,12 @@ def test_viewer_colorbar_replaces_existing_legend_layers():
     manager.show_for_layer(reference, colormap_name="inferno", label="Force (Pa)")
 
     names = [layer.name for layer in viewer.layers]
-    assert names == ["Force (Pa) Colorbar", "Force (Pa) Colorbar Label"]
+    assert names == [
+        "Force (Pa) Colorbar",
+        "Force (Pa) Colorbar Label",
+        "Force (Pa) Colorbar Max",
+        "Force (Pa) Colorbar Min",
+    ]
 
 
 def test_viewer_colorbar_uses_napari_07_border_color_for_label_points():

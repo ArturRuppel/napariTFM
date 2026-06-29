@@ -245,6 +245,9 @@ class FTTCController(QObject):
                 elif layer.name == 'Force Magnitude':
                     magnitude_layer = layer
                     layer.visible = True
+                elif self.visualization_manager.colorbar_manager.is_colorbar_layer(layer.name):
+                    # Keep the scale legend visible alongside the preview.
+                    layer.visible = True
                 else:
                     layer.visible = False
 
