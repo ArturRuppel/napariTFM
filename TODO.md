@@ -29,7 +29,23 @@ columns + a viewer layer. Note: BISM still leaves the meshing path in place, so 
 "mesh doesn't map onto a napari layer" tension is **not** dissolved — revisit if
 BISM becomes the default.
 
-### 6. napari-native visualization engine  ·  L  (after #5)
+### 6. BISM automatic λ selection (L-curve / MAP)  ·  M
+The original `BISM.m` offers **three** ways to set the regularization λ
+(`meth_Lambda`): MAP auto-estimation, L-curve auto-estimation, or a fixed value.
+The port (§5) shipped only the **fixed-value** path and hands the user a manual
+λ slider (`bism_regularization`) — so the user now *has* to pick λ by hand, when
+the original could pick it for them. Port the **L-curve** selector (sweep λ over
+a log range, choose the point of maximal curvature in residual-norm ↔ prior-norm
+space) and/or the **MAP** fixed-point iteration, in `backend/bism.py`, wrapping
+whichever solver runs (full *and* masked paths). Surface as a **λ method**
+dropdown (Fixed / L-curve / MAP) via the existing `WHEN` sentinel — hide the λ
+slider when not Fixed. Threads a method enum through
+UnifiedParameters/MSMParameters/parameter_manager, same plumbing the λ slider
+took. Worth doing if λ turns out finicky across datasets. (Sibling deferred BISM
+item: persist per-pixel **uncertainty** — see §5 — which is what the original's
+`noise_value` knob feeds.)
+
+### 7. napari-native visualization engine  ·  L  (after #5)
 Swap the bespoke renderer for a **napari-native** path built on
 [`napari-movie-maker`](/home/aruppel/Projects/napari-movie-maker), so viewer and
 exported figures/movies share one rendering path.
@@ -44,7 +60,7 @@ exported figures/movies share one rendering path.
 - Retires `backend/batch_analysis_visualizations.py` (`BatchVisualizationSaver`,
   matplotlib + `imageio.mimsave` per stage).
 
-### 7. Parallel batch workers  ·  L
+### 8. Parallel batch workers  ·  L
 Batch config gains a **number-of-workers** parameter; positions are processed in
 parallel, **top positions first** (process in list order).
 - Decision: **workers compute, viewer follows one.** Workers process positions in

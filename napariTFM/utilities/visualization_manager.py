@@ -1246,7 +1246,7 @@ class VisualizationManager(ErrorHandlingMixin):
             name=node_layer_name
         )
 
-    def visualize_masks(self, masks: np.ndarray, downscale_factor: int = 1, name: str = 'Masks', opacity: float = 0.5):
+    def visualize_masks(self, masks: np.ndarray, downscale_factor: int = 1, name: str = 'Masks', opacity: float = 0.5, scale=None):
         """
         Visualize masks with proper scaling.
 
@@ -1260,6 +1260,11 @@ class VisualizationManager(ErrorHandlingMixin):
             Name of the layer in napari viewer
         opacity : float
             Opacity of the mask layer (0-1)
+        scale : sequence of float, optional
+            Per-axis world scale for the labels layer. Masks live on the
+            downsampled analysis grid; passing the input/mask size ratio here
+            renders them at the same size as the full-resolution input layers
+            without inflating the array.
         """
         # Remove existing mask layer if it exists
         if name in self.viewer.layers:
@@ -1275,11 +1280,12 @@ class VisualizationManager(ErrorHandlingMixin):
             upscaled_masks = masks
 
         # Add the mask layer
+        add_labels_kwargs = dict(name=name, visible=True, opacity=opacity)
+        if scale is not None:
+            add_labels_kwargs['scale'] = scale
         self.viewer.add_labels(
             upscaled_masks.astype(np.uint8),
-            name=name,
-            visible=True,
-            opacity=opacity
+            **add_labels_kwargs,
         )
 
     # endregion

@@ -1511,7 +1511,16 @@ class napariTFMWidget(QWidget):
             # the same way beads/reference do — no manual layer load required.
             mask_name = input_files.get("masks")
             if mask_name:
-                self.msm_widget.load_mask_from_file(Path(self._active_experiment) / mask_name)
+                # The mask is stored on the downsampled force grid; pass the bead
+                # image's xy size (read cheaply from disk — the bead arrays stream
+                # in asynchronously and aren't in memory yet) so the mask's
+                # visualization layer is scaled to fit the beads in the viewer.
+                beads_shape = self.preprocessing_widget.peek_input_xy_shape(
+                    self._active_experiment, input_files, "beads"
+                )
+                self.msm_widget.load_mask_from_file(
+                    Path(self._active_experiment) / mask_name, beads_shape=beads_shape
+                )
         self._update_disclosure()
 
     def _on_experiments_changed(self) -> None:

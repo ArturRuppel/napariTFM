@@ -146,3 +146,98 @@ def test_controller_freeze_emits_signal_without_panels(app):
     controller.freeze_ui()
     controller.unfreeze_ui()
     assert seen == [True, False]
+
+
+class _CapturingVisualizationManager:
+    def __init__(self):
+        self.calls = []
+
+    def visualize_masks(self, masks, *args, **kwargs):
+        self.calls.append((masks, kwargs))
+
+
+class _Forces:
+    def __init__(self, force_field):
+        self.force_field = force_field
+
+
+class _MaskDataManager:
+    """Holds optional force results (to downsample the mask) and a bead stack."""
+
+    def __init__(self, force_results=None, bead_stack=None):
+        self.force_results = force_results
+        self.bead_stack = bead_stack
+        self.mask_stack = None
+
+    def set_mask_stack(self, masks):
+        self.mask_stack = masks
+
+
+def _make_widget(viz, data_manager):
+    return mw.MSMWidget(
+        viewer=_FakeViewer(),
+        data_manager=data_manager,
+        parameter_manager=_FakeParameterManager(),
+        visualization_manager=viz,
+    )
+
+
+def test_mask_layer_scaled_to_fit_beads(app):
+    import numpy as np
+
+    # Force grid downsamples the mask to (10, 15); beads are (40, 60).
+    force_field = np.zeros((3, 10, 15, 2), dtype=np.float32)
+    viz = _CapturingVisualizationManager()
+    widget = _make_widget(viz, _MaskDataManager(force_results=_Forces(force_field)))
+
+    raw_mask = np.ones((3, 40, 60), dtype=np.uint8)
+    widget._apply_mask_data(raw_mask, warn=False, beads_shape=(40, 60))
+
+    masks, kwargs = viz.calls[-1]
+    # Stored/displayed array stays on the downsampled grid (not inflated)...
+    assert masks.shape == (3, 10, 15)
+    assert widget.data_manager.mask_stack.shape == (3, 10, 15)
+    # ...but the layer is scaled by the actual bead/mask xy ratio to fit the beads.
+    assert kwargs["scale"] == (1.0, 4.0, 4.0)
+
+
+def test_mask_layer_scaled_to_fit_beads_without_force_results(app):
+    import numpy as np
+
+    # No force results → mask kept at its file resolution (12, 9); beads (36, 36).
+    viz = _CapturingVisualizationManager()
+    widget = _make_widget(viz, _MaskDataManager(force_results=None))
+
+    raw_mask = np.ones((2, 12, 9), dtype=np.uint8)
+    widget._apply_mask_data(raw_mask, warn=False, beads_shape=(36, 36))
+
+    masks, kwargs = viz.calls[-1]
+    assert masks.shape == (2, 12, 9)
+    assert kwargs["scale"] == (1.0, 3.0, 4.0)
+
+
+def test_mask_layer_unscaled_when_matching_beads(app):
+    import numpy as np
+
+    force_field = np.zeros((2, 32, 32, 2), dtype=np.float32)
+    viz = _CapturingVisualizationManager()
+    widget = _make_widget(viz, _MaskDataManager(force_results=_Forces(force_field)))
+
+    widget._apply_mask_data(
+        np.ones((2, 32, 32), dtype=np.uint8), warn=False, beads_shape=(32, 32)
+    )
+
+    _, kwargs = viz.calls[-1]
+    assert kwargs["scale"] is None
+
+
+def test_mask_layer_scale_is_none_without_a_beads_shape(app):
+    import numpy as np
+
+    viz = _CapturingVisualizationManager()
+    widget = _make_widget(viz, _MaskDataManager())
+
+    widget._apply_mask_data(np.ones((1, 8, 8), dtype=np.uint8), warn=False)
+
+    _, kwargs = viz.calls[-1]
+    assert kwargs["scale"] is None

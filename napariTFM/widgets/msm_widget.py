@@ -509,15 +509,22 @@ class MSMWidget(BaseAnalysisWidget):
         if not isinstance(mask_data, np.ndarray):
             QMessageBox.warning(self, "Invalid Layer", "Selected layer is not a valid image layer.")
             return
-        self._apply_mask_data(mask_data, warn=True)
+        # Manual load happens after inputs are in memory, so read the bead size
+        # straight off the data manager to fit the mask to it in the viewer.
+        self._apply_mask_data(mask_data, warn=True, beads_shape=self._loaded_beads_shape())
 
-    def load_mask_from_file(self, mask_path) -> bool:
+    def load_mask_from_file(self, mask_path, beads_shape=None) -> bool:
         """Load a mask stack from a TIFF on disk into memory.
 
         Used to auto-load an experiment's discovered ``masks.tif`` on selection so
         the Stress stage's Run/Preview enable without a manual layer load. Silent
         and best-effort: a missing or unreadable file is a no-op (the user can
         still load a mask manually). Returns True when a mask was loaded.
+
+        ``beads_shape`` is the bead image's ``(height, width)``; when given, the
+        mask's visualization layer is scaled so its xy dimensions fit the beads.
+        The caller supplies it because the bead stack itself loads asynchronously
+        and may not be in memory yet on selection.
         """
         from pathlib import Path
 
@@ -533,15 +540,17 @@ class MSMWidget(BaseAnalysisWidget):
             return False
         if not isinstance(mask_data, np.ndarray):
             return False
-        self._apply_mask_data(mask_data, warn=False)
+        self._apply_mask_data(mask_data, warn=False, beads_shape=beads_shape)
         return True
 
-    def _apply_mask_data(self, mask_data: np.ndarray, *, warn: bool) -> None:
+    def _apply_mask_data(self, mask_data: np.ndarray, *, warn: bool, beads_shape=None) -> None:
         """Resize a raw mask onto the analysis grid, store it, and show it.
 
         Shared by the manual (active-layer) and automatic (from-file) paths.
         ``warn`` pops the conversion/resize notices for the manual path but stays
         silent for the auto-load so selecting an experiment is quiet.
+        ``beads_shape`` is the bead image ``(height, width)`` the displayed mask
+        should be scaled to fit (``None`` leaves it at its own size).
         """
         force_results = self.data_manager.force_results
         force_field = force_results.force_field if force_results is not None else None
@@ -550,8 +559,35 @@ class MSMWidget(BaseAnalysisWidget):
             for warning in warnings:
                 QMessageBox.warning(self, "Warning", warning)
         self.data_manager.set_mask_stack(processed_masks)
-        self.visualization_manager.visualize_masks(processed_masks)
+        # The stored mask sits on the (downsampled) force grid, so the labels layer
+        # is smaller than the full-resolution bead image. Scale the *visualization*
+        # layer so its xy dimensions fit the beads, without inflating the array.
+        self.visualization_manager.visualize_masks(
+            processed_masks,
+            scale=self._mask_display_scale(processed_masks, beads_shape),
+        )
         self._update_ui_state()
+
+    def _loaded_beads_shape(self):
+        """Bead image ``(height, width)`` from the data manager, or ``None``."""
+        beads = getattr(self.data_manager, "bead_stack", None)
+        if beads is not None and beads.ndim >= 2:
+            return tuple(beads.shape[-2:])
+        return None
+
+    def _mask_display_scale(self, masks: np.ndarray, beads_shape):
+        """Per-axis world scale that fits the displayed mask to the bead image.
+
+        Compares the actual mask and bead xy shapes; ``None`` when there is no
+        bead shape to fit to or the mask already matches it.
+        """
+        if beads_shape is None:
+            return None
+        my, mx = masks.shape[-2:]
+        ty, tx = beads_shape[-2:]
+        if my == 0 or mx == 0 or (my, mx) == (ty, tx):
+            return None
+        return (1.0, ty / my, tx / mx)
 
     def _update_stress_parameters(self, category: ParameterCategory):
         """Refresh cached MSM parameters when a parameter reset occurs."""

@@ -286,6 +286,26 @@ class PreprocessingController(QObject):
         if self.preview_enabled:
             self._update_preview()
 
+    def peek_input_xy_shape(self, folder, input_files, slot="beads"):
+        """Read one input file's ``(height, width)`` from disk without loading it.
+
+        ``_open_lazy`` memmaps the TIFF (~1 ms), so this is cheap to call on the
+        UI thread. Lets callers learn the bead image size synchronously even
+        though ``load_input_files`` streams the arrays in asynchronously. Returns
+        ``None`` when the slot is unnamed, missing, or unreadable.
+        """
+        name = (input_files or {}).get(slot)
+        if not folder or not name:
+            return None
+        path = Path(folder) / name
+        if not path.exists():
+            return None
+        try:
+            arr = _open_lazy(path)
+            return tuple(arr.shape[-2:])
+        except Exception:
+            return None
+
     def load_input_files(self, folder, input_files):
         """Load an experiment's raw input files lazily and off the UI thread.
 
