@@ -1,17 +1,11 @@
 from dataclasses import asdict, fields
-from typing import Dict, Any, Tuple
+from typing import Dict, Any
 from enum import Enum, auto
 import math
 import yaml
 from pathlib import Path
 from qtpy.QtCore import QObject, Signal
 from napariTFM.backend.parameter_dataclasses import PreprocessingParameters, DisplacementParameters, FTTCParameters, MSMParameters, UnifiedParameters
-from napariTFM.backend.parameter_validation import (
-    validate_displacement_parameters,
-    validate_fttc_parameters,
-    validate_msm_parameters,
-    validate_preprocessing_parameters,
-)
 
 
 class ParameterCategory(Enum):
@@ -211,12 +205,6 @@ class ParameterManager(QObject):
         # Update all parameters
         self._update_all_parameters(new_params)
 
-    def save_to_file(self, filepath: Path) -> None:
-        """Save parameters to file"""
-        data = asdict(self._parameters)
-        with open(filepath, 'w') as f:
-            yaml.dump(data, f, default_flow_style=False)
-
     def _update_all_parameters(self, new_params: UnifiedParameters) -> None:
         """Update all parameters with validation"""
         old_values = asdict(self._parameters)
@@ -225,31 +213,3 @@ class ParameterManager(QObject):
         for name, new_value in new_values.items():
             if old_values.get(name) != new_value:
                 self.set_parameter(name, new_value)
-
-    def validate_all_parameters(self) -> Tuple[bool, str]:
-        """Validate all parameters using service validation methods"""
-        # Check preprocessing parameters
-        preproc_params = self.get_preprocessing_parameters()
-        valid, msg = validate_preprocessing_parameters(preproc_params)
-        if not valid:
-            return False, f"Preprocessing parameters invalid: {msg}"
-
-        # Check displacement parameters
-        disp_params = self.get_displacement_parameters()
-        valid, msg = validate_displacement_parameters(disp_params)
-        if not valid:
-            return False, f"Displacement parameters invalid: {msg}"
-
-        # Check force parameters
-        force_params = self.get_fttc_parameters()
-        valid, msg = validate_fttc_parameters(force_params)
-        if not valid:
-            return False, f"Force parameters invalid: {msg}"
-
-        # Check stress parameters
-        stress_params = self.get_msm_parameters()
-        valid, msg = validate_msm_parameters(stress_params)
-        if not valid:
-            return False, f"Stress parameters invalid: {msg}"
-
-        return True, ""

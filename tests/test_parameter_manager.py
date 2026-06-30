@@ -111,9 +111,6 @@ def test_parameter_manager_validation_does_not_import_services(monkeypatch):
     ]
     assert imported_service_modules == []
 
-    manager = module.ParameterManager()
-    assert manager.validate_all_parameters() == (True, "")
-
 
 def test_validation_helpers_return_compatible_results():
     assert validate_preprocessing_parameters(

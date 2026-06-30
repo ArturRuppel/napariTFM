@@ -940,25 +940,12 @@ def test_only_stress_stage_is_optional(monkeypatch, app):
         assert widget._stage_sections_by_key[key].enable_btn is None
 
 
-def test_disabling_stress_marks_it_off_and_persists_in_state(monkeypatch, app):
+def test_disabling_stress_marks_it_off(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     stress = widget._stage_sections_by_key["stress"]
 
     stress.set_enabled(False)
     assert stress.spine._status == "off"
-    assert widget.get_state()["disabled_stages"] == ["stress"]
-
-
-def test_set_state_restores_disabled_stages(monkeypatch, app):
-    widget = _stub_main_widget(monkeypatch)
-    stress = widget._stage_sections_by_key["stress"]
-
-    widget.set_state({"parameters": {}, "disabled_stages": ["stress"]})
-    assert stress.is_enabled is False
-    assert stress.spine._status == "off"
-
-    widget.set_state({"parameters": {}, "disabled_stages": []})
-    assert stress.is_enabled is True
 
 
 def test_main_widget_lets_dock_determine_width(monkeypatch, app):
@@ -1550,48 +1537,6 @@ def test_completion_signal_triggers_single_refresh(monkeypatch, app):
     assert calls["n"] == 1
 
 
-def test_get_set_state_round_trips_parameters(monkeypatch, app, tmp_path):
-    import importlib.util as _ilu
-
-    _pm_spec = _ilu.spec_from_file_location(
-        "napariTFM.utilities.parameter_manager_real",
-        Path(__file__).parent.parent / "napariTFM" / "utilities" / "parameter_manager.py",
-    )
-    _pm_mod = _ilu.module_from_spec(_pm_spec)
-    _pm_spec.loader.exec_module(_pm_mod)
-    ParameterManager = _pm_mod.ParameterManager
-
-    _dm_spec = _ilu.spec_from_file_location(
-        "napariTFM.utilities.data_manager_real",
-        Path(__file__).parent.parent / "napariTFM" / "utilities" / "data_manager.py",
-    )
-    _dm_mod = _ilu.module_from_spec(_dm_spec)
-    _dm_spec.loader.exec_module(_dm_mod)
-    DataManager = _dm_mod.DataManager
-
-    monkeypatch.setattr(_widget, "DataManager", DataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", ParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    for name in (
-        "PreprocessingWidget", "DisplacementAnalysisWidget",
-        "FTTCWidget", "MSMWidget",
-    ):
-        monkeypatch.setattr(_widget, name, _StubStageWidget)
-
-    widget = _widget.napariTFMWidget(object())
-    widget.data_manager.set_output_dir(tmp_path)
-
-    widget.parameter_manager.set_parameter("rolling_ball_radius", 7)
-    state = widget.get_state()
-    assert state["parameters"]["rolling_ball_radius"] == 7
-    assert state["output_dir"] == str(tmp_path)
-
-    widget.parameter_manager.set_parameter("rolling_ball_radius", 0)
-    widget.set_state(state)
-    assert widget.parameter_manager.get_parameter("rolling_ball_radius") == 7
-
-
-
 def test_calibration_change_updates_all_stage_widgets(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
@@ -1800,21 +1745,6 @@ def test_disabling_stress_refreshes_experiment_minirails(monkeypatch, app):
     row = widget.experiments_list._rows[0]
     fill, ring = row.mini_rail.appearance("stress")
     assert fill is None  # stress dot now reads 'off'
-
-
-def test_state_round_trips_experiments_and_active(monkeypatch, app):
-    widget = _stub_main_widget(monkeypatch)
-    widget.experiments_list.set_experiments(["/data/a", "/data/b"])
-    widget.experiments_list.set_active("/data/b")
-
-    state = widget.get_state()
-    assert state["experiments"] == ["/data/a", "/data/b"]
-    assert state["active_experiment"] == "/data/b"
-
-    fresh = _stub_main_widget(monkeypatch)
-    fresh.set_state(state)
-    assert fresh.experiments_list.experiments() == ["/data/a", "/data/b"]
-    assert fresh.experiments_list.active() == "/data/b"
 
 
 def test_toolbar_exposes_project_and_parameter_buttons(monkeypatch, app):

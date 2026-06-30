@@ -25,7 +25,7 @@ from napariTFM.backend.displacement_analysis import (
 )
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
 from napariTFM.backend.bism import calculate_bism_stresses
-from napariTFM.backend.msm import calculate_stresses, generate_mesh_stack, process_mask_data
+from napariTFM.backend.msm import calculate_stresses, generate_mesh_stack
 from napariTFM.backend.ntfm_writer import write_experiment_ntfm
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters, UnifiedParameters
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
@@ -608,32 +608,6 @@ class BatchAnalysis:
             print("No analysis results produced; skipping .ntfm write.")
             return
         print(f"Saved data artifact: {ntfm_path}")
-
-    def _mask_on_grid(
-        self,
-        mask_data: Optional[np.ndarray],
-        force_result: Optional[FTTCResult],
-        displacement_result: Optional[DisplacementResult],
-    ) -> Optional[np.ndarray]:
-        """Resize the raw external mask onto the analysis grid, or ``None``."""
-        if mask_data is None:
-            return None
-
-        field = None
-        if force_result is not None:
-            field = force_result.force_field
-        elif displacement_result is not None:
-            field = displacement_result.displacement_field
-        if field is None:
-            return None
-
-        try:
-            # ``field`` is (nt, ny, nx, 2); process_mask_data resizes to its grid.
-            mask_stack, _ = process_mask_data(mask_data, field)
-            return mask_stack.astype(np.int64)
-        except Exception as e:
-            print(f"Could not align mask to analysis grid: {str(e)}")
-            return None
 
     def _execute_preprocessing(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
         """

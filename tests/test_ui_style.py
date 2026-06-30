@@ -3,7 +3,6 @@ from qtpy.QtWidgets import QApplication, QGridLayout, QLabel
 
 from napariTFM.widgets._ui_style import (
     MUTED_TEXT_COLOR,
-    STAGE_ACCENTS,
     caption_style,
     danger_text_style,
     muted_stage_accent,

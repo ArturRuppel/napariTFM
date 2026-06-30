@@ -85,12 +85,6 @@ class DataManager:
     def has_valid_output_dir(self) -> bool:
         return self._output_dir is not None and self._output_dir.exists() and self._output_dir.is_dir()
 
-    def ensure_output_dir(self) -> Path:
-        if self._output_dir is None:
-            raise ValueError("Output directory is not set")
-        self._output_dir.mkdir(parents=True, exist_ok=True)
-        return self._output_dir
-
     def set_active_inputs(self, folder, input_files) -> None:
         """Point the raw-input disk check at the active experiment.
 

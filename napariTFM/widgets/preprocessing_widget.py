@@ -41,7 +41,6 @@ class PreprocessingController(QObject):
     preprocessing_started = Signal()
     preprocessing_completed = Signal(dict)  # Results dictionary
     preprocessing_failed = Signal(str)  # Error message
-    preview_updated = Signal()
     data_updated = Signal(str)  # Data type that was updated
     ui_frozen = Signal(bool)
 
@@ -766,12 +765,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Cancel action is always enabled
         self._action_enabled["cancel"] = True
         self.action_states_changed.emit()
-
-    def _check_preprocessed_data(self) -> bool:
-        """Check availability of preprocessed data."""
-        return (self.data_manager.preprocessed_bead_stack is not None or
-                self.data_manager.preprocessed_reference is not None or
-                self.data_manager.preprocessed_cell_stack is not None)
 
     # endregion
 

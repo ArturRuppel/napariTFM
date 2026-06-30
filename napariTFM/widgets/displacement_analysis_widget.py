@@ -319,13 +319,6 @@ class DisplacementController(QObject):
             self.active_workers.clear()
             self.unfreeze_ui()
 
-    def _handle_progress(self, progress_info: dict):
-        """Handle progress updates."""
-        self.progress_updated.emit(
-            progress_info['progress'],
-            progress_info['message']
-        )
-
     def _handle_error(self, error_msg: str):
         """Handle errors."""
         self.progress_updated.emit(0, f"Error: {error_msg}")

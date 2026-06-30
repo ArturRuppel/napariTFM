@@ -160,10 +160,6 @@ class CollapsibleSection(QWidget):
         """Show or hide the built-in toggle header row."""
         self._toggle.setVisible(visible)
 
-    def set_title(self, title: str) -> None:
-        self._base_title = title
-        self._toggle.setText(self._qt_display_text(title))
-
     def set_status(self, status: str | None) -> None:
         self._status = status
 
@@ -181,9 +177,6 @@ class CollapsibleSection(QWidget):
 
     def expand(self) -> None:
         self._toggle.setChecked(True)
-
-    def collapse(self) -> None:
-        self._toggle.setChecked(False)
 
     def _on_toggled(self, checked: bool) -> None:
         self._toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)

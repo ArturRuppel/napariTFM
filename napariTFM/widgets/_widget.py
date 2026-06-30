@@ -38,8 +38,6 @@ from napariTFM.utilities.viewer_sink import ViewerSink
 
 logger = logging.getLogger(__name__)
 
-CONFIG_FILENAME = "napariTFM_config.json"
-STATE_VERSION = 1
 PROJECT_FORMAT_VERSION = 2
 
 
@@ -1527,37 +1525,6 @@ class napariTFMWidget(QWidget):
         if not self._applying_state:
             self._dirty = True
 
-    def get_state(self) -> dict:
-        output_dir = self.data_manager.output_dir
-        return {
-            "version": STATE_VERSION,
-            "parameters": self.parameter_manager.get_all_parameters(),
-            "output_dir": str(output_dir) if output_dir else None,
-            "disabled_stages": self._disabled_stages(),
-            "experiments": self.experiments_list.experiments(),
-            "active_experiment": self.experiments_list.active(),
-        }
-
-    def set_state(self, state: dict) -> None:
-        if not isinstance(state, dict):
-            return
-        self._applying_state = True
-        try:
-            self._apply_parameters(state.get("parameters", {}))
-            # output_dir is intentionally NOT re-applied: the config lives
-            # inside output_dir, so the dir is already known when we load it.
-            disabled = set(state.get("disabled_stages") or [])
-            for key, section in self._stage_sections_by_key.items():
-                if section.enable_btn is not None:
-                    section.set_enabled(key not in disabled)
-            self.experiments_list.set_experiments(state.get("experiments") or [])
-            active = state.get("active_experiment")
-            if active:
-                self.experiments_list.set_active(active)
-        finally:
-            self._applying_state = False
-        self.refresh()
-
     def _reset_parameters(self):
         """Reset parameters to default values and notify all widgets."""
         try:
@@ -1581,7 +1548,7 @@ class napariTFMWidget(QWidget):
         """Apply a name→value dict of analysis knobs onto the shared manager.
 
         Unknown names are skipped (forward/backward-compatible files) and
-        ``registration_mode`` is normalised, mirroring :meth:`set_state`.
+        ``registration_mode`` is normalised.
         """
         if not isinstance(params, dict):
             return

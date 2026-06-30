@@ -17,42 +17,7 @@ DEFAULT_ROW_SPACING = 4
 
 MUTED_TEXT_COLOR = "#999"
 
-# ── Theme palettes ───────────────────────────────────────────────────────
-# Each palette maps semantic color names to hex. Stage keys reference these
-# names via STAGE_ACCENTS, so switching ACTIVE_PALETTE re-accents the whole UI.
-CIVIDIS = {
-    "rosewater": "#d6c35d", "pink": "#555c6d", "mauve": "#243c6e",
-    "red": "#555c6d", "peach": "#a79d73", "yellow": "#d6c35d",
-    "green": "#7d7c78", "teal": "#7d7c78", "sapphire": "#d6c35d",
-    "blue": "#555c6d",
-}
-VIRIDIS = {
-    "rosewater": "#9bd93c", "pink": "#31668e", "mauve": "#463480",
-    "red": "#31668e", "peach": "#38b977", "yellow": "#9bd93c",
-    "green": "#21918c", "teal": "#21918c", "sapphire": "#9bd93c",
-    "blue": "#31668e",
-}
-NORD = {
-    "rosewater": "#bf616a", "pink": "#b48ead", "mauve": "#b48ead",
-    "red": "#bf616a", "peach": "#d08770", "yellow": "#ebcb8b",
-    "green": "#a3be8c", "teal": "#8fbcbb", "sapphire": "#81a1c1",
-    "blue": "#5e81ac",
-}
-DRACULA = {
-    "rosewater": "#ffb86c", "pink": "#ff79c6", "mauve": "#bd93f9",
-    "red": "#ff5555", "peach": "#ffb86c", "yellow": "#f1fa8c",
-    "green": "#50fa7b", "teal": "#8be9fd", "sapphire": "#8be9fd",
-    "blue": "#6272a4",
-}
-
-THEME_PALETTES = {
-    "Cividis": CIVIDIS,
-    "Viridis": VIRIDIS,
-    "Nord": NORD,
-    "Dracula": DRACULA,
-}
 ACTIVE_THEME_NAME = "Cividis"
-ACTIVE_PALETTE = THEME_PALETTES[ACTIVE_THEME_NAME]
 
 # ── Ordered perceptual ramps ─────────────────────────────────────────────
 # Each theme is an ordered list of hex stops. Stages sample the ACTIVE ramp by
@@ -77,18 +42,6 @@ STAGE_RAMP_POSITION = {
     "force": 0.75, "stress": 1.0, "batch": 1.0,
 }
 
-# Stage key -> semantic palette color name. Each visible stage gets a
-# distinct accent so the workflow reads as ordered, themeable bands.
-STAGE_ACCENTS = {
-    "inputs": "sapphire",
-    "project": "sapphire",
-    "preprocessing": "blue",
-    "displacement": "mauve",
-    "force": "teal",
-    "stress": "peach",
-    "batch": "yellow",
-}
-
 STATUS_COLORS = {
     "not_started": "#8c8c8c",
     "ready": "#2f80ed",
@@ -103,12 +56,6 @@ STATUS_GLYPHS = {
     "missing_optional": "○",
     "running": "⟳",
     "error": "⚠",
-}
-
-ACTION_GLYPHS = {
-    "view": "👁",
-    "save": "💾",
-    "load": "↑",
 }
 
 # File-status dot colours: a stage's input/output artifacts read red (missing)
@@ -135,25 +82,8 @@ def file_status_state(available: bool, required: bool, error: bool) -> str:
     return "missing" if required else "optional"
 
 
-def make_icon_button(
-    owner: QWidget,
-    action: str,
-    object_name: str,
-    tooltip: str,
-    standard_icon: QStyle.StandardPixmap,
-) -> QToolButton:
-    button = QToolButton(owner)
-    button.setAutoRaise(True)
-    button.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
-    button.setIcon(owner.style().standardIcon(standard_icon))
-    button.setObjectName(object_name)
-    button.setToolTip(tooltip)
-    button.setToolButtonStyle(Qt.ToolButtonIconOnly)
-    return button
-
-
 def theme_names() -> tuple[str, ...]:
-    return tuple(THEME_PALETTES)
+    return tuple(THEME_RAMPS)
 
 
 def active_theme_name() -> str:
@@ -161,9 +91,8 @@ def active_theme_name() -> str:
 
 
 def set_active_theme(name: str) -> None:
-    global ACTIVE_PALETTE, ACTIVE_THEME_NAME, ACTIVE_RAMP
+    global ACTIVE_THEME_NAME, ACTIVE_RAMP
     ACTIVE_THEME_NAME = name
-    ACTIVE_PALETTE = THEME_PALETTES[name]
     ACTIVE_RAMP = THEME_RAMPS[name]
 
 
@@ -399,20 +328,6 @@ def danger_text_style() -> str:
     return "color: red;"
 
 
-def status_indicator_style(status: str) -> str:
-    color = STATUS_COLORS.get(status, STATUS_COLORS["not_started"])
-    return (
-        "background-color: "
-        f"{color};"
-        " border: 1px solid rgba(0, 0, 0, 80);"
-        " border-radius: 5px;"
-        " min-width: 10px;"
-        " max-width: 10px;"
-        " min-height: 10px;"
-        " max-height: 10px;"
-    )
-
-
 def section_grid() -> QGridLayout:
     """A 4-column grid (label, field, label, field) where field columns
     stretch — so sliders, combos, and labels fill the available width and
@@ -429,12 +344,6 @@ def section_grid() -> QGridLayout:
 
 def add_section_header(grid, row, widget):
     """Add a heading widget spanning all 4 columns of a section_grid."""
-    grid.addWidget(widget, row, 0, 1, 4)
-    return widget
-
-
-def add_section_full_row(grid, row, widget):
-    """Add a widget (separator, button row, …) spanning all 4 columns."""
     grid.addWidget(widget, row, 0, 1, 4)
     return widget
 
