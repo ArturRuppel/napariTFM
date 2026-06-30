@@ -41,7 +41,7 @@ def test_all_pipeline_steps_run_by_default():
 
 
 def test_disabled_stress_is_skipped():
-    # MSM keeps its on/off glyph as the disable path (D1).
+    # Stress keeps its on/off glyph as the disable path (D1).
     cfg = build_run_config(_RECORDS, {}, disabled_stages=["stress"])
     assert cfg["analysis_steps"]["stress"] is False
     assert cfg["analysis_steps"]["force"] is True
@@ -63,6 +63,11 @@ def test_experiment_metadata_maps_path_to_columns():
 def test_save_cache_flag_is_carried():
     assert build_run_config(_RECORDS, {})["save_cache"] is False
     assert build_run_config(_RECORDS, {}, save_cache=True)["save_cache"] is True
+
+
+def test_apply_mask_on_save_flag_is_carried():
+    assert build_run_config(_RECORDS, {})["apply_mask_on_save"] is False
+    assert build_run_config(_RECORDS, {}, apply_mask_on_save=True)["apply_mask_on_save"] is True
 
 
 def test_visualizations_and_metrics_are_constant_and_present():

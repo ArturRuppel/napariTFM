@@ -37,12 +37,6 @@ _ICON_BODIES = {
     ),
     # plus — "add folders"
     "plus": '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
-    # down-arrow onto a baseline — "export this row to a CSV file"
-    "export": (
-        '<line x1="12" y1="3" x2="12" y2="14"/>'
-        '<path d="M8 10 L12 14 L16 10"/>'
-        '<line x1="5" y1="19" x2="19" y2="19"/>'
-    ),
     # crosshair target — "auto-select the optimal regularization (GCV)"
     "gcv": (
         '<circle cx="12" cy="12" r="6.5"/>'
@@ -50,14 +44,6 @@ _ICON_BODIES = {
         '<line x1="12" y1="19" x2="12" y2="22.5"/>'
         '<line x1="1.5" y1="12" x2="5" y2="12"/>'
         '<line x1="19" y1="12" x2="22.5" y2="12"/>'
-    ),
-    # grid — "preview the finite-element mesh"
-    "mesh": (
-        '<rect x="3.5" y="3.5" width="17" height="17" rx="1.5"/>'
-        '<line x1="3.5" y1="9.2" x2="20.5" y2="9.2"/>'
-        '<line x1="3.5" y1="14.8" x2="20.5" y2="14.8"/>'
-        '<line x1="9.2" y1="3.5" x2="9.2" y2="20.5"/>'
-        '<line x1="14.8" y1="3.5" x2="14.8" y2="20.5"/>'
     ),
 }
 

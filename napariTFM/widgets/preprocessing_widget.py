@@ -52,9 +52,9 @@ class PreprocessingController(BaseAnalysisController):
         self._load_worker = None
 
         # Sliders emit valueChanged continuously while dragging, so parameter
-        # changes arrive in rapid bursts. Recomputing the (rolling-ball-heavy)
-        # preview on each one freezes the UI; instead coalesce a burst into a
-        # single recompute once the changes settle.
+        # changes arrive in rapid bursts. Recomputing the preview on each one
+        # freezes the UI; instead coalesce a burst into a single recompute
+        # once the changes settle.
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(150)
@@ -377,9 +377,9 @@ class PreprocessingController(BaseAnalysisController):
         GUI-thread slot can stale-check before touching napari layers.
         """
         for data_type, slot, layer_name in (
+            ('beads', 'beads', 'Beads'),
             ('reference', 'reference', 'Reference'),
-            ('beads', 'beads', 'Bead stack'),
-            ('cells', 'cells', 'Cell stack'),
+            ('cells', 'cells', 'Cells'),
         ):
             name = input_files.get(slot)
             if not name:
@@ -665,7 +665,9 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
     def _on_preview_toggled(self, enabled: bool):
         """Handle preview toggle."""
+        self._action_enabled["preview_active"] = enabled
         self.controller.toggle_preview(enabled)
+        self.action_states_changed.emit()
 
     def _on_process_clicked(self):
         """Handle process button click."""
@@ -722,6 +724,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
         # Uncheck preview if no data
         if not has_any_data and self.preview_check.isChecked():
             self.preview_check.setChecked(False)
+        self._action_enabled["preview_active"] = self.preview_check.isChecked()
 
         # Update action enablement - now uses _has_required_data()
         self._action_enabled["run"] = self._has_required_data()

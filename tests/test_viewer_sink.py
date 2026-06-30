@@ -78,9 +78,16 @@ class FakeData:
         self.calls.append(("stress_results", results))
 
 
-def _sink(pump=None, on_experiment=None):
+def _sink(pump=None, on_experiment=None, on_stage_progress=None):
     vis, data = FakeVis(), FakeData()
-    return ViewerSink(data, vis, pump=pump, on_experiment=on_experiment), vis, data
+    return (
+        ViewerSink(
+            data, vis, pump=pump, on_experiment=on_experiment,
+            on_stage_progress=on_stage_progress,
+        ),
+        vis,
+        data,
+    )
 
 
 # --- displacement / force ------------------------------------------------
@@ -292,3 +299,70 @@ def test_end_run_is_idempotent():
     vis.restored = None
     sink.end_run()  # second restore is a no-op
     assert vis.restored is None
+
+
+# --- per-stage progress (item #10, progressive loading bar) --------------
+
+def test_stage_started_reports_running_at_zero():
+    seen = []
+    sink, vis, data = _sink(on_stage_progress=lambda *a: seen.append(a))
+    sink.stage_started("displacement", 4, {
+        "v_max": 1.0, "vector_stride": 1, "arrow_scale": 1.0, "downscale_factor": 1,
+    })
+    assert seen == [("displacement", "running", 0.0)]
+
+
+def test_stage_frame_reports_growing_fraction():
+    seen = []
+    sink, vis, data = _sink(on_stage_progress=lambda *a: seen.append(a))
+    sink.stage_started("displacement", 4, {
+        "v_max": 1.0, "vector_stride": 1, "arrow_scale": 1.0, "downscale_factor": 1,
+    })
+    sink.stage_frame("displacement", 0, np.zeros((2, 2, 2)))
+    sink.stage_frame("displacement", 1, np.zeros((2, 2, 2)))
+    sink.stage_frame("displacement", 3, np.zeros((2, 2, 2)))
+    assert seen[1:] == [
+        ("displacement", "running", 0.25),
+        ("displacement", "running", 0.5),
+        ("displacement", "running", 1.0),
+    ]
+
+
+def test_stage_finished_reports_done_with_no_fraction():
+    seen = []
+    sink, vis, data = _sink(on_stage_progress=lambda *a: seen.append(a))
+    sink.stage_finished("force", "force-result")
+    assert seen == [("force", "done", None)]
+
+
+def test_stage_finished_reports_done_even_for_preprocessing_none_result():
+    """Preprocessing always finishes with result=None; that must still count
+    as a completed stage for progress purposes, not get silently dropped."""
+    seen = []
+    sink, vis, data = _sink(on_stage_progress=lambda *a: seen.append(a))
+    sink.stage_finished("preprocessing", None)
+    assert seen == [("preprocessing", "done", None)]
+
+
+def test_preprocessing_frame_progress_uses_frame_index_not_channel_count():
+    """A preprocessing frame can yield multiple channel calls per frame_index;
+    progress must track frames, not the extra per-channel stage_frame calls."""
+    seen = []
+    sink, vis, data = _sink(on_stage_progress=lambda *a: seen.append(a))
+    sink.stage_started("preprocessing", 2, {
+        "beads_shape": (2, 4, 4), "reference_shape": (4, 4), "cells_shape": None,
+    })
+    sink.stage_frame("preprocessing", 0, {"beads": np.zeros((4, 4))})
+    sink.stage_frame("preprocessing", 0, {"reference": np.zeros((4, 4))})
+    sink.stage_frame("preprocessing", 1, {"beads": np.zeros((4, 4))})
+    fractions = [s[2] for s in seen if s[1] == "running"]
+    assert fractions == [0.0, 0.5, 0.5, 1.0]
+
+
+def test_no_progress_callback_is_noop():
+    sink, vis, data = _sink()
+    sink.stage_started("force", 1, {
+        "v_max": 1.0, "vector_stride": 1, "arrow_scale": 1.0, "downscale_factor": 1,
+    })
+    sink.stage_frame("force", 0, np.zeros((2, 2, 2)))
+    sink.stage_finished("force", "force-result")  # must not raise

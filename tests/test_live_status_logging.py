@@ -29,6 +29,9 @@ class _WidgetStub:
 
     def __init__(self):
         self.status_label = _StatusLabelStub()
+        # No stage sections wired up — _relay_stage_status's spine-progress
+        # forwarding must be a no-op against an empty mapping, not require one.
+        self._stage_sections_by_key = {}
 
 
 # A leading "[YYYY-MM-DD HH:MM:SS] " stamp matching TeeLogger's format.

@@ -4,10 +4,6 @@ import types
 
 import pytest
 
-sys.modules.setdefault("gmsh", types.ModuleType("gmsh"))
-sys.modules.setdefault("solidspy", types.ModuleType("solidspy"))
-sys.modules.setdefault("solidspy.assemutil", types.ModuleType("solidspy.assemutil"))
-sys.modules.setdefault("solidspy.postprocesor", types.ModuleType("solidspy.postprocesor"))
 qtrangeslider = types.ModuleType("qtrangeslider")
 qtrangeslider.QRangeSlider = object
 sys.modules.setdefault("qtrangeslider", qtrangeslider)
@@ -15,13 +11,13 @@ sys.modules.setdefault("qtrangeslider", qtrangeslider)
 from napariTFM.backend.parameter_dataclasses import (
     DisplacementParameters,
     FTTCParameters,
-    MSMParameters,
+    StressParameters,
     PreprocessingParameters,
 )
 from napariTFM.backend.parameter_validation import (
     validate_displacement_parameters,
     validate_fttc_parameters,
-    validate_msm_parameters,
+    validate_stress_parameters,
     validate_preprocessing_parameters,
 )
 from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
@@ -133,19 +129,19 @@ def test_validation_helpers_return_compatible_results():
         FTTCParameters(young_modulus=0)
     ) == (False, "Young's modulus must be positive")
 
-    assert validate_msm_parameters(
-        MSMParameters(density_factor=0.001)
-    ) == (False, "Density factor is too low (< 0.005). This may lead to numerical instabilities.")
+    assert validate_stress_parameters(
+        StressParameters(max_stress=0)
+    ) == (False, "Maximum stress must be positive")
 
 
-def test_msm_parameters_have_no_mask_fields():
+def test_stress_parameters_have_no_mask_fields():
     import dataclasses
-    field_names = {f.name for f in dataclasses.fields(MSMParameters)}
+    field_names = {f.name for f in dataclasses.fields(StressParameters)}
     assert "threshold" not in field_names
     assert "dilation" not in field_names
     assert "smoothing_sigma" not in field_names
 
 
-def test_validate_msm_ignores_mask_params():
-    ok, _ = validate_msm_parameters(MSMParameters(density_factor=0.01))
+def test_validate_stress_ignores_mask_params():
+    ok, _ = validate_stress_parameters(StressParameters())
     assert ok is True

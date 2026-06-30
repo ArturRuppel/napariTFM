@@ -56,6 +56,11 @@ class StageSpine(QWidget):
         self._accent_above = accent
         self._accent_below = accent
         self._status = status
+        # Fractional completion (0..1) of an in-flight "running" stage, or None
+        # when no per-frame progress is known. None falls back to the original
+        # solid-fill node (the historical "running" look), which is also what a
+        # single-frame stage shows since its only update is 0%→100%.
+        self._progress: Optional[float] = None
         self.setFixedWidth(self.GUTTER_WIDTH)
         # Fixed width, but vertically the spine only *follows* its stage's height
         # rather than expanding to grab free space — otherwise each section
@@ -66,6 +71,20 @@ class StageSpine(QWidget):
 
     def set_status(self, status: str) -> None:
         self._status = status
+        if status != "running":
+            # Stale progress must not leak into the next run of this stage, or
+            # the node would briefly flash a half-filled ring on its next start.
+            self._progress = None
+        self.update()
+
+    def set_progress(self, fraction: Optional[float]) -> None:
+        """Set the in-flight fractional completion (0..1) of a running stage.
+
+        Only visible while ``status == "running"``; harmless to call at other
+        times since :meth:`paintEvent` ignores it then. Pass ``None`` to fall
+        back to the plain solid-fill "running" node.
+        """
+        self._progress = None if fraction is None else max(0.0, min(1.0, fraction))
         self.update()
 
     def set_accents(self, accent: str, above: Optional[str] = None, below: Optional[str] = None) -> None:
@@ -114,8 +133,22 @@ class StageSpine(QWidget):
             painter.drawLine(int(cx - r), self.NODE_Y, int(cx + r), self.NODE_Y)
             painter.end()
             return
+        rect = QRectF(cx - r, self.NODE_Y - r, 2 * r, 2 * r)
+        if self._status == "running" and self._progress is not None:
+            # A pie wedge growing clockwise from 12 o'clock reads as a fill
+            # level, so the node itself doubles as a tiny per-stage progress
+            # ring instead of just a flat "something is happening" amber dot.
+            painter.setPen(QPen(ring, 2))
+            painter.setBrush(QBrush(self.palette().color(self.backgroundRole())))
+            painter.drawEllipse(rect)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(ring))
+            span = -round(360 * 16 * self._progress)
+            painter.drawPie(rect, 90 * 16, span)
+            painter.end()
+            return
         centre = fill if fill is not None else self.palette().color(self.backgroundRole())
         painter.setPen(QPen(ring, 2))
         painter.setBrush(QBrush(centre))
-        painter.drawEllipse(QRectF(cx - r, self.NODE_Y - r, 2 * r, 2 * r))
+        painter.drawEllipse(rect)
         painter.end()

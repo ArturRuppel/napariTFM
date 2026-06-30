@@ -37,6 +37,7 @@ class StageSection(QWidget):
         optional: bool = False,
         enabled: bool = True,
         extra_actions: list[dict] | None = None,
+        preview_is_toggle: bool = False,
     ):
         super().__init__()
         self._title = title
@@ -47,6 +48,12 @@ class StageSection(QWidget):
         self._status = status
         self._optional = optional
         self._enabled = enabled if optional else True
+        # Toggle-style preview (persistent on/off, e.g. Preprocessing's live
+        # preview) renders the header pill as a checkable toggle so its
+        # pressed/active state reflects whether preview is currently on —
+        # distinct from the momentary, non-checkable one-shot preview button
+        # the other stages use.
+        self._preview_is_toggle = preview_is_toggle
         self.enable_btn = None
         self.status_panel = status_panel
         self.parameter_panel = parameter_panel
@@ -110,7 +117,8 @@ class StageSection(QWidget):
         self.params_btn.toggled.connect(self._set_parameter_panel_expanded)
 
         self.preview_button = self._create_glyph_button(
-            "preview", "▷", f"Preview {title}", "preview"
+            "preview", "▷", self._preview_tooltip(False), "preview",
+            checkable=self._preview_is_toggle,
         )
         preview_handler = self._actions.get("preview")
         if preview_handler is not None:
@@ -242,6 +250,15 @@ class StageSection(QWidget):
         self.spine.set_status(self._effective_status())
         self._refresh_action_states()
 
+    def set_progress(self, fraction: float | None) -> None:
+        """Forward a stage's fractional completion (0..1) to its spine node."""
+        self.spine.set_progress(fraction)
+
+    def _preview_tooltip(self, active: bool) -> str:
+        if not self._preview_is_toggle:
+            return f"Preview {self._title}"
+        return f"{'Stop' if active else 'Start'} live preview of {self._title}"
+
     def _refresh_action_states(self):
         if not self._enabled:
             self.run_cancel_btn.setEnabled(False)
@@ -253,6 +270,10 @@ class StageSection(QWidget):
         running = self._status == "running"
         self.run_cancel_btn.setEnabled(running or states.get("run", False))
         self.preview_button.setEnabled(states.get("preview", False))
+        if self._preview_is_toggle:
+            active = states.get("preview_active", False)
+            self.preview_button.setChecked(active)
+            self.preview_button.setToolTip(self._preview_tooltip(active))
         for key, button in self.extra_buttons.items():
             button.setEnabled(states.get(key, False))
 

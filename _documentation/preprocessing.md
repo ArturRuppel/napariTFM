@@ -8,7 +8,6 @@ The preprocessing backend provides functions for validating images and preproces
 - `params` (PreprocessingParameters): Configuration including:
   - Intensity scaling parameters (percentile ranges)
   - Gaussian smoothing parameters (sigma values)
-  - Rolling ball background correction radius
   - Registration mode and parameters
   - Separate parameter sets for cell and bead images
 
@@ -43,8 +42,7 @@ Generator yielding progress updates and returning final results:
 params = PreprocessingParameters(
     min_intensity_percentile=1,
     max_intensity_percentile=99,
-    gaussian_sigma=1.0,
-    rolling_ball_radius=50
+    gaussian_sigma=1.0
 )
 
 # Get the generator
@@ -108,7 +106,6 @@ The `info` dictionary contains:
 - final_std: Standard deviation after processing
 - intensity_range: (min, max) used for scaling
 - gaussian_sigma: Applied Gaussian smoothing sigma
-- rolling_ball_radius: Applied background correction radius
 
 ## ImageProcessor Class
 
@@ -123,21 +120,6 @@ ImageProcessor()
 No parameters required as all methods are stateless.
 
 ### Key Methods
-
-#### apply_rolling_ball
-
-```python
-apply_rolling_ball(image: np.ndarray, radius: float) -> np.ndarray
-```
-
-Applies rolling ball background subtraction.
-
-##### Parameters
-- `image` (np.ndarray): Input image
-- `radius` (float): Rolling ball radius in pixels
-
-##### Returns
-- np.ndarray: Background-corrected image in same dtype as input
 
 #### apply_gaussian_filter
 
@@ -202,22 +184,17 @@ Registers images using Enhanced Correlation Coefficient maximization.
 
 The preprocessing implementation follows a systematic pipeline:
 
-1. Background Correction (optional)
-   - Rolling ball algorithm for uneven illumination
-   - Preserves local intensity variations
-   - Skipped for cell images
-
-2. Noise Reduction
+1. Noise Reduction
    - Gaussian filtering with configurable sigma
    - Edge-preserving implementation
    - Separate parameters for cell/bead images
 
-3. Intensity Normalization
+2. Intensity Normalization
    - Percentile-based scaling to [0, 1]
    - Handles outliers robustly
    - Separate ranges for cell/bead images
 
-4. Registration (optional)
+3. Registration (optional)
    - ECC-based alignment
    - Supports translation-only or rigid registration
    - Automatic intensity normalization
@@ -226,5 +203,4 @@ The preprocessing implementation follows a systematic pipeline:
 The pipeline is optimized for microscopy data, providing:
 - Dtype preservation
 - Proper handling of both 8-bit and 16-bit images
-- Robust background correction
 - Accurate image registration

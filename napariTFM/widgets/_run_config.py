@@ -39,6 +39,7 @@ def build_run_config(
     disabled_stages: Iterable[str] = (),
     save_cache: bool = False,
     processed_root: object = None,
+    apply_mask_on_save: bool = False,
 ) -> dict:
     """Assemble the run config from the table's ``records`` + shared ``parameters``.
 
@@ -46,7 +47,7 @@ def build_run_config(
     ``input_files`` / ``columns``); folders run in record order and the input
     file names are taken from the first record (the table applies them
     uniformly). Every pipeline step is mandatory except stress, which is skipped
-    when ``"stress"`` is in ``disabled_stages`` (the MSM on/off glyph, D1). Each
+    when ``"stress"`` is in ``disabled_stages`` (the stress-stage on/off glyph, D1). Each
     row's free-form columns ride along as ``experiment_metadata`` for the saved
     config and the §5 aggregator.
     """
@@ -76,10 +77,14 @@ def build_run_config(
         "metrics_parameters": dict(_METRICS_PARAMETERS),
         "save_cache": bool(save_cache),
         "experiment_metadata": experiment_metadata,
-        # Where derived output lands; ``None`` means in-place (a ``processed/``
-        # bucket inside each input folder). The status dots and interactive
+        # Where derived output lands; ``None`` means in-place (a ``TFM_data/``
+        # bucket sibling of each input folder). The status dots and interactive
         # persist resolve against this same value, so all three agree.
         "processed_root": str(processed_root) if processed_root else None,
+        # Opt-in, default off: zero u_x/u_y/F_x/F_y (and stress) wherever the
+        # mask is background before writing the .ntfm (batch-only; interactive
+        # per-stage saves never set this).
+        "apply_mask_on_save": bool(apply_mask_on_save),
     }
 
 

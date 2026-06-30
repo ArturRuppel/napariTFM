@@ -28,7 +28,6 @@ class _StubParameterManager(QObject):
         self._values = {
             "pixel_size": 1.0,
             "frame_interval": 1.0,
-            "rolling_ball_radius": 0,
             "min_intensity_percentile": 0.0,
             "max_intensity_percentile": 100.0,
             "gaussian_sigma": 0.0,
@@ -60,13 +59,7 @@ class _StubParameterManager(QObject):
             "threshold": 0.0,
             "dilation": 10,
             "smoothing_sigma": 10.0,
-            "stress_method": "MSM",
-            "density_factor": 0.01,
-            "mesh_algorithm": "Frontal-Del.",
-            "use_optimization": True,
-            "poisson_ratio_cells": 0.5,
             "bism_regularization": -6.0,
-            "bism_lambda_method": "Fixed",
             "max_stress": 1.0,
         }
         self._callbacks = {}
@@ -202,6 +195,22 @@ class _StubVisualizationManager:
     def __init__(self, viewer, data_manager):
         self.viewer = viewer
         self.data_manager = data_manager
+        self.vector_stream_calls = []
+        self.vector_stream_frames = []
+        self.stress_stream_calls = []
+        self.stress_stream_frames = []
+
+    def begin_vector_field_stream(self, kind, num_frames, vis_params):
+        self.vector_stream_calls.append((kind, num_frames, dict(vis_params)))
+
+    def stream_vector_field_frame(self, kind, frame_index, field_frame):
+        self.vector_stream_frames.append((kind, frame_index, field_frame))
+
+    def begin_stress_stream(self, num_frames, max_stress, downscale_factor):
+        self.stress_stream_calls.append((num_frames, max_stress, downscale_factor))
+
+    def stream_stress_frame(self, frame_index, stress_tensor_frame):
+        self.stress_stream_frames.append((frame_index, stress_tensor_frame))
 
 
 class _StubController(QObject):
@@ -227,7 +236,6 @@ class _StubStageWidget(QWidget):
         self.preview_check = QCheckBox("Show Preview")
         self.analyze_btn = QPushButton("Analyze")
         self.preview_frame_btn = QPushButton("Preview Frame")
-        self.preview_mesh_btn = QPushButton("Preview Mesh")
         self.run_analysis_btn = QPushButton("Run Analysis")
         self.data_panel = QWidget()
         self.action_panel = QWidget()
@@ -263,9 +271,6 @@ class _StubStageWidget(QWidget):
 
     def gcv_action(self):
         self.action_calls["gcv"] = self.action_calls.get("gcv", 0) + 1
-
-    def mesh_action(self):
-        self.action_calls["mesh"] = self.action_calls.get("mesh", 0) + 1
 
     def action_states(self):
         return dict(self._action_states)
@@ -344,9 +349,9 @@ _stub_module(
     "napariTFM.widgets.displacement_analysis_widget",
     DisplacementAnalysisWidget=_StubStageWidget,
 )
-# msm_widget.py imports ParameterCategory which is not in our stub, so stub
+# stress_widget.py imports ParameterCategory which is not in our stub, so stub
 # the entire module to avoid that import path.
-_stub_module("napariTFM.widgets.msm_widget", MSMWidget=_StubStageWidget)
+_stub_module("napariTFM.widgets.stress_widget", StressWidget=_StubStageWidget)
 # fttc_widget is NOT stubbed at module level so that test_force_ownership.py
 # (collected after this file) sees the real module.
 # _stub_main_widget patches FTTCWidget per-test via monkeypatch instead.
@@ -373,7 +378,7 @@ def _stub_main_widget(monkeypatch):
         _widget, "DisplacementAnalysisWidget", _StubStageWidget
     )
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "MSMWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
     return _widget.napariTFMWidget(object())
 
 
@@ -618,6 +623,112 @@ def test_all_nan_displacement_stays_none(monkeypatch, app, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Tests: restored results also stream into the viewer (not just DataManager)
+# ---------------------------------------------------------------------------
+
+
+def test_load_displacement_streams_to_viewer(monkeypatch, app, tmp_path):
+    """Restoring displacement pushes every frame through the same
+    begin/stream_vector_field_frame calls a live run uses, so the viewer
+    isn't left empty after selecting an already-processed experiment."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_viz_disp"
+    folder.mkdir()
+
+    disp = np.ones((2, 2, 2, 2)) * 0.5
+    _write_ntfm(
+        folder,
+        config={"pixel_size": 0.1, "downscale_factor": 4, "d_max": 1.5},
+        displacement_field=disp,
+    )
+
+    widget._load_active_experiment_results(str(folder))
+
+    viz = widget.visualization_manager
+    assert len(viz.vector_stream_calls) == 1
+    kind, num_frames, vis_params = viz.vector_stream_calls[0]
+    assert kind == "displacement"
+    assert num_frames == 2
+    assert vis_params["v_max"] == pytest.approx(1.5)
+    assert vis_params["downscale_factor"] == 4
+
+    assert [f[1] for f in viz.vector_stream_frames] == [0, 1]
+    assert all(f[0] == "displacement" for f in viz.vector_stream_frames)
+
+
+def test_load_force_streams_to_viewer(monkeypatch, app, tmp_path):
+    """Restoring force pushes every frame into the 'force' vector-field stream."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_viz_force"
+    folder.mkdir()
+
+    disp = np.ones((1, 2, 2, 2)) * 0.3
+    force = np.ones((1, 2, 2, 2)) * 100.0
+    _write_ntfm(
+        folder,
+        config={"f_max": 250.0, "downscale_factor": 4},
+        displacement_field=disp,
+        force_field=force,
+    )
+
+    widget._load_active_experiment_results(str(folder))
+
+    viz = widget.visualization_manager
+    force_calls = [c for c in viz.vector_stream_calls if c[0] == "force"]
+    assert len(force_calls) == 1
+    _, num_frames, vis_params = force_calls[0]
+    assert num_frames == 1
+    assert vis_params["v_max"] == pytest.approx(250.0)
+
+    force_frames = [f for f in viz.vector_stream_frames if f[0] == "force"]
+    assert len(force_frames) == 1
+
+
+def test_load_stress_streams_to_viewer(monkeypatch, app, tmp_path):
+    """Restoring stress pushes every frame into the stress stream, using the
+    force grid's downscale_factor (matching stress_widget's live-run lookup)."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_viz_stress"
+    folder.mkdir()
+
+    disp = np.ones((1, 2, 2, 2)) * 0.2
+    force = np.ones((1, 2, 2, 2)) * 50.0
+    stress = np.ones((1, 2, 2, 2, 2)) * 0.01
+    _write_ntfm(
+        folder,
+        config={"max_stress": 3.0, "downscale_factor": 6},
+        displacement_field=disp,
+        force_field=force,
+        stress_tensor=stress,
+    )
+
+    widget._load_active_experiment_results(str(folder))
+
+    viz = widget.visualization_manager
+    assert len(viz.stress_stream_calls) == 1
+    num_frames, max_stress, downscale_factor = viz.stress_stream_calls[0]
+    assert num_frames == 1
+    assert max_stress == pytest.approx(3.0)
+    # Sourced from force_results.parameters.downscale_factor, not stress_params.
+    assert downscale_factor == widget.data_manager.force_results.parameters.downscale_factor
+
+    assert len(viz.stress_stream_frames) == 1
+
+
+def test_no_ntfm_streams_nothing(monkeypatch, app, tmp_path):
+    """No .ntfm on disk means no viewer streaming calls at all."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "empty_exp_viz"
+    folder.mkdir()
+
+    widget._load_active_experiment_results(str(folder))
+
+    viz = widget.visualization_manager
+    assert viz.vector_stream_calls == []
+    assert viz.stress_stream_calls == []
+
+
+# ---------------------------------------------------------------------------
 # Tests: full selection path via _on_active_experiment_changed
 # ---------------------------------------------------------------------------
 
@@ -667,7 +778,7 @@ def test_selecting_experiment_auto_loads_discovered_mask(monkeypatch, app, tmp_p
     }])
     widget.experiments_list.set_active(str(folder))
 
-    assert widget.msm_widget.loaded_mask_paths == [str(folder / "masks.tif")]
+    assert widget.stress_widget.loaded_mask_paths == [str(folder / "masks.tif")]
 
 
 def test_selecting_experiment_without_mask_does_not_load(monkeypatch, app, tmp_path):
@@ -688,7 +799,7 @@ def test_selecting_experiment_without_mask_does_not_load(monkeypatch, app, tmp_p
     }])
     widget.experiments_list.set_active(str(folder))
 
-    assert widget.msm_widget.loaded_mask_paths == []
+    assert widget.stress_widget.loaded_mask_paths == []
 
 
 def test_deselection_clears_results(monkeypatch, app, tmp_path):

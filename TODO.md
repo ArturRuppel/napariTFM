@@ -48,68 +48,40 @@ arrays are filled in place in the data manager, so the persist reads real data.
 Closely related to the backlog "Load processed `.ntfm` back into memory on
 selection."
 
-### 5. BISM as a selectable stress engine  ·  DONE (2026-06-30)
-~~Replace MSM with BISM~~ → **added BISM alongside MSM** (user's call: keep MSM
-intact, switch via a **Stress Method** dropdown). The validated BISM core moved
-to `napariTFM/backend/bism.py`; a unified `backend/stress.py::StressResult` both
-engines return (`MSMResult` is now an alias). `params.stress_method` ("MSM"/"BISM")
-dispatches in the batch (`_run_bism_stress`) and interactive (`MSMController`)
-runners; BISM skips the mesh phase. **FE mesh kept** (it's MSM's, still works).
-**Param panel is now engine-aware** (2026-06-30): a `WHEN(param, value)` sentinel
-in the Stress spec (`_widget.py`) swaps the whole knob set off the Method
-dropdown — MSM shows its mesh/material params, BISM shows its one real knob, the
-Bayesian regularization λ (a 10^x slider, `bism_regularization`, previously
-hardcoded at 1e-6 and now threaded through). `free_bc` stays fixed (validated True
-for masked monolayers). Built so retiring MSM later = deleting its WHEN block.
-Deferred follow-up: persist BISM's per-pixel **uncertainty** into the `.ntfm`
-columns + a viewer layer. Note: BISM still leaves the meshing path in place, so #7's
-"mesh doesn't map onto a napari layer" tension is **not** dissolved — revisit if
-BISM becomes the default.
+### 5. BISM as a selectable stress engine  ·  DONE (2026-06-30), superseded (2026-06-30)
+~~Replace MSM with BISM~~ → originally **added BISM alongside MSM** behind a
+**Stress Method** dropdown. **Superseded same day**: MSM was later ripped out
+entirely (see below) — BISM is now the only stress engine, no dropdown.
 
-### 6. BISM automatic λ selection — MAP DONE (2026-06-30); L-curve still open  ·  S
-**DECISION (2026-06-30): rip out the whole MAP machinery — it sucks.** The
-non-monotonic fixed point, the unstable separatrix, the scale-dependent λ₀, the
-log-grid root-find band-aid: too much fragile cleverness for a knob the user can
-set by hand. Tear out `_estimate_lambda_map`, the `noise_value_map` plumbing, the
-`bism_lambda_method` enum + **λ Method** dropdown + AND-gate sentinel, and the
-associated tests (`test_map_does_not_collapse_to_zero_field` et al.). Go back to
-**fixed λ only** for BISM; if we ever want auto-λ again, do L-curve fresh, not MAP.
-This makes the L-curve note below moot unless we revisit auto-selection from scratch.
+### 6. Rip out MSM and BISM's MAP auto-λ  ·  DONE (2026-06-30)
+**Both MSM and BISM's MAP machinery are fully removed** (user's call: MSM was
+never coming back as a real option, and MAP was "too much fragile cleverness for
+a knob the user can set by hand").
 
-The original `BISM.m` offers **three** ways to set the regularization λ
-(`meth_Lambda`): MAP auto-estimation, L-curve auto-estimation, or a fixed value.
-The §5 port shipped only **fixed-value**, forcing the user to pick λ by hand.
-**MAP is now ported** (`backend/bism.py::_estimate_lambda_map`) — the MAP/Jeffreys
-condition from `meth_Lambda==1` (the same fixed point `λ = l²·s_noise²/s_prior²`,
-the reference's full parameter/observation denominators + Jeffreys `+2`, no
-effective-parameters trace term), adapted to the masked counts (`2·ncell`, `ninf`).
-It also yields the MAP **noise estimate** (`meta["noise_value_map"]`) — the dormant
-`noise_value` slot that feeds §5's uncertainty maps. A `bism_lambda_method` enum
-("Fixed"/"MAP") threads through UnifiedParameters/MSMParameters/parameter_manager/
-msm_widget; the UI got a **λ Method** dropdown via a new `AND` WHEN-conjunction
-sentinel that hides the λ slider unless Fixed.
-
-**Robustness fix (2026-06-30):** the first cut copied BISM.m's *bare fixed-point
-iteration* from a hardcoded λ₀=1e-3 verbatim, and it returned **zero stress
-everywhere** on real-scale data. Root cause: `g(λ)=l²s²/s0²` is non-monotonic with
-an *unstable* separatrix; λ₀=1e-3 is calibrated to the paper's reference (l≈2, tiny
-tractions, natural λ≈1e-5) and only converges there. On napariTFM-scale data
-(smaller l, smooth fields, natural λ≈1e-6–1e-7) 1e-3 lands on the runaway side and
-λ explodes (→1e25), over-regularizing σ→0. Replaced the iteration with a
-**stable-fixed-point root-find**: scan g(λ) on a log grid, bracket the largest
-`+→−` crossing (attracting), refine with Brent. Scale-independent — recovers the
-correct field on the benchmark (R² 0.02→1.00) while still reproducing the
-reference's λ=8.88e-6. On genuinely noise-free data (no MAP optimum) it returns
-`None` and the caller falls back to the fixed λ with a warning. Test-locked in
-`test_bism_stress.py` incl. a `test_map_does_not_collapse_to_zero_field` regression
-(smooth fittable field where the old iteration zeroed out); UI gating in
-`test_workflow_shell.py`.
-**Still open — L-curve:** port `meth_Lambda==2` (sweep λ over a log range, pick
-the point of maximal curvature in residual-norm ↔ prior-norm space) as a third
-dropdown option ("L-curve"). The plumbing (enum, dropdown, AND-gate, masked-count
-adaptation) is all in place now — it's just the selector function + one dropdown
-entry. Worth it only if MAP turns out finicky on some datasets; MAP is the more
-coherent default since it does double duty with the §5 uncertainty follow-up.
+- **MSM gone**: `backend/msm.py`, `msm_numba_functions.py`, `mesh_generator.py`,
+  and `_validation/benchmark_MSM/` deleted outright; `gmsh`/`solidspy` dropped
+  from `pyproject.toml`. `widgets/msm_widget.py` → `widgets/stress_widget.py`
+  (`MSMWidget`/`MSMController` → `StressWidget`/`StressController`), stripped of
+  every MSM branch (`preview_mesh`, the mesh header glyph, the MSM half of every
+  `use_bism` conditional — those calls are now unconditional BISM). The mesh-only
+  `StressResult` fields (`nodes`/`elements`/`condition_number`/`residual`) are
+  gone; `method` defaults to `"BISM"`. `MSMParameters` → `StressParameters`
+  (mesh/material fields dropped); `MSMResult` alias gone, everything imports
+  `StressResult` from `backend/stress.py` directly (which also now hosts
+  `process_mask_data`, relocated out of `msm.py`). The Stress parameter-panel
+  section collapsed to a flat list (`bism_regularization` + `max_stress`) — no
+  more `WHEN`/`AND`-gated engine choice, since there's only one engine.
+- **MAP gone**: `_estimate_lambda_map`, `noise_value_map`, `lam_method`/`use_map`
+  threading, the `bism_lambda_method` field, and the **λ Method** dropdown +
+  AND-gate sentinel are all deleted from `bism.py`/`parameter_dataclasses.py`/
+  `_widget.py`. BISM always uses the fixed `bism_regularization` slider. The
+  L-curve idea (`meth_Lambda==2`) is genuinely moot now, not just "moot per a
+  note" — no auto-λ plumbing survives to extend.
+- Test suite updated to match (`test_msm_analysis.py` deleted, `process_mask_data`
+  test ported to `test_bism_stress.py`; MAP-specific tests in `test_bism_stress.py`
+  deleted; `test_stress_ownership.py`/`test_workflow_shell.py`/
+  `test_reload_on_selection.py` fixtures and dropdown tests updated/removed).
+  548 passed.
 
 ### 7. visualization engine — napari live viewer + matplotlib export  ·  DONE (2026-06-30)
 **Final decision (2026-06-30): the export renders with matplotlib; napari stays
@@ -165,30 +137,15 @@ parallel, **top positions first** (process in list order).
 
 ---
 
-## Backlog
+## Backlog (ranked, quick wins first)
 
-### Output results to `TFM_data/` next to the input, not `processed/`
-TFM results should **not** land in a folder called `processed`. They should go
-in a folder called `TFM_data` sitting **right next to the input data** — i.e. as
-a sibling of the input's containing folder. When an output-folder variable is
-set, the input folder structure is cloned into that output directory, and the
-`TFM_data` folder lives where the input data *would* be inside that cloned tree.
-Also **rename the artifact**: the single multi-series OME-TIFF holding all the
-results should be called `TFM_results.ome.tif` — not `<experiment_name>.ome.tif`
-(currently `batch_output.py::experiment_output_path`, line ~104).
+### Adding rows to an empty list should preload the first row  ·  S  ·  DONE (2026-06-30)
+When the `ExperimentsList` is empty and the user adds rows, the first added row
+should be **preloaded/selected automatically** (rather than leaving the list with
+no active selection). Saves a click and gives an active position for downstream
+actions to target.
 
-### Dedup preprocessed-TIFF persistence (batch vs. interactive)
-The preprocessed-image save lives as **two independent implementations** that
-only share the low-level `save_calibrated_tiff` helper:
-`backend/batch_analysis.py::_execute_preprocessing` (lines ~724-742) and
-`widgets/_widget.py::_persist_preprocessed_tiffs`. Parity is currently held by
-hand — which is exactly how the §3c bug happened (one path was wired, the other
-sat dead). Collapse the interactive path so it calls into the batch's
-preprocessing-save orchestration rather than reimplementing it, so there's one
-place that knows how a position's preprocessed TIFFs get written. Pure tidy-up,
-no behaviour change.
-
-### Remove the export icon from the experiments list (now just a copy-file button)
+### Remove the export icon from the experiments list (now just a copy-file button)  ·  S  ·  DONE (2026-06-30)
 The per-row Export button no longer does anything beyond copying the position's
 OME-TIFF elsewhere, so it's redundant — remove the control **and its logic**:
 - `widgets/_experiments_list.py`: the `export_btn` (lines ~233-243), the
@@ -200,42 +157,22 @@ OME-TIFF elsewhere, so it's redundant — remove the control **and its logic**:
 - Drop the `"export"` entry from `stage_action_icon` if nothing else uses it, and
   any test that asserts `experiment_row_export_button`.
 
-### Preprocessing param-panel layout cleanup
-Tidy the preprocessing widget (`napariTFM/widgets/preprocessing_widget.py`):
-- **Shorten the double sliders** a bit (they're wider than they need to be).
-- **Remove rolling-ball radius** entirely — both the front-end control and the
-  back-end parameter/usage.
-- **Regroup the params** into rows: 1 row Intensity, 1 row Cell Intensity, 1 row
-  sigma + cell sigma side by side, 1 row registration method.
-- **Reorder the input-file rows** to: bead stack (top), reference stack, cell
-  stack, Masks. **Rename the layers** to `Beads`, `Reference`, `Cells`, `Masks`.
+### Polish the colorbar legend  ·  S  ·  DONE (2026-06-30)
+Spacing, label alignment, endpoint-number placement — the `viewer_colorbar.py`
+knobs `COLORBAR_HEIGHT_FRACTION` / `LABEL_INSET_FRACTION` are the levers. Pure
+visual tuning, no plumbing.
 
-### Polish colorbar + progressive per-stage loading bar
-Two threads of viewer-legend / progress polish:
-- **Polish the colorbar** legend (spacing, label alignment, endpoint-number
-  placement — the `viewer_colorbar.py` knobs `COLORBAR_HEIGHT_FRACTION` /
-  `LABEL_INSET_FRACTION` are the levers).
-- **Progressive loading bar** for both **live** mode and **batch** mode: each
-  status circle/node should **fill up progressively** as its stage runs (not just
-  flip empty→done). One implementation that serves both modes.
-  **Investigate complexity first** — driving a smooth per-stage fill needs
-  intra-stage progress signals from the pipeline (the sink currently emits
-  stage-level start/finish, not fractional progress), so scope what granularity is
-  actually available before committing to a design.
+### Output results to `TFM_data/` next to the input, not `processed/`  ·  S/M  ·  DONE (2026-06-30)
+TFM results should **not** land in a folder called `processed`. They should go
+in a folder called `TFM_data` sitting **right next to the input data** — i.e. as
+a sibling of the input's containing folder. When an output-folder variable is
+set, the input folder structure is cloned into that output directory, and the
+`TFM_data` folder lives where the input data *would* be inside that cloned tree.
+Also **rename the artifact**: the single multi-series OME-TIFF holding all the
+results should be called `TFM_results.ome.tif` — not `<experiment_name>.ome.tif`
+(currently `batch_output.py::experiment_output_path`, line ~104).
 
-### Adding rows to an empty list should preload the first row
-When the `ExperimentsList` is empty and the user adds rows, the first added row
-should be **preloaded/selected automatically** (rather than leaving the list with
-no active selection). Saves a click and gives an active position for downstream
-actions to target.
-
-### Load processed `.ntfm` back into memory on selection
-Follow-up from the "stage runners weren't saving" fix: selecting an
-already-processed experiment reads "done" from disk, but the viewer layers stay
-empty until a stage re-runs. On selection, **load its `.ntfm` back into memory**
-so the viewer shows the stored result.
-
-### Apply-mask-on-save option in the batch config
+### Apply-mask-on-save option in the batch config  ·  M  ·  DONE (2026-06-30)
 Opt-in `apply_mask_on_save` flag: when a mask layer is present, **zero every map
 pixel where the mask is background (label 0)** before writing the `.ntfm` —
 `u_x, u_y, F_x, F_y` (and stress, if present) set to `0.0` wherever `mask == 0`.
@@ -248,11 +185,47 @@ The `mask` column records which pixels were zeroed (self-documenting).
 - **Where.** Batch write step (`backend/batch_analysis.py` →
   `ntfm.results_to_ntfm`), a pre-write array op. Interactive/preview unaffected.
 
-### Make preview toggle-vs-one-shot legible in the icons
-    Preview is inconsistent across stages: some stages **toggle** preview (on/off,
-    persistent state) while others fire it as a **one-shot** action. The icons don't
-    distinguish the two, so the control's behavior isn't predictable from looking at
-    it. Make toggle-style previews **render as toggles** in the icon set (a
-    pressed/active state that reflects the on/off), distinct from the one-shot
-    (momentary action) icons — so the UI tells the user which kind of preview each
-    stage offers before they click.
+### Preprocessing param-panel layout cleanup  ·  M  ·  DONE (2026-06-30)
+Tidy the preprocessing widget (`napariTFM/widgets/preprocessing_widget.py`):
+- **Shorten the double sliders** a bit (they're wider than they need to be).
+- **Remove rolling-ball radius** entirely — both the front-end control and the
+  back-end parameter/usage.
+- **Regroup the params** into rows: 1 row Intensity, 1 row Cell Intensity, 1 row
+  sigma + cell sigma side by side, 1 row registration method.
+- **Reorder the input-file rows** to: bead stack (top), reference stack, cell
+  stack, Masks. **Rename the layers** to `Beads`, `Reference`, `Cells`, `Masks`.
+
+### Dedup preprocessed-TIFF persistence (batch vs. interactive)  ·  M  ·  DONE (2026-06-30)
+The preprocessed-image save lives as **two independent implementations** that
+only share the low-level `save_calibrated_tiff` helper:
+`backend/batch_analysis.py::_execute_preprocessing` (lines ~724-742) and
+`widgets/_widget.py::_persist_preprocessed_tiffs`. Parity is currently held by
+hand — which is exactly how the §3c bug happened (one path was wired, the other
+sat dead). Collapse the interactive path so it calls into the batch's
+preprocessing-save orchestration rather than reimplementing it, so there's one
+place that knows how a position's preprocessed TIFFs get written. Pure tidy-up,
+no behaviour change.
+
+### Load processed `.ntfm` back into memory on selection  ·  M  ·  DONE (2026-06-30)
+Follow-up from the "stage runners weren't saving" fix: selecting an
+already-processed experiment reads "done" from disk, but the viewer layers stay
+empty until a stage re-runs. On selection, **load its `.ntfm` back into memory**
+so the viewer shows the stored result.
+
+### Make preview toggle-vs-one-shot legible in the icons  ·  M  ·  DONE (2026-06-30)
+Preview is inconsistent across stages: some stages **toggle** preview (on/off,
+persistent state) while others fire it as a **one-shot** action. The icons don't
+distinguish the two, so the control's behavior isn't predictable from looking at
+it. Make toggle-style previews **render as toggles** in the icon set (a
+pressed/active state that reflects the on/off), distinct from the one-shot
+(momentary action) icons — so the UI tells the user which kind of preview each
+stage offers before they click.
+
+### Progressive per-stage loading bar  ·  L (scope first)  ·  DONE (2026-06-30)
+For both **live** mode and **batch** mode: each status circle/node should **fill
+up progressively** as its stage runs (not just flip empty→done). One
+implementation that serves both modes. **Investigate complexity first** —
+driving a smooth per-stage fill needs intra-stage progress signals from the
+pipeline (the sink currently emits stage-level start/finish, not fractional
+progress), so scope what granularity is actually available before committing to
+a design. Biggest unknown in the backlog — do not start without scoping.

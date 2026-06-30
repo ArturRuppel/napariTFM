@@ -135,6 +135,12 @@ def dslider(lo, hi, val, step=0.1, decimals=2, tooltip="", *, step_buttons=True)
     return s
 
 
+# Range sliders span the full section-grid width by default, which reads
+# wider than the two-handle track needs; cap it so it doesn't stretch the
+# whole panel.
+RANGE_SLIDER_MAX_WIDTH = 260
+
+
 def rslider(lo, hi, low_val, high_val, step=0.1, decimals=2, tooltip=""):
     """A two-handle range slider for a min/max pair on one track.
 
@@ -151,6 +157,7 @@ def rslider(lo, hi, low_val, high_val, step=0.1, decimals=2, tooltip=""):
     s.setValue((low_val, high_val))
     s.setToolTip(tooltip)
     s.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    s.setMaximumWidth(RANGE_SLIDER_MAX_WIDTH)
     for label in s._handle_labels:
         label.setFont(mono_font())
     return s

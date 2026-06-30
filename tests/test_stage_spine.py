@@ -81,6 +81,53 @@ def test_spine_gradient_is_continuous_across_a_boundary(app):
     assert upper._gradient_stops()[-1][1].name() == lower._gradient_stops()[0][1].name()
 
 
+def test_spine_set_progress_stores_clamped_fraction(app):
+    spine = StageSpine("#2a788e", status="running")
+    spine.set_progress(0.5)
+    assert spine._progress == 0.5
+    spine.set_progress(1.4)
+    assert spine._progress == 1.0
+    spine.set_progress(-0.2)
+    assert spine._progress == 0.0
+
+
+def test_spine_set_progress_accepts_none(app):
+    spine = StageSpine("#2a788e", status="running")
+    spine.set_progress(0.5)
+    spine.set_progress(None)
+    assert spine._progress is None
+
+
+def test_spine_set_status_clears_stale_progress(app):
+    """A finished/restarted stage must not carry over its previous fill."""
+    spine = StageSpine("#2a788e", status="running")
+    spine.set_progress(0.7)
+    spine.set_status("done")
+    assert spine._progress is None
+
+    spine.set_status("running")
+    assert spine._progress is None
+
+
+def test_spine_paints_without_error_at_various_progress(app):
+    """Smoke test: the pie-wedge paint path doesn't raise for edge fractions."""
+    spine = StageSpine("#2a788e", status="running")
+    spine.resize(StageSpine.GUTTER_WIDTH, 40)
+    for fraction in (0.0, 0.25, 0.99, 1.0):
+        spine.set_progress(fraction)
+        spine.show()
+        app.processEvents()
+
+
+def test_stage_section_set_progress_forwards_to_spine(app):
+    from napariTFM.widgets._stage_section import StageSection
+    from qtpy.QtWidgets import QLabel
+
+    section = StageSection("Force", QLabel("body"), status="running")
+    section.set_progress(0.42)
+    assert section.spine._progress == 0.42
+
+
 def test_stage_section_owns_a_spine_and_forwards_status(app):
     from napariTFM.widgets._stage_section import StageSection
     from qtpy.QtWidgets import QLabel

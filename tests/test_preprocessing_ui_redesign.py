@@ -192,7 +192,6 @@ class _ParameterManager(QObject):
         from napariTFM.backend.parameter_dataclasses import PreprocessingParameters
 
         self._params = PreprocessingParameters(
-            rolling_ball_radius=0,
             min_intensity_percentile=0,
             max_intensity_percentile=100,
             gaussian_sigma=0,
@@ -353,6 +352,27 @@ def test_preprocessing_run_enablement_tracks_required_inputs(app):
     data_manager.set_preprocessed_reference(np.ones((2, 2), dtype=np.float32))
     widget._update_ui_state()
     assert widget.action_states()["run"]
+
+
+def test_preprocessing_action_states_tracks_preview_active(app):
+    """The header pill's checked state (StageSection) is driven by
+    action_states()['preview_active'], which must mirror preview_check."""
+    data_manager = DataManager()
+    data_manager.set_bead_stack(np.ones((1, 2, 2), dtype=np.float32))
+    widget = PreprocessingWidget(
+        _FakeViewer(),
+        data_manager,
+        _ParameterManager(),
+        _FakeVisualizationManager(),
+    )
+
+    assert widget.action_states()["preview_active"] is False
+
+    widget.preview_check.setChecked(True)
+    assert widget.action_states()["preview_active"] is True
+
+    widget.preview_check.setChecked(False)
+    assert widget.action_states()["preview_active"] is False
 
 
 def test_preprocessing_preview_error_unchecks_widget_preview_control(monkeypatch, app):

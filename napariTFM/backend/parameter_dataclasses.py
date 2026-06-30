@@ -7,7 +7,6 @@ import numpy as np
 @dataclass
 class PreprocessingParameters:
     """Parameters for image preprocessing"""
-    rolling_ball_radius: int = 0
     min_intensity_percentile: float = 0.0
     max_intensity_percentile: float = 100
     gaussian_sigma: float = 0.0
@@ -71,44 +70,12 @@ class FTTCParameters:
 
 
 @dataclass
-class MeshParameters:
-    """Parameters for mesh generation"""
-    mask: np.ndarray
-    density_factor: float = 0.01
-    mesh_algorithm: int = 2
-    use_optimization: bool = True
-
-
-# MSM stress is linear in Young's modulus, so its absolute value does not affect
-# the computed stress *distribution*. The cell monolayer modulus is therefore
-# fixed to a constant rather than exposed as a tunable parameter.
-MSM_YOUNG_MODULUS: float = 1.0
-
-
-@dataclass
-class MSMParameters:
-    """Parameters for stress calculations (MSM or BISM engine)."""
-    # Engine selector: "MSM" (FEM, material params + mesh) or "BISM" (Bayesian,
-    # mesh-free, no material params). The mesh/material fields below are read
-    # only by the MSM engine.
-    stress_method: str = "MSM"
-
-    # Mesh parameters
-    density_factor: float = 0.01
-    mesh_algorithm: str = 'Frontal-Del.'
-    use_optimization: bool = True
-
-    # Material parameters
-    poisson_ratio_cells: float = 0.5
-    young_modulus: float = MSM_YOUNG_MODULUS
-
-    # BISM parameter (read only by the BISM engine): the Bayesian regularization
-    # hyperparameter Lambda, trading traction-fit against the stress-norm prior.
-    # Stored as the actual value; the UI exposes it as a base-10 exponent.
+class StressParameters:
+    """Parameters for stress calculations (BISM, Bayesian, mesh-free)."""
+    # The Bayesian regularization hyperparameter Lambda, trading traction-fit
+    # against the stress-norm prior. Stored as the actual value; the UI exposes
+    # it as a base-10 exponent.
     bism_regularization: float = 1e-6
-    # How Lambda is chosen: "Fixed" (use bism_regularization) or "MAP" (estimate
-    # it per frame via the Nier 2016 fixed point, ignoring the slider).
-    bism_lambda_method: str = "Fixed"
 
     # Scaling parameter
     pixel_size: float = 0.1  # in µm
@@ -129,7 +96,6 @@ class UnifiedParameters:
     frame_interval: float = 1.0  # min
 
     # Preprocessing parameters
-    rolling_ball_radius: int = 0
     min_intensity_percentile: float = 0.0
     max_intensity_percentile: float = 100.0
     gaussian_sigma: float = 0.0
@@ -162,20 +128,13 @@ class UnifiedParameters:
     force_arrow_scale: float = 1.0
     f_max: float = 500.0  # Pa
 
-    # Stress parameters
-    stress_method: str = "MSM"   # "MSM" (FEM) or "BISM" (Bayesian, mesh-free)
-    density_factor: float = 0.01
-    mesh_algorithm: str = 'Frontal-Del.'
-    use_optimization: bool = True
-    poisson_ratio_cells: float = 0.5
-    bism_regularization: float = 1e-6  # BISM only; stored as value, UI shows 10^x
-    bism_lambda_method: str = "Fixed"  # BISM only; "Fixed" or "MAP" (auto Lambda)
+    # Stress parameters (BISM, Bayesian, mesh-free)
+    bism_regularization: float = 1e-6  # stored as value, UI shows 10^x
     max_stress: float = 1.0
 
     def to_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create PreprocessingParameters from unified parameters"""
         return PreprocessingParameters(
-            rolling_ball_radius=self.rolling_ball_radius,  # Add new parameter
             min_intensity_percentile=self.min_intensity_percentile,
             max_intensity_percentile=self.max_intensity_percentile,
             gaussian_sigma=self.gaussian_sigma,
@@ -220,17 +179,10 @@ class UnifiedParameters:
             f_max=self.f_max
         )
 
-    def to_msm_parameters(self) -> MSMParameters:
-        """Create MSMParameters from unified parameters"""
-        return MSMParameters(
-            stress_method=self.stress_method,
-            density_factor=self.density_factor,
-            mesh_algorithm=self.mesh_algorithm,
-            use_optimization=self.use_optimization,
-            poisson_ratio_cells=self.poisson_ratio_cells,
-            young_modulus=MSM_YOUNG_MODULUS,
+    def to_stress_parameters(self) -> StressParameters:
+        """Create StressParameters from unified parameters"""
+        return StressParameters(
             bism_regularization=self.bism_regularization,
-            bism_lambda_method=self.bism_lambda_method,
             pixel_size=self.pixel_size,
             downscale_factor=self.downscale_factor,
             frame_interval=self.frame_interval,

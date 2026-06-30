@@ -3,7 +3,7 @@ from typing import Tuple
 from napariTFM.backend.parameter_dataclasses import (
     DisplacementParameters,
     FTTCParameters,
-    MSMParameters,
+    StressParameters,
     PreprocessingParameters,
 )
 
@@ -104,16 +104,7 @@ def validate_fttc_parameters(params: FTTCParameters) -> Tuple[bool, str]:
     return True, ""
 
 
-def validate_msm_parameters(params: MSMParameters) -> Tuple[bool, str]:
-    if params.density_factor < 0.005:
-        return False, "Density factor is too low (< 0.005). This may lead to numerical instabilities."
-
-    if params.density_factor > 0.05:
-        return False, "Density factor is too high (> 0.05). This may lead to poor resolution."
-
-    if not 0 <= params.poisson_ratio_cells <= 0.5:
-        return False, "Poisson ratio must be between 0 and 0.5"
-
+def validate_stress_parameters(params: StressParameters) -> Tuple[bool, str]:
     if params.max_stress <= 0:
         return False, "Maximum stress must be positive"
 
@@ -125,8 +116,5 @@ def validate_msm_parameters(params: MSMParameters) -> Tuple[bool, str]:
 
     if params.downscale_factor < 1:
         return False, "Downscale factor must be at least 1"
-
-    if params.young_modulus <= 0:
-        return False, "Young's modulus must be positive"
 
     return True, ""

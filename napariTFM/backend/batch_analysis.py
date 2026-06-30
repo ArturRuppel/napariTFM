@@ -25,12 +25,11 @@ from napariTFM.backend.displacement_analysis import (
 )
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
 from napariTFM.backend.bism import calculate_bism_stresses
-from napariTFM.backend.msm import calculate_stresses, generate_mesh_stack
 from napariTFM.backend.ntfm_writer import write_experiment_ntfm
-from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, MSMParameters, PreprocessingParameters, UnifiedParameters
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, StressParameters, PreprocessingParameters, UnifiedParameters
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 from napariTFM.utilities import ntfm
-from napariTFM.utilities.batch_output import resolve_output_plan
+from napariTFM.utilities.batch_output import RESULTS_FILENAME, resolve_output_plan
 
 
 def save_calibrated_tiff(data: np.ndarray, filepath: Path, pixel_size: float,
@@ -97,6 +96,25 @@ def save_calibrated_tiff(data: np.ndarray, filepath: Path, pixel_size: float,
     )
 
     print(f"Saved calibrated TIFF: {filepath}")
+
+
+def save_preprocessed_tiffs(output_dir: Path, pixel_size: float, frame_interval: float, *,
+                            beads: Optional[np.ndarray] = None,
+                            reference: Optional[np.ndarray] = None,
+                            cells: Optional[np.ndarray] = None) -> None:
+    """Write a position's preprocessed bead/reference/cell TIFFs to *output_dir*.
+
+    Single place that knows the canonical filenames
+    (``preprocessed_beads.tif`` / ``preprocessed_reference.tif`` /
+    ``preprocessed_cells.tif``), used by both the batch pipeline and the
+    interactive widget so a position's saved TIFFs stay in lockstep no matter
+    which path produced them. Any array left as ``None`` is silently skipped
+    (delegated to :func:`save_calibrated_tiff`).
+    """
+    output_dir = Path(output_dir)
+    save_calibrated_tiff(beads, output_dir / "preprocessed_beads.tif", pixel_size, frame_interval)
+    save_calibrated_tiff(reference, output_dir / "preprocessed_reference.tif", pixel_size, frame_interval)
+    save_calibrated_tiff(cells, output_dir / "preprocessed_cells.tif", pixel_size, frame_interval)
 
 
 # TODO black image when only one frame for cell-force overlay visualization
@@ -290,7 +308,7 @@ class BatchAnalysis:
         - Stress analysis (consumes externally supplied masks)
         - Visualization generation
 
-        Each experiment's derived output is saved under the resolved ``processed/``
+        Each experiment's derived output is saved under the resolved ``TFM_data/``
         bucket (ROADMAP §4): one ``.ntfm`` data artifact plus ``figures/`` and a
         ``batch.log`` capturing the processing steps and any issues encountered.
 
@@ -338,9 +356,9 @@ class BatchAnalysis:
         This method executes the complete TFM analysis pipeline on a single
         experimental dataset. Derived output (the ``.ntfm`` data artifact,
         ``figures/`` previews, ``batch.log``, and any stage-resume cache) is
-        written under ``output_dir`` — the ``processed/`` bucket resolved by
+        written under ``output_dir`` — the ``TFM_data/`` bucket resolved by
         :func:`resolve_output_plan` (ROADMAP §4). When ``output_dir`` is not
-        supplied it is resolved in-place (a ``processed/`` subfolder inside the
+        supplied it is resolved in-place (a ``TFM_data/`` sibling of the
         input folder).
 
         Parameters
@@ -373,7 +391,7 @@ class BatchAnalysis:
 
         Results
         -------
-        Writes derived output under the resolved ``processed/`` bucket:
+        Writes derived output under the resolved ``TFM_data/`` bucket:
             - <experiment>.ntfm: the sole data artifact (tidy table + metadata)
             - figures/: per-stage PNG/GIF previews (human-facing, not data)
             - batch.log: detailed processing log
@@ -529,7 +547,7 @@ class BatchAnalysis:
         (e.g. ``displacement_field``, ``force_field``). Returns ``None`` (with a
         message) if the container or the field is missing.
         """
-        ntfm_path = tfm_folder / f"{folder.name}.ome.tif"
+        ntfm_path = tfm_folder / RESULTS_FILENAME
         if not ntfm_path.exists():
             print(f"No existing container to resume from at {ntfm_path}.")
             return None
@@ -582,7 +600,7 @@ class BatchAnalysis:
         stage-resume reads displacement/force back from this container.
         """
         labels = (self.config.get('labels') or {}).get(str(folder), {})
-        ntfm_path = output_dir / f"{folder.name}.ome.tif"
+        ntfm_path = output_dir / RESULTS_FILENAME
         # Delegate to the one shared writer (also used by interactive per-stage
         # runs), so batch- and live-saved containers are identical.
         try:
@@ -596,6 +614,7 @@ class BatchAnalysis:
                 folder=folder,
                 input_files=self.config.get('input_files', {}),
                 labels=labels,
+                apply_mask_on_save=bool(self.config.get('apply_mask_on_save', False)),
             )
         except Exception as e:
             # The .ntfm is the sole persisted artifact (ROADMAP §4): if it cannot
@@ -638,14 +657,12 @@ class BatchAnalysis:
         1. Loads raw bead images and reference image
         2. Optionally loads cell images if specified in config
         3. Applies preprocessing pipeline:
-            - Background subtraction
             - Gaussian filtering
             - Intensity normalization
             - Image registration (for bead images)
         4. Saves results as calibrated TIFF files with metadata
 
         The preprocessing parameters are taken from the config:
-            - rolling_ball_radius
             - min_intensity_percentile
             - max_intensity_percentile
             - gaussian_sigma
@@ -721,25 +738,14 @@ class BatchAnalysis:
         pixel_size = self.config['parameters']['pixel_size']
         frame_interval = self.config['parameters']['frame_interval']
 
-        self._save_calibrated_tiff(
-            preprocessed['beads'],
-            tfm_folder / "preprocessed_beads.tif",
+        save_preprocessed_tiffs(
+            tfm_folder,
             pixel_size,
-            frame_interval
+            frame_interval,
+            beads=preprocessed['beads'],
+            reference=preprocessed['reference'],
+            cells=preprocessed.get('cells'),
         )
-        self._save_calibrated_tiff(
-            preprocessed['reference'],
-            tfm_folder / "preprocessed_reference.tif",
-            pixel_size,
-            frame_interval
-        )
-        if 'cells' in preprocessed:
-            self._save_calibrated_tiff(
-                preprocessed['cells'],
-                tfm_folder / "preprocessed_cells.tif",
-                pixel_size,
-                frame_interval
-            )
 
         self._emit('stage_finished', 'preprocessing', preprocessed)
         print(f"Preprocessing completed in {self._format_duration(time() - start_time)}")
@@ -928,8 +934,8 @@ class BatchAnalysis:
         """
         Execute the stress analysis step of the TFM analysis pipeline.
 
-        This method implements Monolayer Stress Microscopy (MSM) to calculate
-        internal stress fields within cell monolayers.
+        Uses Bayesian Inversion Stress Microscopy (BISM, mesh-free) to infer
+        internal stress fields within cell monolayers from the traction field.
 
         Parameters
         ----------
@@ -947,31 +953,13 @@ class BatchAnalysis:
         Optional[dict]
             Dictionary containing:
             - stress_tensor: Calculated stress tensors (np.ndarray)
-            - mesh_quality: Mesh quality metrics
             - parameters: Stress calculation parameters
             Returns None if analysis fails
-
-        Processing Steps
-        ---------------
-        1. Generates finite element mesh for each frame
-        2. For each frame:
-            - Assembles system matrices
-            - Applies boundary conditions
-            - Solves equilibrium equations
-            - Calculates stress tensor field
-        3. Returns the stress result (persisted later in the .ntfm)
-
-        The stress analysis parameters are taken from the config:
-            - poisson_ratio_cells
-            - density_factor
-            And other MSM parameters
-        (The cell Young's modulus is fixed to a constant, not read from config.)
 
         Notes
         -----
         Progress updates are logged during processing, including:
             - Frame-by-frame completion status
-            - Mesh quality metrics
             - Mean and max stress values
             - Processing time
 
@@ -980,12 +968,12 @@ class BatchAnalysis:
         RuntimeError
             If stress calculation fails
         ValueError
-            If input data is invalid or mesh generation fails
+            If input data is invalid
         """
         print("Starting Stress Analysis...")
         start_time = time()
 
-        params = self._create_msm_parameters()
+        params = self._create_stress_parameters()
 
         # Ensure mask_data is 3D (t, y, x)
         if mask_data.ndim == 2:
@@ -1009,86 +997,6 @@ class BatchAnalysis:
             ])
             print(f"After resize - Mask pixels > 0: {np.sum(mask_data > 0)}")
 
-        # BISM is mesh-free; it skips the whole mesh-generation phase below.
-        if params.stress_method == "BISM":
-            return self._run_bism_stress(force_data, mask_data, params, start_time)
-
-        try:
-            # Initialize mesh generation
-            print("Generating meshes for all frames...")
-            mesh_generator = generate_mesh_stack(mask_data, params)
-
-            # Store mesh data for all frames
-            mesh_data = []
-
-            # Process mesh generation results
-            try:
-                while True:
-                    nodes, elements, quality_metrics, frame, total = next(mesh_generator)
-                    mesh_data.append((nodes, elements, quality_metrics))
-                    self._log_mesh_progress({
-                        'mean_quality': quality_metrics['mean_quality'],
-                        'min_angle': quality_metrics['min_angle']
-                    }, frame + 1, total)
-            except StopIteration as e:
-                # Get the final mesh results if returned
-                final_mesh_results = e.value
-                if final_mesh_results:
-                    mesh_data = final_mesh_results
-
-            # Calculate stress for each frame
-            print("Calculating stress fields...")
-            # The downscale factor lives on the force result's parameters (as in
-            # the interactive MSM controller), not on the MSM params; guard the
-            # stage-resume case where force_data is a bare field shim.
-            fr_params = getattr(force_data, 'parameters', None)
-            downscale = getattr(fr_params, 'downscale_factor', 1) if fr_params is not None else 1
-            self._emit('stage_started', 'stress',
-                       int(force_data.force_field.shape[0]), {
-                           'max_stress': params.max_stress,
-                           'downscale_factor': downscale,
-                       })
-            # Get the generator
-            stress_generator = calculate_stresses(
-                force_field=force_data.force_field,  # Access forces from the dictionary
-                masks=mask_data,
-                params=params,
-                mesh_data=mesh_data
-            )
-
-            # Process stress calculation results
-            try:
-                while True:
-                    stress_result, frame, total = next(stress_generator)
-                    self._log_stress_progress(stress_result, frame, total)
-                    # ``stress_tensor`` is the cumulative stack; the newest frame
-                    # is its last slice. 1-based frame → 0-based for the viewer.
-                    self._emit('stage_frame', 'stress', frame - 1,
-                               stress_result.stress_tensor[-1])
-            except StopIteration as e:
-                # Retrieve final result from generator's return value
-                final_result = e.value
-
-            if final_result is None:
-                raise RuntimeError("Stress calculation failed")
-
-            # No intermediate .npy (ROADMAP §4): the .ntfm is the sole persisted
-            # result.
-            self._emit('stage_finished', 'stress', final_result)
-            print(f"Stress analysis completed in {self._format_duration(time() - start_time)}")
-            return final_result
-
-        except Exception as e:
-            print(f"Error during stress analysis: {str(e)}")
-            return None
-
-    def _run_bism_stress(self, force_data, mask_data, params, start_time):
-        """BISM stress stage: mesh-free Bayesian inversion.
-
-        Emits the same ``stage_started``/``stage_frame``/``stage_finished`` events
-        as the MSM path so the sink, viewer stream and ``.ntfm`` writer stay
-        engine-agnostic — only the compute differs (no mesh phase).
-        """
         try:
             fr_params = getattr(force_data, 'parameters', None)
             downscale = getattr(fr_params, 'downscale_factor', 1) if fr_params is not None else 1
@@ -1116,15 +1024,16 @@ class BatchAnalysis:
                 final_result = e.value
 
             if final_result is None:
-                raise RuntimeError("BISM stress calculation failed")
+                raise RuntimeError("Stress calculation failed")
 
+            # No intermediate .npy (ROADMAP §4): the .ntfm is the sole persisted
+            # result.
             self._emit('stage_finished', 'stress', final_result)
-            print(f"Stress analysis (BISM) completed in "
-                  f"{self._format_duration(time() - start_time)}")
+            print(f"Stress analysis completed in {self._format_duration(time() - start_time)}")
             return final_result
 
         except Exception as e:
-            print(f"Error during BISM stress analysis: {str(e)}")
+            print(f"Error during stress analysis: {str(e)}")
             return None
 
     def _unified_parameters(self) -> UnifiedParameters:
@@ -1150,9 +1059,9 @@ class BatchAnalysis:
         """Create FTTC parameters from config."""
         return self._unified_parameters().to_fttc_parameters()
 
-    def _create_msm_parameters(self) -> MSMParameters:
-        """Create MSM parameters from config."""
-        return self._unified_parameters().to_msm_parameters()
+    def _create_stress_parameters(self) -> StressParameters:
+        """Create stress (BISM) parameters from config."""
+        return self._unified_parameters().to_stress_parameters()
 
     def _log_displacement_progress(self, result, frame, total):
         displacement_field_magnitude = np.sqrt(np.sum(result ** 2, axis=-1))
@@ -1166,11 +1075,6 @@ class BatchAnalysis:
               f"Mean force: {np.mean(force_magnitude):.2f} Pa, "
               f"Max force: {np.max(force_magnitude):.2f} Pa")
 
-    def _log_mesh_progress(self, quality, frame, total):
-        print(f"Frame {frame}/{total}: "
-              f"Average quality: {quality['mean_quality']:.3f}, "
-              f"Min angle: {quality['min_angle']:.1f}°")
-
     def _log_stress_progress(self, result, frame, total):
         magnitude = np.sqrt(np.sum(result.stress_tensor ** 2, axis=-1))
         print(f"Frame {frame}/{total}: "
@@ -1178,7 +1082,7 @@ class BatchAnalysis:
               f"Max stress: {np.max(magnitude):.2f} mN/m")
 
     def _initialize_folder(self, output_dir: Path) -> Path:
-        """Set up the processed/ output folder and logging (ROADMAP §4).
+        """Set up the TFM_data/ output folder and logging (ROADMAP §4).
 
         Derived output — the ``.ntfm`` artifact, ``figures/``, ``batch.log`` and
         the stage-resume cache — all live under ``output_dir``.
@@ -1281,11 +1185,6 @@ class BatchAnalysis:
         with open(yaml_path, 'r') as f:
             config = yaml.safe_load(f)
         return cls(config)
-
-    def _save_calibrated_tiff(self, data: np.ndarray, filepath: Path, pixel_size: float,
-                              frame_interval: float) -> None:
-        """Delegate to the module-level :func:`save_calibrated_tiff`."""
-        save_calibrated_tiff(data, filepath, pixel_size, frame_interval)
 
     def _cleanup(self) -> None:
         """Clean up resources."""

@@ -73,17 +73,15 @@ pure repetition as columns and buy analysis nothing.
 **Why this is lossless (verified against the code).** Displacement, force, and
 stress are all co-registered on one **downscaled analysis grid**: force inherits
 the displacement-field grid (`fttc.py` `force_shape = displacement_field
-.shape[1:4]`), and MSM interpolates nodal stresses back onto that same grid
-(`msm.py` `_interpolate_stress_field`), both reporting `grid_spacing =
-pixel_size · downscale_factor`. The triangular FE mesh is an internal MSM compute
-detail and is **not** persisted, so there is no mesh topology or multi-grid
-problem — one grid holds everything.
+.shape[1:4]`), and BISM (`bism.py`) solves directly on that same grid — no mesh,
+both reporting `grid_spacing = pixel_size · downscale_factor`. There is no mesh
+topology or multi-grid problem — one grid holds everything.
 
 **Notes baked into the schema**
 - `u_x, u_y` are included (primary measurement, same grid) so the native
   container round-trips fully. The CSV/Iris export may drop them if only
   results are wanted.
-- Stress is three independent components (MSM computes only σxx, σyy, σxy; the
+- Stress is three independent components (BISM computes only σxx, σyy, σxy; the
   Cauchy tensor is symmetric). Stored as `sigma_xx`, `sigma_yy`, and a single
   `sigma_shear` (= σxy = σyx) — no redundant `sigma_yx` column.
 - Off-mask grid nodes still emit rows: valid `u_*`/`F_*`, `NaN` stress,

@@ -28,7 +28,6 @@ def test_backend_validates_preprocessing_images():
 
 def test_backend_preprocesses_frame_with_selected_parameter_set(monkeypatch):
     params = PreprocessingParameters(
-        rolling_ball_radius=7,
         min_intensity_percentile=10,
         max_intensity_percentile=90,
         gaussian_sigma=2,
@@ -38,10 +37,6 @@ def test_backend_preprocesses_frame_with_selected_parameter_set(monkeypatch):
     )
     calls = []
 
-    def fake_rolling_ball(image, radius):
-        calls.append(("rolling_ball", radius))
-        return image + 1
-
     def fake_gaussian(image, sigma):
         calls.append(("gaussian", sigma))
         return image + 2
@@ -50,7 +45,6 @@ def test_backend_preprocesses_frame_with_selected_parameter_set(monkeypatch):
         calls.append(("scaling", min_percentile, max_percentile))
         return image / 10, (min_percentile, max_percentile)
 
-    monkeypatch.setattr(preprocessing.ImageProcessor, "apply_rolling_ball", staticmethod(fake_rolling_ball))
     monkeypatch.setattr(preprocessing.ImageProcessor, "apply_gaussian_filter", staticmethod(fake_gaussian))
     monkeypatch.setattr(preprocessing.ImageProcessor, "apply_intensity_scaling", staticmethod(fake_scaling))
 
@@ -62,16 +56,13 @@ def test_backend_preprocesses_frame_with_selected_parameter_set(monkeypatch):
     )
 
     assert calls == [
-        ("rolling_ball", 7),
         ("gaussian", 2),
         ("scaling", 10, 90),
         ("gaussian", 3),
         ("scaling", 20, 80),
     ]
-    assert np.allclose(result.processed_image, np.array([[0.4, 0.5], [0.6, 0.7]], dtype=np.float32))
-    assert result.info["rolling_ball_radius"] == 7
+    assert np.allclose(result.processed_image, np.array([[0.3, 0.4], [0.5, 0.6]], dtype=np.float32))
     assert result.info["intensity_range"] == (10, 90)
-    assert cell_result.info["rolling_ball_radius"] is None
     assert cell_result.info["gaussian_sigma"] == 3
 
 

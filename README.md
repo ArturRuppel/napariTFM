@@ -20,7 +20,7 @@
 
 ## Introduction
 
-napariTFM is a comprehensive tool for Traction Force Microscopy (TFM) analysis, built as a plugin for the napari image viewer. It provides a complete analysis pipeline for investigating cell-generated forces through displacement field measurements, traction force reconstruction, and Monolayer Stress Microscopy (MSM).
+napariTFM is a comprehensive tool for Traction Force Microscopy (TFM) analysis, built as a plugin for the napari image viewer. It provides a complete analysis pipeline for investigating cell-generated forces through displacement field measurements, traction force reconstruction, and Bayesian Inversion Stress Microscopy (BISM).
 
 The software combines established TFM algorithms with napari's visualization capabilities to enable systematic analysis of cell-substrate interactions. It supports both single-frame and time series analysis, making it suitable for studying various experimental setups from individual cells to cell monolayers.
 
@@ -32,11 +32,11 @@ The core algorithms implemented in napariTFM are based on established methods de
 
 **FTTC (Fourier Transform Traction Cytometry):** The force calculation implementation is based on the DirectMethod package by Usschwarz (https://github.com/usschwarz/DirectMethod, MIT License) and incorporates methods from Blumberg & Schwarz, "Comparison of direct and inverse methods for 2.5D traction force microscopy" (2022). Gel height corrections are adapted from the pyTFM package (https://github.com/fabrylab/pyTFM, GNU GPL v3.0 License).
 
-**MSM (Monolayer Stress Microscopy):** The stress field calculation implementation is based on the pyTFM package by Bauer et al. (https://github.com/fabrylab/pyTFM, GNU GPL v3.0 License), as described in "pyTFM: A tool for traction force and monolayer stress microscopy" PLoS Computational Biology (2021).
+**BISM (Bayesian Inversion Stress Microscopy):** The stress field calculation implementation is a dependency-light port of the MATLAB reference (Nier et al., Biophys. J. 110(7):1625-1635, 2016; original BISM.m by Vincent Nier).
 
 ### Key Features
 - Complete TFM analysis pipeline from preprocessing to stress calculation
-- Monolayer Stress Microscopy (MSM) for internal stress analysis
+- Bayesian Inversion Stress Microscopy (BISM) for internal stress analysis
 - Interactive visualization of results
 - Support for both single images and time series data
 - Integration with napari's image viewing capabilities
@@ -136,7 +136,7 @@ napariTFM consists of four main analysis modules:
 1. **Preprocessing**: Image enhancement and registration
 2. **Displacement Analysis**: Displacement field measurement
 3. **Force Calculation**: Traction force computation using FTTC
-4. **Stress Analysis**: Internal stress field calculation using MSM
+4. **Stress Analysis**: Internal stress field calculation using BISM
 
 ## Preprocessing
 
@@ -154,7 +154,6 @@ Prepare raw microscopy images for analysis by:
    - Click "Load Cell Stack" (optional) for cell images
 
 2. Adjust Parameters:
-   - Rolling Ball Radius: Background correction (0-50 pixels)
    - Intensity Range: Set min/max percentiles for contrast
    - Gaussian Blur: Noise reduction (0-10 sigma)
    - Registration Mode: Translation or Rigid alignment
@@ -329,20 +328,16 @@ Calculate internal stress fields in cell monolayers.
      - Threshold
      - Dilation
      - Smoothing
-   - Mesh Parameters:
-     - Density
-     - Algorithm selection
-   - Material Properties
+   - BISM regularization (Lambda)
 
 3. Analysis Steps:
    - Create/load masks
-   - Preview mesh
    - Calculate stress tensors
    - Save results
 
 ### Tips
 - Verify mask quality before analysis
-- Adjust mesh density for balance
+- BISM is mesh-free, so there's no mesh density/algorithm to tune
 - Use appropriate visualization settings
 
 ## Batch Processing

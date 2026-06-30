@@ -276,7 +276,7 @@ def test_vector_field_hides_unrelated_layers_but_does_not_force_show():
     assert viewer.layers["Raw beads"].visible is False
 
 
-# --- stress streaming (MSM) -----------------------------------------------
+# --- stress streaming (BISM) ------------------------------------------------
 
 def _stress_frame(xx, yy):
     t = np.zeros((4, 4, 2, 2), dtype=np.float32)

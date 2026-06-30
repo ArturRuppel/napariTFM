@@ -48,7 +48,7 @@ FORMAT_VERSION = "2.0"
 ID_COLUMNS = ["t[min]", "y[µm]", "x[µm]", "row", "col"]
 
 # Measures — the full 2D field at each sample. NaN where a measure is absent
-# (e.g. off-mask stress nodes). MSM is symmetric, so a single shear column.
+# (e.g. off-mask stress nodes). The stress tensor is symmetric, so a single shear column.
 MEASURE_COLUMNS = [
     "u_x[µm]",
     "u_y[µm]",
@@ -701,7 +701,7 @@ def dataframe_from_results(
     grid_spacing: Optional[float] = None,
     frame_interval: Optional[float] = None,
 ) -> pd.DataFrame:
-    """Build the tidy table from ``DisplacementResult`` / ``FTTCResult`` / ``MSMResult``.
+    """Build the tidy table from ``DisplacementResult`` / ``FTTCResult`` / ``StressResult``.
 
     ``grid_spacing`` (µm) and ``frame_interval`` (min) default to the values
     carried in the results' ``physical_scale`` — every stage reports the same

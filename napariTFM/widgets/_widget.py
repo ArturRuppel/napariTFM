@@ -18,7 +18,7 @@ from napariTFM.utilities.visualization_manager import VisualizationManager
 from napariTFM.widgets.preprocessing_widget import PreprocessingWidget
 from napariTFM.widgets.displacement_analysis_widget import DisplacementAnalysisWidget
 from napariTFM.widgets.fttc_widget import FTTCWidget
-from napariTFM.widgets.msm_widget import MSMWidget
+from napariTFM.widgets.stress_widget import StressWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec
 from napariTFM.widgets._stage_file_status import StageFileStatusRow
 from napariTFM.widgets._stage_section import StageSection
@@ -43,9 +43,9 @@ PROJECT_FORMAT_VERSION = 2
 
 STAGE_DATA_ARTIFACTS = {
     "preprocessing": [
-        DataArtifactSpec("reference", "Reference image", "reference", "input"),
-        DataArtifactSpec("bead_stack", "Bead stack", "bead_stack", "input"),
-        DataArtifactSpec("cell_stack", "Cell stack", "cell_stack", "input", required=False),
+        DataArtifactSpec("bead_stack", "Beads", "bead_stack", "input"),
+        DataArtifactSpec("reference", "Reference", "reference", "input"),
+        DataArtifactSpec("cell_stack", "Cells", "cell_stack", "input", required=False),
         DataArtifactSpec("preprocessed_reference", "Preprocessed reference", "preprocessed_reference", "output"),
         DataArtifactSpec("preprocessed_bead_stack", "Preprocessed beads", "preprocessed_bead_stack", "output"),
     ],
@@ -84,24 +84,24 @@ def _build_preprocessing_specs(preprocessing_widget, visualization_manager):
 
     return [
         DataArtifactSpec(
-            "reference",
-            "Reference image",
-            "reference",
-            "input",
-            on_view=view("reference"),
-            on_action=assign("reference"),
-        ),
-        DataArtifactSpec(
             "bead_stack",
-            "Bead stack",
+            "Beads",
             "bead_stack",
             "input",
             on_view=view("bead_stack"),
             on_action=assign("beads"),
         ),
         DataArtifactSpec(
+            "reference",
+            "Reference",
+            "reference",
+            "input",
+            on_view=view("reference"),
+            on_action=assign("reference"),
+        ),
+        DataArtifactSpec(
             "cell_stack",
-            "Cell stack",
+            "Cells",
             "cell_stack",
             "input",
             required=False,
@@ -226,15 +226,14 @@ class WorkflowParameterPanel(QWidget):
             ("frame_interval", "Frame Length (min)", "float", 0.001, 1000.0, 0.1, 3, None),
         ]),
         ("Preprocessing", [
-            ("rolling_ball_radius", "Rolling Ball Radius", "int", 0, 50, 1, 0, None),
-            ("gaussian_sigma", "Gaussian Sigma", "float", 0.0, 10.0, 0.1, 1, None),
             (("min_intensity_percentile", "max_intensity_percentile"), "Intensity (%)",
              "range", 0.0, 100.0, 0.1, 1, None),
+            (("cell_min_intensity_percentile", "cell_max_intensity_percentile"), "Cell Intensity (%)",
+             "range", 0.0, 100.0, 0.1, 1, None),
+            ("gaussian_sigma", "Gaussian Sigma", "float", 0.0, 10.0, 0.1, 1, None),
             ("cell_gaussian_sigma", "Cell Gaussian Sigma", "float", 0.0, 10.0, 0.1, 1, None),
             ("registration_mode", "Registration Mode", "choice", None, None, None, None,
              ["translation", "rigid", "no registration"]),
-            (("cell_min_intensity_percentile", "cell_max_intensity_percentile"), "Cell Intensity (%)",
-             "range", 0.0, 100.0, 0.1, 1, None),
         ]),
         ("Displacement", [
             ("median_filtering", "Window Size", "int", 1, 51, 2, 0, None),
@@ -264,22 +263,8 @@ class WorkflowParameterPanel(QWidget):
             ("f_max", "Max Force (Pa)", "float", 0.1, 10000.0, 1.0, 1, None),
         ]),
         ("Stress", [
-            ("stress_method", "Method", "choice", None, None, None, None,
-             ["MSM", "BISM"]),
-            # FEM engine: needs a mesh + a (cell) Poisson ratio.
-            (WHEN, "stress_method", "MSM"),
-            ("density_factor", "Density Factor", "float", 0.005, 0.1, 0.001, 3, None),
-            ("mesh_algorithm", "Mesh Algorithm", "choice", None, None, None, None,
-             ["Frontal-Del.", "Delaunay", "MeshAdapt", "BAMG", "FD Quads", "Para. Pack"]),
-            ("use_optimization", "Mesh Optimization", "bool", None, None, None, None, None),
-            ("poisson_ratio_cells", "Poisson Ratio", "float", 0.0, 0.5, 0.01, 2, None),
-            # Bayesian engine: mesh-free, no material params. Lambda is either
-            # entered by hand (Fixed, a base-10 exponent like Force's) or
-            # estimated per frame (MAP) — so the slider only shows under Fixed.
-            (WHEN, "stress_method", "BISM"),
-            ("bism_lambda_method", "λ Method", "choice", None, None, None, None,
-             ["Fixed", "MAP"]),
-            (AND, "bism_lambda_method", "Fixed"),
+            # BISM (Bayesian, mesh-free): Lambda entered by hand as a base-10
+            # exponent, like Force's regularization.
             ("bism_regularization", "Regularization (10^x)", "float", -12.0, 0.0, 0.5, 1, None),
             (GROUP, "Visualization"),
             ("max_stress", "Max Stress (mN/m)", "float", 0.01, 1000.0, 0.1, 2, None),
@@ -582,9 +567,6 @@ class napariTFMWidget(QWidget):
         )
         self.experiments_list.run_all_requested.connect(self._run_all_experiments)
         self.experiments_list.cancel_run_all_requested.connect(self._cancel_run_all)
-        self.experiments_list.export_requested.connect(
-            self._on_export_experiment_data
-        )
         self._active_batch = None
         container_layout.addWidget(self.experiments_list)
 
@@ -635,7 +617,7 @@ class napariTFMWidget(QWidget):
             self.visualization_manager
         )
 
-        self.msm_widget = MSMWidget(
+        self.stress_widget = StressWidget(
             self.viewer,
             self.data_manager,
             self.parameter_manager,
@@ -649,11 +631,11 @@ class napariTFMWidget(QWidget):
             (self.preprocessing_widget, "Preprocessing"),
             (self.displacement_widget, "Displacement"),
             (self.force_widget, "Force"),
-            (self.msm_widget, "Stress"),
+            (self.stress_widget, "Stress"),
         ):
             stage_widget.controller.progress_updated.connect(
-                lambda _progress, message, label=stage_label: self._relay_stage_status(
-                    label, message
+                lambda progress, message, label=stage_label: self._relay_stage_status(
+                    label, message, progress
                 )
             )
 
@@ -669,7 +651,7 @@ class napariTFMWidget(QWidget):
             self.force_widget,
         )
         stage_data_artifacts["stress"] = _build_stress_specs(
-            self.msm_widget,
+            self.stress_widget,
         )
         self._stage_status_panels_by_key = {
             key: StageFileStatusRow(key, self.data_manager, artifacts)
@@ -689,6 +671,7 @@ class napariTFMWidget(QWidget):
                 },
                 action_states=self.preprocessing_widget.action_states,
                 action_states_changed=self.preprocessing_widget.action_states_changed,
+                preview_is_toggle=True,
             ),
             "displacement": StageSection(
                 "Displacement",
@@ -726,24 +709,16 @@ class napariTFMWidget(QWidget):
             ),
             "stress": StageSection(
                 "Stress Analysis",
-                self.msm_widget,
+                self.stress_widget,
                 status_panel=self._stage_status_panels_by_key["stress"],
                 parameter_panel=self._stage_parameter_panels_by_key.get("stress"),
                 actions={
-                    "run": self.msm_widget.run_action,
-                    "preview": self.msm_widget.preview_action,
-                    "cancel": self.msm_widget.cancel_action,
+                    "run": self.stress_widget.run_action,
+                    "preview": self.stress_widget.preview_action,
+                    "cancel": self.stress_widget.cancel_action,
                 },
-                action_states=self.msm_widget.action_states,
-                action_states_changed=self.msm_widget.action_states_changed,
-                extra_actions=[
-                    {
-                        "key": "mesh",
-                        "icon": "mesh",
-                        "tooltip": "Preview mesh",
-                        "handler": self.msm_widget.mesh_action,
-                    }
-                ],
+                action_states=self.stress_widget.action_states,
+                action_states_changed=self.stress_widget.action_states_changed,
                 optional=True,
                 # Stress needs an external mask, so it stays off until the user
                 # opts in (D1).
@@ -766,7 +741,7 @@ class napariTFMWidget(QWidget):
             "preprocessing": self.preprocessing_widget,
             "displacement": self.displacement_widget,
             "force": self.force_widget,
-            "stress": self.msm_widget,
+            "stress": self.stress_widget,
         }
         for key, stage_widget in self._freeze_widgets_by_key.items():
             stage_widget.controller.ui_frozen.connect(
@@ -963,7 +938,7 @@ class napariTFMWidget(QWidget):
             self.preprocessing_widget,
             self.displacement_widget,
             self.force_widget,
-            self.msm_widget,
+            self.stress_widget,
         ]
 
     def refresh(self):
@@ -992,7 +967,7 @@ class napariTFMWidget(QWidget):
         for section in self._stage_sections:
             section.setVisible(tuning)
 
-    def _relay_stage_status(self, stage_label: str, message: str) -> None:
+    def _relay_stage_status(self, stage_label: str, message: str, progress: int = 0) -> None:
         """Render a stage's progress message in the one global status label (P2).
 
         Interactive runs also echo to the console so live mode prints the same
@@ -1003,10 +978,18 @@ class napariTFMWidget(QWidget):
         the same console path without disturbing the UI label or the batch
         run-log file. This path never runs under the TeeLogger (run-all reports
         via ``_on_batch_progress``), so there is no double-timestamping.
+
+        ``progress`` (0-100, as emitted by ``progress_updated``) also drives the
+        stage's spine node so a running stage's rail fill grows frame by frame
+        instead of just sitting on a flat amber dot — a no-op while the stage
+        isn't "running" (the spine itself ignores progress then).
         """
         self.status_label.setText(f"{stage_label} — {message}")
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print(f"[{timestamp}] {stage_label} — {message}")
+        section = self._stage_sections_by_key.get(stage_label.lower())
+        if section is not None:
+            section.set_progress(progress / 100.0)
 
     def _run_all_experiments(self) -> None:
         """Run the whole config table through the pipeline, walking the rail (P4).
@@ -1034,6 +1017,7 @@ class napariTFMWidget(QWidget):
             self.visualization_manager,
             pump=QApplication.processEvents,
             on_experiment=self._on_experiment_streaming,
+            on_stage_progress=self._on_run_all_stage_progress,
         )
         analyzer = BatchAnalysis(
             config,
@@ -1112,48 +1096,31 @@ class napariTFMWidget(QWidget):
     def _persist_preprocessed_tiffs(self, path: str) -> None:
         """Write preprocessed TIFFs for *path* to the canonical output dir.
 
-        Uses the same :func:`~napariTFM.backend.batch_analysis.save_calibrated_tiff`
-        the batch pipeline uses so interactive and batch outputs are byte-identical.
-        Silently skips any array that is not in memory yet; logs + sets a status
-        message on write failure without propagating the exception.
+        Delegates to the batch pipeline's
+        :func:`~napariTFM.backend.batch_analysis.save_preprocessed_tiffs`
+        orchestration so there is one place that knows how a position's
+        preprocessed TIFFs get written, and interactive/batch outputs stay
+        byte-identical. Silently skips any array that is not in memory yet;
+        logs + sets a status message on write failure without propagating the
+        exception.
         """
-        from pathlib import Path
-
-        from napariTFM.backend.batch_analysis import save_calibrated_tiff
+        from napariTFM.backend.batch_analysis import save_preprocessed_tiffs
         from napariTFM.utilities.batch_output import experiment_output_dir
 
         try:
             out_dir = experiment_output_dir(path, self.data_manager.output_dir)
-            out_dir.mkdir(parents=True, exist_ok=True)
             params = self.parameter_manager.get_all_parameters()
             pixel_size = params.get("pixel_size", 1.0)
             frame_interval = params.get("frame_interval", 1.0)
 
-            beads = self.data_manager.preprocessed_bead_stack
-            reference = self.data_manager.preprocessed_reference
-            cells = self.data_manager.preprocessed_cell_stack
-
-            if beads is not None:
-                save_calibrated_tiff(
-                    beads,
-                    out_dir / "preprocessed_beads.tif",
-                    pixel_size,
-                    frame_interval,
-                )
-            if reference is not None:
-                save_calibrated_tiff(
-                    reference,
-                    out_dir / "preprocessed_reference.tif",
-                    pixel_size,
-                    frame_interval,
-                )
-            if cells is not None:
-                save_calibrated_tiff(
-                    cells,
-                    out_dir / "preprocessed_cells.tif",
-                    pixel_size,
-                    frame_interval,
-                )
+            save_preprocessed_tiffs(
+                out_dir,
+                pixel_size,
+                frame_interval,
+                beads=self.data_manager.preprocessed_bead_stack,
+                reference=self.data_manager.preprocessed_reference,
+                cells=self.data_manager.preprocessed_cell_stack,
+            )
         except Exception as exc:
             logger.exception("Could not persist preprocessed TIFFs for %s", path)
             self.status_label.setText(f"Save failed: {exc}")
@@ -1189,6 +1156,21 @@ class napariTFMWidget(QWidget):
                 f"Pipeline · running ▸ {Path(self._active_experiment).name}"
             )
         self._update_disclosure()
+
+    def _on_run_all_stage_progress(self, stage: str, status: str, fraction: float | None) -> None:
+        """Walk a run-all's progress onto the matching stage pill's spine node.
+
+        Mirrors the live single-stage path (``_relay_stage_status``) so a
+        run-all's rail fills frame by frame too, instead of sitting static
+        until ``refresh_stage_statuses`` reconciles everything at the very end.
+        """
+        section = self._stage_sections_by_key.get(stage)
+        if section is None:
+            return
+        if section.status != status:
+            section.set_status(status)
+        if fraction is not None:
+            section.set_progress(fraction)
 
     def _on_batch_progress(self, folder: str, status: str) -> None:
         """Live per-folder feedback for Run-all: walk the rail, then refresh (P4)."""
@@ -1262,19 +1244,19 @@ class napariTFMWidget(QWidget):
         output is present — not merely because a container exists. Each stage's
         immediate predecessor being done makes it 'ready' (the single run-next
         frontier); upstream of that is 'not_started'. Disabled stages read
-        'off' (MSM is exempt from auto-skip per D1).
+        'off' (stress is exempt from auto-skip per D1).
         """
         from pathlib import Path
 
         from napariTFM.utilities import ntfm as _ntfm
-        from napariTFM.utilities.batch_output import experiment_output_dir
+        from napariTFM.utilities.batch_output import RESULTS_FILENAME, experiment_output_dir
 
         folder = Path(path)
         # Resolve the .ntfm exactly where the batch writes it (and where an
         # interactive run persists it): the shared resolve_output_plan bucket.
         # Reading any other path is how the row dots silently went stale.
         out_dir = experiment_output_dir(path, self.data_manager.output_dir)
-        ntfm_path = out_dir / f"{folder.name}.ome.tif"
+        ntfm_path = out_dir / RESULTS_FILENAME
         tfm_folder = out_dir
         measures = _ntfm.populated_measures(ntfm_path)
         # Inputs live in the experiment folder under their discovery names.
@@ -1312,50 +1294,6 @@ class napariTFMWidget(QWidget):
 
         return {stage: _status(stage) for stage in PIPELINE_STAGES}
 
-    def _on_export_experiment_data(self, path: str) -> None:
-        """Save a copy of one position's processed OME-TIFF to a chosen location.
-
-        The container the batch/interactive writer produced is *itself* the
-        portable export — a single self-describing OME-TIFF that Fiji/ImageJ open
-        directly. So "export" is a plain copy-out to wherever the user wants it,
-        rather than the old per-pixel CSV dump (retired: unusable at grid scale).
-        The row's button is disabled until a stage is done, but we still guard the
-        no-container case (e.g. a stale row) rather than copy a missing file.
-        """
-        import shutil
-        from pathlib import Path
-
-        from napariTFM.utilities.batch_output import experiment_ntfm_path
-
-        name = Path(path).name
-        ntfm_path = experiment_ntfm_path(path, self.data_manager.output_dir)
-        if not ntfm_path.exists():
-            self.status_label.setText(f"Export — no processed data for {name} yet")
-            QMessageBox.information(
-                self,
-                "Export data",
-                f"{name} has not been processed yet — nothing to export.",
-            )
-            return
-
-        default = str(Path(path) / f"{name}.ome.tif")
-        dest, _ = QFileDialog.getSaveFileName(
-            self, f"Export {name} (OME-TIFF)", default, "OME-TIFF (*.ome.tif)"
-        )
-        if not dest:
-            return
-
-        try:
-            self.status_label.setText(f"Export — copying {name}…")
-            shutil.copy2(ntfm_path, dest)
-        except Exception as exc:
-            logger.exception("Data export failed for %s", path)
-            self.status_label.setText(f"Export failed: {exc}")
-            QMessageBox.critical(self, "Export data", f"Export failed: {exc}")
-            return
-
-        self.status_label.setText(f"Export — wrote {Path(dest).name}")
-
     def _load_active_experiment_results(self, path: str) -> None:
         """Restore previously-computed results from an experiment's .ntfm into memory.
 
@@ -1372,13 +1310,13 @@ class napariTFMWidget(QWidget):
         import numpy as np
 
         from napariTFM.utilities import ntfm as _ntfm
-        from napariTFM.utilities.batch_output import experiment_output_dir
+        from napariTFM.utilities.batch_output import RESULTS_FILENAME, experiment_output_dir
         from pathlib import Path
 
         try:
             ntfm_path = (
                 experiment_output_dir(path, self.data_manager.output_dir)
-                / f"{Path(path).name}.ome.tif"
+                / RESULTS_FILENAME
             )
             if not ntfm_path.exists():
                 return
@@ -1410,7 +1348,7 @@ class napariTFMWidget(QWidget):
                 unified = UnifiedParameters()
             disp_params = unified.to_displacement_parameters()
             force_params = unified.to_fttc_parameters()
-            stress_params = unified.to_msm_parameters()
+            stress_params = unified.to_stress_parameters()
 
             pixel_size = float(config.get("pixel_size", 0.0))
             downscale_factor = float(config.get("downscale_factor", 0))
@@ -1449,6 +1387,12 @@ class napariTFMWidget(QWidget):
             # Restore stages in dependency order (displacement → force → stress)
             # so the downstream-invalidation in set_displacement_results never
             # clears a stage we are about to set.
+            # Restoring into DataManager alone leaves the viewer empty until a
+            # stage re-runs, so each restored stage is also pushed through the
+            # same begin_*_stream/stream_*_frame calls a live run uses — same
+            # end state, including the "only this stage's layers visible"
+            # take-over (worklist §4), just sourced from disk instead of a
+            # fresh computation.
             disp = arrays.get("displacement_field")
             if _present(disp):
                 result = types.SimpleNamespace(
@@ -1461,6 +1405,19 @@ class napariTFMWidget(QWidget):
                 self.data_manager.set_displacement_results(
                     result, source="loaded", dirty=False
                 )
+                self.visualization_manager.begin_vector_field_stream(
+                    'displacement', disp.shape[0],
+                    {
+                        'v_max': disp_params.d_max,
+                        'vector_stride': disp_params.disp_vector_stride,
+                        'arrow_scale': disp_params.disp_arrow_scale,
+                        'downscale_factor': disp_params.downscale_factor,
+                    },
+                )
+                for frame_index in range(disp.shape[0]):
+                    self.visualization_manager.stream_vector_field_frame(
+                        'displacement', frame_index, disp[frame_index]
+                    )
 
             force = arrays.get("force_field")
             if _present(force):
@@ -1474,6 +1431,19 @@ class napariTFMWidget(QWidget):
                 self.data_manager.set_force_results(
                     result, source="loaded", dirty=False
                 )
+                self.visualization_manager.begin_vector_field_stream(
+                    'force', force.shape[0],
+                    {
+                        'v_max': force_params.f_max,
+                        'vector_stride': force_params.force_vector_stride,
+                        'arrow_scale': force_params.force_arrow_scale,
+                        'downscale_factor': force_params.downscale_factor,
+                    },
+                )
+                for frame_index in range(force.shape[0]):
+                    self.visualization_manager.stream_vector_field_frame(
+                        'force', frame_index, force[frame_index]
+                    )
 
             stress = arrays.get("stress_tensor")
             if _present(stress):
@@ -1482,15 +1452,29 @@ class napariTFMWidget(QWidget):
                     physical_scale=physical_scale,
                     original_shape=stress.shape[1:3],
                     stress_shape=stress.shape[1:3],
-                    nodes=[],
-                    elements=[],
-                    condition_number=0.0,
-                    residual=0.0,
                     parameters=stress_params,
                 )
                 self.data_manager.set_stress_results(
                     result, source="loaded", dirty=False
                 )
+                # Stress visualization upscales by the force grid's downscale
+                # factor — mirrors stress_widget's live-run lookup, with the
+                # same fallback to 1 when no force results are available.
+                force_results = self.data_manager.force_results
+                stress_downscale = (
+                    force_results.parameters.downscale_factor
+                    if force_results is not None
+                    else 1
+                )
+                self.visualization_manager.begin_stress_stream(
+                    num_frames=stress.shape[0],
+                    max_stress=stress_params.max_stress,
+                    downscale_factor=stress_downscale,
+                )
+                for frame_index in range(stress.shape[0]):
+                    self.visualization_manager.stream_stress_frame(
+                        frame_index, stress[frame_index]
+                    )
 
         except Exception:
             logger.exception(
@@ -1536,7 +1520,7 @@ class napariTFMWidget(QWidget):
                 beads_shape = self.preprocessing_widget.peek_input_xy_shape(
                     self._active_experiment, input_files, "beads"
                 )
-                self.msm_widget.load_mask_from_file(
+                self.stress_widget.load_mask_from_file(
                     Path(self._active_experiment) / mask_name, beads_shape=beads_shape
                 )
         self._update_disclosure()
@@ -1655,7 +1639,7 @@ class napariTFMWidget(QWidget):
         self.force_widget.force_calculated.connect(
             lambda *_: self._on_stage_persisted("force")
         )
-        self.msm_widget.stress_calculated.connect(
+        self.stress_widget.stress_calculated.connect(
             lambda *_: self._on_stage_persisted("stress")
         )
 

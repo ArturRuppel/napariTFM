@@ -159,6 +159,62 @@ def test_run_cancel_icon_swaps_on_running(app):
     assert section.run_cancel_btn.icon().cacheKey() != cancel_icon
 
 
+def test_preview_button_is_not_checkable_by_default(app):
+    """One-shot stages (Displacement/Force/Stress) keep the momentary-action
+    preview button: it never shows a pressed/active toggle state."""
+    section = StageSection("Displacement", QWidget())
+    assert section.preview_button.isCheckable() is False
+
+
+def test_preview_button_is_checkable_when_toggle_style(app):
+    """Toggle-style stages (Preprocessing) render preview as a real toggle:
+    a checkable pill whose pressed/active state reflects on/off."""
+    section = StageSection("Preprocessing", QWidget(), preview_is_toggle=True)
+    assert section.preview_button.isCheckable() is True
+
+
+def test_toggle_preview_checked_state_follows_action_states(app):
+    """The toggle preview button's checked state mirrors 'preview_active'
+    reported by action_states, refreshed whenever action_states_changed fires."""
+    from qtpy.QtCore import QObject, Signal
+
+    class _Signaler(QObject):
+        action_states_changed = Signal()
+
+    signaler = _Signaler()
+    active = {"value": False}
+
+    section = StageSection(
+        "Preprocessing",
+        QWidget(),
+        action_states=lambda: {"preview": True, "preview_active": active["value"]},
+        action_states_changed=signaler.action_states_changed,
+        preview_is_toggle=True,
+    )
+
+    assert section.preview_button.isChecked() is False
+
+    active["value"] = True
+    signaler.action_states_changed.emit()
+    assert section.preview_button.isChecked() is True
+
+    active["value"] = False
+    signaler.action_states_changed.emit()
+    assert section.preview_button.isChecked() is False
+
+
+def test_one_shot_preview_button_checked_state_ignores_action_states(app):
+    """A one-shot stage's preview button stays non-checkable/unchecked even if
+    'preview_active' is reported — only toggle-style stages opt in."""
+    section = StageSection(
+        "Force Analysis",
+        QWidget(),
+        action_states=lambda: {"preview": True, "preview_active": True},
+    )
+    assert section.preview_button.isCheckable() is False
+    assert section.preview_button.isChecked() is False
+
+
 def test_no_status_indicator_dot(app):
     section = StageSection("Preprocessing", QWidget())
     assert not hasattr(section, "status_indicator")

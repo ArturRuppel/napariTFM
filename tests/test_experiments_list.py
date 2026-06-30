@@ -117,46 +117,6 @@ def test_experiment_row_set_selected_toggles_state(app):
     assert row.is_selected() is True
 
 
-def test_export_button_disabled_until_a_stage_is_done(app):
-    row = ExperimentRow("/data/Ctrl/pos_00")
-    assert row.export_btn.isEnabled() is False
-    row.set_stage_statuses(
-        {"preprocessing": "ready", "displacement": "not_started",
-         "force": "not_started", "stress": "off"}
-    )
-    assert row.export_btn.isEnabled() is False
-    row.set_stage_statuses(
-        {"preprocessing": "done", "displacement": "done",
-         "force": "ready", "stress": "off"}
-    )
-    assert row.export_btn.isEnabled() is True
-
-
-_DONE = {"preprocessing": "done", "displacement": "done",
-         "force": "done", "stress": "done"}
-
-
-def test_export_button_emits_path(app):
-    row = ExperimentRow("/data/Ctrl/pos_00")
-    row.set_stage_statuses(_DONE)  # enable the (otherwise disabled) button
-    seen = []
-    row.export_requested.connect(seen.append)
-    row.export_btn.click()
-    assert seen == ["/data/Ctrl/pos_00"]
-
-
-def test_experiments_list_reemits_row_export(app):
-    from napariTFM.widgets._experiments_list import ExperimentsList
-
-    widget = ExperimentsList()
-    widget.add_folders(["/data/Ctrl/pos_00"])
-    widget._rows[0].set_stage_statuses(_DONE)
-    seen = []
-    widget.export_requested.connect(seen.append)
-    widget._rows[0].export_btn.click()
-    assert seen == ["/data/Ctrl/pos_00"]
-
-
 from napariTFM.widgets._experiments_list import ExperimentsList
 
 
@@ -177,6 +137,27 @@ def test_add_folders_appends_without_duplicates(app):
     widget.set_experiments(["/data/a"])
     widget.add_folders(["/data/a", "/data/b"])
     assert widget.experiments() == ["/data/a", "/data/b"]
+
+
+def test_adding_rows_to_empty_list_preloads_first_row(app):
+    widget = ExperimentsList()
+    seen = []
+    widget.active_changed.connect(seen.append)
+
+    widget.add_folders(["/data/a", "/data/b"])
+
+    assert widget.active() == "/data/a"
+    assert seen == ["/data/a"]
+
+
+def test_adding_more_rows_does_not_steal_existing_active(app):
+    widget = ExperimentsList()
+    widget.add_folders(["/data/a", "/data/b"])
+    widget.set_active("/data/b")
+
+    widget.add_folders(["/data/c"])
+
+    assert widget.active() == "/data/b"
 
 
 def test_selecting_a_row_sets_single_active_and_emits(app):
@@ -202,7 +183,7 @@ def test_set_active_ignores_unknown_path(app):
 
     widget.set_active("/data/not-in-list")
 
-    assert widget.active() is None
+    assert widget.active() == "/data/a"
     assert seen == []
 
 
@@ -597,6 +578,7 @@ def test_delete_selected_clears_active_when_active_deleted(app):
 def test_delete_button_enables_only_with_a_selection(app):
     widget = ExperimentsList()
     widget.set_experiments(["/data/a"])
+    widget.set_active(None)
     assert widget.delete_btn.isEnabled() is False
     widget._on_row_clicked("/data/a", 0)
     assert widget.delete_btn.isEnabled() is True

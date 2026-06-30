@@ -153,23 +153,28 @@ def test_viewer_colorbar_is_added_to_right_of_reference_layer():
     assert label_kwargs["text"]["rotation"] == -90
 
     # Scale endpoints: each is its own layer, sitting just right of the bar and
-    # flush with one end — max top-anchored to the bar's top, min bottom-anchored
-    # to the bar's bottom. The bar is full height (40), so the ends are at y == 0
-    # and y == 40. Both sit to the right of the bar's centre column (label's x).
+    # inset from one end by LABEL_INSET_FRACTION * bar_height. Both are
+    # center-anchored — napari's "upper_left"/"lower_left" text anchors use
+    # font-wide ascender/descender metrics inflated by glyphs digits never
+    # contain (e.g. accents, descenders), which overshoots and visually
+    # centers the text on the anchor point instead of sitting flush below/
+    # above it. Center-anchoring plus a half-text-height inset is what
+    # actually lands the number's own edge flush with the bar's edge. The bar
+    # is full height (40), so the un-inset ends would be at y == 0 and y == 40.
     max_data, max_kwargs = viewer.added_points[1]
     min_data, min_kwargs = viewer.added_points[2]
     assert max_data.shape == (1, 2)
     assert min_data.shape == (1, 2)
     assert max_kwargs["name"] == "Displacement (um) Colorbar Max"
     assert min_kwargs["name"] == "Displacement (um) Colorbar Min"
-    assert max_data[0, 0] == 0           # flush with the top of the bar
-    assert min_data[0, 0] == 40          # flush with the bottom of the bar
+    assert 0 < max_data[0, 0] < 20        # inset down from the bar's top
+    assert 20 < min_data[0, 0] < 40       # inset up from the bar's bottom
     assert max_data[0, 1] > label_data[0, 1]   # off to the right of the bar
     assert min_data[0, 1] == max_data[0, 1]    # same column for both numbers
     assert max_kwargs["text"]["string"] == ["1.50"]
-    assert max_kwargs["text"]["anchor"] == "upper_left"
+    assert max_kwargs["text"]["anchor"] == "center"
     assert min_kwargs["text"]["string"] == ["0"]
-    assert min_kwargs["text"]["anchor"] == "lower_left"
+    assert min_kwargs["text"]["anchor"] == "center"
     assert max_kwargs["text"]["rotation"] == 0
 
 

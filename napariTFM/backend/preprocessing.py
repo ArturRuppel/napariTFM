@@ -71,13 +71,11 @@ def preprocess_frame(
         max_percentile = params.cell_max_intensity_percentile
         gaussian_sigma = params.cell_gaussian_sigma
         processed = image
-        rolling_ball_radius = None
     else:
         min_percentile = params.min_intensity_percentile
         max_percentile = params.max_intensity_percentile
         gaussian_sigma = params.gaussian_sigma
-        processed = processor.apply_rolling_ball(image, params.rolling_ball_radius)
-        rolling_ball_radius = params.rolling_ball_radius
+        processed = image
 
     processed = processor.apply_gaussian_filter(processed, gaussian_sigma)
     processed, intensity_range = processor.apply_intensity_scaling(
@@ -99,7 +97,6 @@ def preprocess_frame(
         "final_std": float(processed.std()),
         "intensity_range": intensity_range,
         "gaussian_sigma": gaussian_sigma,
-        "rolling_ball_radius": rolling_ball_radius,
     })
 
     return PreprocessingIntermediateResult(
@@ -167,65 +164,6 @@ class ImageProcessor:
     - Implements robust background correction
     - Provides accurate image registration
     """
-
-    @staticmethod
-    def apply_rolling_ball(image: np.ndarray, radius: float) -> np.ndarray:
-        """Apply rolling ball background subtraction to microscopy images.
-
-        Implements rolling ball background subtraction using morphological
-        operations. This method is particularly effective for removing uneven
-        background illumination in microscopy images while preserving local
-        intensity variations.
-
-        Args:
-            image (np.ndarray): Input image to process
-            radius (float): Radius of the rolling ball in pixels
-                If radius <= 0, returns a copy of the input image
-                Larger radius values remove larger-scale background variations
-
-        Returns:
-            np.ndarray: Background-corrected image in the same dtype as input
-                Negative values are clipped to 0
-
-        Note:
-            The implementation uses a combination of morphological opening and
-            Gaussian filtering to approximate the rolling ball algorithm. The
-            kernel size is automatically calculated from the radius.
-        """
-        if radius <= 0:
-            return image.copy()
-
-        # Create properly sized kernel for rolling ball
-        kernel_size = int(2 * radius + 1)  # Ensure odd size
-        if kernel_size < 3:  # Minimum size of 3x3
-            kernel_size = 3
-
-        # Create structuring element
-        se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-
-        # Store original dtype for later
-        orig_dtype = image.dtype
-
-        # Estimate background using morphological opening
-        # OpenCV expects uint8/uint16 or float32, so we keep uint16/uint8 as is
-        # but convert other types to float32
-        if orig_dtype not in (np.uint8, np.uint16):
-            image = image.astype(np.float32)
-
-        bg = cv2.morphologyEx(image, cv2.MORPH_OPEN, se, iterations=1)
-        bg = cv2.GaussianBlur(bg, (kernel_size, kernel_size), 0)
-
-        # Subtract background - convert to float32 for subtraction to avoid underflow
-        corrected = image.astype(np.float32) - bg.astype(np.float32)
-
-        # Clip negative values
-        corrected = np.clip(corrected, 0, None)
-
-        # Convert back to original dtype
-        if orig_dtype in (np.uint8, np.uint16):
-            corrected = np.clip(corrected, 0, np.iinfo(orig_dtype).max).astype(orig_dtype)
-
-        return corrected
 
     @staticmethod
     def apply_gaussian_filter(image: np.ndarray, sigma: float) -> np.ndarray:

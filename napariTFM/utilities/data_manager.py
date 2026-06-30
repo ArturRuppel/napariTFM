@@ -6,7 +6,7 @@ import numpy as np
 
 from napariTFM.backend.displacement_analysis import DisplacementResult
 from napariTFM.backend.fttc import FTTCResult
-from napariTFM.backend.msm import MSMResult
+from napariTFM.backend.stress import StressResult
 
 
 @dataclass
@@ -231,7 +231,7 @@ class DataManager:
         self.set_artifact("force_results", results, path=path, source=source, dirty=dirty)
         self._invalidate_downstream("force_results")
 
-    def set_stress_results(self, results: MSMResult, path=None, source: str = "", dirty: bool = False) -> None:
+    def set_stress_results(self, results: StressResult, path=None, source: str = "", dirty: bool = False) -> None:
         """Store stress results."""
         self.set_artifact("stress_results", results, path=path, source=source, dirty=dirty)
 
@@ -274,7 +274,7 @@ class DataManager:
         return self.get_artifact("force_results").value
 
     @property
-    def stress_results(self) -> Optional[MSMResult]:
+    def stress_results(self) -> Optional[StressResult]:
         return self.get_artifact("stress_results").value
 
     # Validation methods

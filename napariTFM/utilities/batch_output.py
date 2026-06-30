@@ -1,15 +1,17 @@
-"""Resolve where batch-derived output lands — the ``processed/`` bucket (ROADMAP §4).
+"""Resolve where batch-derived output lands — the ``TFM_data/`` bucket (ROADMAP §4).
 
-All derived output goes into a bucket named ``processed/``, never mixed with raw
-inputs. Two modes:
+All derived output goes into a bucket named ``TFM_data``, sitting *next to* the
+raw input — never mixed with it. Two modes:
 
-- **Processed root set** → the input-folder tree is *mirrored* under it. Each
-  folder is reproduced relative to the *longest common parent* of all input
-  folders. When the folders are genuinely disconnected (no shared parent — e.g.
-  different Windows drives) or there is only a single folder, fall back to folder
-  *basenames* flat under the processed root and emit a warning.
-- **Processed root empty → in-place**: a ``processed/`` subfolder is created
-  *inside each input folder*, so derived files still never mix with raw.
+- **Processed root set** → the input-folder tree is *mirrored* under it (each
+  folder reproduced relative to the *longest common parent* of all input
+  folders; disconnected roots or a single folder fall back to folder
+  *basenames* flat under the processed root, with a warning). The ``TFM_data``
+  bucket then sits where the input data would land in that cloned tree, with
+  the experiment's own basename nested under it so siblings can't collide.
+- **Processed root empty → in-place**: ``TFM_data`` is created as a *sibling*
+  of each input folder (not nested inside it), again namespaced by the
+  experiment's basename.
 
 The resolver is pure path arithmetic so it is fully unit-testable without a
 filesystem.
@@ -23,8 +25,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
-#: Name of the in-place bucket created inside each input folder.
-PROCESSED_BUCKET = "processed"
+#: Name of the bucket holding derived output, sibling of the input data.
+TFM_DATA_BUCKET = "TFM_data"
+
+#: Filename of the sole data artifact written into each experiment's bucket.
+RESULTS_FILENAME = "TFM_results.ome.tif"
 
 
 @dataclass
@@ -56,9 +61,11 @@ def resolve_output_plan(
     warnings: List[str] = []
 
     if not processed_root:
-        # In-place: a processed/ subfolder inside each raw input folder.
+        # In-place: TFM_data sits as a sibling of each raw input folder,
+        # namespaced by the folder's own basename so siblings can't collide.
         output_dirs = {
-            original: Path(original) / PROCESSED_BUCKET for original in input_folders
+            original: Path(original).parent / TFM_DATA_BUCKET / Path(original).name
+            for original in input_folders
         }
         return OutputPlan(output_dirs, warnings)
 
@@ -68,10 +75,8 @@ def resolve_output_plan(
     output_dirs: Dict[str, Path] = {}
     for original in input_folders:
         folder = Path(original)
-        if base is None:
-            output_dirs[original] = root / folder.name
-        else:
-            output_dirs[original] = root / folder.relative_to(base)
+        mirror = root / folder.name if base is None else root / folder.relative_to(base)
+        output_dirs[original] = mirror.parent / TFM_DATA_BUCKET / mirror.name
 
     if base is None:
         _warn_basename_collisions(input_folders, warnings)
@@ -95,13 +100,13 @@ def experiment_output_dir(
 def experiment_ntfm_path(
     experiment_path: str, processed_root: Optional[str] = None
 ) -> Path:
-    """The canonical container path for one experiment (basename names the file).
+    """The canonical container path for one experiment.
 
-    The on-disk artifact is a single multi-series OME-TIFF (``<name>.ome.tif``);
+    The on-disk artifact is a single multi-series OME-TIFF (``RESULTS_FILENAME``);
     the helper name is kept for continuity with the rest of the pipeline.
     """
     out_dir = experiment_output_dir(experiment_path, processed_root)
-    return out_dir / f"{Path(experiment_path).name}.ome.tif"
+    return out_dir / RESULTS_FILENAME
 
 
 def _mirror_base(input_folders: Sequence[str], warnings: List[str]) -> Optional[Path]:

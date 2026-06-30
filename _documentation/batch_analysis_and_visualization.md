@@ -169,7 +169,7 @@ _execute_stress_analysis(
 ) -> Optional[dict]
 ```
 
-Executes stress field calculation using MSM.
+Executes stress field calculation using BISM.
 
 ##### Parameters
 - `tfm_folder` (Path): Output folder path
@@ -216,7 +216,6 @@ The implementation includes comprehensive error handling:
 Key configuration parameters include:
 
 #### Preprocessing
-- rolling_ball_radius: Background subtraction parameter
 - gaussian_sigma: Smoothing parameter
 - min/max_intensity_percentile: Intensity scaling range
 
@@ -231,9 +230,7 @@ Key configuration parameters include:
 - regularization: FTTC regularization parameter
 
 #### Stress Analysis
-- poisson_ratio_cells: Cell monolayer Poisson ratio
-- density_factor: Mesh density parameter
-- mesh_algorithm: Choice of meshing algorithm
+- bism_regularization: BISM regularization hyperparameter (Lambda)
 
 
 ## BatchVisualizationSaver Class
@@ -342,7 +339,7 @@ Creates an animation overlaying force vectors on phase contrast cell images.
 
 ```python
 save_stress_visualization(
-    stress_results: MSMResult,
+    stress_results: StressResult,
     plot_sigma_xx: bool = True,
     plot_sigma_yy: bool = True,
     plot_normal_stress: bool = True,
@@ -353,7 +350,7 @@ save_stress_visualization(
 Creates animations for different components of the stress tensor field.
 
 ##### Parameters
-- `stress_results` (MSMResult): Contains:
+- `stress_results` (StressResult): Contains:
   - stress_tensor: Array of stress tensors
   - parameters: Visualization parameters including:
     - max_stress: Maximum stress for color scaling
@@ -361,24 +358,6 @@ Creates animations for different components of the stress tensor field.
 - `plot_sigma_yy` (bool): Generate YY normal stress visualization
 - `plot_normal_stress` (bool): Generate average normal stress visualization
 - `fps` (int, optional): Frames per second for output GIFs
-
-#### save_mesh_visualization
-
-```python
-save_mesh_visualization(
-    stress_results: MSMResult,
-    fps: int = 10
-) -> None
-```
-
-Creates an animation showing the finite element mesh evolution.
-
-##### Parameters
-- `stress_results` (MSMResult): Contains:
-  - nodes: List of node coordinates for each frame
-  - elements: List of element connectivity for each frame
-  - stress_shape: Tuple of (height, width) for output sizing
-- `fps` (int, optional): Frames per second for output GIF
 
 ### Visualization Features
 

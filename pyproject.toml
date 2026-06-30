@@ -27,14 +27,12 @@ classifiers = [
 ]
 dependencies = [
     "napari[pyqt]>=0.7.0",
-    "solidspy>=1.1.0",
     "scipy>=1.9.3",
     "scikit-image>=0.24.0",
     "numpy>=1.25.2",
     "opencv-python>=4.8.0",
     "tifffile>=2024.6.18",
     "pyyaml>=6.0.2",
-    "gmsh>=4.13.1",
     "numba>=0.60.0",
     "imageio>=2.36.1",
     "imageio-ffmpeg>=0.5.1",

@@ -1,7 +1,7 @@
 import pytest
 from qtpy.QtWidgets import QApplication
 
-import napariTFM.widgets.msm_widget as mw
+import napariTFM.widgets.stress_widget as mw
 
 
 @pytest.fixture
@@ -60,13 +60,13 @@ class _FakeParameterManager:
         self.parameter_changed = self._pm.parameter_changed
         self.parameters_reset = self._pm.parameters_reset
 
-    def get_msm_parameters(self):
+    def get_stress_parameters(self):
         return object()
 
 
 @pytest.fixture
 def stress_widget(app):
-    return mw.MSMWidget(
+    return mw.StressWidget(
         viewer=_FakeViewer(),
         data_manager=_FakeDataManager(),
         parameter_manager=_FakeParameterManager(),
@@ -84,45 +84,25 @@ def test_stress_exposes_action_contract(app, stress_widget):
     assert callable(w.cancel_action)
 
 
-def test_stress_mesh_is_a_header_action_not_a_body_button(app, stress_widget):
-    w = stress_widget
-    # Mesh preview is now a header glyph action, not a text body button.
-    assert not hasattr(w, "preview_mesh_btn")
-    assert "mesh" in w.action_states()
-    assert callable(w.mesh_action)
-
-
-def test_stress_mesh_action_invokes_controller(app, stress_widget, monkeypatch):
-    calls = {"n": 0}
-    monkeypatch.setattr(
-        stress_widget.controller,
-        "preview_mesh",
-        lambda: calls.__setitem__("n", calls["n"] + 1),
-    )
-
-    stress_widget.mesh_action()
-    assert calls["n"] == 1
-
-
 def test_no_per_stage_status_label(app, stress_widget):
     # P2: the shell's one global status label replaces per-stage labels.
     assert not hasattr(stress_widget, "status_label")
 
 
 def test_parameter_panel_class_is_removed():
-    assert not hasattr(mw, "MSMParameterPanel")
+    assert not hasattr(mw, "StressParameterPanel")
 
 
 def test_data_panel_class_is_removed():
-    assert not hasattr(mw, "MSMDataPanel")
+    assert not hasattr(mw, "StressDataPanel")
 
 
 def test_action_panel_class_is_removed():
-    assert not hasattr(mw, "MSMActionPanel")
+    assert not hasattr(mw, "StressActionPanel")
 
 
 def test_controller_has_no_panel_attributes(app):
-    controller = mw.MSMController(
+    controller = mw.StressController(
         viewer=_FakeViewer(),
         data_manager=_FakeDataManager(),
         parameter_manager=_FakeParameterManager(),
@@ -135,7 +115,7 @@ def test_controller_has_no_panel_attributes(app):
 
 
 def test_controller_freeze_emits_signal_without_panels(app):
-    controller = mw.MSMController(
+    controller = mw.StressController(
         viewer=_FakeViewer(),
         data_manager=_FakeDataManager(),
         parameter_manager=_FakeParameterManager(),
@@ -174,7 +154,7 @@ class _MaskDataManager:
 
 
 def _make_widget(viz, data_manager):
-    return mw.MSMWidget(
+    return mw.StressWidget(
         viewer=_FakeViewer(),
         data_manager=data_manager,
         parameter_manager=_FakeParameterManager(),

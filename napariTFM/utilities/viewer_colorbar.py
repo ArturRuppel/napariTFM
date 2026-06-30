@@ -39,9 +39,13 @@ def _display_shape(data: np.ndarray) -> Tuple[int, int]:
 COLORBAR_HEIGHT_FRACTION = 1.0
 
 # How far the endpoint numbers ("1.00" / "0") are inset from the bar's ends,
-# as a fraction of the bar height. 0.0 == flush with the ends; raise it to pull
-# the two numbers closer together vertically without resizing the bar.
-LABEL_INSET_FRACTION = 0.0
+# as a fraction of the bar height. The numbers are center-anchored (napari's
+# top/bottom text anchors use font-wide ascender/descender metrics inflated by
+# glyphs digits never contain, so they overshoot); this inset is what pulls a
+# center-anchored number in by half its own height so its outer edge lands
+# flush with the bar's end. Raise it to pull the two numbers closer together
+# vertically without resizing the bar.
+LABEL_INSET_FRACTION = 0.012
 
 
 def _colorbar_dimensions(image_height: int, image_width: int) -> Tuple[int, int, int, int]:
@@ -169,17 +173,17 @@ class ViewerColorbarManager:
             },
         )
 
-        # Endpoint numbers: each sits just right of the bar and flush with one
-        # end — max anchored by its top-left to the bar's top, min by its
-        # bottom-left to the bar's bottom. A separate layer per number is needed
-        # because napari's text anchor is per-layer, not per-point.
+        # Endpoint numbers: each sits just right of the bar, center-anchored
+        # and inset by LABEL_INSET_FRACTION so its own top/bottom edge lands
+        # flush with the bar's top/bottom edge. A separate layer per number is
+        # needed because napari's text anchor is per-layer, not per-point.
         max_layer = self._add_scale_number(
             max_name, format_scale_value(vmax), number_top_y, number_x,
-            "upper_left", (scale_y, scale_x), (translate_y, translate_x),
+            "center", (scale_y, scale_x), (translate_y, translate_x),
         )
         min_layer = self._add_scale_number(
             min_name, format_scale_value(vmin), number_bottom_y, number_x,
-            "lower_left", (scale_y, scale_x), (translate_y, translate_x),
+            "center", (scale_y, scale_x), (translate_y, translate_x),
         )
 
         self._layer_names = [

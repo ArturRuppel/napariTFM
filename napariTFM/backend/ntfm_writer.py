@@ -14,11 +14,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, fields
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 import numpy as np
 
-from napariTFM.backend.msm import process_mask_data
+from napariTFM.backend.stress import process_mask_data
 from napariTFM.backend.parameter_dataclasses import UnifiedParameters
 from napariTFM.utilities import ntfm
 
@@ -27,7 +28,7 @@ def mask_on_grid(mask_data, force_result, displacement_result) -> Optional[np.nd
     """Resize a raw external mask onto the analysis grid, or return ``None``.
 
     The mask shares the force/displacement grid; ``process_mask_data`` resizes it
-    exactly as MSM does. A mask that cannot be aligned is dropped (``None``)
+    exactly as the stress stage does. A mask that cannot be aligned is dropped (``None``)
     rather than aborting the write — the results are still worth persisting.
     """
     if mask_data is None:
@@ -48,6 +49,50 @@ def mask_on_grid(mask_data, force_result, displacement_result) -> Optional[np.nd
     except Exception as e:  # pragma: no cover - defensive
         print(f"Could not align mask to analysis grid: {str(e)}")
         return None
+
+
+def _zeroed_off_mask(field: np.ndarray, grid_mask: np.ndarray) -> np.ndarray:
+    """Copy of ``field`` with every pixel zeroed where ``grid_mask == 0``.
+
+    ``grid_mask`` may carry a single frame (``nt == 1``) while ``field`` has
+    several; broadcast it rather than require an exact shape match, mirroring
+    the 2D-mask broadcast ``arrays_to_tidy`` already does for the ``mask`` column.
+    """
+    mask = grid_mask
+    if mask.shape[0] == 1 and field.shape[0] > 1:
+        mask = np.broadcast_to(mask[0], (field.shape[0],) + mask.shape[1:])
+    out = np.array(field, copy=True)
+    out[mask == 0] = 0.0
+    return out
+
+
+def _apply_mask_on_save(grid_mask, displacement_result, force_result, stress_result):
+    """Off-mask results, ``apply_mask_on_save`` (ROADMAP §4 backlog).
+
+    Off-cell substrate signal is noise; zeroing ``u_x/u_y/F_x/F_y`` (and stress,
+    if present) wherever the mask is background compresses the written
+    container substantially. The ``mask`` column already records which pixels
+    were zeroed, so the loss is self-documenting. Returns lightweight shims
+    (not mutated copies of the originals) carrying only the two attributes
+    :func:`dataframe_from_results` reads, so the caller's result objects —
+    still used for visualization before this point — are left untouched.
+    """
+    if displacement_result is not None:
+        displacement_result = SimpleNamespace(
+            displacement_field=_zeroed_off_mask(displacement_result.displacement_field, grid_mask),
+            physical_scale=displacement_result.physical_scale,
+        )
+    if force_result is not None:
+        force_result = SimpleNamespace(
+            force_field=_zeroed_off_mask(force_result.force_field, grid_mask),
+            physical_scale=force_result.physical_scale,
+        )
+    if stress_result is not None:
+        stress_result = SimpleNamespace(
+            stress_tensor=_zeroed_off_mask(stress_result.stress_tensor, grid_mask),
+            physical_scale=stress_result.physical_scale,
+        )
+    return displacement_result, force_result, stress_result
 
 
 def config_from_parameters(parameters: Optional[dict]) -> dict:
@@ -73,8 +118,13 @@ def write_experiment_ntfm(
     folder=None,
     input_files: Optional[dict] = None,
     labels: Optional[dict] = None,
+    apply_mask_on_save: bool = False,
 ) -> Optional[Path]:
     """Write one experiment's results to ``.ntfm``; the sole persisted artifact.
+
+    ``apply_mask_on_save`` (opt-in, default off — batch-only, see
+    :func:`_apply_mask_on_save`) zeroes off-cell pixels before write; the
+    interactive per-stage save never sets it, so live results are unaffected.
 
     Returns the written :class:`Path`, or ``None`` when there is nothing to
     persist (all three results absent). Raises on a real write failure so the
@@ -84,6 +134,12 @@ def write_experiment_ntfm(
         return None
 
     grid_mask = mask_on_grid(mask, force_result, displacement_result)
+
+    if apply_mask_on_save and grid_mask is not None:
+        displacement_result, force_result, stress_result = _apply_mask_on_save(
+            grid_mask, displacement_result, force_result, stress_result
+        )
+
     config = config_from_parameters(parameters)
     inputs = {
         "folder": str(folder) if folder is not None else "",

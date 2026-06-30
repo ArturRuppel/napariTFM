@@ -5,7 +5,7 @@ import math
 import yaml
 from pathlib import Path
 from qtpy.QtCore import QObject, Signal
-from napariTFM.backend.parameter_dataclasses import PreprocessingParameters, DisplacementParameters, FTTCParameters, MSMParameters, UnifiedParameters
+from napariTFM.backend.parameter_dataclasses import PreprocessingParameters, DisplacementParameters, FTTCParameters, StressParameters, UnifiedParameters
 
 
 class ParameterCategory(Enum):
@@ -88,9 +88,9 @@ class ParameterManager(QObject):
         """Get parameters for FTTC service"""
         return self._parameters.to_fttc_parameters()
 
-    def get_msm_parameters(self) -> MSMParameters:
-        """Get parameters for MSM service"""
-        return self._parameters.to_msm_parameters()
+    def get_stress_parameters(self) -> StressParameters:
+        """Get parameters for the stress (BISM) service"""
+        return self._parameters.to_stress_parameters()
 
     def get_all_parameters(self) -> Dict[str, Any]:
         """
@@ -137,7 +137,7 @@ class ParameterManager(QObject):
         category_mappings = {
             ParameterCategory.GENERAL: ['pixel_size', 'frame_interval'],
             ParameterCategory.PREPROCESSING: [
-                'rolling_ball_radius', 'min_intensity_percentile', 'max_intensity_percentile',
+                'min_intensity_percentile', 'max_intensity_percentile',
                 'gaussian_sigma', 'cell_min_intensity_percentile',
                 'cell_max_intensity_percentile', 'cell_gaussian_sigma',
                 'registration_mode'
@@ -154,9 +154,7 @@ class ParameterManager(QObject):
                 'force_vector_stride', 'force_arrow_scale', 'f_max'
             ],
             ParameterCategory.STRESS: [
-                'stress_method', 'density_factor', 'mesh_algorithm',
-                'use_optimization', 'poisson_ratio_cells', 'bism_regularization',
-                'bism_lambda_method', 'max_stress'
+                'bism_regularization', 'max_stress'
             ],
         }
 

@@ -109,8 +109,8 @@ def _drive_preprocessing(tmp_path, monkeypatch, save_cache=False):
     monkeypatch.setattr(BatchAnalysis, "_create_preprocessing_parameters", lambda self: SimpleNamespace())
 
     saved = []
-    monkeypatch.setattr(BatchAnalysis, "_save_calibrated_tiff",
-                        lambda self, data, path, *a, **k: saved.append(path))
+    monkeypatch.setattr(ba, "save_calibrated_tiff",
+                        lambda data, path, *a, **k: data is not None and saved.append(path))
 
     analysis._execute_preprocessing(tmp_path, tmp_path)
     return saved

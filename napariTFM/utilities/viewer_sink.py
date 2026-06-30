@@ -36,6 +36,12 @@ class ViewerSink(PipelineSink):
         a new experiment folder (worklist §3), so the shell can make the
         experiments-list selection follow the position being processed. ``None``
         disables tracking.
+    on_stage_progress
+        Optional callable ``callback(stage, status, fraction)`` invoked as each
+        stage starts (``status="running"``, ``fraction=0.0``), streams a frame
+        (``status="running"``, ``fraction`` growing 0..1), and finishes
+        (``status="done"``, ``fraction=None``) — item #10's progressive
+        per-stage loading bar. ``None`` disables this (e.g. headless runs).
     """
 
     # Per-stage active-layer sets (worklist §4). While a stage streams, the sink
@@ -50,17 +56,23 @@ class ViewerSink(PipelineSink):
     _PREPROC_BEADS_REF = ['Preprocessed Beads', 'Preprocessed Reference']
     _PREPROC_CELLS = ['Preprocessed Cells']
 
-    def __init__(self, data_manager, visualization_manager, pump=None, on_experiment=None):
+    def __init__(
+        self, data_manager, visualization_manager, pump=None, on_experiment=None,
+        on_stage_progress=None,
+    ):
         self.data_manager = data_manager
         self.vis = visualization_manager
         self._pump = pump
         self._on_experiment = on_experiment
+        self._on_stage_progress = on_stage_progress
         # Set once the preprocessing stage has flipped to its cell-only phase, so
         # the flip fires on the first cell frame and never repeats mid-stage.
         self._preproc_cells_isolated = False
         # Pre-run visibility snapshot, held between begin_run/end_run; ``None``
         # outside a run so end_run is a safe no-op (and idempotent).
         self._restore_visibility = None
+        # Frame count of the stage currently streaming, for fraction = (i+1)/n.
+        self._stage_num_frames = 0
 
     # --- run boundary (§4) ------------------------------------------------
 
@@ -96,6 +108,9 @@ class ViewerSink(PipelineSink):
 
     def stage_started(self, stage, num_frames, info=None):
         info = info or {}
+        self._stage_num_frames = num_frames
+        if self._on_stage_progress is not None:
+            self._on_stage_progress(stage, 'running', 0.0)
         if stage == 'preprocessing':
             self._begin_preprocessing(info)
             # Start in the beads+reference phase; the first cell frame flips it.
@@ -132,9 +147,14 @@ class ViewerSink(PipelineSink):
             self.vis.stream_vector_field_frame(stage, frame_index, frame)
         elif stage == 'stress':
             self.vis.stream_stress_frame(frame_index, frame)
+        if self._on_stage_progress is not None:
+            fraction = (frame_index + 1) / max(self._stage_num_frames, 1)
+            self._on_stage_progress(stage, 'running', fraction)
         self._repaint()
 
     def stage_finished(self, stage, result):
+        if self._on_stage_progress is not None:
+            self._on_stage_progress(stage, 'done', None)
         # Store the full result so interactive frame-scrubbing and any downstream
         # stage see it — mirrors what each per-stage controller does on
         # completion. Preprocessing needs nothing here: its stacks were allocated
