@@ -6,20 +6,16 @@ from napari.viewer import Viewer
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QApplication, QHBoxLayout, QMessageBox
 
-from napariTFM.backend.parameter_dataclasses import MSMParameters
+from napariTFM.backend.parameter_dataclasses import StressParameters
 from napariTFM.backend.bism import calculate_bism_stresses
-from napariTFM.backend.msm import (
-    calculate_stresses,
-    generate_mesh_stack,
-    process_mask_data,
-)
+from napariTFM.backend.stress import process_mask_data
 from napariTFM.widgets._base_widget import BaseAnalysisController, BaseAnalysisWidget
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.utilities.visualization_manager import VisualizationManager
 
 
-class MSMController(BaseAnalysisController):
+class StressController(BaseAnalysisController):
     """Coordinates interactions between UI components, service, and managers."""
 
     def _validate_prerequisites(self) -> bool:
@@ -52,34 +48,6 @@ class MSMController(BaseAnalysisController):
             if force_results is None:
                 raise ValueError("No force data available")
 
-            use_bism = params.stress_method == "BISM"
-
-            # MSM needs a per-frame FE mesh; BISM is mesh-free, so it skips this
-            # whole phase. Mesh generation runs in the main thread for MSM.
-            mesh_data = None
-            if not use_bism:
-                print("Generating meshes for all frames...")
-                mesh_generator = generate_mesh_stack(masks, params)
-                mesh_data = []
-                try:
-                    while True:
-                        nodes, elements, quality_metrics, frame, total = next(mesh_generator)
-                        mesh_data.append((nodes, elements, quality_metrics))
-                        self._update_progress(
-                            int((frame + 1) / total * 45),  # First 45% for mesh generation
-                            f"Generating mesh: Frame {frame + 1}/{total}"
-                        )
-                        # Keep UI responsive
-                        QApplication.processEvents()
-                except StopIteration as e:
-                    # Get the final mesh results if returned
-                    final_mesh_results = e.value
-                    if final_mesh_results:
-                        mesh_data = final_mesh_results
-
-                # Update status for numba compilation
-                QApplication.processEvents()
-
             # Bind the three stress layers up front so each frame streams in live
             # (preserving the contrast/visibility the user set) and the slider
             # follows it, instead of the whole stack landing only at the end.
@@ -90,24 +58,14 @@ class MSMController(BaseAnalysisController):
                 downscale_factor=force_results.parameters.downscale_factor,
             )
 
-            # Now calculate stress using the pre-generated meshes
             @thread_worker
             def stress_calculation_worker():
                 try:
-                    # BISM solves on the grid (no mesh); MSM uses the pre-built meshes.
-                    if use_bism:
-                        stress_generator = calculate_bism_stresses(
-                            force_field=force_results.force_field,
-                            masks=masks,
-                            params=params,
-                        )
-                    else:
-                        stress_generator = calculate_stresses(
-                            force_field=force_results.force_field,
-                            masks=masks,
-                            params=params,
-                            mesh_data=mesh_data
-                        )
+                    stress_generator = calculate_bism_stresses(
+                        force_field=force_results.force_field,
+                        masks=masks,
+                        params=params,
+                    )
 
                     while True:
                         result, current_frame, total = next(stress_generator)
@@ -124,8 +82,7 @@ class MSMController(BaseAnalysisController):
 
             def on_yielded(data):
                 frame_index, total, stress_tensor_frame = data
-                # Mesh generation took the first 50%; stress fills the rest.
-                progress = 50 + int((frame_index + 1) / max(total, 1) * 50)
+                progress = int((frame_index + 1) / max(total, 1) * 100)
                 self._update_progress(
                     progress, f"Calculating stress: Frame {frame_index + 1}/{total}"
                 )
@@ -137,21 +94,12 @@ class MSMController(BaseAnalysisController):
                 # downstream steps. Other layers' visibility is left untouched.
                 self.data_manager.set_stress_results(final_result, source="generated", dirty=True)
 
-                # Update status with engine-appropriate final metrics: MSM reports
-                # FEM solver stability, BISM reports traction-reconstruction R².
-                if final_result.method == "BISM":
-                    r2 = final_result.r2_traction
-                    r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
-                    status_msg = (
-                        f"Analysis completed successfully (BISM)\n"
-                        f"Mean traction-reconstruction R²: {r2_text}"
-                    )
-                else:
-                    status_msg = (
-                        f"Analysis completed successfully\n"
-                        f"Average condition number: {final_result.condition_number:.1e}\n"
-                        f"Average residual: {final_result.residual:.1e}"
-                    )
+                r2 = final_result.r2_traction
+                r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
+                status_msg = (
+                    f"Analysis completed successfully (BISM)\n"
+                    f"Mean traction-reconstruction R²: {r2_text}"
+                )
                 self._update_progress(100, status_msg)
 
                 self.analysis_completed.emit(final_result)
@@ -211,19 +159,11 @@ class MSMController(BaseAnalysisController):
             mask = masks[current_frame] if masks.ndim > 2 else masks
             force_field = force_results.force_field[current_frame] if force_results.force_field.ndim > 3 else force_results.force_field
 
-            # Calculate stress field for current frame (mesh-free for BISM)
-            if params.stress_method == "BISM":
-                stress_generator = calculate_bism_stresses(
-                    force_field=force_field[np.newaxis, ...],
-                    masks=mask[np.newaxis, ...],
-                    params=params,
-                )
-            else:
-                stress_generator = calculate_stresses(
-                    force_field=force_field[np.newaxis, ...],
-                    masks=mask[np.newaxis, ...],
-                    params=params,
-                )
+            stress_generator = calculate_bism_stresses(
+                force_field=force_field[np.newaxis, ...],
+                masks=mask[np.newaxis, ...],
+                params=params,
+            )
 
             try:
                 # Get stress results
@@ -274,20 +214,12 @@ class MSMController(BaseAnalysisController):
                     if current_index != len(self.viewer.layers) - 1:  # -1 position (top)
                         self.viewer.layers.move(current_index, -1)
 
-                # Create status message with engine-appropriate metrics.
-                if result.method == "BISM":
-                    r2 = result.r2_traction
-                    r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
-                    status_msg = (
-                        f"Stress preview generated for frame {current_frame} (BISM)\n"
-                        f"Traction-reconstruction R²: {r2_text}"
-                    )
-                else:
-                    status_msg = (
-                        f"Stress preview generated for frame {current_frame}\n"
-                        f"Condition number: {result.condition_number:.1e}\n"
-                        f"Residual: {result.residual:.1e}"
-                    )
+                r2 = result.r2_traction
+                r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
+                status_msg = (
+                    f"Stress preview generated for frame {current_frame} (BISM)\n"
+                    f"Traction-reconstruction R²: {r2_text}"
+                )
 
                 self._update_progress(100, status_msg)
                 return result
@@ -301,75 +233,13 @@ class MSMController(BaseAnalysisController):
             QMessageBox.critical(None, "Error", error_msg)
             return None
 
-    def _get_current_parameters(self) -> MSMParameters:
-        """Get current MSM parameters from parameter manager."""
-        return self.parameter_manager.get_msm_parameters()
+    def _get_current_parameters(self) -> StressParameters:
+        """Get current stress (BISM) parameters from parameter manager."""
+        return self.parameter_manager.get_stress_parameters()
 
     def _update_progress(self, progress: int, status: str):
         """Update progress and emit signal."""
         self.progress_updated.emit(progress, status)
-
-    def preview_mesh(self):
-        """Generate and display mesh preview for the current frame."""
-        try:
-            self._update_progress(0, "Generating mesh preview...")
-
-            # Get current frame index
-            if len(self.viewer.dims.current_step) == 2:
-                current_frame = 0
-                self.progress_updated.emit(0, "No image stack found, previewing frame 0")
-            else:
-                current_frame = self.viewer.dims.current_step[0]
-
-            params = self._get_current_parameters()
-
-            # Get mask for current frame
-            masks = self.data_manager.mask_stack
-            if masks is None:
-                raise ValueError("No mask data available")
-
-            mask = masks[current_frame] if masks.ndim > 2 else masks
-
-            mesh_generator = generate_mesh_stack(mask, params)
-
-            try:
-                # Get first mesh result
-                nodes, elements, quality_metrics, _, _ = next(mesh_generator)
-
-                # Get downscale factor from force results if available
-                if self.data_manager.force_results is not None:
-                    downscale_factor = self.data_manager.force_results.parameters.downscale_factor
-                else:
-                    downscale_factor = 1
-
-                # Update visualization
-                self.visualization_manager.visualize_mesh(
-                    nodes=nodes,
-                    elements=elements,
-                    downscale_factor=downscale_factor
-                )
-
-                # Simplified quality metrics message
-                num_elements = len(elements)
-                mean_quality = quality_metrics.get('mean_quality', 0.0)
-                status_msg = (
-                    f"Mesh preview generated for frame {current_frame}\n"
-                    f"Elements: {num_elements}\n"
-                    f"Mean quality: {mean_quality:.3f}"
-                )
-
-                self._update_progress(100, status_msg)
-
-                return nodes, elements, quality_metrics
-
-            except StopIteration:
-                raise ValueError("Mesh generation failed to produce results")
-
-        except Exception as e:
-            error_msg = f"Failed to preview mesh: {str(e)}"
-            self._update_progress(0, error_msg)
-            QMessageBox.critical(None, "Error", error_msg)
-            return None
 
     def cancel_all_operations(self):
         """Cancel all running background operations"""
@@ -390,8 +260,8 @@ class MSMController(BaseAnalysisController):
         self.unfreeze_ui()
 
 
-class MSMWidget(BaseAnalysisWidget):
-    """Widget for Monolayer Stress Microscopy analysis."""
+class StressWidget(BaseAnalysisWidget):
+    """Widget for Bayesian Inversion Stress Microscopy (BISM) analysis."""
     stress_calculated = Signal(object)  # Emits stress analysis results
 
     def __init__(
@@ -405,14 +275,14 @@ class MSMWidget(BaseAnalysisWidget):
 
         # Action enablement consumed by the stage header via the action contract
         self._action_enabled = {
-            "run": False, "preview": False, "cancel": True, "mesh": False,
+            "run": False, "preview": False, "cancel": True,
         }
 
         # Get initial parameters from parameter manager
-        self.msm_params = parameter_manager.get_msm_parameters()
+        self.stress_params = parameter_manager.get_stress_parameters()
 
         # Initialize controller (owns no panels; emits ui_frozen)
-        self.controller = MSMController(
+        self.controller = StressController(
             viewer=viewer,
             data_manager=data_manager,
             parameter_manager=parameter_manager,
@@ -435,8 +305,8 @@ class MSMWidget(BaseAnalysisWidget):
     def _setup_ui(self):
         """Set up the user interface.
 
-        All stage actions — run/preview/cancel plus mesh preview — live in the
-        stage header (P7), so this widget owns no visible body content.
+        All stage actions — run/preview/cancel — live in the stage header (P7),
+        so this widget owns no visible body content.
         """
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -560,19 +430,15 @@ class MSMWidget(BaseAnalysisWidget):
         return (1.0, ty / my, tx / mx)
 
     def _update_stress_parameters(self, category: ParameterCategory):
-        """Refresh cached MSM parameters when a parameter reset occurs."""
+        """Refresh cached stress parameters when a parameter reset occurs."""
         if category == ParameterCategory.STRESS:
-            self.msm_params = self.parameter_manager.get_msm_parameters()
+            self.stress_params = self.parameter_manager.get_stress_parameters()
 
     def _handle_parameter_change(self, param_name: str, value: Any):
-        """Refresh cached MSM parameters when an individual parameter changes."""
-        stress_params = {
-            'stress_method', 'density_factor', 'mesh_algorithm', 'use_optimization',
-            'poisson_ratio_cells', 'bism_regularization', 'bism_lambda_method',
-            'max_stress'
-        }
+        """Refresh cached stress parameters when an individual parameter changes."""
+        stress_params = {'bism_regularization', 'max_stress'}
         if param_name in stress_params:
-            self.msm_params = self.parameter_manager.get_msm_parameters()
+            self.stress_params = self.parameter_manager.get_stress_parameters()
 
     def run_action(self):
         self.controller.start_analysis()
@@ -583,15 +449,11 @@ class MSMWidget(BaseAnalysisWidget):
     def cancel_action(self):
         self.controller.cancel_all_operations()
 
-    def mesh_action(self):
-        self.controller.preview_mesh()
-
     def _update_ui_state(self, event=None):
         """Update action button enablement based on available data."""
         has_force = self.data_manager.force_results is not None
         has_mask = self.data_manager.mask_stack is not None
 
-        self._action_enabled["mesh"] = has_mask
         self._action_enabled["preview"] = has_force and has_mask
         self._action_enabled["run"] = has_force and has_mask
         self._action_enabled["cancel"] = True
