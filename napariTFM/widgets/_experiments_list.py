@@ -3,7 +3,7 @@
 Each discovered experiment is one row. The columns are *derived from the folder
 nesting* under the chosen discovery root: every nesting level becomes a column
 and the folder name at that level is the row's value for it (root ``/data`` and
-folder ``/data/Ctrl/pos_00`` → ``Level 1 = Ctrl``, ``Level 2 = pos_00``). The
+folder ``/data/Ctrl/pos_00`` → ``Column 1 = Ctrl``, ``Column 2 = pos_00``). The
 column *names* are an editable, table-wide header; the *values* are read-only
 (they are the folder names). Rows are multi-selectable (Ctrl/Shift-click) and
 deletable.
@@ -69,9 +69,9 @@ def nesting_columns(folder: str | Path, root: str | Path) -> dict[str, str]:
     """Derive a row's columns from *folder*'s nesting under *root*.
 
     Every path component of *folder* relative to *root* becomes a column named
-    ``Level 1``, ``Level 2`` … (left to right) whose value is that component's
+    ``Column 1``, ``Column 2`` … (left to right) whose value is that component's
     folder name. A folder that is not actually under *root* (or equals it) falls
-    back to a single ``Level 1`` column holding the leaf folder name, so a row
+    back to a single ``Column 1`` column holding the leaf folder name, so a row
     always carries at least one column.
     """
     folder = Path(folder)
@@ -81,7 +81,7 @@ def nesting_columns(folder: str | Path, root: str | Path) -> dict[str, str]:
         parts = ()
     if not parts:
         parts = (folder.name,)
-    return {f"Level {i + 1}": part for i, part in enumerate(parts)}
+    return {f"Column {i + 1}": part for i, part in enumerate(parts)}
 
 
 def discover_experiment_folders(

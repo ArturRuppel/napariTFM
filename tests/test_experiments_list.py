@@ -313,8 +313,8 @@ def test_commit_adds_discovered_with_nesting_columns(app, tmp_path):
     records = widget.experiment_records()
     assert len(records) == 1
     # Each nesting level under the discovery root becomes a column.
-    assert records[0]["columns"] == {"Level 1": "Ctrl", "Level 2": "pos_00"}
-    assert widget.column_names() == ["Level 1", "Level 2"]
+    assert records[0]["columns"] == {"Column 1": "Ctrl", "Column 2": "pos_00"}
+    assert widget.column_names() == ["Column 1", "Column 2"]
     assert records[0]["input_files"] == {
         "beads": "beads.tif",
         "reference": "reference.tif",
@@ -331,10 +331,10 @@ def test_commit_columns_pad_to_max_nesting_depth(app, tmp_path):
     widget.file_name_inputs["masks"].setText("")
     widget.discover(tmp_path)
     widget.commit_discovered()
-    assert widget.column_names() == ["Level 1", "Level 2"]
+    assert widget.column_names() == ["Column 1", "Column 2"]
     by_leaf = {Path(r["path"]).name: r["columns"] for r in widget.experiment_records()}
-    assert by_leaf["pos_00"] == {"Level 1": "Ctrl", "Level 2": "pos_00"}
-    assert by_leaf["solo"] == {"Level 1": "solo", "Level 2": ""}
+    assert by_leaf["pos_00"] == {"Column 1": "Ctrl", "Column 2": "pos_00"}
+    assert by_leaf["solo"] == {"Column 1": "solo", "Column 2": ""}
 
 
 def test_commit_button_enables_only_after_discovery(app, tmp_path):
@@ -584,10 +584,10 @@ def test_delete_button_enables_only_with_a_selection(app):
     assert widget.delete_btn.isEnabled() is True
 
 
-def test_column_header_has_one_editable_field_per_level(app):
+def test_column_header_has_one_editable_field_per_column(app):
     widget = ExperimentsList()
-    widget.add_folders(["/data/a"], columns={"Level 1": "Ctrl", "Level 2": "pos_00"})
-    assert [f.text() for f in widget._header_fields] == ["Level 1", "Level 2"]
+    widget.add_folders(["/data/a"], columns={"Column 1": "Ctrl", "Column 2": "pos_00"})
+    assert [f.text() for f in widget._header_fields] == ["Column 1", "Column 2"]
 
 
 # ── styling fidelity (mockup v2 aggregation layer) ──────────────────────
