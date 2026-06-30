@@ -240,9 +240,13 @@ class _StubStageWidget(QWidget):
         self.action_calls = {"run": 0, "preview": 0, "cancel": 0}
         self._action_states = {"run": False, "preview": False}
 
-    def load_mask_from_file(self, mask_path):
+    def load_mask_from_file(self, mask_path, beads_shape=None):
         self.loaded_mask_paths.append(str(mask_path))
+        self.loaded_mask_beads_shape = beads_shape
         return True
+
+    def peek_input_xy_shape(self, folder, input_files, slot="beads"):
+        return None
 
     def _update_ui_state(self):
         self.update_count += 1
@@ -288,11 +292,34 @@ class _StubStageWidget(QWidget):
         self.loaded_files.append(key)
 
 
+_ORIGINAL_MODULES = {}
+
+
 def _stub_module(name, **attrs):
+    if name not in _ORIGINAL_MODULES:
+        _ORIGINAL_MODULES[name] = sys.modules.get(name)
     module = _types.ModuleType(name)
     for attr_name, value in attrs.items():
         setattr(module, attr_name, value)
     sys.modules[name] = module
+
+
+def _restore_stubbed_modules():
+    """Undo the module-level stubs so they don't leak into other test files.
+
+    ``_widget`` binds the stub classes at import time, so once it has been
+    imported the real modules can be put back in ``sys.modules``. Without this,
+    the bare stub modules shadow the genuine widgets for every test collected
+    afterwards (e.g. the streaming controllers fail to import with "unknown
+    location"). This supersedes the older per-symbol workaround of leaving
+    individual modules unstubbed.
+    """
+    for name, original in _ORIGINAL_MODULES.items():
+        if original is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = original
+    _ORIGINAL_MODULES.clear()
 
 
 # Install stubs before importing _widget so it picks them up.
@@ -324,6 +351,8 @@ _stub_module("napariTFM.widgets.msm_widget", MSMWidget=_StubStageWidget)
 # _stub_main_widget patches FTTCWidget per-test via monkeypatch instead.
 
 from napariTFM.widgets import _widget  # noqa: E402 — stubs must be in place first
+
+_restore_stubbed_modules()
 
 
 # ---------------------------------------------------------------------------

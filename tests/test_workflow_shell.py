@@ -242,11 +242,34 @@ class _StubStageWidget(QWidget):
         self.loaded_files.append(key)
 
 
+_ORIGINAL_MODULES = {}
+
+
 def _stub_module(name, **attrs):
+    if name not in _ORIGINAL_MODULES:
+        _ORIGINAL_MODULES[name] = sys.modules.get(name)
     module = types.ModuleType(name)
     for attr_name, value in attrs.items():
         setattr(module, attr_name, value)
     sys.modules[name] = module
+
+
+def _restore_stubbed_modules():
+    """Undo the module-level stubs so they don't leak into other test files.
+
+    ``_widget`` binds the stub classes at import time (eager top-level
+    imports), so once it has been imported the real modules can be put back in
+    ``sys.modules``. Without this, the bare stub modules — no ``__file__`` and
+    missing the real symbols — shadow the genuine widgets for every test
+    collected afterwards, so e.g. ``from ...displacement_analysis_widget import
+    DisplacementController`` fails with "unknown location".
+    """
+    for name, original in _ORIGINAL_MODULES.items():
+        if original is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = original
+    _ORIGINAL_MODULES.clear()
 
 
 _stub_module(
@@ -267,6 +290,8 @@ _stub_module("napariTFM.widgets.fttc_widget", FTTCWidget=_StubStageWidget)
 _stub_module("napariTFM.widgets.msm_widget", MSMWidget=_StubStageWidget)
 
 from napariTFM.widgets import _widget
+
+_restore_stubbed_modules()
 
 
 @pytest.fixture
