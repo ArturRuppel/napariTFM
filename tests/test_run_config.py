@@ -70,6 +70,14 @@ def test_apply_mask_on_save_flag_is_carried():
     assert build_run_config(_RECORDS, {}, apply_mask_on_save=True)["apply_mask_on_save"] is True
 
 
+def test_num_workers_defaults_to_one():
+    assert build_run_config(_RECORDS, {})["num_workers"] == 1
+
+
+def test_num_workers_is_carried():
+    assert build_run_config(_RECORDS, {}, num_workers=4)["num_workers"] == 4
+
+
 def test_visualizations_and_metrics_are_constant_and_present():
     cfg = build_run_config(_RECORDS, {})
     assert cfg["visualizations"]["displacement_map"] is True
