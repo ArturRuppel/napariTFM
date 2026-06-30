@@ -654,7 +654,7 @@ class _StubDM:
         self._cbs.append(cb)
 
     def set_output_dir(self, path):
-        self.output_dir = Path(path)
+        self.output_dir = Path(path) if path is not None else None
         for cb in self._cbs:
             cb()
 
@@ -733,12 +733,32 @@ def test_calibration_field_syncs_from_parameter_changed(app):
     assert float(widget.calibration_controls["frame_interval"].text()) == 2.5
 
 
-def test_experiments_list_tracks_output_directory(app, tmp_path):
+def test_output_dir_starts_as_unset_add_affordance(app):
+    widget = ExperimentsList(data_manager=_StubDM())
+    assert widget.output_dir_label.isVisible() is False
+    assert widget.choose_output_dir_btn.text() == "Add custom output directory"
+    assert widget.clear_output_dir_btn.isVisible() is False
+
+
+def test_output_dir_shows_path_and_clear_button_once_set(app, tmp_path):
     dm = _StubDM()
     widget = ExperimentsList(data_manager=dm)
-    assert widget.output_dir_label.text() == "No output directory"
+    widget.show()  # isVisible() reflects ancestor visibility; must actually show
     dm.set_output_dir(tmp_path)
+    assert widget.output_dir_label.isVisible() is True
     assert widget.output_dir_label.text() == str(tmp_path)
+    assert widget.clear_output_dir_btn.isVisible() is True
+    assert widget.choose_output_dir_btn.text() == "Change output directory"
+
+
+def test_clear_output_dir_resets_manager_and_label(app, tmp_path):
+    dm = _StubDM()
+    widget = ExperimentsList(data_manager=dm)
+    dm.set_output_dir(tmp_path)
+    widget._clear_output_dir()
+    assert dm.output_dir is None
+    assert widget.output_dir_label.isVisible() is False
+    assert widget.choose_output_dir_btn.text() == "Add custom output directory"
 
 
 def test_apply_output_dir_sets_manager_and_emits(app, tmp_path):

@@ -439,7 +439,6 @@ class ExperimentsList(QWidget):
             self._parameter_manager.parameter_changed.connect(self._sync_parameter)
         if self._data_manager is not None:
             self._data_manager.add_change_callback(self._sync_output_dir)
-            self._sync_output_dir()
 
     # -- setup: calibration + input-file names + optional output dir ------
     def _build_setup_section(self) -> CollapsibleSection:
@@ -519,10 +518,11 @@ class ExperimentsList(QWidget):
         return out
 
     def _clear_output_dir(self) -> None:
-        # Placeholder for this task only — a later task (Task 4, not yours)
-        # replaces this with real clear-to-default behavior. For THIS task,
-        # just make it a safe no-op so the row builds without AttributeError.
-        pass
+        """Reset to the default per-experiment output location (unset override)."""
+        if self._data_manager is None:
+            return
+        self._data_manager.set_output_dir(None)
+        self.output_dir_changed.emit()
 
     def _commit_parameter(self, name: str, control: QLineEdit) -> None:
         """Parse a free-text calibration field; revert to last good value if junk."""
@@ -565,12 +565,22 @@ class ExperimentsList(QWidget):
     def _sync_output_dir(self) -> None:
         path = getattr(self._data_manager, "output_dir", None)
         if path is None:
-            self.output_dir_label.setText("No output directory")
+            self.output_dir_label.setText("")
+            self.output_dir_label.setVisible(False)
             self.output_dir_label.setToolTip("")
+            self.choose_output_dir_btn.setText("Add custom output directory")
+            self.choose_output_dir_btn.setToolTip(
+                "Optional — overrides the default per-experiment output location"
+            )
+            self.clear_output_dir_btn.setVisible(False)
             return
         text = str(path)
         self.output_dir_label.setText(text)
+        self.output_dir_label.setVisible(True)
         self.output_dir_label.setToolTip(text)
+        self.choose_output_dir_btn.setText("Change output directory")
+        self.choose_output_dir_btn.setToolTip("Choose a different output directory")
+        self.clear_output_dir_btn.setVisible(True)
 
     # -- input-file config (the discovery requirements) ------------------
     def _build_config_header(self) -> QVBoxLayout:
