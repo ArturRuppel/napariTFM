@@ -45,6 +45,27 @@ _ICON_BODIES = {
         '<line x1="1.5" y1="12" x2="5" y2="12"/>'
         '<line x1="19" y1="12" x2="22.5" y2="12"/>'
     ),
+    # document with a plus corner — "start a new project"
+    "new": (
+        '<path d="M7 3 H14 L18 7 V21 H7 Z"/>'
+        '<path d="M14 3 V7 H18"/>'
+        '<line x1="9.5" y1="14" x2="15.5" y2="14"/>'
+        '<line x1="12.5" y1="11" x2="12.5" y2="17"/>'
+    ),
+    # open folder — "load a project or a preset"
+    "load": '<path d="M3 6.5 H9 L11 8.5 H21 V18.5 H3 Z"/>',
+    # tray with a downward arrow — "save a project or a preset"
+    "save": (
+        '<path d="M4 4 H20 V14 H4 Z"/>'
+        '<path d="M9 8 L12 11 L15 8"/>'
+        '<line x1="12" y1="4.5" x2="12" y2="11"/>'
+        '<path d="M4 14 V20 H20 V14"/>'
+    ),
+    # circular arrow — "reset parameters to defaults"
+    "reset": (
+        '<path d="M5 12 A7 7 0 1 0 7.5 6.5"/>'
+        '<path d="M5 6 L5 12 L11 12"/>'
+    ),
 }
 
 _SVG_TEMPLATE = (
