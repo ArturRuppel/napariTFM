@@ -300,6 +300,9 @@ class BatchAnalysis:
         # headless run leaves this ``None`` and the hooks are silent no-ops.
         self._sink = sink
         self._cancelled = False
+        # Parallel-mode pool state (populated by start_parallel).
+        self._executor = None
+        self._pending_futures = {}
 
     def _emit(self, method: str, *args) -> None:
         """Notify the optional sink; never let it break a run (worklist §5).
