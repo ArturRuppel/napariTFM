@@ -740,3 +740,24 @@ def test_collapsed_summary_tracks_experiment_count(app):
 def test_collapse_button_has_expected_object_name(app):
     widget = ExperimentsList()
     assert widget.collapse_btn.objectName() == "experiments_collapse_button"
+
+
+def test_num_workers_spinbox_defaults_to_one(app):
+    widget = ExperimentsList()
+    assert widget._num_workers_spinbox.objectName() == "experiments_num_workers_spinbox"
+    assert widget._num_workers_spinbox.value() == 1
+    assert widget.num_workers() == 1
+
+
+def test_num_workers_returns_spinbox_value(app):
+    widget = ExperimentsList()
+    widget._num_workers_spinbox.setValue(4)
+    assert widget.num_workers() == 4
+
+
+def test_num_workers_spinbox_range_matches_cpu_count(app):
+    import os
+
+    widget = ExperimentsList()
+    assert widget._num_workers_spinbox.minimum() == 1
+    assert widget._num_workers_spinbox.maximum() == (os.cpu_count() or 1)
