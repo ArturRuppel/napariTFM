@@ -347,6 +347,73 @@ def test_commit_button_enables_only_after_discovery(app, tmp_path):
     assert widget.commit_btn.isEnabled() is False
 
 
+def test_discover_renders_preview_rows_in_table(app, tmp_path):
+    _make_qualifying(tmp_path, "a", "b")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)
+    assert len(widget._preview_rows) == 2
+    assert all(row.is_preview for row in widget._preview_rows)
+    # Preview rows are not committed rows.
+    assert widget.experiments() == []
+
+
+def test_discover_again_replaces_rather_than_merges_preview(app, tmp_path):
+    # Two non-overlapping roots (sibling subfolders of tmp_path) — discover()
+    # scans recursively, so nesting one root inside the other would make the
+    # first call legitimately find both folders, masking the replace behavior
+    # this test targets.
+    first_root = tmp_path / "first"
+    _make_qualifying(first_root, "a")
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    _make_qualifying(other_root, "z")
+    widget = ExperimentsList()
+    widget.discover(first_root)
+    assert len(widget._preview_rows) == 1
+    widget.discover(other_root)
+    assert len(widget._preview_rows) == 1
+    assert Path(widget._preview_rows[0].path).name == "z"
+
+
+def test_preview_row_click_toggles_selection(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)
+    row = widget._preview_rows[0]
+    row.clicked.emit(row.path, 0)
+    assert row.path in widget._discovered_selected
+    assert widget.delete_btn.isEnabled() is True
+    row.clicked.emit(row.path, 0)
+    assert row.path not in widget._discovered_selected
+    assert widget.delete_btn.isEnabled() is False
+
+
+def test_delete_selected_removes_preview_rows_before_committing(app, tmp_path):
+    _make_qualifying(tmp_path, "a", "b")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)
+    row_to_drop = widget._preview_rows[0]
+    row_to_drop.clicked.emit(row_to_drop.path, 0)
+    widget.delete_selected()
+    assert len(widget._preview_rows) == 1
+    assert len(widget.discovered()) == 1
+    # Committed table untouched.
+    assert widget.experiments() == []
+
+
+def test_commit_discovered_clears_preview_rows_and_hardens(app, tmp_path):
+    _make_qualifying(tmp_path, "Ctrl/pos_00")
+    widget = ExperimentsList()
+    widget.file_name_inputs["cells"].setText("")
+    widget.file_name_inputs["masks"].setText("")
+    widget.discover(tmp_path)
+    assert len(widget._preview_rows) == 1
+    widget.commit_discovered()
+    assert widget._preview_rows == []
+    assert len(widget._rows) == 1
+    assert widget._rows[0].is_preview is False
+
+
 def test_refresh_statuses_calls_status_fn_for_each_row(app):
     calls = []
     def status_fn(path):

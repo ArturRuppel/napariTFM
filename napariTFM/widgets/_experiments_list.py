@@ -189,10 +189,18 @@ class ExperimentRow(QWidget):
     selected = Signal(str)  # legacy single-select (kept for back-compat callers)
     clicked = Signal(str, int)  # path, modifier flag: 0 plain, 1 ctrl, 2 shift
 
-    def __init__(self, path: str, values: Optional[list[str]] = None, parent=None):
+    def __init__(
+        self,
+        path: str,
+        values: Optional[list[str]] = None,
+        parent=None,
+        *,
+        preview: bool = False,
+    ):
         super().__init__(parent)
         self._path = path
         self._selected = False
+        self._preview = preview
         # The row paints its own (styled) background — selected rows lift.
         self.setObjectName("experiment_row")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -226,6 +234,13 @@ class ExperimentRow(QWidget):
         self._chip.setStyleSheet(f"color: {experiment_status_color('queued')};")
         layout.addWidget(self._chip)
 
+        if self._preview:
+            # Nothing has run for a not-yet-committed folder — no status to show.
+            self.mini_rail.setVisible(False)
+            self._chip.setVisible(False)
+            for value_label in self._value_labels:
+                value_label.setStyleSheet(f"color: {TEXT_DIM}; font-style: italic;")
+
         # Apply the deselected resting style (row + name colors).
         self.set_selected(False)
 
@@ -237,6 +252,10 @@ class ExperimentRow(QWidget):
     def name(self) -> str:
         return Path(self._path).name
 
+    @property
+    def is_preview(self) -> bool:
+        return self._preview
+
     def is_selected(self) -> bool:
         return self._selected
 
@@ -247,9 +266,10 @@ class ExperimentRow(QWidget):
             f"background: {accent};" if on else "background: transparent;"
         )
         self.setStyleSheet(experiment_row_style(on, accent))
-        color = experiment_name_color(on)
-        for label in self._value_labels:
-            label.setStyleSheet(f"color: {color};")
+        if not self._preview:
+            color = experiment_name_color(on)
+            for label in self._value_labels:
+                label.setStyleSheet(f"color: {color};")
 
     def set_stage_statuses(self, statuses: dict[str, str]) -> None:
         self.mini_rail.set_statuses(statuses)
@@ -302,6 +322,7 @@ class ExperimentsList(QWidget):
         # Ordered, editable column names shared by every row (the table header).
         self._column_names: list[str] = []
         self._rows: list[ExperimentRow] = []
+        self._preview_rows: list[ExperimentRow] = []
         self._active: Optional[str] = None
         # Multi-selection for delete (Ctrl/Shift-click); ``_anchor`` is the
         # range-select pivot (the last plainly-clicked row).
@@ -334,6 +355,9 @@ class ExperimentsList(QWidget):
         # committed rows can derive their columns from the nesting under it.
         self._discovered: list[str] = []
         self._discover_root: Optional[str] = None
+        # Preview-row selection (separate from the committed-row selection
+        # machinery — preview rows have no "active"/tuning concept).
+        self._discovered_selected: set[str] = set()
 
         self._staging_label = QLabel("")
         self._staging_label.setStyleSheet(f"color: {TEXT_DIM};")
@@ -657,13 +681,18 @@ class ExperimentsList(QWidget):
         Folder-presence only — required inputs are beads + reference (cells is
         optional and excluded from the requirement). The root is remembered so
         committed rows can derive their columns from the nesting under it.
-        Staging never mutates the list; the second Commit step does.
+        Staging never mutates the committed list; the second Commit step does.
+        The staged set renders immediately as dimmed preview rows in the table;
+        a second call to ``discover`` *replaces* the current preview set rather
+        than merging into it.
         """
         cfg = self.input_file_config()
         required = [cfg.get("beads"), cfg.get("reference")]
         self._discover_root = str(root)
         self._discovered = discover_experiment_folders(root, required)
+        self._discovered_selected = set()
         self._update_staging()
+        self._rebuild_table()
         return list(self._discovered)
 
     def discovered(self) -> list[str]:
@@ -675,8 +704,9 @@ class ExperimentsList(QWidget):
             return
         root = self._discover_root
         pairs = [(path, nesting_columns(path, root)) for path in self._discovered]
-        self._add_records(pairs, self.input_file_config())
         self._discovered = []
+        self._discovered_selected = set()
+        self._add_records(pairs, self.input_file_config())
         self._update_staging()
 
     def _update_staging(self) -> None:
@@ -845,7 +875,16 @@ class ExperimentsList(QWidget):
         self.active_changed.emit(path or "")
 
     def delete_selected(self) -> None:
-        """Remove every multi-selected row from the table."""
+        """Remove selected rows: preview-staged first, else committed rows."""
+        if self._discovered_selected:
+            self._discovered = [
+                p for p in self._discovered if p not in self._discovered_selected
+            ]
+            self._discovered_selected = set()
+            self._update_staging()
+            self._rebuild_table()
+            self._update_delete_btn()
+            return
         if not self._selected_paths:
             return
         remaining = [p for p in self._paths if p not in self._selected_paths]
@@ -942,13 +981,25 @@ class ExperimentsList(QWidget):
             self._anchor = path
             self.set_active(path)
 
+    def _on_preview_row_clicked(self, path: str, _flag: int) -> None:
+        """Toggle one not-yet-committed row in/out of the delete selection."""
+        if path in self._discovered_selected:
+            self._discovered_selected.discard(path)
+        else:
+            self._discovered_selected.add(path)
+        for row in self._preview_rows:
+            row.set_selected(row.path in self._discovered_selected)
+        self._update_delete_btn()
+
     def _apply_selection_styles(self) -> None:
         for row in self._rows:
             row.set_selected(row.path in self._selected_paths)
 
     def _update_delete_btn(self) -> None:
         if hasattr(self, "delete_btn"):
-            self.delete_btn.setEnabled(bool(self._selected_paths))
+            self.delete_btn.setEnabled(
+                bool(self._selected_paths) or bool(self._discovered_selected)
+            )
 
     def keyPressEvent(self, event) -> None:  # pragma: no cover - GUI event
         if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and self._selected_paths:
@@ -1001,6 +1052,7 @@ class ExperimentsList(QWidget):
             if item.widget() is not None:
                 item.widget().deleteLater()
         self._rows = []
+        self._preview_rows = []
         self._rows_box.addWidget(self._build_header_widget())
         for path in self._paths:
             values = [
@@ -1012,13 +1064,20 @@ class ExperimentsList(QWidget):
             row.set_selected(path in self._selected_paths)
             self._rows_box.addWidget(row)
             self._rows.append(row)
+        for path in self._discovered:
+            row = ExperimentRow(path, preview=True)
+            row.clicked.connect(self._on_preview_row_clicked)
+            row.set_selected(path in self._discovered_selected)
+            self._rows_box.addWidget(row)
+            self._preview_rows.append(row)
         self._update_table_visibility()
 
     def _update_table_visibility(self) -> None:
         """Collapse the empty table so the action bar sits flush under the
         input-file form. The bounded scroll region (and its "Folder" header
-        placeholder) only earns its 300px once there are rows to show."""
-        self._rows_scroll.setVisible(bool(self._paths))
+        placeholder) only earns its 300px once there are committed or
+        preview rows to show."""
+        self._rows_scroll.setVisible(bool(self._paths) or bool(self._discovered))
 
     def _update_meta(self) -> None:
         n = len(self._paths)
