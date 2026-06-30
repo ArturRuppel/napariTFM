@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from qtpy.QtWidgets import QApplication
+from qtpy.QtWidgets import QApplication, QLabel
 
 from napariTFM.widgets._experiments_list import (
     MiniRail,
@@ -778,38 +778,28 @@ def test_output_dir_button_has_expected_object_name(app):
     assert widget.choose_output_dir_btn.objectName() == "experiments_output_dir_button"
 
 
-def test_experiments_list_starts_expanded(app):
+def test_experiments_panel_has_no_collapse_chrome(app):
     widget = ExperimentsList()
-    assert widget.is_collapsed() is False
-    assert widget._body.isHidden() is False
-    assert widget._header_summary.isHidden() is True
+    assert not hasattr(widget, "collapse_btn")
+    assert not hasattr(widget, "toggle_collapsed")
+    assert not hasattr(widget, "set_collapsed")
+    assert not hasattr(widget, "is_collapsed")
 
 
-def test_toggle_collapsed_folds_body_and_shows_summary(app):
+def test_experiments_label_is_present_and_plain(app):
     widget = ExperimentsList()
-    widget.set_experiments(["/data/a", "/data/b"])
-
-    widget.toggle_collapsed()
-    assert widget.is_collapsed() is True
-    assert widget._body.isHidden() is True
-    # The header keeps a compact count so the single folded row stays informative.
-    assert widget._header_summary.isHidden() is False
-    assert widget._header_summary.text() == "2 experiments"
-
-    widget.toggle_collapsed()
-    assert widget.is_collapsed() is False
-    assert widget._body.isHidden() is False
-    assert widget._header_summary.isHidden() is True
+    label = widget.findChild(QLabel, "experiments_panel_label")
+    assert label is not None
+    assert label.text() == "Experiments"
 
 
-def test_collapsed_summary_tracks_experiment_count(app):
+def test_table_and_actions_are_always_visible_regardless_of_row_count(app):
     widget = ExperimentsList()
-    widget.set_collapsed(True)
-    assert widget._header_summary.text() == "0 experiments"
+    widget.show()  # isVisible() reflects ancestor visibility; must actually show
+    # No collapse toggle exists, so the action row is always shown — only the
+    # scrollable rows region itself hides/shows based on row count (existing
+    # _update_table_visibility behavior, unchanged by this task).
+    assert widget.add_btn.isVisible() is True
+    assert widget.commit_btn.isVisible() is True
     widget.set_experiments(["/data/a"])
-    assert widget._header_summary.text() == "1 experiment"
-
-
-def test_collapse_button_has_expected_object_name(app):
-    widget = ExperimentsList()
-    assert widget.collapse_btn.objectName() == "experiments_collapse_button"
+    assert widget.add_btn.isVisible() is True

@@ -313,40 +313,17 @@ class ExperimentsList(QWidget):
         layout.setSpacing(COMPACT_SPACING)
         self.setLayout(layout)
 
-        # Header: a collapse caret, the section label, and a compact summary
-        # that only earns its place while the list is folded away.
-        self._collapsed = False
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        self.collapse_btn = QToolButton()
-        self.collapse_btn.setObjectName("experiments_collapse_button")
-        self.collapse_btn.setArrowType(Qt.DownArrow)
-        self.collapse_btn.setAutoRaise(True)
-        self.collapse_btn.setToolTip("Collapse the experiments list")
-        self.collapse_btn.clicked.connect(self.toggle_collapsed)
-        header.addWidget(self.collapse_btn)
-        label = QLabel("EXPERIMENTS")
+        # A plain, non-interactive label — the table below is always visible,
+        # so there's nothing to fold away (unlike the Setup section above it).
+        label = QLabel("Experiments")
+        label.setObjectName("experiments_panel_label")
         label.setStyleSheet(f"color: {TEXT_MID}; font-weight: bold;")
-        header.addWidget(label)
-        self._header_summary = QLabel("")
-        self._header_summary.setObjectName("experiments_header_summary")
-        self._header_summary.setStyleSheet(f"color: {TEXT_DIM};")
-        self._header_summary.setVisible(False)
-        header.addSpacing(COMPACT_SPACING)
-        header.addWidget(self._header_summary)
-        header.addStretch()
+        layout.addWidget(label)
 
-        layout.addLayout(header)
-
-        # Everything below the header lives in one collapsible body, so folding
-        # the list is a single setVisible on the container.
-        self._body = QWidget()
-        self._body.setObjectName("experiments_body")
         body_layout = QVBoxLayout()
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(COMPACT_SPACING)
-        self._body.setLayout(body_layout)
-        layout.addWidget(self._body)
+        layout.addLayout(body_layout)
 
         # Setup: calibration, input-file names, optional output dir — one
         # collapsible block, auto-collapsing after the first commit.
@@ -1047,35 +1024,6 @@ class ExperimentsList(QWidget):
         n = len(self._paths)
         self._meta.setText(f"{n} experiment{'s' if n != 1 else ''}")
         self.run_all_btn.setEnabled(n > 0)
-        # Keep the folded-away summary current even while collapsed.
-        self._header_summary.setText(self._meta.text())
-
-    # -- collapse / expand ----------------------------------------------
-    def is_collapsed(self) -> bool:
-        return self._collapsed
-
-    def set_collapsed(self, collapsed: bool) -> None:
-        """Fold the list down to its header row (or restore it).
-
-        Collapsing hides the whole body — calibration, input-file config, the
-        rows table, the action bar and the count — leaving only the header,
-        which then shows a compact experiment-count summary so the single
-        remaining row still says how much is hidden.
-        """
-        self._collapsed = bool(collapsed)
-        self._body.setVisible(not self._collapsed)
-        self._header_summary.setVisible(self._collapsed)
-        self.collapse_btn.setArrowType(
-            Qt.RightArrow if self._collapsed else Qt.DownArrow
-        )
-        self.collapse_btn.setToolTip(
-            "Expand the experiments list"
-            if self._collapsed
-            else "Collapse the experiments list"
-        )
-
-    def toggle_collapsed(self) -> None:
-        self.set_collapsed(not self._collapsed)
 
     def _on_add_clicked(self) -> None:  # pragma: no cover - GUI dialog
         dialog = QFileDialog(self, "Discover experiments under a root folder")
