@@ -659,6 +659,57 @@ class _StubDM:
             cb()
 
 
+from napariTFM.widgets._collapsible_section import CollapsibleSection
+
+
+def test_setup_section_exists_and_starts_expanded(app):
+    widget = ExperimentsList()
+    assert isinstance(widget.setup_section, CollapsibleSection)
+    assert widget.setup_section.is_expanded is True
+
+
+def test_setup_section_holds_calibration_input_files_and_output_dir(app):
+    widget = ExperimentsList(parameter_manager=_StubPM(), data_manager=_StubDM())
+    # All three groups of fields/buttons still exist, now built by the setup
+    # section rather than two separate top-level layouts.
+    assert "pixel_size" in widget.calibration_controls
+    assert "beads" in widget.file_name_inputs
+    assert widget.choose_output_dir_btn is not None
+
+
+def test_setup_section_auto_collapses_after_first_commit(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    assert widget.setup_section.is_expanded is True
+    widget.discover(tmp_path)
+    widget.commit_discovered()
+    assert widget.setup_section.is_expanded is False
+
+
+def test_setup_section_does_not_collapse_while_list_stays_empty(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)  # staged but not committed
+    assert widget.setup_section.is_expanded is True
+
+
+def test_setup_section_is_manually_reexpandable_after_auto_collapse(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)
+    widget.commit_discovered()
+    assert widget.setup_section.is_expanded is False
+    widget.setup_section.set_expanded(True)
+    assert widget.setup_section.is_expanded is True
+
+
+def test_loading_records_collapses_setup_section(app):
+    widget = ExperimentsList()
+    assert widget.setup_section.is_expanded is True
+    widget.set_records([{"path": "/data/a", "input_files": {}, "columns": {}}])
+    assert widget.setup_section.is_expanded is False
+
+
 def test_experiments_list_owns_calibration_controls(app):
     widget = ExperimentsList(parameter_manager=_StubPM())
     assert "pixel_size" in widget.calibration_controls

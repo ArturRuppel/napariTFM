@@ -29,6 +29,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from napariTFM.widgets._collapsible_section import CollapsibleSection
 from napariTFM.widgets._icons import stage_action_icon
 from napariTFM.widgets._stage_spine import _node_style
 from napariTFM.widgets._ui_style import (
@@ -347,16 +348,15 @@ class ExperimentsList(QWidget):
         self._body.setLayout(body_layout)
         layout.addWidget(self._body)
 
-        # Project-level calibration + output directory (the aggregation layer
-        # owns these now; the old Project section is gone).
-        body_layout.addLayout(self._build_project_strip())
+        # Setup: calibration, input-file names, optional output dir — one
+        # collapsible block, auto-collapsing after the first commit.
+        self.setup_section = self._build_setup_section()
+        body_layout.addWidget(self.setup_section)
 
         # Staging for the two-step Discover→Commit flow (D2). The root is kept so
         # committed rows can derive their columns from the nesting under it.
         self._discovered: list[str] = []
         self._discover_root: Optional[str] = None
-
-        body_layout.addLayout(self._build_config_header())
 
         self._staging_label = QLabel("")
         self._staging_label.setStyleSheet(f"color: {TEXT_DIM};")
@@ -441,13 +441,28 @@ class ExperimentsList(QWidget):
             self._data_manager.add_change_callback(self._sync_output_dir)
             self._sync_output_dir()
 
-    # -- project-level calibration + output (the aggregation layer) -------
-    def _build_project_strip(self) -> QVBoxLayout:
-        """Pixel/frame calibration + an output-directory picker, themed."""
+    # -- setup: calibration + input-file names + optional output dir ------
+    def _build_setup_section(self) -> CollapsibleSection:
+        """The one-time-per-batch config: calibration, input names, output dir.
+
+        Wrapped in a CollapsibleSection that starts expanded and auto-collapses
+        the first time the experiment table goes from empty to non-empty (see
+        ``set_experiments``/``set_records``) — these fields rarely change
+        between batches, so hiding them declutters the common case while
+        staying one click away.
+        """
+        inner = QWidget()
         box = QVBoxLayout()
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(COMPACT_SPACING)
+        box.addLayout(self._build_calibration_row())
+        box.addLayout(self._build_config_header())
+        box.addLayout(self._build_output_dir_row())
+        inner.setLayout(box)
+        return CollapsibleSection("Setup", inner, expanded=True, title_color=TEXT_MID)
 
+    def _build_calibration_row(self) -> QHBoxLayout:
+        """Pixel size + frame interval, free-text fields with a soft validator."""
         self.calibration_controls: dict[str, QLineEdit] = {}
         cal = QHBoxLayout()
         cal.setContentsMargins(0, 0, 0, 0)
@@ -476,24 +491,38 @@ class ExperimentsList(QWidget):
             cell.addWidget(caption)
             cell.addWidget(field)
             cal.addLayout(cell, 1)
-        box.addLayout(cal)
+        return cal
 
+    def _build_output_dir_row(self) -> QHBoxLayout:
+        """Optional output-directory override — last in Setup, after inputs."""
         out = QHBoxLayout()
         out.setContentsMargins(0, 0, 0, 0)
         self.choose_output_dir_btn = QToolButton()
         self.choose_output_dir_btn.setObjectName("experiments_output_dir_button")
-        self.choose_output_dir_btn.setToolTip("Choose output directory")
+        self.choose_output_dir_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.choose_output_dir_btn.setIcon(
-            stage_action_icon("files", muted_accent(stage_accent("project")))
+            stage_action_icon("plus", muted_accent(stage_accent("project")))
         )
         self.choose_output_dir_btn.clicked.connect(self._choose_output_dir)
-        self.output_dir_label = QLabel("No output directory")
+        self.output_dir_label = QLabel("")
         self.output_dir_label.setObjectName("project_output_dir_label")
         self.output_dir_label.setStyleSheet(f"color: {TEXT_DIM};")
+        self.clear_output_dir_btn = QToolButton()
+        self.clear_output_dir_btn.setObjectName("experiments_clear_output_dir_button")
+        self.clear_output_dir_btn.setText("×")
+        self.clear_output_dir_btn.setToolTip("Remove custom output directory")
+        self.clear_output_dir_btn.clicked.connect(self._clear_output_dir)
         out.addWidget(self.choose_output_dir_btn)
         out.addWidget(self.output_dir_label, 1)
-        box.addLayout(out)
-        return box
+        out.addWidget(self.clear_output_dir_btn)
+        self._sync_output_dir()
+        return out
+
+    def _clear_output_dir(self) -> None:
+        # Placeholder for this task only — a later task (Task 4, not yours)
+        # replaces this with real clear-to-default behavior. For THIS task,
+        # just make it a safe no-op so the row builds without AttributeError.
+        pass
 
     def _commit_parameter(self, name: str, control: QLineEdit) -> None:
         """Parse a free-text calibration field; revert to last good value if junk."""
@@ -733,6 +762,7 @@ class ExperimentsList(QWidget):
         # position rather than leaving the list with no selection.
         if was_empty and self._paths:
             self.set_active(self._paths[0])
+            self.setup_section.set_expanded(False)
 
     def _add_records(self, pairs, input_files: Optional[dict] = None) -> None:
         """Append ``(path, columns)`` rows, extending the shared column header.
@@ -805,6 +835,8 @@ class ExperimentsList(QWidget):
         self.refresh_statuses()
         self._update_meta()
         self._update_delete_btn()
+        if self._paths:
+            self.setup_section.set_expanded(False)
         self.experiments_changed.emit()
 
     def set_active(self, path: Optional[str], *, selection=None) -> None:
