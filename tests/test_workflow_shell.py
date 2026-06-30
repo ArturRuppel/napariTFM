@@ -2008,6 +2008,14 @@ def test_new_project_clears_to_empty_open_workspace(monkeypatch, app):
     assert widget._stage_sections_by_key["stress"].is_enabled is False
 
 
+def test_new_project_reexpands_setup_section_after_prior_collapse(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.set_records([{"path": "/data/a", "input_files": {}, "columns": {}}])
+    assert widget.experiments_list.setup_section.is_expanded is False
+    widget._new_project()
+    assert widget.experiments_list.setup_section.is_expanded is True
+
+
 def test_autosave_path_is_gone(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     for attr in ("_write_config", "_read_config", "_reconcile_to_output_dir",

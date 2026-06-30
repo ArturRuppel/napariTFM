@@ -783,6 +783,24 @@ def test_loading_records_collapses_setup_section(app):
     assert widget.setup_section.is_expanded is False
 
 
+def test_setup_section_reexpands_when_list_becomes_empty(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)
+    widget.commit_discovered()
+    assert widget.setup_section.is_expanded is False
+    widget.set_experiments([])
+    assert widget.setup_section.is_expanded is True
+
+
+def test_setup_section_reexpands_when_records_loaded_empty(app):
+    widget = ExperimentsList()
+    widget.set_records([{"path": "/data/a", "input_files": {}, "columns": {}}])
+    assert widget.setup_section.is_expanded is False
+    widget.set_records([])
+    assert widget.setup_section.is_expanded is True
+
+
 def test_experiments_list_owns_calibration_controls(app):
     widget = ExperimentsList(parameter_manager=_StubPM())
     assert "pixel_size" in widget.calibration_controls

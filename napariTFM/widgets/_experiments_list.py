@@ -777,7 +777,9 @@ class ExperimentsList(QWidget):
         self.experiments_changed.emit()
         # Adding rows to a previously-empty list should preload an active
         # position rather than leaving the list with no selection.
-        if was_empty and self._paths:
+        if not self._paths:
+            self.setup_section.set_expanded(True)
+        elif was_empty:
             self.set_active(self._paths[0])
             self.setup_section.set_expanded(False)
 
@@ -852,8 +854,7 @@ class ExperimentsList(QWidget):
         self.refresh_statuses()
         self._update_meta()
         self._update_delete_btn()
-        if self._paths:
-            self.setup_section.set_expanded(False)
+        self.setup_section.set_expanded(not self._paths)
         self.experiments_changed.emit()
 
     def set_active(self, path: Optional[str], *, selection=None) -> None:
