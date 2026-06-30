@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 
 import napari
-from qtpy.QtCore import Qt, QObject
+from qtpy.QtCore import Qt, QObject, QTimer
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox,
     QHBoxLayout, QGridLayout, QSpinBox, QComboBox, QFileDialog, QCheckBox,
@@ -33,7 +33,7 @@ from napariTFM.widgets._run_config import (
 )
 from napariTFM.backend.batch_analysis import BatchAnalysis
 from napariTFM.backend.ntfm_writer import write_experiment_ntfm
-from napariTFM.utilities.batch_output import experiment_ntfm_path
+from napariTFM.utilities.batch_output import experiment_ntfm_path, resolve_output_plan
 from napariTFM.utilities.viewer_sink import ViewerSink
 
 logger = logging.getLogger(__name__)
@@ -998,20 +998,38 @@ class napariTFMWidget(QWidget):
         parameters build the run config, and stress is skipped when its on/off
         glyph is off (D1). A per-folder progress callback drives the live
         mini-rails as the batch advances.
+
+        ``num_workers`` (read once here from the experiments-list spinbox)
+        decides which of two code paths runs: ``<= 1`` keeps the original
+        synchronous, single-process, live-streaming path unchanged; ``> 1``
+        hands the folders to a process pool and polls it from a Qt timer
+        instead (no live viewer streaming in that mode -- see
+        :meth:`_run_all_experiments_parallel`).
         """
         records = self.experiments_list.experiment_records()
         if not records:
             return
+        num_workers = self.experiments_list.num_workers()
         config = build_run_config(
             records,
             self.parameter_manager.get_all_parameters(),
             disabled_stages=self._disabled_stages(),
             processed_root=self.data_manager.output_dir,
+            num_workers=num_workers,
         )
-        # Stream each stage into the live viewer as it runs (worklist §5): the
-        # same BatchAnalysis that drives a headless run now also walks the rail
-        # in napari via a ViewerSink. Frames repaint live because the batch runs
-        # synchronously on the GUI thread and the sink pumps the event loop.
+        if num_workers > 1:
+            self._run_all_experiments_parallel(config)
+        else:
+            self._run_all_experiments_sequential(config)
+
+    def _run_all_experiments_sequential(self, config: dict) -> None:
+        """Original single-process run-all path (unchanged behaviour).
+
+        Streams each stage into the live viewer as it runs (worklist §5): the
+        same ``BatchAnalysis`` that drives a headless run also walks the rail
+        in napari via a ``ViewerSink``. Frames repaint live because the batch
+        runs synchronously on the GUI thread and the sink pumps the event loop.
+        """
         sink = ViewerSink(
             self.data_manager,
             self.visualization_manager,
@@ -1039,6 +1057,74 @@ class napariTFMWidget(QWidget):
             self._active_batch = None
             self.experiments_list.set_run_all_active(False)
             self.refresh_stage_statuses()
+
+    def _run_all_experiments_parallel(self, config: dict) -> None:
+        """Process-pool run-all path: submit once, poll non-blockingly from a timer.
+
+        No ``ViewerSink`` is constructed here -- nothing streams into one in
+        parallel mode (workers run headless in separate processes), so
+        constructing one would sit idle or half-initialise state expecting
+        frames that never come. The per-stage progress rail simply does not
+        update live during a parallel run; it catches up via
+        ``refresh_stage_statuses`` whenever the followed position completes,
+        or at the very end. This is an accepted, deliberate trade-off.
+
+        The viewer follows the currently-selected row, or the topmost folder
+        if nothing is selected yet. Cancellation reuses the existing
+        ``_cancel_run_all`` wiring unchanged -- it calls
+        ``self._active_batch.request_cancel()``, and ``self._active_batch`` is
+        the same analyzer instance used here.
+        """
+        analyzer = BatchAnalysis(config, progress_callback=self._on_batch_progress, sink=None)
+        self._active_batch = analyzer
+        self.experiments_list.set_run_all_active(True)
+
+        try:
+            plan = resolve_output_plan(config['root_folders'], config.get('processed_root'))
+            for warning in plan.warnings:
+                print(f"WARNING: {warning}")
+
+            # Viewer follows the selected row, else the topmost folder (locked
+            # product decision) -- only set it if nothing is already selected,
+            # so an existing selection is respected.
+            if self._active_experiment is None:
+                self._active_experiment = config['root_folders'][0]
+                self.experiments_list.follow_streaming(self._active_experiment)
+
+            analyzer.start_parallel(plan, config['num_workers'])
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("Run-all failed")
+            QMessageBox.critical(self, "Run all", f"Batch run failed: {exc}")
+            self._active_batch = None
+            self.experiments_list.set_run_all_active(False)
+            self.refresh_stage_statuses()
+            return
+
+        timer = QTimer(self)
+        timer.setInterval(150)
+
+        def _poll():
+            events, finished = analyzer.poll_parallel_progress()
+            for folder, status in events:
+                # self._active_experiment may have changed since the run
+                # started (the user can click a different, already-finished
+                # row at any time -- that goes through the existing,
+                # unchanged active_changed -> _on_active_experiment_changed
+                # path and is not this method's concern). Compare against the
+                # CURRENT value, not a value captured once at run start, so
+                # "follow" tracks whatever the user is looking at right now.
+                if status == "done" and folder == self._active_experiment:
+                    self._load_active_experiment_results(folder)
+                    self.refresh_stage_statuses()
+            if finished:
+                timer.stop()
+                self._active_batch = None
+                self.experiments_list.set_run_all_active(False)
+                self.refresh_stage_statuses()
+
+        timer.timeout.connect(_poll)
+        self._parallel_run_timer = timer  # keep a reference so it isn't garbage-collected
+        timer.start()
 
     def _on_stage_persisted(self, stage_key: str) -> None:
         """A stage finished interactively: persist it, then reconcile the dots.

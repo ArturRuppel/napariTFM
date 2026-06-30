@@ -1003,6 +1003,233 @@ def test_run_all_with_no_experiments_is_a_noop(monkeypatch, app):
     assert _FakeBatchAnalysis.last_config is None
 
 
+class _FakeParallelBatchAnalysis:
+    """Stand-in for BatchAnalysis's non-blocking parallel API.
+
+    Records ``start_parallel`` calls and lets tests drive
+    ``poll_parallel_progress`` manually via a queue of canned
+    ``(events, finished)`` results, instead of spinning up a real
+    ProcessPoolExecutor.
+    """
+
+    last_instance = None
+
+    def __init__(self, config, progress_callback=None, sink=None):
+        self.config = config
+        self.progress_callback = progress_callback
+        self.sink = sink
+        self.start_parallel_calls = []
+        self.cancel_calls = 0
+        self._poll_queue: list[tuple[list[tuple[str, str]], bool]] = []
+        type(self).last_instance = self
+
+    def start_parallel(self, plan, num_workers):
+        self.start_parallel_calls.append((plan, num_workers))
+
+    def request_cancel(self):
+        self.cancel_calls += 1
+
+    def queue_poll_result(self, events, finished):
+        self._poll_queue.append((events, finished))
+
+    def poll_parallel_progress(self):
+        events, finished = self._poll_queue.pop(0)
+        for folder, status in events:
+            if self.progress_callback:
+                self.progress_callback(folder, status)
+        return events, finished
+
+
+class _FakeTimer:
+    """Stand-in for QTimer exposing the connected slot for manual driving.
+
+    Avoids depending on a real Qt event loop / pytest-qt (not installed in
+    this env) to exercise the polling loop in tests.
+    """
+
+    instances: list["_FakeTimer"] = []
+
+    def __init__(self, *args, **kwargs):
+        self._slot = None
+        self.started = False
+        self.stopped = False
+        _FakeTimer.instances.append(self)
+
+    def setInterval(self, _ms):
+        pass
+
+    @property
+    def timeout(self):
+        return self
+
+    def connect(self, slot):
+        self._slot = slot
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+    def fire(self):
+        self._slot()
+
+
+def test_run_all_parallel_constructs_no_viewer_sink(monkeypatch, app):
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
+    monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
+    _FakeTimer.instances = []
+
+    def _boom(*a, **k):
+        raise AssertionError("ViewerSink must not be constructed in parallel mode")
+
+    monkeypatch.setattr(_widget, "ViewerSink", _boom)
+
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.add_folders(["/data/exp_a", "/data/exp_b"])
+    widget.experiments_list._num_workers_spinbox.setValue(4)
+
+    widget.experiments_list.run_all_requested.emit()
+
+    analyzer = _FakeParallelBatchAnalysis.last_instance
+    assert analyzer is not None
+    assert analyzer.sink is None
+    assert analyzer.config["num_workers"] == 4
+    assert len(analyzer.start_parallel_calls) == 1
+    _, num_workers = analyzer.start_parallel_calls[0]
+    assert num_workers == 4
+
+
+def test_run_all_parallel_follows_topmost_folder_when_none_selected(monkeypatch, app):
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
+    monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
+    _FakeTimer.instances = []
+
+    widget = _stub_main_widget(monkeypatch)
+    assert widget._active_experiment is None
+    widget.experiments_list.add_folders(["/data/exp_a", "/data/exp_b"])
+    widget.experiments_list._num_workers_spinbox.setValue(2)
+
+    widget.experiments_list.run_all_requested.emit()
+
+    assert widget._active_experiment == "/data/exp_a"
+
+
+def test_run_all_parallel_leaves_existing_selection_alone(monkeypatch, app):
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
+    monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
+    _FakeTimer.instances = []
+
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.add_folders(["/data/exp_a", "/data/exp_b"])
+    widget._active_experiment = "/data/exp_b"
+    widget.experiments_list._num_workers_spinbox.setValue(2)
+
+    widget.experiments_list.run_all_requested.emit()
+
+    assert widget._active_experiment == "/data/exp_b"
+
+
+def test_run_all_parallel_reloads_only_the_followed_folder_on_done(monkeypatch, app):
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
+    monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
+    _FakeTimer.instances = []
+
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.add_folders(["/data/exp_a", "/data/exp_b"])
+    widget._active_experiment = "/data/exp_b"
+    widget.experiments_list._num_workers_spinbox.setValue(2)
+
+    loaded = []
+    monkeypatch.setattr(
+        widget, "_load_active_experiment_results", lambda path: loaded.append(path)
+    )
+    refreshed = []
+    monkeypatch.setattr(widget, "refresh_stage_statuses", lambda: refreshed.append(True))
+
+    widget.experiments_list.run_all_requested.emit()
+
+    analyzer = _FakeParallelBatchAnalysis.last_instance
+    timer = _FakeTimer.instances[-1]
+    assert timer.started is True
+
+    # The non-followed folder finishes first: no reload should happen for it.
+    refreshed.clear()
+    analyzer.queue_poll_result([("/data/exp_a", "done")], False)
+    timer.fire()
+    assert loaded == []
+    assert refreshed == []
+    assert timer.stopped is False
+
+    # The followed folder finishes: reload + refresh fire, and the run ends.
+    # (refresh_stage_statuses fires twice here: once for the matched "done"
+    # event, once more from teardown since this same poll also reports
+    # finished=True.)
+    analyzer.queue_poll_result([("/data/exp_b", "done")], True)
+    timer.fire()
+    assert loaded == ["/data/exp_b"]
+    assert refreshed == [True, True]
+    assert timer.stopped is True
+    assert widget._active_batch is None
+    assert widget.experiments_list.run_all_btn.text() == "Run all"
+
+
+def test_run_all_parallel_keeps_polling_after_cancel_until_finished(monkeypatch, app):
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
+    monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
+    _FakeTimer.instances = []
+
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.add_folders(["/data/exp_a"])
+    widget.experiments_list._num_workers_spinbox.setValue(2)
+
+    widget.experiments_list.run_all_requested.emit()
+
+    analyzer = _FakeParallelBatchAnalysis.last_instance
+    timer = _FakeTimer.instances[-1]
+
+    widget._cancel_run_all()
+    assert analyzer.cancel_calls == 1
+
+    # An in-flight worker keeps reporting after cancel; the loop must keep
+    # polling until "finished" actually flips True.
+    analyzer.queue_poll_result([], False)
+    timer.fire()
+    assert timer.stopped is False
+    assert widget._active_batch is analyzer
+
+    analyzer.queue_poll_result([("/data/exp_a", "done")], True)
+    timer.fire()
+    assert timer.stopped is True
+    assert widget._active_batch is None
+
+
+def test_run_all_sequential_path_is_unchanged_for_default_num_workers(monkeypatch, app):
+    """num_workers <= 1 (including the spinbox default of 1) keeps the exact
+    pre-existing sequential, ViewerSink-streaming path -- a regression guard
+    against the new branch swallowing the default case."""
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
+    sink_calls = []
+    real_viewer_sink = _widget.ViewerSink
+
+    def _spy_sink(*args, **kwargs):
+        sink_calls.append((args, kwargs))
+        return real_viewer_sink(*args, **kwargs)
+
+    monkeypatch.setattr(_widget, "ViewerSink", _spy_sink)
+
+    widget = _stub_main_widget(monkeypatch)
+    assert widget.experiments_list.num_workers() == 1
+    widget.experiments_list.add_folders(["/data/exp_a"])
+
+    widget.experiments_list.run_all_requested.emit()
+
+    assert len(sink_calls) == 1
+    cfg = _FakeBatchAnalysis.last_config
+    assert cfg["num_workers"] == 1
+    assert _FakeBatchAnalysis.last_instance.sink is not None
+
+
 def test_only_stress_stage_is_optional(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     assert widget._stage_sections_by_key["stress"].enable_btn is not None
