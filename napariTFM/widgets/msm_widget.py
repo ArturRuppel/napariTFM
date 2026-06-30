@@ -3,7 +3,7 @@ from typing import Any
 import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
-from qtpy.QtCore import Signal, QObject
+from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QApplication, QHBoxLayout, QMessageBox
 
 from napariTFM.backend.parameter_dataclasses import MSMParameters
@@ -13,32 +13,14 @@ from napariTFM.backend.msm import (
     generate_mesh_stack,
     process_mask_data,
 )
-from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.widgets._base_widget import BaseAnalysisController, BaseAnalysisWidget
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.utilities.visualization_manager import VisualizationManager
 
 
-class MSMController(QObject):
+class MSMController(BaseAnalysisController):
     """Coordinates interactions between UI components, service, and managers."""
-
-    # Define signals as class attributes
-    data_updated = Signal(str)
-    progress_updated = Signal(int, str)  # (progress_value, status_message)
-    analysis_started = Signal()
-    analysis_completed = Signal(object)  # Results object
-    analysis_failed = Signal(str)  # Error message
-    ui_frozen = Signal(bool)
-
-    def __init__(self, viewer: Viewer,
-                 data_manager: DataManager, parameter_manager: ParameterManager,
-                 visualization_manager: VisualizationManager):
-        super().__init__()
-        self.viewer = viewer
-        self.data_manager = data_manager
-        self.parameter_manager = parameter_manager
-        self.visualization_manager = visualization_manager
-        self.active_workers = []
 
     def _validate_prerequisites(self) -> bool:
         """Check if required data is available."""
@@ -323,14 +305,6 @@ class MSMController(QObject):
         """Get current MSM parameters from parameter manager."""
         return self.parameter_manager.get_msm_parameters()
 
-    def freeze_ui(self):
-        """Signal the owning widget to disable interactive controls."""
-        self.ui_frozen.emit(True)
-
-    def unfreeze_ui(self):
-        """Signal the owning widget to re-enable controls."""
-        self.ui_frozen.emit(False)
-
     def _update_progress(self, progress: int, status: str):
         """Update progress and emit signal."""
         self.progress_updated.emit(progress, status)
@@ -419,7 +393,6 @@ class MSMController(QObject):
 class MSMWidget(BaseAnalysisWidget):
     """Widget for Monolayer Stress Microscopy analysis."""
     stress_calculated = Signal(object)  # Emits stress analysis results
-    action_states_changed = Signal()  # Emitted when action enablement changes
 
     def __init__(
             self,
@@ -428,10 +401,7 @@ class MSMWidget(BaseAnalysisWidget):
             parameter_manager: ParameterManager,
             visualization_manager: VisualizationManager
     ):
-        super().__init__(viewer, data_manager, visualization_manager)
-
-        # Store managers
-        self.parameter_manager = parameter_manager
+        super().__init__(viewer, data_manager, parameter_manager, visualization_manager)
 
         # Action enablement consumed by the stage header via the action contract
         self._action_enabled = {
@@ -603,9 +573,6 @@ class MSMWidget(BaseAnalysisWidget):
         if param_name in stress_params:
             self.msm_params = self.parameter_manager.get_msm_parameters()
 
-    def action_states(self):
-        return dict(self._action_enabled)
-
     def run_action(self):
         self.controller.start_analysis()
 
@@ -628,23 +595,6 @@ class MSMWidget(BaseAnalysisWidget):
         self._action_enabled["run"] = has_force and has_mask
         self._action_enabled["cancel"] = True
         self.action_states_changed.emit()
-
-    def _handle_ui_freeze(self, frozen: bool):
-        """Handle UI freeze/unfreeze during processing."""
-        if frozen:
-            self._action_enabled["mesh"] = False
-            self._action_enabled["preview"] = False
-            self._action_enabled["run"] = False
-            self._action_enabled["cancel"] = True
-            self.action_states_changed.emit()
-        else:
-            self._update_ui_state()
-
-    def cleanup(self):
-        """Clean up resources."""
-        if hasattr(self, 'viewer') and self.viewer is not None:
-            self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
-        super().cleanup()
 
     def _on_analysis_started(self):
         """Handle analysis start event."""

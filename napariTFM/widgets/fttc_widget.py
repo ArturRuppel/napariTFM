@@ -1,7 +1,6 @@
 import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
-from qtpy.QtCore import QObject
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QMessageBox, QHBoxLayout
 
@@ -9,32 +8,11 @@ from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optim
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
-from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.widgets._base_widget import BaseAnalysisController, BaseAnalysisWidget
 
 
-class FTTCController(QObject):
+class FTTCController(BaseAnalysisController):
     """Controller coordinating FTTC analysis components."""
-
-    progress_updated = Signal(int, str)  # (progress_value, status_message)
-    analysis_started = Signal()
-    analysis_completed = Signal(object)
-    analysis_failed = Signal(str)
-    data_updated = Signal(str)  # Data type that was updated
-    ui_frozen = Signal(bool)
-
-    def __init__(self, viewer, data_manager, parameter_manager,
-                 visualization_manager):
-        super().__init__()
-        self.viewer = viewer
-        self.data_manager = data_manager
-        self.parameter_manager = parameter_manager
-        self.visualization_manager = visualization_manager
-        self.active_workers = []
-
-        # Live-streaming progress counters: a run fills the magnitude stack and
-        # vector cache frame by frame, so progress is "frames done / total".
-        self._stream_total = 0
-        self._stream_done = 0
 
     def preview_force(self):
         """Preview force calculation for current frame."""
@@ -312,12 +290,6 @@ class FTTCController(QObject):
         else:
             self._handle_error("GCV calculation failed")
 
-    def _handle_error(self, error_msg: str):
-        """Handle errors during processing."""
-        self.progress_updated.emit(0, f"Error: {error_msg}")
-        self.analysis_failed.emit(error_msg)
-        QMessageBox.critical(None, "Error", error_msg)
-
     def _validate_prerequisites(self) -> bool:
         """Check if required data and parameters are available."""
         if self.data_manager.displacement_results is None:
@@ -325,20 +297,11 @@ class FTTCController(QObject):
             return False
         return True
 
-    def freeze_ui(self):
-        """Signal the owning widget to disable interactive controls."""
-        self.ui_frozen.emit(True)
-
-    def unfreeze_ui(self):
-        """Signal the owning widget to re-enable controls."""
-        self.ui_frozen.emit(False)
-
 
 class FTTCWidget(BaseAnalysisWidget):
     """Widget for calculating traction forces using FTTC method."""
 
     force_calculated = Signal(FTTCResult)
-    action_states_changed = Signal()
 
     def __init__(
             self,
@@ -347,10 +310,7 @@ class FTTCWidget(BaseAnalysisWidget):
             parameter_manager: ParameterManager,
             visualization_manager: VisualizationManager
     ):
-        super().__init__(viewer, data_manager, visualization_manager)
-
-        # Store managers
-        self.parameter_manager = parameter_manager
+        super().__init__(viewer, data_manager, parameter_manager, visualization_manager)
 
         # Header-proxied action enablement state
         self._action_enabled = {
@@ -397,9 +357,6 @@ class FTTCWidget(BaseAnalysisWidget):
         # Connect to layer selection changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
 
-    def action_states(self):
-        return dict(self._action_enabled)
-
     def run_action(self):
         self.controller.calculate_forces()
 
@@ -419,15 +376,6 @@ class FTTCWidget(BaseAnalysisWidget):
         self._action_enabled["preview"] = has_displacement
         self._action_enabled["run"] = has_displacement
         self._action_enabled["gcv"] = has_displacement
-        self._action_enabled["cancel"] = True
-        self.action_states_changed.emit()
-
-    def _handle_ui_freeze(self, frozen: bool):
-        """Handle UI freeze/unfreeze during processing."""
-        self._action_enabled["preview"] = not frozen
-        self._action_enabled["run"] = not frozen
-        self._action_enabled["gcv"] = not frozen
-        # Cancel action always enabled
         self._action_enabled["cancel"] = True
         self.action_states_changed.emit()
 
@@ -451,9 +399,3 @@ class FTTCWidget(BaseAnalysisWidget):
             self.visualization_manager.update_force_frame(
                 self.viewer.dims.current_step[0]
             )
-
-    def cleanup(self):
-        """Clean up resources."""
-        if hasattr(self, 'viewer') and self.viewer is not None:
-            self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
-        super().cleanup()

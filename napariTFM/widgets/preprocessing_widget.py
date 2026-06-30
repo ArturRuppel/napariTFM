@@ -4,7 +4,6 @@ from typing import Any
 import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
-from qtpy.QtCore import QObject
 from qtpy.QtCore import QTimer
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (
@@ -12,10 +11,10 @@ from qtpy.QtWidgets import (
     QMessageBox, QSizePolicy
 )
 from qtpy.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QLabel, QWidget
+    QVBoxLayout, QHBoxLayout, QWidget
 )
 
-from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.widgets._base_widget import BaseAnalysisController, BaseAnalysisWidget
 from napariTFM.utilities.parameter_manager import ParameterManager, ParameterCategory
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
 
@@ -34,31 +33,18 @@ def _open_lazy(path):
         return tifffile.imread(str(path))
 
 
-class PreprocessingController(QObject):
-    """Controller coordinating UI components and data processing."""
+class PreprocessingController(BaseAnalysisController):
+    """Controller coordinating UI components and data processing.
 
-    progress_updated = Signal(int, str)  # (progress_value, status_message)
-    preprocessing_started = Signal()
-    preprocessing_completed = Signal(dict)  # Results dictionary
-    preprocessing_failed = Signal(str)  # Error message
-    data_updated = Signal(str)  # Data type that was updated
-    ui_frozen = Signal(bool)
+    Inherits the shared signal set from :class:`BaseAnalysisController`; the
+    completion payload (``analysis_completed``) carries a parameters dict.
+    """
 
     # region === Initialization
     def __init__(self, viewer, data_manager, parameter_manager, visualization_manager):
-        super().__init__()
-        self.viewer = viewer
-        self.data_manager = data_manager
-        self.parameter_manager = parameter_manager
-        self.visualization_manager = visualization_manager
-        self.active_workers = []
+        super().__init__(viewer, data_manager, parameter_manager, visualization_manager)
 
         self.preview_enabled = False
-
-        # Live-streaming progress counters: a run fills the output stacks frame
-        # by frame, so progress is "frames done / frames total" across all inputs.
-        self._stream_total = 0
-        self._stream_done = 0
 
         # Load-token: incremented on every load_input_files call so that yields
         # from a superseded (stale) load worker are silently dropped.
@@ -110,7 +96,7 @@ class PreprocessingController(QObject):
 
             worker = self._create_processing_worker()
             self.active_workers.append(worker)
-            self.preprocessing_started.emit()
+            self.analysis_started.emit()
             self.freeze_ui()
 
             worker.yielded.connect(self._on_frame_processed)
@@ -119,7 +105,7 @@ class PreprocessingController(QObject):
             worker.start()
 
         except Exception as e:
-            self.preprocessing_failed.emit(str(e))
+            self.analysis_failed.emit(str(e))
             QMessageBox.critical(None, "Error", str(e))
             self.unfreeze_ui()
 
@@ -528,7 +514,7 @@ class PreprocessingController(QObject):
     def _handle_preprocessing_error(self, error):
         """Handle preprocessing error."""
         error_msg = str(error)
-        self.preprocessing_failed.emit(error_msg)
+        self.analysis_failed.emit(error_msg)
         self.progress_updated.emit(0, f"Error: {error_msg}")
         QMessageBox.critical(None, "Error", error_msg)
         self.unfreeze_ui()
@@ -550,34 +536,22 @@ class PreprocessingController(QObject):
             self.active_workers.clear()
             current_params = self.parameter_manager.get_preprocessing_parameters()
             self.progress_updated.emit(100, "Preprocessing complete")
-            self.preprocessing_completed.emit({'parameters': current_params.__dict__})
+            self.analysis_completed.emit({'parameters': current_params.__dict__})
 
         except Exception as e:
             error_msg = f"Error finalizing preprocessing: {str(e)}"
-            self.preprocessing_failed.emit(error_msg)
+            self.analysis_failed.emit(error_msg)
             QMessageBox.critical(None, "Error", error_msg)
         finally:
             self.unfreeze_ui()
 
     # endregion === Data Management
 
-    # region === State Management
-    def freeze_ui(self):
-        """Signal that interactive UI elements should be disabled."""
-        self.ui_frozen.emit(True)
-
-    def unfreeze_ui(self):
-        """Signal that interactive UI elements should be re-enabled."""
-        self.ui_frozen.emit(False)
-
-    # endregion === State Management
-
 
 class PreprocessingWidget(BaseAnalysisWidget):
     """Main preprocessing widget integrating all components."""
 
     preprocessing_completed = Signal(dict)  # Emits processed data
-    action_states_changed = Signal()
 
     # region === Initialization
     def __init__(
@@ -587,10 +561,7 @@ class PreprocessingWidget(BaseAnalysisWidget):
             parameter_manager: ParameterManager,
             visualization_manager
     ):
-        super().__init__(viewer, data_manager, visualization_manager)
-
-        # Initialize managers
-        self.parameter_manager = parameter_manager
+        super().__init__(viewer, data_manager, parameter_manager, visualization_manager)
 
         # Per-action enablement consumed by the header (StageSection)
         self._action_enabled = {"run": False, "preview": False, "cancel": True}
@@ -682,8 +653,8 @@ class PreprocessingWidget(BaseAnalysisWidget):
 
         # Connect controller signals. Progress is surfaced by the shell's one
         # global status label (P2), so there is no local status slot to wire.
-        self.controller.preprocessing_completed.connect(self._on_preprocessing_completed)
-        self.controller.preprocessing_failed.connect(self._on_preprocessing_failed)
+        self.controller.analysis_completed.connect(self._on_preprocessing_completed)
+        self.controller.analysis_failed.connect(self._on_preprocessing_failed)
         self.controller.data_updated.connect(self._update_ui_state)
         self.controller.ui_frozen.connect(self._handle_ui_freeze)
         # Parameter-change-driven preview is handled by the controller via
@@ -708,9 +679,6 @@ class PreprocessingWidget(BaseAnalysisWidget):
     # endregion
 
     # region === Action Contract
-    def action_states(self):
-        return dict(self._action_enabled)
-
     def run_action(self):
         self._on_process_clicked()
 
@@ -756,15 +724,14 @@ class PreprocessingWidget(BaseAnalysisWidget):
         self.action_states_changed.emit()
 
     def _handle_ui_freeze(self, frozen: bool):
-        """Handle UI freeze/unfreeze."""
-        # Disable preview and run action during processing
-        self.preview_check.setEnabled(not frozen)
-        self._action_enabled["preview"] = not frozen
-        self._action_enabled["run"] = not frozen and self._has_required_data()
+        """Lock the body's preview checkbox alongside the header actions.
 
-        # Cancel action is always enabled
-        self._action_enabled["cancel"] = True
-        self.action_states_changed.emit()
+        Preprocessing is the only stage with a body control (the Show Preview
+        checkbox), so it extends the base freeze to disable it too; the action
+        map itself is handled by the base.
+        """
+        self.preview_check.setEnabled(not frozen)
+        super()._handle_ui_freeze(frozen)
 
     # endregion
 

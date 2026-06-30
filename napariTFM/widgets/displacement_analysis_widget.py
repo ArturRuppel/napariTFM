@@ -1,13 +1,13 @@
 import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
-from qtpy.QtCore import Signal, QObject
+from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QSpacerItem,
     QSizePolicy
 )
 
-from napariTFM.widgets._base_widget import BaseAnalysisWidget
+from napariTFM.widgets._base_widget import BaseAnalysisController, BaseAnalysisWidget
 from napariTFM.backend.displacement_analysis import (
     DisplacementResult,
     calculate_displacement_field,
@@ -16,32 +16,8 @@ from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
 
-class DisplacementController(QObject):
+class DisplacementController(BaseAnalysisController):
     """Controller coordinating displacement analysis components."""
-
-    progress_updated = Signal(int, str)  # (progress_value, status_message)
-    analysis_started = Signal()
-    analysis_completed = Signal(object)  # Results object
-    analysis_failed = Signal(str)  # Error message
-    data_updated = Signal(str)  # Data type that was updated
-    ui_frozen = Signal(bool)
-
-    # region === Initialization
-    def __init__(self, viewer, data_manager, parameter_manager,
-                 visualization_manager):
-        super().__init__()
-        self.viewer = viewer
-        self.data_manager = data_manager
-        self.parameter_manager = parameter_manager
-        self.visualization_manager = visualization_manager
-        self.active_workers = []
-
-        # Live-streaming progress counters: a run fills the magnitude stack and
-        # vector cache frame by frame, so progress is "frames done / total".
-        self._stream_total = 0
-        self._stream_done = 0
-
-    # endregion === Initialization
 
     # region === Processing Execution
     def get_displacement_statistics(self, flow: np.ndarray) -> dict:
@@ -319,31 +295,13 @@ class DisplacementController(QObject):
             self.active_workers.clear()
             self.unfreeze_ui()
 
-    def _handle_error(self, error_msg: str):
-        """Handle errors."""
-        self.progress_updated.emit(0, f"Error: {error_msg}")
-        self.analysis_failed.emit(error_msg)
-        QMessageBox.critical(None, "Error", error_msg)
-
     # endregion === Data Management
-
-    # region === State Management
-    def freeze_ui(self):
-        """Signal the owning widget to disable interactive controls."""
-        self.ui_frozen.emit(True)
-
-    def unfreeze_ui(self):
-        """Signal the owning widget to re-enable controls."""
-        self.ui_frozen.emit(False)
-
-    # endregion === State Management
 
 
 class DisplacementAnalysisWidget(BaseAnalysisWidget):
     """Widget for analyzing bead displacements using optical flow."""
 
     displacement_calculated = Signal(object)
-    action_states_changed = Signal()
 
     # region === Initialization
     def __init__(
@@ -353,9 +311,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             parameter_manager: ParameterManager,
             visualization_manager: VisualizationManager
     ):
-        super().__init__(viewer, data_manager, visualization_manager)
-
-        self.parameter_manager = parameter_manager
+        super().__init__(viewer, data_manager, parameter_manager, visualization_manager)
 
         # Initialize controller
         self.controller = DisplacementController(
@@ -435,9 +391,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     # endregion
 
     # region === State Management
-    def action_states(self):
-        return dict(self._action_enabled)
-
     def run_action(self):
         self.controller.calculate_all_frames()
 
@@ -458,24 +411,9 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self._action_enabled["cancel"] = True
         self.action_states_changed.emit()
 
-    def _handle_ui_freeze(self, frozen: bool):
-        """Handle UI freeze/unfreeze during processing."""
-        self._action_enabled["preview"] = not frozen
-        self._action_enabled["run"] = not frozen
-        # Cancel button always enabled
-        self._action_enabled["cancel"] = True
-        self.action_states_changed.emit()
-
     def load_active_layer(self, data_type: str):
         """Delegate input-layer loading to the controller (called by the shell)."""
         self.controller.load_active_layer(data_type)
-
-    def _has_required_data(self) -> bool:
-        """Check if required data for processing is available."""
-        return (
-                self.data_manager.preprocessed_reference is not None and
-                self.data_manager.preprocessed_bead_stack is not None
-        )
 
     # endregion
 
@@ -502,14 +440,5 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             self.visualization_manager.update_displacement_frame(
                 self.viewer.dims.current_step[0]
             )
-
-    # endregion
-
-    # region === Cleanup
-    def cleanup(self):
-        """Clean up resources."""
-        if hasattr(self, 'viewer') and self.viewer is not None:
-            self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
-        super().cleanup()
 
     # endregion
