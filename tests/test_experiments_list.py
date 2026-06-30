@@ -735,6 +735,7 @@ def test_calibration_field_syncs_from_parameter_changed(app):
 
 def test_output_dir_starts_as_unset_add_affordance(app):
     widget = ExperimentsList(data_manager=_StubDM())
+    widget.show()
     assert widget.output_dir_label.isVisible() is False
     assert widget.choose_output_dir_btn.text() == "Add custom output directory"
     assert widget.clear_output_dir_btn.isVisible() is False
@@ -754,6 +755,7 @@ def test_output_dir_shows_path_and_clear_button_once_set(app, tmp_path):
 def test_clear_output_dir_resets_manager_and_label(app, tmp_path):
     dm = _StubDM()
     widget = ExperimentsList(data_manager=dm)
+    widget.show()
     dm.set_output_dir(tmp_path)
     widget._clear_output_dir()
     assert dm.output_dir is None
