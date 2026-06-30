@@ -5,6 +5,8 @@ import sys
 if 'QT_QPA_PLATFORM' not in os.environ:
     os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
+import multiprocessing
+from concurrent.futures import Future, ProcessPoolExecutor, wait as futures_wait
 from dataclasses import asdict, fields
 from datetime import datetime
 from pathlib import Path
@@ -115,6 +117,42 @@ def save_preprocessed_tiffs(output_dir: Path, pixel_size: float, frame_interval:
     save_calibrated_tiff(beads, output_dir / "preprocessed_beads.tif", pixel_size, frame_interval)
     save_calibrated_tiff(reference, output_dir / "preprocessed_reference.tif", pixel_size, frame_interval)
     save_calibrated_tiff(cells, output_dir / "preprocessed_cells.tif", pixel_size, frame_interval)
+
+
+def _run_position_headless(config: dict, folder: str, output_dir: str) -> tuple[str, str, Optional[str]]:
+    """Process one position headlessly, in its own (spawned) worker process.
+
+    Module-level (not a method or closure) so it is picklable for
+    ``ProcessPoolExecutor`` under the ``spawn`` start method, which has to
+    ship the callable itself to the worker. Constructs a sink-less
+    ``BatchAnalysis`` and runs the same per-position pipeline as the
+    sequential path (``process_folder``) -- just without a ``sink`` to
+    stream frames into, since a worker process has no GUI to stream to
+    (``BatchAnalysis._emit`` already no-ops when ``sink`` is ``None``).
+
+    Args:
+        config: the run's plain-dict config (pickled across the process
+            boundary; must not contain Qt objects -- see
+            ``widgets/_run_config.build_run_config``).
+        folder: the input folder path for this position.
+        output_dir: the resolved ``TFM_data/`` output directory for this
+            position (one entry of ``OutputPlan.output_dirs``).
+
+    Returns:
+        ``(folder, status, error_message)`` where ``status`` is ``"done"``
+        or ``"error"``, and ``error_message`` is ``None`` on success or the
+        stringified exception on failure. Never raises: a failure inside
+        ``process_folder`` is caught and reported as the ``"error"`` status
+        instead, so a single bad position can't take down the worker (which
+        would otherwise surface as a ``BrokenProcessPool`` for every other
+        future in the pool).
+    """
+    analysis = BatchAnalysis(config, sink=None)
+    try:
+        analysis.process_folder(folder, output_dir)
+    except Exception as e:
+        return folder, "error", str(e)
+    return folder, "done", None
 
 
 # TODO black image when only one frame for cell-force overlay visualization
@@ -323,6 +361,20 @@ class BatchAnalysis:
         for warning in plan.warnings:
             print(f"WARNING: {warning}")
 
+        num_workers = int(self.config.get('num_workers', 1) or 1)
+        if num_workers <= 1:
+            self._process_all_folders_sequential(plan)
+        else:
+            self._process_all_folders_parallel(plan, num_workers)
+
+    def _process_all_folders_sequential(self, plan) -> None:
+        """Process every folder one at a time, in-process (the original,
+        unchanged ``process_all_folders`` loop, extracted verbatim).
+
+        The ``ViewerSink`` (constructed by the caller, not this class) still
+        drives live frame-by-frame streaming exactly as before, via
+        ``self._emit(...)``.
+        """
         for folder in self.config['root_folders']:
             if getattr(self, "_cancelled", False):
                 self._report_progress(folder, "cancelled")
@@ -338,6 +390,123 @@ class BatchAnalysis:
                 self._report_progress(folder, "error")
                 continue
             self._report_progress(folder, "done")
+
+    def _process_all_folders_parallel(self, plan, num_workers: int) -> None:
+        """Blocking parallel variant for CLI/headless/test callers.
+
+        Reuses :meth:`start_parallel` + :meth:`poll_parallel_progress` -- the
+        same non-blocking primitives the GUI's run-all flow consumes -- so
+        there is exactly one code path that knows how to run a process pool
+        over the folders. This method just polls that path to exhaustion
+        instead of returning right after submission, and so also inherits
+        its cancellation handling for free.
+        """
+        self.start_parallel(plan, num_workers)
+        finished = False
+        while not finished:
+            _events, finished = self.poll_parallel_progress()
+            if not finished:
+                sleep(0.05)
+
+    def start_parallel(self, plan, num_workers: int) -> None:
+        """Submit one headless task per folder to a process pool and return
+        immediately (non-blocking; for GUI callers that poll progress via
+        :meth:`poll_parallel_progress` from e.g. a Qt timer).
+
+        Uses a ``ProcessPoolExecutor`` (spawn start method -- see module
+        docstring/plan rationale: forking a GUI process with live Qt/BLAS/
+        OpenMP threads is a deadlock hazard) rather than threads, because the
+        pipeline is CPU-bound (numba/numpy/scipy) and would not parallelize
+        across a single GIL.
+
+        Futures are submitted in ``self.config['root_folders']`` order (top
+        positions first). A pool with ``max_workers=num_workers`` starts the
+        first N immediately and pulls the next queued folder in FIFO order as
+        a slot frees, which alone satisfies "top positions first" -- no
+        explicit priority queue is needed.
+
+        Stores the executor and a ``{Future: folder}`` map on
+        ``self._executor`` / ``self._pending_futures`` for
+        :meth:`poll_parallel_progress` to drain.
+        """
+        ctx = multiprocessing.get_context("spawn")
+        self._executor = ProcessPoolExecutor(max_workers=num_workers, mp_context=ctx)
+        self._pending_futures: dict[Future, str] = {}
+        for folder in self.config['root_folders']:
+            output_dir = str(plan.output_dirs[folder])
+            future = self._executor.submit(_run_position_headless, self.config, folder, output_dir)
+            self._pending_futures[future] = folder
+            # "running" at submission time is an acceptable approximation (a
+            # queued-but-not-yet-started task reports "running" slightly
+            # early), matching the "running" semantics used elsewhere in this
+            # file -- there is no finer-grained signal from inside a worker
+            # process back to this side without a sink.
+            self._report_progress(folder, "running")
+
+    def poll_parallel_progress(self) -> tuple[list[tuple[str, str]], bool]:
+        """Drain whatever parallel-mode futures have completed since the last
+        call, without blocking. Intended to be called repeatedly (e.g. from a
+        Qt timer) until ``finished`` is ``True``.
+
+        Returns:
+            ``(events, finished)`` --
+
+            - ``events``: a list of ``(folder, status)`` pairs that newly
+              completed during *this* call, where ``status`` is one of
+              ``"done"``, ``"error"``, or ``"cancelled"``. Each pair is also
+              reported through :meth:`_report_progress` (the same hook the
+              sequential path already uses), so a caller only needs to
+              listen on one channel; the returned list is for callers (e.g.
+              the GUI) that want to react inline without a callback, such as
+              reloading a finished position's ``.ntfm`` from disk.
+            - ``finished``: ``True`` once every submitted folder has been
+              accounted for (no futures left pending after this call's
+              bookkeeping). When it flips to ``True`` the executor is shut
+              down via ``shutdown(wait=False)`` (non-blocking -- workers are
+              already done by construction at that point).
+
+        Cancellation: checks ``self._cancelled`` (set by
+        :meth:`request_cancel`) on every call. When set, every not-yet-started
+        future has ``.cancel()`` called on it -- this only succeeds for
+        futures still queued (``Future.cancel()`` returns ``True``/``False``)
+        -- and those folders are reported/returned with status
+        ``"cancelled"``. There is no new submission after :meth:`start_parallel`
+        runs (everything is submitted up front), so "stop submitting" is
+        automatic. Already-running workers are *not* forcefully terminated;
+        they finish naturally and report their real ``done``/``error`` status
+        on a later poll.
+        """
+        events: list[tuple[str, str]] = []
+
+        if getattr(self, "_cancelled", False):
+            for future in list(self._pending_futures):
+                if future.cancel():
+                    folder = self._pending_futures.pop(future)
+                    self._report_progress(folder, "cancelled")
+                    events.append((folder, "cancelled"))
+
+        if self._pending_futures:
+            done, _pending = futures_wait(list(self._pending_futures), timeout=0)
+            for future in done:
+                folder = self._pending_futures.pop(future)
+                try:
+                    _folder, status, _err = future.result()
+                except Exception as e:
+                    # A worker process crashed outright (e.g. BrokenProcessPool)
+                    # rather than returning its usual (folder, status, err)
+                    # tuple -- still report this folder as failed instead of
+                    # raising out of a non-blocking poll.
+                    status = "error"
+                    print(f"Parallel worker for {folder} failed: {str(e)}")
+                self._report_progress(folder, status)
+                events.append((folder, status))
+
+        finished = not self._pending_futures
+        if finished and getattr(self, "_executor", None) is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None
+
+        return events, finished
 
     def _report_progress(self, folder: str, status: str) -> None:
         """Notify the optional progress callback; never let it break a run."""
