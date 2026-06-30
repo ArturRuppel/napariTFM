@@ -10,6 +10,7 @@ deletable.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -24,6 +25,7 @@ from qtpy.QtWidgets import (
     QLineEdit,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -417,6 +419,19 @@ class ExperimentsList(QWidget):
 
         actions.addStretch()
 
+        workers_label = QLabel("Workers:")
+        workers_label.setStyleSheet(f"color: {TEXT_DIM};")
+        actions.addWidget(workers_label)
+
+        self._num_workers_spinbox = QSpinBox()
+        self._num_workers_spinbox.setObjectName("experiments_num_workers_spinbox")
+        self._num_workers_spinbox.setRange(1, os.cpu_count() or 1)
+        self._num_workers_spinbox.setValue(1)
+        self._num_workers_spinbox.setToolTip(
+            "How many positions Run-all processes in parallel"
+        )
+        actions.addWidget(self._num_workers_spinbox)
+
         self._run_all_active = False
         self.run_all_btn = QToolButton()
         self.run_all_btn.setObjectName("experiments_run_all_button")
@@ -699,6 +714,10 @@ class ExperimentsList(QWidget):
 
     def active(self) -> Optional[str]:
         return self._active
+
+    def num_workers(self) -> int:
+        """Chosen parallel batch-worker count for Run-all."""
+        return self._num_workers_spinbox.value()
 
     def selected_rows(self) -> list[str]:
         """The paths currently multi-selected for deletion, in row order."""
