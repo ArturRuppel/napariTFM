@@ -26,12 +26,14 @@ License note: BISM is GPLv3, matching napariTFM (pyTFM-derived).
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Generator, Optional, Tuple
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.linalg import spsolve, splu
+from scipy.optimize import brentq
+from scipy.sparse.linalg import MatrixRankWarning, spsolve, splu
 from skimage.transform import resize
 
 from napariTFM.backend.parameter_dataclasses import MSMParameters
@@ -119,6 +121,96 @@ def _build_B(R: int, C: int, free_bc: bool,
     return B.tocsr()
 
 
+def _estimate_lambda_map(
+    AtA: sp.csc_matrix,
+    AtT: np.ndarray,
+    A: sp.spmatrix,
+    B: sp.csr_matrix,
+    T: np.ndarray,
+    l: float,
+    n_obs: int,
+    n_params: int,
+    lam_lo: float = 1e-12,
+    lam_hi: float = 1e3,
+    n_grid: int = 22,
+) -> Tuple[Optional[float], Optional[float]]:
+    """MAP estimate of the regularization Lambda (Nier et al. 2016).
+
+    The MAP/Jeffreys'-hyperprior condition is the fixed point
+    ``Lambda = g(Lambda)`` with ``g(Lambda) = l^2 * s_noise^2 / s_prior^2``,
+    where (at the sigma that solves ``(Lambda*B + l^2 A^T A) sigma = l^2 A^T T``)
+    ``s_prior^2 = sigma^T B sigma / (n_params + 2)`` and
+    ``s_noise^2 = ||T - A sigma||^2 / (n_obs + 2)`` (the reference's full
+    parameter/observation counts plus the Jeffreys ``+2``; no effective-
+    parameters trace term).
+
+    BISM.m (``meth_Lambda==1``) finds this point by a bare fixed-point
+    *iteration* from a hardcoded ``Lambda_0 = 1e-3``. That only converges when
+    ``1e-3`` already sits in the attracting basin — true for the paper's
+    reference data (l~2, tiny tractions) but NOT in general. ``g`` is
+    non-monotonic with an *unstable* separatrix; on real-scale data (smaller l,
+    larger tractions) the natural Lambda falls well below ``1e-3``, so the
+    iteration starts on the wrong side of the separatrix and Lambda explodes,
+    over-regularizing the stress to ~zero (the "0 everywhere" failure).
+
+    We instead locate the *stable* fixed point directly: bracket the largest
+    Lambda where ``h(Lambda) = log g - log Lambda`` crosses from ``+`` to ``-``
+    with increasing Lambda (i.e. ``g`` crosses ``Lambda`` from above ->
+    attracting) on a log grid, then refine with Brent's method. This is
+    independent of where we start and reproduces the reference's result while
+    also working at arbitrary data scale.
+
+    Returns ``(lam, noise_value)`` with ``noise_value = sqrt(s_noise^2)``, or
+    ``(None, None)`` when no stable fixed point exists in the bracket (e.g.
+    genuinely noise-free data, where MAP is ill-posed) so the caller can fall
+    back to the user-supplied fixed Lambda.
+    """
+    rhs = (l ** 2) * AtT
+
+    def _h_and_noise(lam: float) -> Tuple[Optional[float], Optional[float]]:
+        """h(lam) = log g(lam) - log lam, and the noise estimate sqrt(s_noise^2).
+
+        Returns ``(None, None)`` when the solve is unusable (singular M or a
+        non-positive variance), so callers can skip that grid point.
+        """
+        M = (lam * B + (l ** 2) * AtA).tocsc()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", MatrixRankWarning)
+            sigma = spsolve(M, rhs)
+        if not np.isfinite(sigma).all():
+            return None, None
+        prior_norm = float(sigma @ (B @ sigma))
+        res_norm = float((T - A @ sigma) @ (T - A @ sigma))
+        s_prior_2 = prior_norm / (n_params + 2)
+        s_noise_2 = res_norm / (n_obs + 2)
+        if not (s_prior_2 > 0 and s_noise_2 > 0
+                and np.isfinite(s_prior_2) and np.isfinite(s_noise_2)):
+            return None, None
+        g = (l ** 2) * s_noise_2 / s_prior_2
+        return float(np.log(g) - np.log(lam)), float(np.sqrt(s_noise_2))
+
+    grid = np.logspace(np.log10(lam_lo), np.log10(lam_hi), n_grid)
+    hvals = [(lam, _h_and_noise(lam)[0]) for lam in grid]
+
+    # Largest-Lambda stable crossing: h > 0 below, h <= 0 above (attracting).
+    bracket = None
+    for (lo, h_lo), (hi, h_hi) in zip(hvals, hvals[1:]):
+        if h_lo is None or h_hi is None:
+            continue
+        if h_lo > 0 and h_hi <= 0:
+            bracket = (lo, hi)          # keep the last -> largest-Lambda crossing
+    if bracket is None:
+        return None, None
+
+    a, b = bracket
+    # Refine in log-Lambda (Brent on the smooth, sign-changing h).
+    log_lam = brentq(lambda x: _h_and_noise(10.0 ** x)[0],
+                     np.log10(a), np.log10(b), xtol=1e-4, maxiter=60)
+    lam = float(10.0 ** log_lam)
+    _, noise = _h_and_noise(lam)
+    return lam, (noise if noise is not None else 0.0)
+
+
 def _interp_to_grid(sigma: np.ndarray, R: int, C: int):
     """Average the four staggered stress fields onto the R x C data grid."""
     N = R * C
@@ -151,6 +243,7 @@ def compute_bism_stress(
     noise_value: float = 0.0,
     return_uncertainty: bool = False,
     mask: Optional[np.ndarray] = None,
+    lam_method: str = "fixed",
 ) -> BISMResult:
     """Infer the internal stress tensor from a traction field via BISM.
 
@@ -168,13 +261,21 @@ def compute_bism_stress(
                 region and its actual contour (masked BISM) — the correct
                 formulation for a monolayer that does not fill the field. The
                 full rectangular formulation is used when mask is None.
+        lam_method: "fixed" (use ``lam`` as given) or "map" (estimate Lambda by
+                the MAP fixed point, ignoring ``lam``; also estimates the noise
+                amplitude). Case-insensitive.
 
     Returns:
         BISMResult with sxx, syy, sxy in units of [traction]*[l] (Pa*um).
-        With a mask, pixels outside the mask are NaN.
+        With a mask, pixels outside the mask are NaN. ``result.lam`` is the
+        Lambda actually used (the MAP estimate when ``lam_method == "map"``);
+        ``result.meta["noise_value_map"]`` carries the MAP noise estimate.
     """
+    use_map = lam_method.lower() == "map"
     if mask is not None:
-        return _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc)
+        return _compute_bism_masked(
+            tx, ty, mask, l, lam, alpha_xy, alpha_bc, use_map=use_map,
+        )
 
     tx = np.nan_to_num(np.asarray(tx, dtype=float), nan=0.0)
     ty = np.nan_to_num(np.asarray(ty, dtype=float), nan=0.0)
@@ -190,6 +291,18 @@ def compute_bism_stress(
     T = np.concatenate([vTx, vTy])
 
     AtA = (A.T @ A).tocsc()
+    noise_value_map = None
+    if use_map:
+        est_lam, noise_value_map = _estimate_lambda_map(
+            AtA, A.T @ T, A, B, T, l, n_obs=2 * N, n_params=Ninf,
+        )
+        if est_lam is not None:
+            lam = est_lam
+        else:
+            warnings.warn(
+                f"BISM MAP: no stable Lambda found (noise-free data?); "
+                f"falling back to fixed lam={lam:g}.", RuntimeWarning,
+            )
     M = (lam * B + (l ** 2) * AtA).tocsc()
     rhs = (l ** 2) * (A.T @ T)
     sigma = spsolve(M, rhs)
@@ -208,7 +321,8 @@ def compute_bism_stress(
     result = BISMResult(
         sxx=sxx, syy=syy, sxy=sxy, lam=lam, r2_traction=r2,
         meta={"R": R, "C": C, "l": l, "free_bc": free_bc,
-              "alpha_xy": alpha_xy, "alpha_bc": alpha_bc, "Ninf": Ninf},
+              "alpha_xy": alpha_xy, "alpha_bc": alpha_bc, "Ninf": Ninf,
+              "noise_value_map": noise_value_map},
     )
 
     if return_uncertainty and noise_value > 0:
@@ -238,7 +352,8 @@ def compute_bism_stress(
     return result
 
 
-def _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc) -> BISMResult:
+def _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc,
+                         use_map: bool = False) -> BISMResult:
     """Masked BISM: divergence operator and free-BC restricted to the mask.
 
     Stress lives on cell faces (a staggered grid):
@@ -325,7 +440,21 @@ def _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc) -> BISMResult
     B = B + (alpha_bc ** 2) * (Bbc.T @ Bbc)
 
     # ---- solve ----------------------------------------------------------- #
-    M = (lam * B + (l ** 2) * (A.T @ A)).tocsc()
+    AtA = (A.T @ A).tocsc()
+    noise_value_map = None
+    if use_map:
+        # Masked counts: 2*ncell traction observations, ninf stress unknowns.
+        est_lam, noise_value_map = _estimate_lambda_map(
+            AtA, A.T @ T, A, B, T, l, n_obs=2 * ncell, n_params=ninf,
+        )
+        if est_lam is not None:
+            lam = est_lam
+        else:
+            warnings.warn(
+                f"BISM MAP: no stable Lambda found (noise-free data?); "
+                f"falling back to fixed lam={lam:g}.", RuntimeWarning,
+            )
+    M = (lam * B + (l ** 2) * AtA).tocsc()
     rhs = (l ** 2) * (A.T @ T)
     sigma = spsolve(M, rhs)
 
@@ -349,7 +478,8 @@ def _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc) -> BISMResult
     return BISMResult(
         sxx=sxx, syy=syy, sxy=sxy, lam=lam, r2_traction=r2,
         meta={"R": R, "C": C, "l": l, "masked": True, "ncell": ncell,
-              "nx": nx, "ny": ny, "Ninf": ninf},
+              "nx": nx, "ny": ny, "Ninf": ninf,
+              "noise_value_map": noise_value_map},
     )
 
 
@@ -415,7 +545,7 @@ def calculate_bism_stresses(
 
         res = compute_bism_stress(
             tx, ty, l=grid_spacing, lam=params.bism_regularization,
-            mask=current_mask,
+            mask=current_mask, lam_method=params.bism_lambda_method,
         )
         # Pa*um -> mN/m. Off-mask pixels are NaN from the masked solve; zero them
         # to match MSM's off-mask zeroing so downstream maps are clean.

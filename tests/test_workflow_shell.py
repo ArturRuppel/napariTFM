@@ -53,6 +53,7 @@ class _StubParameterManager(QObject):
             "use_optimization": True,
             "poisson_ratio_cells": 0.5,
             "bism_regularization": -6.0,
+            "bism_lambda_method": "Fixed",
             "max_stress": 1.0,
         }
         self._callbacks = {}
@@ -1155,6 +1156,39 @@ def test_stress_method_dropdown_swaps_engine_parameter_rows(app):
     manager.set_parameter("stress_method", "MSM")
     assert not msm_cell.isHidden()
     assert bism_cell.isHidden()
+
+
+def test_bism_lambda_method_gates_regularization_slider(app):
+    # Under BISM, the λ Method dropdown shows; the Regularization slider shows
+    # only while the method is Fixed (MAP estimates λ, so the knob is hidden).
+    manager = _StubParameterManager()
+    panel = _widget.WorkflowParameterPanel(manager)
+
+    method_cell = panel.parameter_controls["bism_lambda_method"].parent()
+    lam_cell = panel.parameter_controls["bism_regularization"].parent()
+
+    # Default engine MSM: neither BISM control is visible.
+    assert method_cell.isHidden()
+    assert lam_cell.isHidden()
+
+    # BISM + Fixed (default method): both the dropdown and the slider show.
+    manager.set_parameter("stress_method", "BISM")
+    assert not method_cell.isHidden()
+    assert not lam_cell.isHidden()
+
+    # Switch to MAP: dropdown stays, slider hides (λ is estimated).
+    manager.set_parameter("bism_lambda_method", "MAP")
+    assert not method_cell.isHidden()
+    assert lam_cell.isHidden()
+
+    # Back to Fixed: slider returns.
+    manager.set_parameter("bism_lambda_method", "Fixed")
+    assert not lam_cell.isHidden()
+
+    # Leaving BISM hides the dropdown even though the method is still Fixed.
+    manager.set_parameter("stress_method", "MSM")
+    assert method_cell.isHidden()
+    assert lam_cell.isHidden()
 
 
 def test_workflow_parameter_panel_writes_through_ui_parameter_api(app):

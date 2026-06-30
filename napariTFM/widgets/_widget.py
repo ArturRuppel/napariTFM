@@ -209,6 +209,13 @@ GROUP = object()
 # mutually exclusive engines — retiring an engine is deleting its block.
 WHEN = object()
 
+# Sentinel adding a second clause to the active WHEN gate (logical AND). A spec
+# of the form (AND, "bism_lambda_method", "Fixed") right after a WHEN block makes
+# the following rows visible only while BOTH the WHEN clause and this clause
+# match — e.g. show the Lambda slider only when stress_method == BISM *and*
+# bism_lambda_method == Fixed. Cleared by the next WHEN or GROUP.
+AND = object()
+
 
 class WorkflowParameterPanel(QWidget):
     """Single visible parameter editor for the workflow shell."""
@@ -266,9 +273,13 @@ class WorkflowParameterPanel(QWidget):
              ["Frontal-Del.", "Delaunay", "MeshAdapt", "BAMG", "FD Quads", "Para. Pack"]),
             ("use_optimization", "Mesh Optimization", "bool", None, None, None, None, None),
             ("poisson_ratio_cells", "Poisson Ratio", "float", 0.0, 0.5, 0.01, 2, None),
-            # Bayesian engine: mesh-free, no material params — one regularization
-            # knob (Lambda), entered as a base-10 exponent like Force's.
+            # Bayesian engine: mesh-free, no material params. Lambda is either
+            # entered by hand (Fixed, a base-10 exponent like Force's) or
+            # estimated per frame (MAP) — so the slider only shows under Fixed.
             (WHEN, "stress_method", "BISM"),
+            ("bism_lambda_method", "λ Method", "choice", None, None, None, None,
+             ["Fixed", "MAP"]),
+            (AND, "bism_lambda_method", "Fixed"),
             ("bism_regularization", "Regularization (10^x)", "float", -12.0, 0.0, 0.5, 1, None),
             (GROUP, "Visualization"),
             ("max_stress", "Max Stress (mN/m)", "float", 0.01, 1000.0, 0.1, 2, None),
@@ -280,7 +291,8 @@ class WorkflowParameterPanel(QWidget):
         self.parameter_manager = parameter_manager
         self._section_titles = set(section_titles) if section_titles is not None else None
         self.parameter_controls = {}
-        # Rows gated by a WHEN block: (controlling_param, expected_value, [cells]).
+        # Rows gated by a WHEN/AND block: (clauses, [cells]) where clauses is a
+        # tuple of (param, expected) all of which must match for the row to show.
         self._conditional_rows = []
         self._conditional_controllers = set()
         self._setup_ui()
@@ -310,7 +322,7 @@ class WorkflowParameterPanel(QWidget):
             # under so a flushed solo row is registered correctly.
             row = 1
             pending = None  # (label, control, condition)
-            condition = None
+            condition = ()  # tuple of (param, expected) clauses; () = always visible
 
             def flush_pending():
                 nonlocal pending, row
@@ -323,14 +335,17 @@ class WorkflowParameterPanel(QWidget):
             for spec in specs:
                 if spec[0] is GROUP:
                     flush_pending()
-                    condition = None
+                    condition = ()
                     subheader = QLabel(spec[1])
                     subheader.setStyleSheet(section_subheader_style())
                     add_section_header(grid, row, subheader)
                     row += 1
                 elif spec[0] is WHEN:
                     flush_pending()
-                    condition = (spec[1], spec[2])
+                    condition = ((spec[1], spec[2]),)
+                elif spec[0] is AND:
+                    flush_pending()
+                    condition = condition + ((spec[1], spec[2]),)
                 elif spec[2] == "range":
                     flush_pending()
                     label, control = self._control_for_spec(spec)
@@ -359,20 +374,25 @@ class WorkflowParameterPanel(QWidget):
         self.setLayout(layout)
 
     def _register_conditional(self, condition, *cells):
-        """Record a row's cell container(s) under a WHEN gate so visibility can
-        track the controlling parameter. No-op for unconditional rows."""
-        if condition is None:
+        """Record a row's cell container(s) under a WHEN/AND gate so visibility
+        can track the controlling parameter(s). ``condition`` is a tuple of
+        (param, expected) clauses, all of which must match for the row to show.
+        No-op for unconditional rows (empty tuple)."""
+        if not condition:
             return
-        param, expected = condition
-        self._conditional_controllers.add(param)
+        for param, _ in condition:
+            self._conditional_controllers.add(param)
         self._conditional_rows.append(
-            (param, expected, [c for c in cells if c is not None])
+            (condition, [c for c in cells if c is not None])
         )
 
     def _apply_conditional_visibility(self):
-        """Show each WHEN-gated row only while its controlling parameter matches."""
-        for param, expected, cells in self._conditional_rows:
-            visible = self.parameter_manager.get_ui_parameter(param) == expected
+        """Show each gated row only while all its clauses match."""
+        for clauses, cells in self._conditional_rows:
+            visible = all(
+                self.parameter_manager.get_ui_parameter(param) == expected
+                for param, expected in clauses
+            )
             for cell in cells:
                 cell.setVisible(visible)
 

@@ -156,7 +156,7 @@ class ParameterManager(QObject):
             ParameterCategory.STRESS: [
                 'stress_method', 'density_factor', 'mesh_algorithm',
                 'use_optimization', 'poisson_ratio_cells', 'bism_regularization',
-                'max_stress'
+                'bism_lambda_method', 'max_stress'
             ],
         }
 

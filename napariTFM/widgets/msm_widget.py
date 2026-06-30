@@ -568,7 +568,8 @@ class MSMWidget(BaseAnalysisWidget):
         """Refresh cached MSM parameters when an individual parameter changes."""
         stress_params = {
             'stress_method', 'density_factor', 'mesh_algorithm', 'use_optimization',
-            'poisson_ratio_cells', 'bism_regularization', 'max_stress'
+            'poisson_ratio_cells', 'bism_regularization', 'bism_lambda_method',
+            'max_stress'
         }
         if param_name in stress_params:
             self.msm_params = self.parameter_manager.get_msm_parameters()

@@ -66,6 +66,7 @@ class _StubParameterManager(QObject):
             "use_optimization": True,
             "poisson_ratio_cells": 0.5,
             "bism_regularization": -6.0,
+            "bism_lambda_method": "Fixed",
             "max_stress": 1.0,
         }
         self._callbacks = {}

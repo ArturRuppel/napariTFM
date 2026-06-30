@@ -66,21 +66,50 @@ columns + a viewer layer. Note: BISM still leaves the meshing path in place, so 
 "mesh doesn't map onto a napari layer" tension is **not** dissolved — revisit if
 BISM becomes the default.
 
-### 6. BISM automatic λ selection (L-curve / MAP)  ·  M
+### 6. BISM automatic λ selection — MAP DONE (2026-06-30); L-curve still open  ·  S
+**DECISION (2026-06-30): rip out the whole MAP machinery — it sucks.** The
+non-monotonic fixed point, the unstable separatrix, the scale-dependent λ₀, the
+log-grid root-find band-aid: too much fragile cleverness for a knob the user can
+set by hand. Tear out `_estimate_lambda_map`, the `noise_value_map` plumbing, the
+`bism_lambda_method` enum + **λ Method** dropdown + AND-gate sentinel, and the
+associated tests (`test_map_does_not_collapse_to_zero_field` et al.). Go back to
+**fixed λ only** for BISM; if we ever want auto-λ again, do L-curve fresh, not MAP.
+This makes the L-curve note below moot unless we revisit auto-selection from scratch.
+
 The original `BISM.m` offers **three** ways to set the regularization λ
 (`meth_Lambda`): MAP auto-estimation, L-curve auto-estimation, or a fixed value.
-The port (§5) shipped only the **fixed-value** path and hands the user a manual
-λ slider (`bism_regularization`) — so the user now *has* to pick λ by hand, when
-the original could pick it for them. Port the **L-curve** selector (sweep λ over
-a log range, choose the point of maximal curvature in residual-norm ↔ prior-norm
-space) and/or the **MAP** fixed-point iteration, in `backend/bism.py`, wrapping
-whichever solver runs (full *and* masked paths). Surface as a **λ method**
-dropdown (Fixed / L-curve / MAP) via the existing `WHEN` sentinel — hide the λ
-slider when not Fixed. Threads a method enum through
-UnifiedParameters/MSMParameters/parameter_manager, same plumbing the λ slider
-took. Worth doing if λ turns out finicky across datasets. (Sibling deferred BISM
-item: persist per-pixel **uncertainty** — see §5 — which is what the original's
-`noise_value` knob feeds.)
+The §5 port shipped only **fixed-value**, forcing the user to pick λ by hand.
+**MAP is now ported** (`backend/bism.py::_estimate_lambda_map`) — the MAP/Jeffreys
+condition from `meth_Lambda==1` (the same fixed point `λ = l²·s_noise²/s_prior²`,
+the reference's full parameter/observation denominators + Jeffreys `+2`, no
+effective-parameters trace term), adapted to the masked counts (`2·ncell`, `ninf`).
+It also yields the MAP **noise estimate** (`meta["noise_value_map"]`) — the dormant
+`noise_value` slot that feeds §5's uncertainty maps. A `bism_lambda_method` enum
+("Fixed"/"MAP") threads through UnifiedParameters/MSMParameters/parameter_manager/
+msm_widget; the UI got a **λ Method** dropdown via a new `AND` WHEN-conjunction
+sentinel that hides the λ slider unless Fixed.
+
+**Robustness fix (2026-06-30):** the first cut copied BISM.m's *bare fixed-point
+iteration* from a hardcoded λ₀=1e-3 verbatim, and it returned **zero stress
+everywhere** on real-scale data. Root cause: `g(λ)=l²s²/s0²` is non-monotonic with
+an *unstable* separatrix; λ₀=1e-3 is calibrated to the paper's reference (l≈2, tiny
+tractions, natural λ≈1e-5) and only converges there. On napariTFM-scale data
+(smaller l, smooth fields, natural λ≈1e-6–1e-7) 1e-3 lands on the runaway side and
+λ explodes (→1e25), over-regularizing σ→0. Replaced the iteration with a
+**stable-fixed-point root-find**: scan g(λ) on a log grid, bracket the largest
+`+→−` crossing (attracting), refine with Brent. Scale-independent — recovers the
+correct field on the benchmark (R² 0.02→1.00) while still reproducing the
+reference's λ=8.88e-6. On genuinely noise-free data (no MAP optimum) it returns
+`None` and the caller falls back to the fixed λ with a warning. Test-locked in
+`test_bism_stress.py` incl. a `test_map_does_not_collapse_to_zero_field` regression
+(smooth fittable field where the old iteration zeroed out); UI gating in
+`test_workflow_shell.py`.
+**Still open — L-curve:** port `meth_Lambda==2` (sweep λ over a log range, pick
+the point of maximal curvature in residual-norm ↔ prior-norm space) as a third
+dropdown option ("L-curve"). The plumbing (enum, dropdown, AND-gate, masked-count
+adaptation) is all in place now — it's just the selector function + one dropdown
+entry. Worth it only if MAP turns out finicky on some datasets; MAP is the more
+coherent default since it does double duty with the §5 uncertainty follow-up.
 
 ### 7. napari-native visualization engine  ·  L  (after #5)
 Swap the bespoke renderer for a **napari-native** path built on
@@ -112,6 +141,16 @@ parallel, **top positions first** (process in list order).
 ---
 
 ## Backlog
+
+### Output results to `TFM_data/` next to the input, not `processed/`
+TFM results should **not** land in a folder called `processed`. They should go
+in a folder called `TFM_data` sitting **right next to the input data** — i.e. as
+a sibling of the input's containing folder. When an output-folder variable is
+set, the input folder structure is cloned into that output directory, and the
+`TFM_data` folder lives where the input data *would* be inside that cloned tree.
+Also **rename the artifact**: the single multi-series OME-TIFF holding all the
+results should be called `TFM_results.ome.tif` — not `<experiment_name>.ome.tif`
+(currently `batch_output.py::experiment_output_path`, line ~104).
 
 ### Dedup preprocessed-TIFF persistence (batch vs. interactive)
 The preprocessed-image save lives as **two independent implementations** that

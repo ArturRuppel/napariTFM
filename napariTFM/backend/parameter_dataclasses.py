@@ -106,6 +106,9 @@ class MSMParameters:
     # hyperparameter Lambda, trading traction-fit against the stress-norm prior.
     # Stored as the actual value; the UI exposes it as a base-10 exponent.
     bism_regularization: float = 1e-6
+    # How Lambda is chosen: "Fixed" (use bism_regularization) or "MAP" (estimate
+    # it per frame via the Nier 2016 fixed point, ignoring the slider).
+    bism_lambda_method: str = "Fixed"
 
     # Scaling parameter
     pixel_size: float = 0.1  # in µm
@@ -166,6 +169,7 @@ class UnifiedParameters:
     use_optimization: bool = True
     poisson_ratio_cells: float = 0.5
     bism_regularization: float = 1e-6  # BISM only; stored as value, UI shows 10^x
+    bism_lambda_method: str = "Fixed"  # BISM only; "Fixed" or "MAP" (auto Lambda)
     max_stress: float = 1.0
 
     def to_preprocessing_parameters(self) -> PreprocessingParameters:
@@ -226,6 +230,7 @@ class UnifiedParameters:
             poisson_ratio_cells=self.poisson_ratio_cells,
             young_modulus=MSM_YOUNG_MODULUS,
             bism_regularization=self.bism_regularization,
+            bism_lambda_method=self.bism_lambda_method,
             pixel_size=self.pixel_size,
             downscale_factor=self.downscale_factor,
             frame_interval=self.frame_interval,
