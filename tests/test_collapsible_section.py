@@ -43,3 +43,12 @@ def test_set_accent_color_refreshes_descendants(app):
     inner.setParent(outer)
     outer.set_accent_color("#aa3344")
     assert inner._effective_accent == "#aa3344"
+
+
+def test_set_expanded_can_both_open_and_close(app):
+    sec = CollapsibleSection("Title", QWidget(), expanded=True)
+    assert sec.is_expanded is True
+    sec.set_expanded(False)
+    assert sec.is_expanded is False
+    sec.set_expanded(True)
+    assert sec.is_expanded is True
