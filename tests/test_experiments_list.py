@@ -408,10 +408,16 @@ def test_commit_discovered_clears_preview_rows_and_hardens(app, tmp_path):
     widget.file_name_inputs["masks"].setText("")
     widget.discover(tmp_path)
     assert len(widget._preview_rows) == 1
+    row = widget._preview_rows[0]
+    row.clicked.emit(row.path, 0)  # select it
     widget.commit_discovered()
     assert widget._preview_rows == []
     assert len(widget._rows) == 1
     assert widget._rows[0].is_preview is False
+    # The stale preview-row selection must not leak past commit (it would
+    # otherwise keep the delete button/keyboard shortcut wrongly armed for a
+    # row that no longer exists as a preview).
+    assert widget._discovered_selected == set()
 
 
 def test_refresh_statuses_calls_status_fn_for_each_row(app):

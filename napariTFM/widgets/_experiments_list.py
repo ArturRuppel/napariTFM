@@ -1002,7 +1002,9 @@ class ExperimentsList(QWidget):
             )
 
     def keyPressEvent(self, event) -> None:  # pragma: no cover - GUI event
-        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and self._selected_paths:
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and (
+            self._selected_paths or self._discovered_selected
+        ):
             self.delete_selected()
             event.accept()
             return
