@@ -34,7 +34,6 @@ class VisualizationManager(ErrorHandlingMixin):
         self._preview_config = PreviewConfig()
 
         # Connect to viewer events
-        self.viewer.dims.events.current_step.connect(self._on_frame_changed)
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
 
     def cleanup(self) -> None:
@@ -44,7 +43,6 @@ class VisualizationManager(ErrorHandlingMixin):
 
             # Disconnect other events
             if self.viewer is not None:
-                self.viewer.dims.events.current_step.disconnect(self._on_frame_changed)
                 self.viewer.layers.events.removed.disconnect(self._on_layer_removed)
 
             # Clear layers
@@ -62,44 +60,6 @@ class VisualizationManager(ErrorHandlingMixin):
     # endregion
 
     # region === Event Handlers
-    def _on_frame_changed(self, event=None) -> None:
-        """Handle frame change events for both displacement and force visualizations."""
-        try:
-            current_frame = self.viewer.dims.current_step[0]
-
-            # Handle displacement vectors
-            if (hasattr(self.data_manager, 'displacement_vector_cache') and
-                    self.data_manager.displacement_vector_cache is not None):
-                cache = self.data_manager.displacement_vector_cache
-                if ('data' in cache and current_frame < len(cache['data']) and
-                        'displacement_vectors' in self._layers and
-                        self._layers['displacement_vectors'] is not None):
-                    with self.viewer.events.blocker_all():
-                        self._layers['displacement_vectors'].data = cache['data'][current_frame]
-                        self._layers['displacement_vectors'].edge_color = cache['colors'][current_frame]
-
-            # Handle force vectors
-            if (hasattr(self.data_manager, 'force_vector_cache') and
-                    self.data_manager.force_vector_cache is not None):
-                cache = self.data_manager.force_vector_cache
-                if ('data' in cache and current_frame < len(cache['data']) and
-                        'force_vectors' in self._layers and
-                        self._layers['force_vectors'] is not None):
-                    with self.viewer.events.blocker_all():
-                        self._layers['force_vectors'].data = cache['data'][current_frame]
-                        self._layers['force_vectors'].edge_color = cache['colors'][current_frame]
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to update frame visualization",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Check vector cache and layer consistency",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
-
     def _on_layer_removed(self, event) -> None:
         """Handle layer removal events."""
         layer = event.value
