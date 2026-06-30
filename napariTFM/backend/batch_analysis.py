@@ -337,7 +337,10 @@ class BatchAnalysis:
 
         This is the main entry point for batch processing multiple experiment folders.
         It iterates through each folder path specified in config['root_folders'] and
-        processes them sequentially.
+        processes them either one at a time (``config['num_workers'] <= 1``, the
+        default -- see :meth:`_process_all_folders_sequential`) or in parallel
+        across a process pool (``config['num_workers'] > 1`` -- see
+        :meth:`_process_all_folders_parallel`).
 
         The method handles:
         - Preprocessing of bead and cell images
