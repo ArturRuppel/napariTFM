@@ -441,15 +441,19 @@ def add_section_full_row(grid, row, widget):
 
 def add_section_pair_row(grid, row, left_label, left_widget, right_label=None, right_widget=None):
     """Add a row with up to two [label][widget] pairs. Widgets keep their
-    natural size policy (no fixed-width wrap) so sliders/combos can stretch."""
-    left_label_widget = _block_label(left_label)
-    _add_section_pair_cell(grid, row, 0, left_label_widget, left_widget)
+    natural size policy (no fixed-width wrap) so sliders/combos can stretch.
 
-    right_label_widget = None
+    Returns the per-cell container widgets ``(left_container, right_container)``
+    (``right_container`` is None for a solo row) so callers can show/hide a whole
+    cell as a unit — hiding both containers collapses the grid row."""
+    left_label_widget = _block_label(left_label)
+    left_container = _add_section_pair_cell(grid, row, 0, left_label_widget, left_widget)
+
+    right_container = None
     if right_widget is not None:
         right_label_widget = _block_label(right_label or "")
-        _add_section_pair_cell(grid, row, 2, right_label_widget, right_widget)
-    return left_label_widget, left_widget, right_label_widget, right_widget
+        right_container = _add_section_pair_cell(grid, row, 2, right_label_widget, right_widget)
+    return left_container, right_container
 
 
 def add_section_labeled_full_row(grid, row, label_text, widget):

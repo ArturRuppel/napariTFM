@@ -157,15 +157,78 @@ def test_ntfm_container_round_trip(tmp_path, grid_arrays):
     assert metadata2["format_version"] == ntfm.FORMAT_VERSION
 
 
-def test_ntfm_is_a_zip_with_expected_members(tmp_path, grid_arrays):
-    import zipfile
+def test_container_is_ome_tiff_with_expected_series(tmp_path, grid_arrays):
+    import tifffile
 
     df = ntfm.arrays_to_tidy(**grid_arrays)
-    path = tmp_path / "experiment.ntfm"
+    path = tmp_path / "experiment.ome.tif"
     ntfm.write_ntfm(path, df, ntfm.build_metadata(config={}))
 
-    with zipfile.ZipFile(path) as zf:
-        assert set(zf.namelist()) == {"samples.parquet", "metadata.json"}
+    with tifffile.TiffFile(path) as tf:
+        # Full pipeline + a real mask -> all four named series present.
+        assert {s.name for s in tf.series} == {
+            "displacement",
+            "traction",
+            "stress",
+            "mask",
+        }
+
+
+def test_channel_names_carry_units(tmp_path, grid_arrays):
+    import tifffile
+
+    df = ntfm.arrays_to_tidy(**grid_arrays)
+    path = tmp_path / "experiment.ome.tif"
+    ntfm.write_ntfm(path, df, ntfm.build_metadata(config={}))
+
+    with tifffile.TiffFile(path) as tf:
+        xml = tf.ome_metadata
+    # Unit-bearing channel names are written into the OME-XML.
+    for name in ("u_x[µm]", "F_x[Pa]", "sigma_xx[mN/m]", "sigma_shear[mN/m]"):
+        assert name in xml
+
+
+def test_physical_scale_in_ome_xml(tmp_path, grid_arrays):
+    df = ntfm.arrays_to_tidy(**grid_arrays)
+    path = tmp_path / "experiment.ome.tif"
+    ntfm.write_ntfm(path, df, ntfm.build_metadata(config={}))
+
+    # grid_spacing=0.4 µm, frame_interval=2.0 min survive into the OME-XML and
+    # are recovered on read to rebuild the physical id columns exactly.
+    df2, _ = ntfm.read_ntfm(path)
+    assert np.allclose(df2["y[µm]"], df2["row"] * 0.4)
+    assert set(df2["t[min]"].unique()) == {0.0, 2.0, 4.0}
+
+
+def test_measures_stored_float32_read_float64(tmp_path, grid_arrays):
+    import tifffile
+
+    df = ntfm.arrays_to_tidy(**grid_arrays)
+    path = tmp_path / "experiment.ome.tif"
+    ntfm.write_ntfm(path, df, ntfm.build_metadata(config={}))
+
+    with tifffile.TiffFile(path) as tf:
+        by_name = {s.name: s for s in tf.series}
+        assert by_name["displacement"].dtype == np.float32
+        assert by_name["mask"].dtype == np.uint16
+
+    # The in-memory contract is float64 — measures are cast back up on read.
+    df2, _ = ntfm.read_ntfm(path)
+    assert df2["u_x[µm]"].dtype == np.float64
+
+
+def test_absent_stage_writes_no_series(tmp_path):
+    import tifffile
+
+    disp = np.ones((1, 2, 2, 2))
+    df = ntfm.arrays_to_tidy(displacement_field=disp, grid_spacing=1.0, frame_interval=1.0)
+    path = tmp_path / "disp_only.ome.tif"
+    ntfm.write_ntfm(path, df, ntfm.build_metadata(config={}))
+
+    with tifffile.TiffFile(path) as tf:
+        # No traction/stress/mask series for stages that never ran.
+        assert {s.name for s in tf.series} == {"displacement"}
+    assert ntfm.populated_measures(path) == {"displacement"}
 
 
 def test_metadata_carries_provenance():

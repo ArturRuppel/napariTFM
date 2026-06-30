@@ -29,7 +29,7 @@ def test_write_experiment_ntfm_round_trips(tmp_path):
 
     analysis._write_experiment_ntfm(out, folder, disp, force, None, None)
 
-    ntfm_path = out / "exp_A.ntfm"
+    ntfm_path = out / "exp_A.ome.tif"
     assert ntfm_path.exists()
 
     df, metadata = ntfm.read_ntfm(ntfm_path)
@@ -48,14 +48,14 @@ def test_write_experiment_ntfm_aligns_mask_to_grid(tmp_path):
     analysis = _analysis()
     analysis._write_experiment_ntfm(tmp_path, tmp_path / "exp", None, force, None, raw_mask)
 
-    df, _ = ntfm.read_ntfm(tmp_path / "exp.ntfm")
+    df, _ = ntfm.read_ntfm(tmp_path / "exp.ome.tif")
     assert (df["mask"] == 1).all()
 
 
 def test_no_results_skips_ntfm(tmp_path):
     analysis = _analysis()
     analysis._write_experiment_ntfm(tmp_path, tmp_path / "exp", None, None, None, None)
-    assert not (tmp_path / "exp.ntfm").exists()
+    assert not (tmp_path / "exp.ome.tif").exists()
 
 
 def test_write_failure_propagates(tmp_path, monkeypatch):

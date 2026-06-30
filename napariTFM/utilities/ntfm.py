@@ -1,38 +1,48 @@
-"""Native ``.ntfm`` container and the tidy long-format table (ROADMAP §1).
+"""Native TFM container and the tidy long-format table (ROADMAP §1).
 
-A single tidy, long-format table is the canonical data representation: one row
-per ``(t, y, x)`` grid sample, every value in physical units with the unit
-carried inline in the column name. The table is self-contained for analysis;
-the only thing in the sidecar is run-level provenance plus the resolved config.
+The canonical *on-disk* form is a single multi-series **OME-TIFF**
+(``<experiment>.ome.tif``) that Fiji/ImageJ open on a double-click via bundled
+Bio-Formats — data and provenance in one self-describing file::
 
-``.ntfm`` is a zip::
+    experiment.ome.tif            # one OME-TIFF, up to four named series
+    ├── series "displacement"     # (T, C, Y, X) float32 — u_x[µm], u_y[µm]
+    ├── series "traction"         # (T, C, Y, X) float32 — F_x[Pa], F_y[Pa]
+    ├── series "stress"           # (T, C, Y, X) float32 — sigma_xx/yy/shear[mN/m]
+    ├── series "mask"             # (T, Y, X) uint16 — region labels (binarised 0/1)
+    └── OME-XML                   # channel names+units, PhysicalSizeX/Y (µm),
+                                  # TimeIncrement (min), and the provenance dict
+                                  # (config / labels / git) as a JSON Description
 
-    experiment.ntfm
-    ├── samples.parquet   # the tidy table
-    └── metadata.json     # provenance + resolved config
+A series is written only when its stage ran and is not entirely NaN, so the set
+of present series *is* the per-stage truth (no all-NaN placeholders on disk).
+Off-mask NaN inside a written series is preserved. Pixels are float32 — beyond
+any TFM measurement precision; ``read_ntfm`` casts measures back to float64.
 
-One converter handles both directions so import and export share a code path.
-``arrays -> tidy -> arrays`` is lossless for every column below; array
-reconstruction is trivial because ``row``/``col`` are explicit integer columns.
+The tidy long-format table (one row per ``(t, y, x)`` sample, units inline in
+the column name) remains the *in-memory* interchange: ``read_ntfm`` returns it,
+``write_ntfm`` accepts it. ``arrays -> tidy -> arrays`` is lossless (modulo the
+float32 storage step); reconstruction is trivial because ``row``/``col`` are
+explicit integer columns. Coordinate frame is image convention: ``x`` = column
+(+x right), ``y`` = row (**+y down**, no flip to physical y-up).
 """
 
 from __future__ import annotations
 
-import io
 import json
 import subprocess
-import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
+import tifffile
 
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
 
-FORMAT_VERSION = "1.0"
+FORMAT_VERSION = "2.0"
 
 # Identifiers (Iris vocabulary) — locate every sample.
 ID_COLUMNS = ["t[min]", "y[µm]", "x[µm]", "row", "col"]
@@ -52,9 +62,18 @@ MEASURE_COLUMNS = [
 
 COLUMNS = ID_COLUMNS + MEASURE_COLUMNS
 
-# Names of the entries inside the .ntfm zip.
-_SAMPLES_NAME = "samples.parquet"
-_METADATA_NAME = "metadata.json"
+# OME-TIFF series layout: series name -> the tidy measure columns it carries,
+# in channel order. The canonical write order is displacement, traction, stress.
+_SERIES_COLUMNS = {
+    "displacement": ["u_x[µm]", "u_y[µm]"],
+    "traction": ["F_x[Pa]", "F_y[Pa]"],
+    "stress": ["sigma_xx[mN/m]", "sigma_yy[mN/m]", "sigma_shear[mN/m]"],
+}
+_MASK_SERIES = "mask"
+
+# populated_measures speaks the stage vocabulary; the traction series is the
+# "force" stage. mask is an input, not a stage, so it is excluded.
+_SERIES_TO_STAGE = {"displacement": "displacement", "traction": "force", "stress": "stress"}
 
 
 # ---------------------------------------------------------------------------
@@ -330,30 +349,181 @@ def build_metadata(
 # Container I/O
 # ---------------------------------------------------------------------------
 
+def _grid_step(values: np.ndarray, default: float = 1.0) -> float:
+    """Smallest positive spacing between sorted unique ``values`` (else default)."""
+    uniq = np.sort(np.unique(values))
+    diffs = np.diff(uniq)
+    diffs = diffs[diffs > 0]
+    return float(diffs.min()) if diffs.size else float(default)
+
+
+def _measure_series_array(df: pd.DataFrame, columns: list) -> Optional[np.ndarray]:
+    """Stack a series' tidy columns into ``(T, C, Y, X)`` float32, or None.
+
+    Returns None when the stage is absent (columns missing) or never ran (every
+    value NaN), so only real stages become on-disk series.
+    """
+    if not set(columns).issubset(df.columns):
+        return None
+    arrays = ntfm_tidy_to_series_channels(df, columns)
+    if arrays is None or np.isnan(arrays).all():
+        return None
+    return arrays.astype(np.float32)
+
+
+def ntfm_tidy_to_series_channels(df: pd.DataFrame, columns: list) -> Optional[np.ndarray]:
+    """Scatter the given tidy columns onto the ``(T, C, Y, X)`` grid."""
+    unique_t = np.sort(df["t[min]"].unique())
+    nt = len(unique_t)
+    ny = int(df["row"].max()) + 1
+    nx = int(df["col"].max()) + 1
+    t_pos = np.searchsorted(unique_t, df["t[min]"].to_numpy())
+    rows = df["row"].to_numpy().astype(np.int64)
+    cols = df["col"].to_numpy().astype(np.int64)
+    out = np.full((nt, len(columns), ny, nx), np.nan, dtype=float)
+    for ci, col in enumerate(columns):
+        out[t_pos, ci, rows, cols] = df[col].to_numpy()
+    return out
+
+
 def write_ntfm(path, df: pd.DataFrame, metadata: Dict) -> Path:
-    """Write a ``.ntfm`` zip (samples.parquet + metadata.json)."""
+    """Write the container as a single multi-series OME-TIFF.
+
+    One series per populated stage (``displacement`` / ``traction`` / ``stress``,
+    each ``(T, C, Y, X)`` float32) plus a ``mask`` series (``(T, Y, X)`` uint16)
+    when a real mask is present. Channel names carry units; the first series also
+    carries ``PhysicalSizeX/Y`` (µm), ``TimeIncrement`` (min) and the full
+    ``metadata`` dict as a JSON ``Description`` — so the file is self-describing
+    and Fiji-openable.
+    """
     path = Path(path)
 
-    parquet_buf = io.BytesIO()
-    df.to_parquet(parquet_buf, engine="pyarrow", index=False)
+    grid_spacing = _grid_step(df["x[µm]"].to_numpy())
+    frame_interval = _grid_step(df["t[min]"].to_numpy())
+    description = json.dumps(metadata, ensure_ascii=False, default=str)
 
-    metadata_bytes = json.dumps(metadata, indent=2, ensure_ascii=False).encode("utf-8")
+    # Build the ordered list of (name, channel-names, array) to write.
+    series: list = []
+    for name, columns in _SERIES_COLUMNS.items():
+        arr = _measure_series_array(df, columns)
+        if arr is not None:
+            series.append((name, columns, arr))
+
+    if "mask" in df.columns and (df["mask"].to_numpy() != 0).any():
+        mask_arr = ntfm_tidy_to_series_channels(df, ["mask"])[:, 0, :, :]
+        series.append((_MASK_SERIES, [_MASK_SERIES], np.nan_to_num(mask_arr).astype(np.uint16)))
+
+    if not series:
+        raise ValueError("write_ntfm: nothing to write (no populated stage or mask)")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(_SAMPLES_NAME, parquet_buf.getvalue())
-        zf.writestr(_METADATA_NAME, metadata_bytes)
+    with tifffile.TiffWriter(path, ome=True) as tw:
+        for idx, (name, channel_names, arr) in enumerate(series):
+            axes = "TYX" if arr.ndim == 3 else "TCYX"
+            md: Dict = {"axes": axes, "Name": name}
+            if arr.ndim == 4:
+                md["Channel"] = {"Name": list(channel_names)}
+            if idx == 0:  # physical scale + provenance ride on the first series
+                md.update(
+                    PhysicalSizeX=grid_spacing,
+                    PhysicalSizeXUnit="µm",
+                    PhysicalSizeY=grid_spacing,
+                    PhysicalSizeYUnit="µm",
+                    TimeIncrement=frame_interval,
+                    TimeIncrementUnit="min",
+                    Description=description,
+                )
+            tw.write(arr, photometric="minisblack", compression="zlib", metadata=md)
     return path
 
 
+def _parse_ome(xml: str) -> tuple:
+    """Pull ``(metadata, grid_spacing, frame_interval)`` from the OME-XML.
+
+    The provenance dict is the first ``Image`` element's JSON ``Description``;
+    spacing/interval come from that image's ``Pixels`` attributes.
+    """
+    root = ET.fromstring(xml)
+    ns = {"o": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {}
+
+    def find(elem, tag):
+        return elem.find(f"o:{tag}", ns) if ns else elem.find(tag)
+
+    image = find(root, "Image")
+    metadata: Dict = {}
+    desc = find(image, "Description") if image is not None else None
+    if desc is not None and desc.text:
+        try:
+            metadata = json.loads(desc.text)
+        except (json.JSONDecodeError, TypeError):
+            metadata = {}
+
+    grid_spacing, frame_interval = 1.0, 1.0
+    pixels = find(image, "Pixels") if image is not None else None
+    if pixels is not None:
+        grid_spacing = float(pixels.get("PhysicalSizeX") or 1.0)
+        frame_interval = float(pixels.get("TimeIncrement") or 1.0)
+    return metadata, grid_spacing, frame_interval
+
+
 def read_ntfm(path) -> tuple:
-    """Read a ``.ntfm`` zip, returning ``(df, metadata)``."""
+    """Read an OME-TIFF container, returning ``(df, metadata)``.
+
+    The full tidy schema (every ``COLUMNS`` entry) is reconstructed: stages whose
+    series is absent are refilled as all-NaN columns and measures are cast back to
+    float64, so the returned frame matches what :func:`write_ntfm` was given.
+    """
     path = Path(path)
-    with zipfile.ZipFile(path, "r") as zf:
-        with zf.open(_SAMPLES_NAME) as f:
-            df = pd.read_parquet(io.BytesIO(f.read()), engine="pyarrow")
-        with zf.open(_METADATA_NAME) as f:
-            metadata = json.loads(f.read().decode("utf-8"))
+    with tifffile.TiffFile(path) as tf:
+        by_name = {s.name: s for s in tf.series}
+        metadata, grid_spacing, frame_interval = _parse_ome(tf.ome_metadata or "")
+
+        def series_array(name):
+            return by_name[name].asarray() if name in by_name else None
+
+        disp = series_array("displacement")
+        trac = series_array("traction")
+        stress_ch = series_array("stress")
+        mask_arr = series_array(_MASK_SERIES)
+
+    # tifffile squeezes singleton axes (a one-frame stack reads back as
+    # (C, Y, X)); reshape to canonical (T, C, Y, X) using the known channel count
+    # — Y, X are always the trailing two axes.
+    def _as_tcyx(arr, n_channels):
+        if arr is None:
+            return None
+        ny, nx = arr.shape[-2], arr.shape[-1]
+        return np.asarray(arr, dtype=np.float64).reshape(-1, n_channels, ny, nx)
+
+    disp = _as_tcyx(disp, 2)
+    trac = _as_tcyx(trac, 2)
+    stress_ch = _as_tcyx(stress_ch, 3)
+
+    displacement_field = np.moveaxis(disp, 1, -1) if disp is not None else None
+    force_field = np.moveaxis(trac, 1, -1) if trac is not None else None
+
+    stress_tensor = None
+    if stress_ch is not None:
+        nt, _, ny, nx = stress_ch.shape
+        stress_tensor = np.empty((nt, ny, nx, 2, 2))
+        stress_tensor[..., 0, 0] = stress_ch[:, 0]
+        stress_tensor[..., 1, 1] = stress_ch[:, 1]
+        stress_tensor[..., 0, 1] = stress_ch[:, 2]
+        stress_tensor[..., 1, 0] = stress_ch[:, 2]
+
+    mask = None
+    if mask_arr is not None:
+        ny, nx = mask_arr.shape[-2], mask_arr.shape[-1]
+        mask = np.asarray(mask_arr).reshape(-1, ny, nx).astype(np.int64)
+
+    df = arrays_to_tidy(
+        displacement_field=displacement_field,
+        force_field=force_field,
+        stress_tensor=stress_tensor,
+        mask=mask,
+        grid_spacing=grid_spacing,
+        frame_interval=frame_interval,
+    )
     return df, metadata
 
 
@@ -382,20 +552,19 @@ _populated_measures_cache: dict = {}
 
 
 def populated_measures(path) -> set:
-    """Return which measured stages have real (non-all-NaN) data in a ``.ntfm``.
+    """Return which measured stages have real data in the container.
 
-    The result is a subset of ``{"displacement", "force", "stress"}``. A missing
-    or unreadable container yields the empty set, so callers can treat "no
-    output yet" and "can't tell" identically. This is the per-output truth the
-    experiments-list stage-status reads (P3); ``mask`` is an input, not a stage.
+    The result is a subset of ``{"displacement", "force", "stress"}``. Because a
+    series is written only when its stage ran with non-all-NaN data, *presence of
+    the series is the per-stage truth* — no pixel read is needed, only the series
+    list from the OME-XML header. A missing or unreadable container yields the
+    empty set, so callers treat "no output yet" and "can't tell" identically.
+    This is what the experiments-list stage-status reads (P3); ``mask`` is an
+    input, not a stage, and is excluded.
 
-    Results are cached by ``(path, mtime_ns, size)`` so repeated calls on an
-    unchanged file are O(1).  The parquet column statistics (row-group metadata)
-    are read instead of the full table, reducing per-call I/O from ~200 ms to
-    ~1 ms.  The cache self-invalidates when the file is rewritten (new mtime/size).
+    Results are cached by ``(path, mtime_ns, size)``; the cache self-invalidates
+    when the file is rewritten (new mtime/size).
     """
-    import pyarrow.parquet as pq
-
     path = Path(path)
 
     # Stat the file; propagate missing-file as empty set.
@@ -411,31 +580,13 @@ def populated_measures(path) -> set:
     if cached is not None:
         return set(cached)
 
-    # Compute via parquet column statistics (no full-table read).
+    # Read series names from the header only (no pixel data).
     try:
-        with zipfile.ZipFile(path, "r") as zf:
-            data = zf.read(_SAMPLES_NAME)
-        pf = pq.ParquetFile(io.BytesIO(data))
-        md = pf.metadata
-        names = pf.schema_arrow.names
-        present = set()
-        for stage, column in _STAGE_MEASURE_COLUMN.items():
-            if column not in names:
-                continue
-            ci = names.index(column)
-            nulls = 0
-            have_stats = True
-            for rg in range(md.num_row_groups):
-                st_col = md.row_group(rg).column(ci).statistics
-                if st_col is None:
-                    have_stats = False
-                    break
-                nulls += st_col.null_count
-            if have_stats:
-                if nulls < md.num_rows:  # at least one non-null value
-                    present.add(stage)
-            else:
-                present.add(stage)  # stats unavailable -> conservatively present
+        with tifffile.TiffFile(path) as tf:
+            names = {s.name for s in tf.series}
+        present = {
+            stage for series, stage in _SERIES_TO_STAGE.items() if series in names
+        }
     except Exception:
         return set()
 
@@ -535,108 +686,6 @@ def merge_tidy_preserving(new_df: pd.DataFrame, old_df: pd.DataFrame) -> pd.Data
     # Preserve COLUMNS ordering, include only columns present.
     ordered_cols = [c for c in COLUMNS if c in result_df.columns]
     return result_df[ordered_cols]
-
-
-# ---------------------------------------------------------------------------
-# CSV export (lossy, additional)
-# ---------------------------------------------------------------------------
-
-def write_csv(path, df: pd.DataFrame, drop_displacement: bool = False) -> Path:
-    """Export the tidy table to CSV (human/Excel portability, lossy on dtypes).
-
-    Set ``drop_displacement`` to omit ``u_x``/``u_y`` when only results are wanted.
-    """
-    path = Path(path)
-    if drop_displacement:
-        df = df.drop(columns=["u_x[µm]", "u_y[µm]"], errors="ignore")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, index=False)
-    return path
-
-
-def _csv_export_columns(pf) -> list:
-    """Pick the CSV columns from a parquet file: ids always, measures when present.
-
-    Identifier columns are always emitted. A measure column is kept only when it
-    carries real data (so a stage that never ran — its column is all-NaN — is
-    dropped, and an all-zero ``mask`` from a no-mask run is dropped too), giving
-    the "stress / mask when present" behaviour. Presence is judged from row-group
-    statistics (no full-table read); when stats are unavailable the column is
-    conservatively kept. Returned in canonical ``COLUMNS`` order.
-    """
-    md = pf.metadata
-    names = pf.schema_arrow.names
-    keep: list = []
-    for col in COLUMNS:
-        if col not in names:
-            continue
-        if col in ID_COLUMNS:
-            keep.append(col)
-            continue
-        ci = names.index(col)
-        if col == "mask":
-            # Keep mask only when some sample is non-zero (a real mask exists).
-            present = False
-            for rg in range(md.num_row_groups):
-                st = md.row_group(rg).column(ci).statistics
-                if st is None or not st.has_min_max:
-                    present = True  # can't tell -> keep
-                    break
-                if st.min != 0 or st.max != 0:
-                    present = True
-                    break
-            if present:
-                keep.append(col)
-            continue
-        # Measure column: keep when at least one value is non-null.
-        nulls = 0
-        have_stats = True
-        for rg in range(md.num_row_groups):
-            st = md.row_group(rg).column(ci).statistics
-            if st is None:
-                have_stats = False
-                break
-            nulls += st.null_count
-        if not have_stats or nulls < md.num_rows:
-            keep.append(col)
-    return keep
-
-
-def export_ntfm_to_csv(ntfm_path, csv_path, *, chunk_rows: int = 200_000) -> Path:
-    """Stream a ``.ntfm``'s tidy table to a full per-pixel CSV dump.
-
-    Writes every ``(t, y, x)`` grid sample's measures — ``u_x, u_y, F_x, F_y``
-    (plus ``sigma_*`` and ``mask`` *when present*) — for every frame. The parquet
-    inside the container is read and the CSV written in row-batches, so the whole
-    CSV text is never materialised in memory at once (these dumps can be large).
-
-    Columns absent from the data are omitted (see :func:`_csv_export_columns`).
-    Raises ``FileNotFoundError`` when no container exists yet.
-    """
-    import pyarrow.parquet as pq
-
-    ntfm_path = Path(ntfm_path)
-    csv_path = Path(csv_path)
-    if not ntfm_path.exists():
-        raise FileNotFoundError(f"No .ntfm container to export at {ntfm_path}")
-
-    with zipfile.ZipFile(ntfm_path, "r") as zf:
-        data = zf.read(_SAMPLES_NAME)
-    pf = pq.ParquetFile(io.BytesIO(data))
-
-    keep = _csv_export_columns(pf)
-
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    first = True
-    with open(csv_path, "w", newline="", encoding="utf-8") as fh:
-        for batch in pf.iter_batches(batch_size=chunk_rows, columns=keep):
-            frame = batch.to_pandas()
-            frame = frame[[c for c in keep if c in frame.columns]]
-            frame.to_csv(fh, header=first, index=False)
-            first = False
-        if first:  # no rows at all — still emit a header row for the schema
-            pd.DataFrame(columns=keep).to_csv(fh, index=False)
-    return csv_path
 
 
 # ---------------------------------------------------------------------------

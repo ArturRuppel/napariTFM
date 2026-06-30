@@ -18,9 +18,14 @@ to `napariTFM/backend/bism.py`; a unified `backend/stress.py::StressResult` both
 engines return (`MSMResult` is now an alias). `params.stress_method` ("MSM"/"BISM")
 dispatches in the batch (`_run_bism_stress`) and interactive (`MSMController`)
 runners; BISM skips the mesh phase. **FE mesh kept** (it's MSM's, still works).
-Deferred follow-ups: persist BISM's per-pixel **uncertainty** into the `.ntfm`
-columns + a viewer layer; optionally retire the now-redundant FE-material params
-from the UI. Note: BISM still leaves the meshing path in place, so #7's
+**Param panel is now engine-aware** (2026-06-30): a `WHEN(param, value)` sentinel
+in the Stress spec (`_widget.py`) swaps the whole knob set off the Method
+dropdown — MSM shows its mesh/material params, BISM shows its one real knob, the
+Bayesian regularization λ (a 10^x slider, `bism_regularization`, previously
+hardcoded at 1e-6 and now threaded through). `free_bc` stays fixed (validated True
+for masked monolayers). Built so retiring MSM later = deleting its WHEN block.
+Deferred follow-up: persist BISM's per-pixel **uncertainty** into the `.ntfm`
+columns + a viewer layer. Note: BISM still leaves the meshing path in place, so #7's
 "mesh doesn't map onto a napari layer" tension is **not** dissolved — revisit if
 BISM becomes the default.
 

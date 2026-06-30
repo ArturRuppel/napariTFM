@@ -67,11 +67,11 @@ def test_experiment_ntfm_path_matches_batch_write_location():
     # In-place mode (no processed_root): processed/ bucket inside the folder.
     out_dir = experiment_output_dir(folder, None)
     assert out_dir == Path(folder) / PROCESSED_BUCKET
-    assert experiment_ntfm_path(folder, None) == out_dir / "pos_00.ntfm"
+    assert experiment_ntfm_path(folder, None) == out_dir / "pos_00.ome.tif"
 
     # The batch resolves the same way for the same single folder.
     plan = resolve_output_plan([folder], None)
-    assert experiment_ntfm_path(folder, None) == plan.output_dirs[folder] / "pos_00.ntfm"
+    assert experiment_ntfm_path(folder, None) == plan.output_dirs[folder] / "pos_00.ome.tif"
 
 
 def test_experiment_ntfm_path_honours_processed_root():
@@ -82,7 +82,7 @@ def test_experiment_ntfm_path_honours_processed_root():
     # hold is that the writer and the reader agree given the SAME inputs, which
     # they do because both call resolve_output_plan. Assert the helper composes.
     out_dir = experiment_output_dir("/data/cond1/exp_A", "/out")
-    assert experiment_ntfm_path("/data/cond1/exp_A", "/out") == out_dir / "exp_A.ntfm"
+    assert experiment_ntfm_path("/data/cond1/exp_A", "/out") == out_dir / "exp_A.ome.tif"
 
 
 def test_basename_collision_is_warned(monkeypatch):

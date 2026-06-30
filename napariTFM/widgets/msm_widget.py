@@ -509,13 +509,49 @@ class MSMWidget(BaseAnalysisWidget):
         if not isinstance(mask_data, np.ndarray):
             QMessageBox.warning(self, "Invalid Layer", "Selected layer is not a valid image layer.")
             return
+        self._apply_mask_data(mask_data, warn=True)
+
+    def load_mask_from_file(self, mask_path) -> bool:
+        """Load a mask stack from a TIFF on disk into memory.
+
+        Used to auto-load an experiment's discovered ``masks.tif`` on selection so
+        the Stress stage's Run/Preview enable without a manual layer load. Silent
+        and best-effort: a missing or unreadable file is a no-op (the user can
+        still load a mask manually). Returns True when a mask was loaded.
+        """
+        from pathlib import Path
+
+        import tifffile
+
+        mask_path = Path(mask_path)
+        if not mask_path.exists():
+            return False
+        try:
+            mask_data = tifffile.imread(str(mask_path))
+        except Exception as e:  # pragma: no cover - defensive
+            print(f"Could not read mask file {mask_path}: {e}")
+            return False
+        if not isinstance(mask_data, np.ndarray):
+            return False
+        self._apply_mask_data(mask_data, warn=False)
+        return True
+
+    def _apply_mask_data(self, mask_data: np.ndarray, *, warn: bool) -> None:
+        """Resize a raw mask onto the analysis grid, store it, and show it.
+
+        Shared by the manual (active-layer) and automatic (from-file) paths.
+        ``warn`` pops the conversion/resize notices for the manual path but stays
+        silent for the auto-load so selecting an experiment is quiet.
+        """
         force_results = self.data_manager.force_results
         force_field = force_results.force_field if force_results is not None else None
         processed_masks, warnings = process_mask_data(mask_data, force_field)
-        for warning in warnings:
-            QMessageBox.warning(self, "Warning", warning)
+        if warn:
+            for warning in warnings:
+                QMessageBox.warning(self, "Warning", warning)
         self.data_manager.set_mask_stack(processed_masks)
         self.visualization_manager.visualize_masks(processed_masks)
+        self._update_ui_state()
 
     def _update_stress_parameters(self, category: ParameterCategory):
         """Refresh cached MSM parameters when a parameter reset occurs."""
@@ -526,7 +562,7 @@ class MSMWidget(BaseAnalysisWidget):
         """Refresh cached MSM parameters when an individual parameter changes."""
         stress_params = {
             'stress_method', 'density_factor', 'mesh_algorithm', 'use_optimization',
-            'poisson_ratio_cells', 'max_stress'
+            'poisson_ratio_cells', 'bism_regularization', 'max_stress'
         }
         if param_name in stress_params:
             self.msm_params = self.parameter_manager.get_msm_parameters()

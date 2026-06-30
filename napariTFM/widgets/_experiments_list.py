@@ -188,7 +188,7 @@ class ExperimentRow(QWidget):
 
     selected = Signal(str)  # legacy single-select (kept for back-compat callers)
     clicked = Signal(str, int)  # path, modifier flag: 0 plain, 1 ctrl, 2 shift
-    export_requested = Signal(str)  # path — "dump this position's .ntfm to CSV"
+    export_requested = Signal(str)  # path — "save this position's OME-TIFF elsewhere"
 
     def __init__(self, path: str, values: Optional[list[str]] = None, parent=None):
         super().__init__(parent)
@@ -236,7 +236,7 @@ class ExperimentRow(QWidget):
         self.export_btn.setIcon(
             stage_action_icon("export", muted_accent(stage_accent("project")), size=14)
         )
-        self.export_btn.setToolTip("Export this position's processed data to CSV")
+        self.export_btn.setToolTip("Export this position's processed data (OME-TIFF)")
         self.export_btn.setAutoRaise(True)
         self.export_btn.setEnabled(False)
         self.export_btn.clicked.connect(lambda: self.export_requested.emit(self._path))

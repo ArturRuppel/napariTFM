@@ -413,7 +413,10 @@ def calculate_bism_stresses(
             zeros = np.zeros(tx.shape, dtype=np.float32)
             return zeros, zeros, zeros, np.nan
 
-        res = compute_bism_stress(tx, ty, l=grid_spacing, mask=current_mask)
+        res = compute_bism_stress(
+            tx, ty, l=grid_spacing, lam=params.bism_regularization,
+            mask=current_mask,
+        )
         # Pa*um -> mN/m. Off-mask pixels are NaN from the masked solve; zero them
         # to match MSM's off-mask zeroing so downstream maps are clean.
         sxx = np.nan_to_num(res.sxx) * _BISM_TO_MN_PER_M

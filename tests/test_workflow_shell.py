@@ -52,6 +52,7 @@ class _StubParameterManager(QObject):
             "mesh_algorithm": "Frontal-Del.",
             "use_optimization": True,
             "poisson_ratio_cells": 0.5,
+            "bism_regularization": -6.0,
             "max_stress": 1.0,
         }
         self._callbacks = {}
@@ -1083,6 +1084,28 @@ def test_workflow_parameter_panel_exposes_one_control_per_managed_parameter(app)
         assert panel.parameter_controls[name].objectName() == f"workflow_parameter_{name}"
 
     assert "outer_iterations" not in panel.parameter_controls
+
+
+def test_stress_method_dropdown_swaps_engine_parameter_rows(app):
+    # The Method dropdown gates which engine's parameter rows are shown: MSM's
+    # mesh/material knobs vs BISM's single regularization knob.
+    manager = _StubParameterManager()
+    panel = _widget.WorkflowParameterPanel(manager)
+
+    msm_cell = panel.parameter_controls["density_factor"].parent()
+    bism_cell = panel.parameter_controls["bism_regularization"].parent()
+
+    # Default engine is MSM: its rows show, BISM's are hidden.
+    assert not msm_cell.isHidden()
+    assert bism_cell.isHidden()
+
+    manager.set_parameter("stress_method", "BISM")
+    assert msm_cell.isHidden()
+    assert not bism_cell.isHidden()
+
+    manager.set_parameter("stress_method", "MSM")
+    assert not msm_cell.isHidden()
+    assert bism_cell.isHidden()
 
 
 def test_workflow_parameter_panel_writes_through_ui_parameter_api(app):

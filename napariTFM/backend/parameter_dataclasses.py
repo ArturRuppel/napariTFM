@@ -102,6 +102,11 @@ class MSMParameters:
     poisson_ratio_cells: float = 0.5
     young_modulus: float = MSM_YOUNG_MODULUS
 
+    # BISM parameter (read only by the BISM engine): the Bayesian regularization
+    # hyperparameter Lambda, trading traction-fit against the stress-norm prior.
+    # Stored as the actual value; the UI exposes it as a base-10 exponent.
+    bism_regularization: float = 1e-6
+
     # Scaling parameter
     pixel_size: float = 0.1  # in µm
     downscale_factor: int = 4
@@ -160,6 +165,7 @@ class UnifiedParameters:
     mesh_algorithm: str = 'Frontal-Del.'
     use_optimization: bool = True
     poisson_ratio_cells: float = 0.5
+    bism_regularization: float = 1e-6  # BISM only; stored as value, UI shows 10^x
     max_stress: float = 1.0
 
     def to_preprocessing_parameters(self) -> PreprocessingParameters:
@@ -219,6 +225,7 @@ class UnifiedParameters:
             use_optimization=self.use_optimization,
             poisson_ratio_cells=self.poisson_ratio_cells,
             young_modulus=MSM_YOUNG_MODULUS,
+            bism_regularization=self.bism_regularization,
             pixel_size=self.pixel_size,
             downscale_factor=self.downscale_factor,
             frame_interval=self.frame_interval,

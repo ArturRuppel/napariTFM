@@ -52,7 +52,7 @@ class ParameterManager(QObject):
         value = self.get_parameter(name)
         if name == 'young_modulus':
             return value / 1000
-        if name == 'regularization':
+        if name in ('regularization', 'bism_regularization'):
             return math.log10(value)
         if name == 'gel_height':
             return value
@@ -78,7 +78,7 @@ class ParameterManager(QObject):
         """Set a parameter from a UI control value, converting to internal units."""
         if name == 'young_modulus':
             value = value * 1000
-        elif name == 'regularization':
+        elif name in ('regularization', 'bism_regularization'):
             value = 10 ** value
         self.set_parameter(name, value)
 
@@ -161,7 +161,8 @@ class ParameterManager(QObject):
             ],
             ParameterCategory.STRESS: [
                 'stress_method', 'density_factor', 'mesh_algorithm',
-                'use_optimization', 'poisson_ratio_cells', 'max_stress'
+                'use_optimization', 'poisson_ratio_cells', 'bism_regularization',
+                'max_stress'
             ],
         }
 

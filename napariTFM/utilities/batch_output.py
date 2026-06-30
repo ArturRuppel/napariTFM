@@ -95,9 +95,13 @@ def experiment_output_dir(
 def experiment_ntfm_path(
     experiment_path: str, processed_root: Optional[str] = None
 ) -> Path:
-    """The canonical ``.ntfm`` path for one experiment (basename names the file)."""
+    """The canonical container path for one experiment (basename names the file).
+
+    The on-disk artifact is a single multi-series OME-TIFF (``<name>.ome.tif``);
+    the helper name is kept for continuity with the rest of the pipeline.
+    """
     out_dir = experiment_output_dir(experiment_path, processed_root)
-    return out_dir / f"{Path(experiment_path).name}.ntfm"
+    return out_dir / f"{Path(experiment_path).name}.ome.tif"
 
 
 def _mirror_base(input_folders: Sequence[str], warnings: List[str]) -> Optional[Path]:

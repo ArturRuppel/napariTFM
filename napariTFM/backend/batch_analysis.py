@@ -529,9 +529,9 @@ class BatchAnalysis:
         (e.g. ``displacement_field``, ``force_field``). Returns ``None`` (with a
         message) if the container or the field is missing.
         """
-        ntfm_path = tfm_folder / f"{folder.name}.ntfm"
+        ntfm_path = tfm_folder / f"{folder.name}.ome.tif"
         if not ntfm_path.exists():
-            print(f"No existing .ntfm to resume from at {ntfm_path}.")
+            print(f"No existing container to resume from at {ntfm_path}.")
             return None
         try:
             df, _ = ntfm.read_ntfm(ntfm_path)
@@ -582,7 +582,7 @@ class BatchAnalysis:
         stage-resume reads displacement/force back from this container.
         """
         labels = (self.config.get('labels') or {}).get(str(folder), {})
-        ntfm_path = output_dir / f"{folder.name}.ntfm"
+        ntfm_path = output_dir / f"{folder.name}.ome.tif"
         # Delegate to the one shared writer (also used by interactive per-stage
         # runs), so batch- and live-saved containers are identical.
         try:

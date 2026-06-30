@@ -65,6 +65,7 @@ class _StubParameterManager(QObject):
             "mesh_algorithm": "Frontal-Del.",
             "use_optimization": True,
             "poisson_ratio_cells": 0.5,
+            "bism_regularization": -6.0,
             "max_stress": 1.0,
         }
         self._callbacks = {}
@@ -234,9 +235,14 @@ class _StubStageWidget(QWidget):
         self.loaded_active_layers = []
         self.loaded_input_files = None
         self.loaded_files = []
+        self.loaded_mask_paths = []
         self.update_count = 0
         self.action_calls = {"run": 0, "preview": 0, "cancel": 0}
         self._action_states = {"run": False, "preview": False}
+
+    def load_mask_from_file(self, mask_path):
+        self.loaded_mask_paths.append(str(mask_path))
+        return True
 
     def _update_ui_state(self):
         self.update_count += 1
@@ -560,17 +566,25 @@ def test_load_stress_sets_stress_results(monkeypatch, app, tmp_path):
 
 
 def test_all_nan_displacement_stays_none(monkeypatch, app, tmp_path):
-    """An all-NaN displacement field is not restored (same as populated_measures logic)."""
+    """An all-NaN displacement stage is not restored (same as populated_measures logic).
+
+    In the OME-TIFF container an all-NaN stage is simply never written as a series,
+    so it can't exist *alone* (there'd be nothing to write). We pair it with a real
+    force stage — a realistic force-only container — and assert the absent
+    displacement still reloads as None while force loads.
+    """
     widget = _stub_main_widget(monkeypatch)
     folder = tmp_path / "nan_exp"
     folder.mkdir()
 
     nan_disp = np.full((1, 2, 2, 2), np.nan)
-    _write_ntfm(folder, displacement_field=nan_disp)
+    real_force = np.ones((1, 2, 2, 2))
+    _write_ntfm(folder, displacement_field=nan_disp, force_field=real_force)
 
     widget._load_active_experiment_results(str(folder))
 
     assert widget.data_manager.displacement_results is None
+    assert widget.data_manager.force_results is not None
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +611,54 @@ def test_on_active_experiment_changed_loads_displacement(monkeypatch, app, tmp_p
         disp,
         rtol=1e-5,
     )
+
+
+def test_selecting_experiment_auto_loads_discovered_mask(monkeypatch, app, tmp_path):
+    """Selecting an experiment whose folder has masks.tif loads it into memory.
+
+    The mask is an external Stress input; auto-loading it on selection (mirroring
+    beads/reference) is what enables the Stress Run/Preview buttons without a
+    manual layer load.
+    """
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "sel_mask"
+    folder.mkdir()
+    (folder / "beads.tif").write_bytes(b"x")
+    (folder / "reference.tif").write_bytes(b"x")
+    (folder / "masks.tif").write_bytes(b"x")
+    _write_ntfm(folder, displacement_field=np.ones((1, 2, 2, 2)))
+
+    widget._project_open = True
+    widget._update_disclosure()
+    widget.experiments_list.set_records([{
+        "path": str(folder),
+        "input_files": {"beads": "beads.tif", "reference": "reference.tif", "masks": "masks.tif"},
+        "columns": {},
+    }])
+    widget.experiments_list.set_active(str(folder))
+
+    assert widget.msm_widget.loaded_mask_paths == [str(folder / "masks.tif")]
+
+
+def test_selecting_experiment_without_mask_does_not_load(monkeypatch, app, tmp_path):
+    """No masks.tif discovered → no mask auto-load attempt (no-op, not an error)."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "sel_nomask"
+    folder.mkdir()
+    (folder / "beads.tif").write_bytes(b"x")
+    (folder / "reference.tif").write_bytes(b"x")
+    _write_ntfm(folder, displacement_field=np.ones((1, 2, 2, 2)))
+
+    widget._project_open = True
+    widget._update_disclosure()
+    widget.experiments_list.set_records([{
+        "path": str(folder),
+        "input_files": {"beads": "beads.tif", "reference": "reference.tif"},
+        "columns": {},
+    }])
+    widget.experiments_list.set_active(str(folder))
+
+    assert widget.msm_widget.loaded_mask_paths == []
 
 
 def test_deselection_clears_results(monkeypatch, app, tmp_path):

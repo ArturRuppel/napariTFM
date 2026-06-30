@@ -204,6 +204,13 @@ def _build_stress_specs(stress_widget):
 # two-per-row run; it is not a parameter control.
 GROUP = object()
 
+# Sentinel opening a conditional block. A spec of the form
+# (WHEN, "stress_method", "BISM") makes every following control row visible only
+# while parameter "stress_method" equals "BISM"; the block runs until the next
+# WHEN or GROUP (GROUP resets to always-visible). Lets one panel host several
+# mutually exclusive engines — retiring an engine is deleting its block.
+WHEN = object()
+
 
 class WorkflowParameterPanel(QWidget):
     """Single visible parameter editor for the workflow shell."""
@@ -254,11 +261,17 @@ class WorkflowParameterPanel(QWidget):
         ("Stress", [
             ("stress_method", "Method", "choice", None, None, None, None,
              ["MSM", "BISM"]),
+            # FEM engine: needs a mesh + a (cell) Poisson ratio.
+            (WHEN, "stress_method", "MSM"),
             ("density_factor", "Density Factor", "float", 0.005, 0.1, 0.001, 3, None),
             ("mesh_algorithm", "Mesh Algorithm", "choice", None, None, None, None,
              ["Frontal-Del.", "Delaunay", "MeshAdapt", "BAMG", "FD Quads", "Para. Pack"]),
             ("use_optimization", "Mesh Optimization", "bool", None, None, None, None, None),
             ("poisson_ratio_cells", "Poisson Ratio", "float", 0.0, 0.5, 0.01, 2, None),
+            # Bayesian engine: mesh-free, no material params — one regularization
+            # knob (Lambda), entered as a base-10 exponent like Force's.
+            (WHEN, "stress_method", "BISM"),
+            ("bism_regularization", "Regularization (10^x)", "float", -12.0, 0.0, 0.5, 1, None),
             (GROUP, "Visualization"),
             ("max_stress", "Max Stress (mN/m)", "float", 0.01, 1000.0, 0.1, 2, None),
         ]),
@@ -269,8 +282,12 @@ class WorkflowParameterPanel(QWidget):
         self.parameter_manager = parameter_manager
         self._section_titles = set(section_titles) if section_titles is not None else None
         self.parameter_controls = {}
+        # Rows gated by a WHEN block: (controlling_param, expected_value, [cells]).
+        self._conditional_rows = []
+        self._conditional_controllers = set()
         self._setup_ui()
         self._sync_all_controls()
+        self._apply_conditional_visibility()
         self.parameter_manager.parameter_changed.connect(self._sync_parameter)
 
     def _setup_ui(self):
@@ -288,42 +305,78 @@ class WorkflowParameterPanel(QWidget):
             add_section_header(grid, 0, header)
 
             # Lay out specs two-per-row, but a range slider takes a full row.
-            # A scalar spec waits in `pending` for a partner; a range spec
-            # flushes any waiting scalar (as a solo row) before its own row.
+            # A scalar spec waits in `pending` for a partner; a range spec, a
+            # GROUP/WHEN marker, or a change of condition flushes the waiting
+            # scalar (as a solo row) first. `condition` is the active WHEN gate
+            # (None = always visible); pending carries the condition it was born
+            # under so a flushed solo row is registered correctly.
             row = 1
-            pending = None
+            pending = None  # (label, control, condition)
+            condition = None
+
+            def flush_pending():
+                nonlocal pending, row
+                if pending is not None:
+                    left, _ = add_section_pair_row(grid, row, pending[0], pending[1])
+                    self._register_conditional(pending[2], left)
+                    row += 1
+                    pending = None
+
             for spec in specs:
                 if spec[0] is GROUP:
-                    if pending is not None:
-                        add_section_pair_row(grid, row, pending[0], pending[1])
-                        row += 1
-                        pending = None
+                    flush_pending()
+                    condition = None
                     subheader = QLabel(spec[1])
                     subheader.setStyleSheet(section_subheader_style())
                     add_section_header(grid, row, subheader)
                     row += 1
+                elif spec[0] is WHEN:
+                    flush_pending()
+                    condition = (spec[1], spec[2])
                 elif spec[2] == "range":
-                    if pending is not None:
-                        add_section_pair_row(grid, row, pending[0], pending[1])
-                        row += 1
-                        pending = None
+                    flush_pending()
                     label, control = self._control_for_spec(spec)
-                    add_section_labeled_full_row(grid, row, label, control)
+                    container = add_section_labeled_full_row(grid, row, label, control)
+                    self._register_conditional(condition, container)
                     row += 1
                 elif pending is None:
-                    pending = self._control_for_spec(spec)
-                else:
                     label, control = self._control_for_spec(spec)
-                    add_section_pair_row(grid, row, pending[0], pending[1], label, control)
+                    pending = (label, control, condition)
+                elif pending[2] == condition:
+                    label, control = self._control_for_spec(spec)
+                    left, right = add_section_pair_row(grid, row, pending[0], pending[1], label, control)
+                    self._register_conditional(condition, left, right)
                     row += 1
                     pending = None
-            if pending is not None:
-                add_section_pair_row(grid, row, pending[0], pending[1])
-                row += 1
+                else:
+                    # Condition changed without a marker between two scalars;
+                    # don't pair across conditions — flush and start fresh.
+                    flush_pending()
+                    label, control = self._control_for_spec(spec)
+                    pending = (label, control, condition)
+            flush_pending()
 
             layout.addLayout(grid)
 
         self.setLayout(layout)
+
+    def _register_conditional(self, condition, *cells):
+        """Record a row's cell container(s) under a WHEN gate so visibility can
+        track the controlling parameter. No-op for unconditional rows."""
+        if condition is None:
+            return
+        param, expected = condition
+        self._conditional_controllers.add(param)
+        self._conditional_rows.append(
+            (param, expected, [c for c in cells if c is not None])
+        )
+
+    def _apply_conditional_visibility(self):
+        """Show each WHEN-gated row only while its controlling parameter matches."""
+        for param, expected, cells in self._conditional_rows:
+            visible = self.parameter_manager.get_ui_parameter(param) == expected
+            for cell in cells:
+                cell.setVisible(visible)
 
     def _control_for_spec(self, spec):
         name, label, kind, min_val, max_val, step, decimals, choices = spec
@@ -402,6 +455,11 @@ class WorkflowParameterPanel(QWidget):
                 control.setValue(display_value)
         finally:
             control.blockSignals(False)
+
+        # A change to a WHEN controller (e.g. stress_method) re-evaluates which
+        # engine-specific rows are shown.
+        if param_name in self._conditional_controllers:
+            self._apply_conditional_visibility()
 
 
 class SpinBoxEventFilter(QObject):
@@ -507,7 +565,7 @@ class napariTFMWidget(QWidget):
         self.experiments_list.run_all_requested.connect(self._run_all_experiments)
         self.experiments_list.cancel_run_all_requested.connect(self._cancel_run_all)
         self.experiments_list.export_requested.connect(
-            self._on_export_experiment_csv
+            self._on_export_experiment_data
         )
         self._active_batch = None
         container_layout.addWidget(self.experiments_list)
@@ -1198,7 +1256,7 @@ class napariTFMWidget(QWidget):
         # interactive run persists it): the shared resolve_output_plan bucket.
         # Reading any other path is how the row dots silently went stale.
         out_dir = experiment_output_dir(path, self.data_manager.output_dir)
-        ntfm_path = out_dir / f"{folder.name}.ntfm"
+        ntfm_path = out_dir / f"{folder.name}.ome.tif"
         tfm_folder = out_dir
         measures = _ntfm.populated_measures(ntfm_path)
         # Inputs live in the experiment folder under their discovery names.
@@ -1236,48 +1294,49 @@ class napariTFMWidget(QWidget):
 
         return {stage: _status(stage) for stage in PIPELINE_STAGES}
 
-    def _on_export_experiment_csv(self, path: str) -> None:
-        """Dump one position's processed ``.ntfm`` to a full per-pixel CSV (§2).
+    def _on_export_experiment_data(self, path: str) -> None:
+        """Save a copy of one position's processed OME-TIFF to a chosen location.
 
-        Reads the canonical container the batch/interactive writer produced and
-        streams every grid sample's ``u_x, u_y, F_x, F_y`` (plus ``sigma_*`` and
-        ``mask`` when present), per frame, to a user-chosen CSV. The row's button
-        is disabled until a stage is done, but we still guard the no-``.ntfm``
-        case (e.g. a stale row) rather than write an empty file.
+        The container the batch/interactive writer produced is *itself* the
+        portable export — a single self-describing OME-TIFF that Fiji/ImageJ open
+        directly. So "export" is a plain copy-out to wherever the user wants it,
+        rather than the old per-pixel CSV dump (retired: unusable at grid scale).
+        The row's button is disabled until a stage is done, but we still guard the
+        no-container case (e.g. a stale row) rather than copy a missing file.
         """
+        import shutil
         from pathlib import Path
 
-        from napariTFM.utilities import ntfm as _ntfm
         from napariTFM.utilities.batch_output import experiment_ntfm_path
 
         name = Path(path).name
         ntfm_path = experiment_ntfm_path(path, self.data_manager.output_dir)
         if not ntfm_path.exists():
-            self.status_label.setText(f"Export — no processed .ntfm for {name} yet")
+            self.status_label.setText(f"Export — no processed data for {name} yet")
             QMessageBox.information(
                 self,
-                "Export to CSV",
+                "Export data",
                 f"{name} has not been processed yet — nothing to export.",
             )
             return
 
-        default = str(Path(path) / f"{name}.csv")
-        csv_path, _ = QFileDialog.getSaveFileName(
-            self, f"Export {name} to CSV", default, "CSV files (*.csv)"
+        default = str(Path(path) / f"{name}.ome.tif")
+        dest, _ = QFileDialog.getSaveFileName(
+            self, f"Export {name} (OME-TIFF)", default, "OME-TIFF (*.ome.tif)"
         )
-        if not csv_path:
+        if not dest:
             return
 
         try:
-            self.status_label.setText(f"Export — writing {name} to CSV…")
-            _ntfm.export_ntfm_to_csv(ntfm_path, csv_path)
+            self.status_label.setText(f"Export — copying {name}…")
+            shutil.copy2(ntfm_path, dest)
         except Exception as exc:
-            logger.exception("CSV export failed for %s", path)
+            logger.exception("Data export failed for %s", path)
             self.status_label.setText(f"Export failed: {exc}")
-            QMessageBox.critical(self, "Export to CSV", f"Export failed: {exc}")
+            QMessageBox.critical(self, "Export data", f"Export failed: {exc}")
             return
 
-        self.status_label.setText(f"Export — wrote {Path(csv_path).name}")
+        self.status_label.setText(f"Export — wrote {Path(dest).name}")
 
     def _load_active_experiment_results(self, path: str) -> None:
         """Restore previously-computed results from an experiment's .ntfm into memory.
@@ -1301,7 +1360,7 @@ class napariTFMWidget(QWidget):
         try:
             ntfm_path = (
                 experiment_output_dir(path, self.data_manager.output_dir)
-                / f"{Path(path).name}.ntfm"
+                / f"{Path(path).name}.ome.tif"
             )
             if not ntfm_path.exists():
                 return
@@ -1447,6 +1506,12 @@ class napariTFMWidget(QWidget):
             # so downstream stages (Force, Stress) see their inputs and enable
             # their Run buttons without requiring a re-run of upstream stages.
             self._load_active_experiment_results(self._active_experiment)
+            # The mask is an external Stress input; load the discovered masks.tif
+            # from disk into memory too, so Stress Run/Preview enable on selection
+            # the same way beads/reference do — no manual layer load required.
+            mask_name = input_files.get("masks")
+            if mask_name:
+                self.msm_widget.load_mask_from_file(Path(self._active_experiment) / mask_name)
         self._update_disclosure()
 
     def _on_experiments_changed(self) -> None:
