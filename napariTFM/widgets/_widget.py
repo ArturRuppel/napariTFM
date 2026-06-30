@@ -1624,8 +1624,11 @@ class napariTFMWidget(QWidget):
         """Connect signals between components"""
         # A finished stage persists to the active experiment's .ntfm (auto-save),
         # then refreshes so both dot rows reflect the new on-disk truth.
-        # Preprocessing only refreshes — it has nothing of its own to persist.
-        self.preprocessing_widget.preprocessing_completed.connect(lambda *_: self.refresh())
+        # Preprocessing persists its calibrated TIFFs (not the .ntfm) via the same
+        # path, giving it the same on-disk persistence guarantee as the rest.
+        self.preprocessing_widget.preprocessing_completed.connect(
+            lambda *_: self._on_stage_persisted("preprocessing")
+        )
         self.displacement_widget.displacement_calculated.connect(
             lambda *_: self._on_stage_persisted("displacement")
         )

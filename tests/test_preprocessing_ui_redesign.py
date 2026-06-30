@@ -460,6 +460,58 @@ def test_isolate_layers_shows_only_kept_layers_hiding_the_rest():
     assert viewer.layers["Force Magnitude"].visible is False
 
 
+# The interactive per-stage Run buttons stream through begin_*_stream (not the
+# preview path), so isolation has to live in begin_*_stream itself — otherwise a
+# direct stage run leaves every other layer visible (the §4 streaming-isolation
+# bug). These lock the takeover onto the streaming entry points.
+
+def test_begin_vector_field_stream_isolates_to_its_stage():
+    viewer = _FakeViewer()
+    manager = VisualizationManager(viewer, DataManager())
+    for name in ("Beads", "Preprocessed Cells", "Force Magnitude"):
+        viewer.add_image(np.ones((3, 2, 2), dtype=np.float32), name=name)
+
+    manager.begin_vector_field_stream(
+        "displacement", 3,
+        {"v_max": 5.0, "vector_stride": 2, "arrow_scale": 1.0, "downscale_factor": 1},
+    )
+
+    assert viewer.layers["Beads"].visible is False
+    assert viewer.layers["Preprocessed Cells"].visible is False
+    assert viewer.layers["Force Magnitude"].visible is False
+
+
+def test_begin_stress_stream_isolates_to_stress_layers():
+    viewer = _FakeViewer()
+    manager = VisualizationManager(viewer, DataManager())
+    for name in ("Beads", "Force Magnitude", "Average Normal Stress"):
+        viewer.add_image(np.ones((3, 2, 2), dtype=np.float32), name=name)
+
+    manager.begin_stress_stream(num_frames=3, max_stress=1.0, downscale_factor=1)
+
+    assert viewer.layers["Beads"].visible is False
+    assert viewer.layers["Force Magnitude"].visible is False
+    assert viewer.layers["Average Normal Stress"].visible is True
+
+
+def test_begin_preprocessing_stream_isolates_to_preprocessed_layers():
+    viewer = _FakeViewer()
+    data = DataManager()
+    data.preprocessed_bead_stack = np.ones((3, 2, 2), dtype=np.float32)
+    data.preprocessed_reference = np.ones((2, 2), dtype=np.float32)
+    data.preprocessed_cell_stack = np.ones((3, 2, 2), dtype=np.float32)
+    manager = VisualizationManager(viewer, data)
+    viewer.add_image(np.ones((3, 2, 2), dtype=np.float32), name="Beads")
+    viewer.add_image(np.ones((3, 2, 2), dtype=np.float32), name="Force Magnitude")
+
+    manager.begin_preprocessing_stream()
+
+    assert viewer.layers["Beads"].visible is False
+    assert viewer.layers["Force Magnitude"].visible is False
+    assert viewer.layers["Preprocessed Beads"].visible is True
+    assert viewer.layers["Preprocessed Cells"].visible is True
+
+
 def test_isolate_layers_keeps_colorbar_legend_visible():
     viewer = _FakeViewer()
     manager = VisualizationManager(viewer, DataManager())

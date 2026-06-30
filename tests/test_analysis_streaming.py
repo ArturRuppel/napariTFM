@@ -129,6 +129,8 @@ class _FakeViewer:
 
 
 class _FakeColorbar:
+    layer_names = []
+
     def clear(self):
         pass
 
@@ -255,16 +257,21 @@ def test_vector_field_rerun_recreates_magnitude_when_ndim_changes():
     assert sum(layer.name == 'Displacement Magnitude' for layer in viewer.layers) == 1
 
 
-def test_vector_field_leaves_unrelated_layers_untouched():
+def test_vector_field_hides_unrelated_layers_but_does_not_force_show():
     viewer = _FakeViewer()
-    other = viewer.add_image(np.ones((2, 2)), name="Raw beads", visible=True)
-    other.visible = False  # user hid it on purpose
+    hidden = viewer.add_image(np.ones((2, 2)), name="Raw beads", visible=True)
+    hidden.visible = False  # user hid it on purpose
+    viewer.add_image(np.ones((2, 2)), name="Average Normal Stress", visible=True)
     dm = _DataManager()
     manager = _make_manager(viewer, dm)
 
     manager.begin_vector_field_stream('displacement', num_frames=1, vis_params=_vis_params())
     manager.stream_vector_field_frame('displacement', 0, np.ones((4, 4, 2), dtype=np.float32))
 
+    # A run takes the viewer over: an unrelated *visible* layer (another stage)
+    # is hidden so it can't bleed into the displacement view (worklist §4)...
+    assert viewer.layers["Average Normal Stress"].visible is False
+    # ...but a layer the user hid stays hidden — the run never force-shows.
     assert "Raw beads" in viewer.layers
     assert viewer.layers["Raw beads"].visible is False
 

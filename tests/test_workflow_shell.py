@@ -772,6 +772,43 @@ def test_interactive_preprocessing_persists_tiffs(monkeypatch, app, tmp_path):
         widget.deleteLater()
 
 
+def test_preprocessing_completed_signal_persists_tiffs(monkeypatch, app, tmp_path):
+    """Emitting ``preprocessing_completed`` must reach the TIFF-persist path.
+
+    Regression guard for the wiring gap: the persist machinery existed and was
+    test-locked by calling ``_on_stage_persisted`` directly, but the
+    ``preprocessing_completed`` signal was connected only to ``refresh()`` — so
+    an interactive run wrote nothing to disk. This drives the real signal.
+    """
+    import numpy as np
+
+    written = {}
+
+    def _fake_save_tiff(data, filepath, pixel_size, frame_interval):
+        from pathlib import Path
+        written[Path(filepath).name] = data
+
+    monkeypatch.setattr(
+        "napariTFM.backend.batch_analysis.save_calibrated_tiff", _fake_save_tiff
+    )
+
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_01"
+    folder.mkdir()
+    _select(widget, folder)
+    try:
+        widget.data_manager.preprocessed_bead_stack = np.ones((2, 4, 4), dtype=np.float32)
+        widget.data_manager.preprocessed_reference = np.zeros((4, 4), dtype=np.float32)
+
+        widget.preprocessing_widget.preprocessing_completed.emit({})
+
+        assert "preprocessed_beads.tif" in written, "signal did not reach the persist path"
+        assert "preprocessed_reference.tif" in written, "signal did not reach the persist path"
+    finally:
+        widget.close()
+        widget.deleteLater()
+
+
 def test_all_nan_stage_reads_not_done_in_both_dot_rows(monkeypatch, app, tmp_path):
     import numpy as np
 

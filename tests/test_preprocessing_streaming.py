@@ -120,6 +120,8 @@ class _FakeViewer:
 
 
 class _FakeColorbar:
+    layer_names = []
+
     def clear(self):
         pass
 
@@ -201,17 +203,21 @@ def test_begin_stream_preserves_existing_layer_settings_on_rerun():
     assert same_layer.visible is False  # visibility preserved
 
 
-def test_begin_stream_leaves_unrelated_layers_untouched():
+def test_begin_stream_hides_unrelated_layers_but_does_not_force_show():
     viewer = _FakeViewer()
-    other = viewer.add_image(np.ones((2, 2)), name="Raw beads", visible=True)
-    other.visible = False  # user hid it on purpose
+    hidden = viewer.add_image(np.ones((2, 2)), name="Raw beads", visible=True)
+    hidden.visible = False  # user hid it on purpose
+    viewer.add_image(np.ones((2, 2)), name="Force Magnitude", visible=True)
     dm = _DataManager()
     dm.preprocessed_bead_stack = np.zeros((1, 2, 2), dtype=np.float32)
     manager = _make_manager(viewer, dm)
 
     manager.begin_preprocessing_stream()
 
-    # The unrelated layer is still present and still hidden — not force-shown.
+    # A run takes the viewer over: an unrelated *visible* layer (another stage)
+    # is hidden so it can't bleed into the preprocessing view (worklist §4)...
+    assert viewer.layers["Force Magnitude"].visible is False
+    # ...but a layer the user hid stays hidden — the run never force-shows.
     assert "Raw beads" in viewer.layers
     assert viewer.layers["Raw beads"].visible is False
 

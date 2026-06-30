@@ -696,6 +696,10 @@ class PreprocessingWidget(BaseAnalysisWidget):
         """Delegate disk-loading of an experiment's raw inputs to the controller."""
         self.controller.load_input_files(folder, input_files)
 
+    def peek_input_xy_shape(self, folder, input_files, slot="beads"):
+        """Delegate a cheap on-disk shape read of an input file to the controller."""
+        return self.controller.peek_input_xy_shape(folder, input_files, slot)
+
     # endregion
 
     # region === State Management

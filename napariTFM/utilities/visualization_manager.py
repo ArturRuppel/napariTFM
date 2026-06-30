@@ -95,6 +95,23 @@ class VisualizationManager(ErrorHandlingMixin):
         for layer in self.viewer.layers:
             layer.visible = layer.name in keep
 
+    def hide_other_layers(self, keep_names) -> None:
+        """Hide every layer *not* in ``keep_names``; leave the kept ones alone.
+
+        The gentler sibling of :meth:`isolate_layers`. A streamed stage run uses
+        this to take the viewer over — hiding the previous stage and the raw
+        inputs so its output isn't blended (worklist §4) — without forcing its
+        *own* layers visible. That preserves the per-layer visibility the user
+        dialled in across a re-run (e.g. a magnitude layer they hid to inspect
+        the vectors alone stays hidden), which a full isolate would clobber.
+
+        The active colorbar legend always rides along with the kept layers.
+        """
+        keep = set(keep_names) | set(self.colorbar_manager.layer_names)
+        for layer in self.viewer.layers:
+            if layer.name not in keep:
+                layer.visible = False
+
     def capture_layer_visibility(self) -> dict:
         """Snapshot ``{layer_name: visible}`` for every layer in the viewer.
 
@@ -646,6 +663,12 @@ class VisualizationManager(ErrorHandlingMixin):
                         visible=True,
                     )
 
+            # Take the viewer over for the preprocessing run (worklist §4): hide
+            # the raw inputs and any other stage, leaving only the preprocessed
+            # layers. The run-all sink narrows this further with its two-phase
+            # beads+reference → cells isolation immediately after.
+            self.hide_other_layers([name for name, _, _ in specs])
+
         except Exception as e:
             error = self.create_error(
                 message="Failed to begin preprocessing stream",
@@ -835,6 +858,13 @@ class VisualizationManager(ErrorHandlingMixin):
             }
             setattr(self.data_manager, cfg['cache_attr'], cache)
 
+            # Take the viewer over for this stage (worklist §4): hide every other
+            # layer so a streamed run shows only its own output. The
+            # magnitude/vectors layers are created lazily on the first frame and
+            # come up visible as they stream in; hiding (not isolating) preserves
+            # any per-layer visibility the user kept across a re-run.
+            self.hide_other_layers([cfg['magnitude_layer'], cfg['vectors_layer']])
+
         except Exception as e:
             error = self.create_error(
                 message="Failed to begin vector-field stream",
@@ -954,6 +984,10 @@ class VisualizationManager(ErrorHandlingMixin):
             'downscale': downscale_factor,
             'ready': False,
         }
+        # Hide every non-stress layer for the duration of the run (worklist §4);
+        # the stress stacks are created on the first frame and come up visible as
+        # they stream in.
+        self.hide_other_layers(['Normal Stress XX', 'Normal Stress YY', 'Average Normal Stress'])
 
     def stream_stress_frame(self, frame_index: int, stress_tensor_frame: np.ndarray) -> None:
         """Render one freshly computed stress frame (XX, YY, average) and follow it live."""

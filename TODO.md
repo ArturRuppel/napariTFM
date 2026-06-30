@@ -3,13 +3,50 @@
 > Accomplished items are pruned (see git history for completed UI-redesign
 > slices P0–P8, the UI-Coherence roadmap, the BISM port, the 2026-06-29
 > batch/cancel/colorbar/sink work, the 2026-06-30 unified-logging (§1) +
-> per-position Export-to-CSV (§2) work, the §3 streaming-follows-active-
-> position work, and the §4 per-stage layer isolation during streaming). What
-> remains below is **open work only**, ranked easy-wins-first.
+> per-position Export-to-CSV (§2) work, and the §3 streaming-follows-active-
+> position work). What remains below is **open work only**, ranked
+> easy-wins-first.
 
 ---
 
 ## Ranked open work (2026-06-29)
+
+### 3b. Per-stage layer isolation during streaming  ·  DONE (2026-06-30)
+The `120d0a0` machinery only ever ran on the **run-all** path (`ViewerSink`
+calls `isolate_layers` per stage) — and it was provably correct there (drove the
+real `VisualizationManager` through the sink; isolation held at every
+transition). The gap was the **interactive per-stage Run buttons**: they stream
+via `begin_*_stream` + `stream_*_frame` and **never isolated at all**, so a
+direct stage run left every other layer visible ("everything bleeds in"). Only
+the previews isolated, which is why preview looked right and the run didn't.
+**Fix:** moved the takeover into the three streaming entry points themselves —
+`begin_vector_field_stream`, `begin_stress_stream`, `begin_preprocessing_stream`
+now hide non-stage layers, so both the interactive path and the sink isolate for
+free. Used a new `hide_other_layers()` (hides unrelated layers but, unlike
+`isolate_layers`, does **not** force-show the stage's own layers) so the
+deliberate "preserve per-layer visibility across a re-run" behavior survives — a
+magnitude layer the user hid stays hidden. Test-locked in
+`test_analysis_streaming.py`, `test_preprocessing_streaming.py`, and
+`test_preprocessing_ui_redesign.py`. **Distinct from preview** — preview still
+takes over via its own end-of-render `isolate_layers`, untouched.
+
+### 3c. Persist the preprocessed images  ·  DONE (2026-06-30)
+The actual gap was **interactive-path signal wiring**, not the batch write (the
+TODO's old "optional `save_cache`" diagnosis was stale — `batch_analysis.py`
+already writes the preprocessed TIFFs unconditionally since `e12731c`). The
+interactive persist machinery (`_widget.py::_persist_preprocessed_tiffs` + the
+`preprocessing` branch of `_persist_active_experiment`) was fully written **and
+test-locked** (`test_interactive_preprocessing_persists_tiffs`), but
+`connect_signals()` wired `preprocessing_completed` only to `refresh()` with a
+stale "nothing of its own to persist" comment — so a GUI preprocessing run wrote
+nothing to disk. The unit test hid it by calling `_on_stage_persisted` directly,
+never exercising the signal. **Fix:** connect `preprocessing_completed` →
+`_on_stage_persisted("preprocessing")`; added
+`test_preprocessing_completed_signal_persists_tiffs` driving the real signal as a
+regression guard. Verified end-to-end: by the time the signal fires the streamed
+arrays are filled in place in the data manager, so the persist reads real data.
+Closely related to the backlog "Load processed `.ntfm` back into memory on
+selection."
 
 ### 5. BISM as a selectable stress engine  ·  DONE (2026-06-30)
 ~~Replace MSM with BISM~~ → **added BISM alongside MSM** (user's call: keep MSM
@@ -76,6 +113,39 @@ parallel, **top positions first** (process in list order).
 
 ## Backlog
 
+### Dedup preprocessed-TIFF persistence (batch vs. interactive)
+The preprocessed-image save lives as **two independent implementations** that
+only share the low-level `save_calibrated_tiff` helper:
+`backend/batch_analysis.py::_execute_preprocessing` (lines ~724-742) and
+`widgets/_widget.py::_persist_preprocessed_tiffs`. Parity is currently held by
+hand — which is exactly how the §3c bug happened (one path was wired, the other
+sat dead). Collapse the interactive path so it calls into the batch's
+preprocessing-save orchestration rather than reimplementing it, so there's one
+place that knows how a position's preprocessed TIFFs get written. Pure tidy-up,
+no behaviour change.
+
+### Remove the export icon from the experiments list (now just a copy-file button)
+The per-row Export button no longer does anything beyond copying the position's
+OME-TIFF elsewhere, so it's redundant — remove the control **and its logic**:
+- `widgets/_experiments_list.py`: the `export_btn` (lines ~233-243), the
+  `_EXPORT_W` spacer column (`export` placeholder at ~992-994), the
+  `export_requested` signals (row + list, ~191/303) and their re-emit
+  (~1011), and the enable-on-done line (~277).
+- `widgets/_widget.py`: the `export_requested.connect(...)` wiring (~565) and the
+  `_on_export_experiment_data` handler (~1295).
+- Drop the `"export"` entry from `stage_action_icon` if nothing else uses it, and
+  any test that asserts `experiment_row_export_button`.
+
+### Preprocessing param-panel layout cleanup
+Tidy the preprocessing widget (`napariTFM/widgets/preprocessing_widget.py`):
+- **Shorten the double sliders** a bit (they're wider than they need to be).
+- **Remove rolling-ball radius** entirely — both the front-end control and the
+  back-end parameter/usage.
+- **Regroup the params** into rows: 1 row Intensity, 1 row Cell Intensity, 1 row
+  sigma + cell sigma side by side, 1 row registration method.
+- **Reorder the input-file rows** to: bead stack (top), reference stack, cell
+  stack, Masks. **Rename the layers** to `Beads`, `Reference`, `Cells`, `Masks`.
+
 ### Polish colorbar + progressive per-stage loading bar
 Two threads of viewer-legend / progress polish:
 - **Polish the colorbar** legend (spacing, label alignment, endpoint-number
@@ -113,3 +183,12 @@ The `mask` column records which pixels were zeroed (self-documenting).
   discarded irreversibly; only the `mask` column survives). No-op without a mask.
 - **Where.** Batch write step (`backend/batch_analysis.py` →
   `ntfm.results_to_ntfm`), a pre-write array op. Interactive/preview unaffected.
+
+### Make preview toggle-vs-one-shot legible in the icons
+    Preview is inconsistent across stages: some stages **toggle** preview (on/off,
+    persistent state) while others fire it as a **one-shot** action. The icons don't
+    distinguish the two, so the control's behavior isn't predictable from looking at
+    it. Make toggle-style previews **render as toggles** in the icon set (a
+    pressed/active state that reflects the on/off), distinct from the one-shot
+    (momentary action) icons — so the UI tells the user which kind of preview each
+    stage offers before they click.
