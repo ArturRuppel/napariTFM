@@ -5,9 +5,9 @@ from typing import Dict, Any, Tuple, List, Optional
 import cv2
 import napari
 import numpy as np
-from matplotlib import pyplot as plt
 
 from napariTFM.utilities.error_handling import ErrorSeverity, ErrorHandlingMixin
+from napariTFM.utilities.vector_field import build_frame_vectors, upscale_field
 from napariTFM.utilities.viewer_colorbar import ViewerColorbarManager
 
 logger = logging.getLogger(__name__)
@@ -134,15 +134,8 @@ class VisualizationManager(ErrorHandlingMixin):
                 layer.visible = snapshot[layer.name]
 
     def _upscale_field(self, field: np.ndarray, downscale_factor: int) -> np.ndarray:
-        """Upscale a vector field for visualization."""
-        if downscale_factor <= 1:
-            return field
-
-        return cv2.resize(
-            field,
-            (field.shape[1] * downscale_factor, field.shape[0] * downscale_factor),
-            interpolation=cv2.INTER_LINEAR
-        )
+        """Upscale a vector field for visualization (shared with headless export)."""
+        return upscale_field(field, downscale_factor)
 
     def clear_disp_vector_cache(self) -> None:
         """Clear displacement vector cache from data manager."""
@@ -216,49 +209,7 @@ class VisualizationManager(ErrorHandlingMixin):
         Tuple[np.ndarray, np.ndarray]
             Vector data and colors arrays
         """
-        h, w = flow_scaled.shape[:2]
-        stride = max(1, stride)
-
-        # Create regular grid of positions
-        y_points = np.arange(stride // 2, h - stride // 2, stride)
-        x_points = np.arange(stride // 2, w - stride // 2, stride)
-        Y, X = np.meshgrid(y_points, x_points, indexing='ij')
-
-        # Get flow components
-        U = flow_scaled[Y, X, 0]  # x-component
-        V = flow_scaled[Y, X, 1]  # y-component
-
-        # Calculate original magnitudes for coloring
-        orig_u = original_flow[Y, X, 0]
-        orig_v = original_flow[Y, X, 1]
-        magnitudes = np.sqrt(orig_u ** 2 + orig_v ** 2)
-
-        # Flatten the coordinate arrays
-        Y_flat = Y.flatten()
-        X_flat = X.flatten()
-        U_flat = U.flatten()
-        V_flat = V.flatten()
-
-        # Create vectors array in correct format (N, 2, 2)
-        N = len(Y_flat)
-        vectors = np.zeros((N, 2, 2))  # (N, 2, 2) for N vectors with start/end points in 2D
-
-        # Start points
-        vectors[:, 0, 1] = X_flat  # x coordinates
-        vectors[:, 0, 0] = Y_flat  # y coordinates
-
-        vectors[:, 1, 1] = U_flat
-        vectors[:, 1, 0] = V_flat
-
-        # Create colors based on magnitudes
-        max_mag = d_max if d_max is not None else magnitudes.max()
-        if max_mag > 0:
-            normalized_magnitudes = np.clip(magnitudes.flatten() / max_mag, 0, 1)
-            colors = plt.cm.get_cmap(colormap)(normalized_magnitudes)
-        else:
-            colors = plt.cm.get_cmap(colormap)(np.zeros(N))
-
-        return vectors, colors
+        return build_frame_vectors(flow_scaled, original_flow, stride, d_max, colormap)
 
     def get_displacement_statistics(self, flow: np.ndarray) -> dict:
         """Calculate displacement statistics."""

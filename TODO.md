@@ -111,20 +111,45 @@ adaptation) is all in place now — it's just the selector function + one dropdo
 entry. Worth it only if MAP turns out finicky on some datasets; MAP is the more
 coherent default since it does double duty with the §5 uncertainty follow-up.
 
-### 7. napari-native visualization engine  ·  L  (after #5)
-Swap the bespoke renderer for a **napari-native** path built on
-[`napari-movie-maker`](/home/aruppel/Projects/napari-movie-maker), so viewer and
-exported figures/movies share one rendering path.
-- Headless renderer already DONE in napari-movie-maker (`export_movie_headless` /
-  `offscreen_viewer` / `ensure_offscreen_qt`). **Deployment:** napari renders via
-  OpenGL — run under a GL-capable display (`xvfb-run -a python …`; bare
-  `QT_QPA_PLATFORM=offscreen` aborts). Add `xvfb` to runtime/CI.
-- napariTFM side: map each `save_*` product to an `export_movie_headless` call —
-  a `configure(viewer)` that adds image + vectors/quiver layers with matching
-  colormaps, then sweeps the time axis. After #5 the FE-mesh case is gone, so
-  every overlay maps cleanly to a napari layer.
-- Retires `backend/batch_analysis_visualizations.py` (`BatchVisualizationSaver`,
-  matplotlib + `imageio.mimsave` per stage).
+### 7. visualization engine — napari live viewer + matplotlib export  ·  DONE (2026-06-30)
+**Final decision (2026-06-30): the export renders with matplotlib; napari stays
+the live interactive viewer only.** The original §7 goal was one renderer (napari
+for both), and that was built and worked — but it forced a GL canvas, which on a
+desktop pops a window, and going windowless needs a virtual display (xvfb /
+subprocess), which is **Linux-only and not pip-installable**. For a tool shipping
+to PLOS/JOSS users (mostly Mac/Windows) that's the wrong foundation. A
+side-by-side also showed napari's "punch" was largely **additive blending
+oversaturating the magnitude map** (arrow brightness summed into the colormap it's
+meant to encode) — matplotlib, done well, is the cleaner *and* more faithful
+publication artifact, plus vector-grade and fully portable. So the napari-export
+detour (offscreen viewer → vendored movie-maker → xvfb subprocess) was torn out.
+- **`backend/batch_visualizations.py`** (`BatchVisualizationSaver`) renders each
+  product with matplotlib's **Agg** backend — windowless, no display, no GL, no
+  xvfb — straight to **`.mp4`** (libx264/yuv420p via `imageio-ffmpeg`, which
+  bundles ffmpeg on every OS; canvas padded to even dims). Same per-stage `save_*`
+  surface, renders inline (no subprocess/flush). Products: displacement_map
+  (viridis + white arrows), force_map (inferno + white arrows), force_cell_overlay
+  (gray inverted cells + magnitude-coloured arrows), sigma_xx/yy/normal_stress
+  (seismic). Sleek inline vertical colorbar mirrors the viewer's look.
+- **Consistency via shared geometry, not a shared renderer.** Arrows come from the
+  same `utilities/vector_field.py: build_frame_vectors`/`upscale_field` the live
+  `VisualizationManager` uses (verified: same directions/scale as napari on the
+  same field), with the same colormaps + contrast + arrow-scale convention. Only
+  the final raster differs (Agg vs GL).
+- **Mesh dropped** (user's call): FE-mesh GIF was an MSM-only diagnostic. Removed
+  from `_run_config.py` + `_handle_visualization`. The **interactive** "Preview
+  mesh" button (`msm_widget`/`_icons`/`_widget`) is untouched.
+- **New dep:** `imageio-ffmpeg` (added to pyproject; portable, bundles ffmpeg).
+  **No system deps** — xvfb is *not* required (the whole napari-export path that
+  needed it was removed). `matplotlib` was already a dep.
+- Test-locked in `test_batch_visualizations.py` (Agg → no display needed): shared
+  vector math + every product writes an mp4 with right frame count / distinct
+  frames / stress-component gating / single-frame inputs. Live-path streaming /
+  run-config / batch suites green.
+- **Arrow-colour default is white** on the magnitude maps (cleanest/most faithful
+  per the comparison), magnitude-coloured on the gray cell overlay. The
+  additive-glow look is reproducible in matplotlib (additive RGB compositing) if
+  ever wanted — not the default.
 
 ### 8. Parallel batch workers  ·  L
 Batch config gains a **number-of-workers** parameter; positions are processed in

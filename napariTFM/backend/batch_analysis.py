@@ -18,7 +18,7 @@ import tifffile
 import yaml
 from skimage.transform import resize
 
-from napariTFM.backend.batch_analysis_visualizations import BatchVisualizationSaver
+from napariTFM.backend.batch_visualizations import BatchVisualizationSaver
 from napariTFM.backend.displacement_analysis import (
     DisplacementResult,
     calculate_displacement_field,
@@ -1212,7 +1212,7 @@ class BatchAnalysis:
         viz_map = {
             'displacement': 'displacement_map',
             'force': ['force_map', 'force_cell_overlay'],
-            'stress': ['sigma_xx', 'sigma_yy', 'normal_stress', 'mesh']
+            'stress': ['sigma_xx', 'sigma_yy', 'normal_stress']
         }
 
         viz_flags = viz_map.get(step, [])
@@ -1271,12 +1271,6 @@ class BatchAnalysis:
                         plot_sigma_yy=self.config['visualizations']['sigma_yy'],
                         plot_normal_stress=self.config['visualizations']['normal_stress']
                     )
-
-                # BISM is mesh-free (data.nodes is None); only the FEM MSM engine
-                # has a mesh to render.
-                if self.config['visualizations']['mesh'] and getattr(data, 'nodes', None) is not None:
-                    print("Generating mesh visualization...")
-                    viz_saver.save_mesh_visualization(data)
 
         except Exception as e:
             print(f"Error generating {step} visualization: {str(e)}")

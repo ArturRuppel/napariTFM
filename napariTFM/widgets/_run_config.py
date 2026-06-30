@@ -22,7 +22,6 @@ _VISUALIZATIONS = {
     "sigma_xx": True,
     "sigma_yy": True,
     "normal_stress": True,
-    "mesh": True,
 }
 
 # Masks are always supplied externally, so no mask-creation parameters here.

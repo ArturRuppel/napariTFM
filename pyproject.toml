@@ -37,6 +37,7 @@ dependencies = [
     "gmsh>=4.13.1",
     "numba>=0.60.0",
     "imageio>=2.36.1",
+    "imageio-ffmpeg>=0.5.1",
     "matplotlib>=3.9.4",
     "qtpy>=2.4.1",
     "qtrangeslider>=0.1.5",
