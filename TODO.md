@@ -123,17 +123,38 @@ detour (offscreen viewer → vendored movie-maker → xvfb subprocess) was torn 
   additive-glow look is reproducible in matplotlib (additive RGB compositing) if
   ever wanted — not the default.
 
-### 8. Parallel batch workers  ·  L
-Batch config gains a **number-of-workers** parameter; positions are processed in
-parallel, **top positions first** (process in list order).
-- Decision: **workers compute, viewer follows one.** Workers process positions in
-  parallel headless (no per-worker sink); the viewer streams/shows only the
-  top/selected position as results complete. Keeps §5's "viewer is an optional
-  sink" model intact — parallelism lives in the headless compute layer, the
-  single viewer never tries to show N positions at once.
-- Note the tension with the current synchronous-on-GUI-thread batch; this is the
-  most architectural item — design the worker pool + result hand-off before
-  coding.
+### 8. Parallel batch workers  ·  L  ·  DONE (2026-07-01)
+Batch config gains a **number-of-workers** spinbox (experiments-list toolbar,
+1..`os.cpu_count()`, default 1 = today's unchanged behavior); positions process
+in parallel, **top positions first** (FIFO submission order into the pool).
+- **Workers compute, viewer follows one**, as decided: `num_workers > 1` runs
+  each position headlessly (`sink=None`) on a real `ProcessPoolExecutor`
+  (`spawn` context — forking a GUI process with live Qt/BLAS/OpenMP threads is
+  a deadlock hazard). `start_parallel`/`poll_parallel_progress`
+  (`backend/batch_analysis.py`) are the non-blocking pair a `QTimer` drives
+  from `_widget.py`, so the GUI thread never freezes for the run's duration.
+  The viewer follows the selected row, else the topmost folder, by reusing the
+  existing "load `.ntfm` on selection" path once that position's worker
+  reports done — no live cross-process frame streaming. Cancellation cancels
+  only not-yet-started futures; in-flight workers finish naturally (no
+  force-kill, no torn `.ntfm` writes).
+- Manual row clicks during a parallel run go through the existing, unmodified
+  selection path — clicking any row, finished or not, shows current disk
+  truth ("scrub through existing data"), confirmed as the intended UX.
+- `num_workers <= 1` (default) is the exact pre-existing synchronous/live-
+  streaming path, verified byte-identical — zero regression risk for ordinary
+  batch runs.
+- Known, deliberately-scoped trade-offs: the per-stage progress bar doesn't
+  fill frame-by-frame during a parallel run (only reconciles when the
+  followed position completes or the run ends); no executor/timer teardown if
+  the widget is closed mid-run (no existing teardown hook to mirror);
+  `num_workers` is in-memory GUI state only, not persisted to the experiment-
+  series file (unlike `disabled_stages`/`processed_root`).
+- Tests: mocked-executor unit tests (`test_batch_parallel.py`) plus one real,
+  unmocked `ProcessPoolExecutor` integration test
+  (`test_batch_parallel_real_pool.py`) proving the actual multiprocessing
+  round-trip (spawn, pickling, subprocess execution, result hand-off) works,
+  not just the mocked simulation of it. 575 passed.
 
 ---
 
