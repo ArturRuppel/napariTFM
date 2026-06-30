@@ -176,7 +176,10 @@ class CollapsibleSection(QWidget):
         return self._toggle.isChecked()
 
     def expand(self) -> None:
-        self._toggle.setChecked(True)
+        self.set_expanded(True)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._toggle.setChecked(expanded)
 
     def _on_toggled(self, checked: bool) -> None:
         self._toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)

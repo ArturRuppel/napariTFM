@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from qtpy.QtWidgets import QApplication
+from qtpy.QtWidgets import QApplication, QLabel
 
 from napariTFM.widgets._experiments_list import (
     MiniRail,
@@ -313,8 +313,8 @@ def test_commit_adds_discovered_with_nesting_columns(app, tmp_path):
     records = widget.experiment_records()
     assert len(records) == 1
     # Each nesting level under the discovery root becomes a column.
-    assert records[0]["columns"] == {"Level 1": "Ctrl", "Level 2": "pos_00"}
-    assert widget.column_names() == ["Level 1", "Level 2"]
+    assert records[0]["columns"] == {"Column 1": "Ctrl", "Column 2": "pos_00"}
+    assert widget.column_names() == ["Column 1", "Column 2"]
     assert records[0]["input_files"] == {
         "beads": "beads.tif",
         "reference": "reference.tif",
@@ -331,10 +331,10 @@ def test_commit_columns_pad_to_max_nesting_depth(app, tmp_path):
     widget.file_name_inputs["masks"].setText("")
     widget.discover(tmp_path)
     widget.commit_discovered()
-    assert widget.column_names() == ["Level 1", "Level 2"]
+    assert widget.column_names() == ["Column 1", "Column 2"]
     by_leaf = {Path(r["path"]).name: r["columns"] for r in widget.experiment_records()}
-    assert by_leaf["pos_00"] == {"Level 1": "Ctrl", "Level 2": "pos_00"}
-    assert by_leaf["solo"] == {"Level 1": "solo", "Level 2": ""}
+    assert by_leaf["pos_00"] == {"Column 1": "Ctrl", "Column 2": "pos_00"}
+    assert by_leaf["solo"] == {"Column 1": "solo", "Column 2": ""}
 
 
 def test_commit_button_enables_only_after_discovery(app, tmp_path):
@@ -345,6 +345,79 @@ def test_commit_button_enables_only_after_discovery(app, tmp_path):
     assert widget.commit_btn.isEnabled() is True
     widget.commit_discovered()
     assert widget.commit_btn.isEnabled() is False
+
+
+def test_discover_renders_preview_rows_in_table(app, tmp_path):
+    _make_qualifying(tmp_path, "a", "b")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)
+    assert len(widget._preview_rows) == 2
+    assert all(row.is_preview for row in widget._preview_rows)
+    # Preview rows are not committed rows.
+    assert widget.experiments() == []
+
+
+def test_discover_again_replaces_rather_than_merges_preview(app, tmp_path):
+    # Two non-overlapping roots (sibling subfolders of tmp_path) — discover()
+    # scans recursively, so nesting one root inside the other would make the
+    # first call legitimately find both folders, masking the replace behavior
+    # this test targets.
+    first_root = tmp_path / "first"
+    _make_qualifying(first_root, "a")
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    _make_qualifying(other_root, "z")
+    widget = ExperimentsList()
+    widget.discover(first_root)
+    assert len(widget._preview_rows) == 1
+    widget.discover(other_root)
+    assert len(widget._preview_rows) == 1
+    assert Path(widget._preview_rows[0].path).name == "z"
+
+
+def test_preview_row_click_toggles_selection(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)
+    row = widget._preview_rows[0]
+    row.clicked.emit(row.path, 0)
+    assert row.path in widget._discovered_selected
+    assert widget.delete_btn.isEnabled() is True
+    row.clicked.emit(row.path, 0)
+    assert row.path not in widget._discovered_selected
+    assert widget.delete_btn.isEnabled() is False
+
+
+def test_delete_selected_removes_preview_rows_before_committing(app, tmp_path):
+    _make_qualifying(tmp_path, "a", "b")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)
+    row_to_drop = widget._preview_rows[0]
+    row_to_drop.clicked.emit(row_to_drop.path, 0)
+    widget.delete_selected()
+    assert len(widget._preview_rows) == 1
+    assert len(widget.discovered()) == 1
+    # Committed table untouched.
+    assert widget.experiments() == []
+
+
+def test_commit_discovered_clears_preview_rows_and_hardens(app, tmp_path):
+    _make_qualifying(tmp_path, "Ctrl/pos_00")
+    widget = ExperimentsList()
+    widget.file_name_inputs["cells"].setText("")
+    widget.file_name_inputs["masks"].setText("")
+    widget.discover(tmp_path)
+    assert len(widget._preview_rows) == 1
+    row = widget._preview_rows[0]
+    row.clicked.emit(row.path, 0)  # select it
+    widget.commit_discovered()
+    assert widget._preview_rows == []
+    assert len(widget._rows) == 1
+    assert widget._rows[0].is_preview is False
+    # The stale preview-row selection must not leak past commit (it would
+    # otherwise keep the delete button/keyboard shortcut wrongly armed for a
+    # row that no longer exists as a preview).
+    assert widget._discovered_selected == set()
 
 
 def test_refresh_statuses_calls_status_fn_for_each_row(app):
@@ -584,10 +657,10 @@ def test_delete_button_enables_only_with_a_selection(app):
     assert widget.delete_btn.isEnabled() is True
 
 
-def test_column_header_has_one_editable_field_per_level(app):
+def test_column_header_has_one_editable_field_per_column(app):
     widget = ExperimentsList()
-    widget.add_folders(["/data/a"], columns={"Level 1": "Ctrl", "Level 2": "pos_00"})
-    assert [f.text() for f in widget._header_fields] == ["Level 1", "Level 2"]
+    widget.add_folders(["/data/a"], columns={"Column 1": "Ctrl", "Column 2": "pos_00"})
+    assert [f.text() for f in widget._header_fields] == ["Column 1", "Column 2"]
 
 
 # ── styling fidelity (mockup v2 aggregation layer) ──────────────────────
@@ -654,9 +727,78 @@ class _StubDM:
         self._cbs.append(cb)
 
     def set_output_dir(self, path):
-        self.output_dir = Path(path)
+        self.output_dir = Path(path) if path is not None else None
         for cb in self._cbs:
             cb()
+
+
+from napariTFM.widgets._collapsible_section import CollapsibleSection
+
+
+def test_setup_section_exists_and_starts_expanded(app):
+    widget = ExperimentsList()
+    assert isinstance(widget.setup_section, CollapsibleSection)
+    assert widget.setup_section.is_expanded is True
+
+
+def test_setup_section_holds_calibration_input_files_and_output_dir(app):
+    widget = ExperimentsList(parameter_manager=_StubPM(), data_manager=_StubDM())
+    # All three groups of fields/buttons still exist, now built by the setup
+    # section rather than two separate top-level layouts.
+    assert "pixel_size" in widget.calibration_controls
+    assert "beads" in widget.file_name_inputs
+    assert widget.choose_output_dir_btn is not None
+
+
+def test_setup_section_auto_collapses_after_first_commit(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    assert widget.setup_section.is_expanded is True
+    widget.discover(tmp_path)
+    widget.commit_discovered()
+    assert widget.setup_section.is_expanded is False
+
+
+def test_setup_section_does_not_collapse_while_list_stays_empty(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)  # staged but not committed
+    assert widget.setup_section.is_expanded is True
+
+
+def test_setup_section_is_manually_reexpandable_after_auto_collapse(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)
+    widget.commit_discovered()
+    assert widget.setup_section.is_expanded is False
+    widget.setup_section.set_expanded(True)
+    assert widget.setup_section.is_expanded is True
+
+
+def test_loading_records_collapses_setup_section(app):
+    widget = ExperimentsList()
+    assert widget.setup_section.is_expanded is True
+    widget.set_records([{"path": "/data/a", "input_files": {}, "columns": {}}])
+    assert widget.setup_section.is_expanded is False
+
+
+def test_setup_section_reexpands_when_list_becomes_empty(app, tmp_path):
+    _make_qualifying(tmp_path, "a")
+    widget = ExperimentsList()
+    widget.discover(tmp_path)
+    widget.commit_discovered()
+    assert widget.setup_section.is_expanded is False
+    widget.set_experiments([])
+    assert widget.setup_section.is_expanded is True
+
+
+def test_setup_section_reexpands_when_records_loaded_empty(app):
+    widget = ExperimentsList()
+    widget.set_records([{"path": "/data/a", "input_files": {}, "columns": {}}])
+    assert widget.setup_section.is_expanded is False
+    widget.set_records([])
+    assert widget.setup_section.is_expanded is True
 
 
 def test_experiments_list_owns_calibration_controls(app):
@@ -682,12 +824,34 @@ def test_calibration_field_syncs_from_parameter_changed(app):
     assert float(widget.calibration_controls["frame_interval"].text()) == 2.5
 
 
-def test_experiments_list_tracks_output_directory(app, tmp_path):
+def test_output_dir_starts_as_unset_add_affordance(app):
+    widget = ExperimentsList(data_manager=_StubDM())
+    widget.show()
+    assert widget.output_dir_label.isVisible() is False
+    assert widget.choose_output_dir_btn.text() == "Add custom output directory"
+    assert widget.clear_output_dir_btn.isVisible() is False
+
+
+def test_output_dir_shows_path_and_clear_button_once_set(app, tmp_path):
     dm = _StubDM()
     widget = ExperimentsList(data_manager=dm)
-    assert widget.output_dir_label.text() == "No output directory"
+    widget.show()  # isVisible() reflects ancestor visibility; must actually show
     dm.set_output_dir(tmp_path)
+    assert widget.output_dir_label.isVisible() is True
     assert widget.output_dir_label.text() == str(tmp_path)
+    assert widget.clear_output_dir_btn.isVisible() is True
+    assert widget.choose_output_dir_btn.text() == "Change output directory"
+
+
+def test_clear_output_dir_resets_manager_and_label(app, tmp_path):
+    dm = _StubDM()
+    widget = ExperimentsList(data_manager=dm)
+    widget.show()
+    dm.set_output_dir(tmp_path)
+    widget._clear_output_dir()
+    assert dm.output_dir is None
+    assert widget.output_dir_label.isVisible() is False
+    assert widget.choose_output_dir_btn.text() == "Add custom output directory"
 
 
 def test_apply_output_dir_sets_manager_and_emits(app, tmp_path):
@@ -705,41 +869,31 @@ def test_output_dir_button_has_expected_object_name(app):
     assert widget.choose_output_dir_btn.objectName() == "experiments_output_dir_button"
 
 
-def test_experiments_list_starts_expanded(app):
+def test_experiments_panel_has_no_collapse_chrome(app):
     widget = ExperimentsList()
-    assert widget.is_collapsed() is False
-    assert widget._body.isHidden() is False
-    assert widget._header_summary.isHidden() is True
+    assert not hasattr(widget, "collapse_btn")
+    assert not hasattr(widget, "toggle_collapsed")
+    assert not hasattr(widget, "set_collapsed")
+    assert not hasattr(widget, "is_collapsed")
 
 
-def test_toggle_collapsed_folds_body_and_shows_summary(app):
+def test_experiments_label_is_present_and_plain(app):
     widget = ExperimentsList()
-    widget.set_experiments(["/data/a", "/data/b"])
-
-    widget.toggle_collapsed()
-    assert widget.is_collapsed() is True
-    assert widget._body.isHidden() is True
-    # The header keeps a compact count so the single folded row stays informative.
-    assert widget._header_summary.isHidden() is False
-    assert widget._header_summary.text() == "2 experiments"
-
-    widget.toggle_collapsed()
-    assert widget.is_collapsed() is False
-    assert widget._body.isHidden() is False
-    assert widget._header_summary.isHidden() is True
+    label = widget.findChild(QLabel, "experiments_panel_label")
+    assert label is not None
+    assert label.text() == "Experiments"
 
 
-def test_collapsed_summary_tracks_experiment_count(app):
+def test_table_and_actions_are_always_visible_regardless_of_row_count(app):
     widget = ExperimentsList()
-    widget.set_collapsed(True)
-    assert widget._header_summary.text() == "0 experiments"
+    widget.show()  # isVisible() reflects ancestor visibility; must actually show
+    # No collapse toggle exists, so the action row is always shown — only the
+    # scrollable rows region itself hides/shows based on row count (existing
+    # _update_table_visibility behavior, unchanged by this task).
+    assert widget.add_btn.isVisible() is True
+    assert widget.commit_btn.isVisible() is True
     widget.set_experiments(["/data/a"])
-    assert widget._header_summary.text() == "1 experiment"
-
-
-def test_collapse_button_has_expected_object_name(app):
-    widget = ExperimentsList()
-    assert widget.collapse_btn.objectName() == "experiments_collapse_button"
+    assert widget.add_btn.isVisible() is True
 
 
 def test_num_workers_spinbox_defaults_to_one(app):

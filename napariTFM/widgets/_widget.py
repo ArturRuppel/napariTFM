@@ -7,7 +7,7 @@ import napari
 from qtpy.QtCore import Qt, QObject, QTimer
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox,
-    QHBoxLayout, QGridLayout, QSpinBox, QComboBox, QFileDialog, QCheckBox,
+    QHBoxLayout, QFrame, QSpinBox, QComboBox, QFileDialog, QCheckBox,
     QMenu, QToolButton, QApplication
 )
 
@@ -22,7 +22,8 @@ from napariTFM.widgets.stress_widget import StressWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec
 from napariTFM.widgets._stage_file_status import StageFileStatusRow
 from napariTFM.widgets._stage_section import StageSection
-from napariTFM.widgets._ui_style import title_style, stage_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, add_section_labeled_full_row, section_label_style, section_subheader_style, TIGHT_SPACING
+from napariTFM.widgets._ui_style import title_style, stage_accent, muted_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, add_section_labeled_full_row, section_label_style, section_subheader_style, TIGHT_SPACING
+from napariTFM.widgets._icons import stage_action_icon
 from napariTFM.widgets._param_controls import dslider, islider, rslider
 from superqt import QLabeledDoubleRangeSlider, QLabeledDoubleSlider, QLabeledSlider
 from napariTFM.widgets._experiments_list import ExperimentsList, PIPELINE_STAGES
@@ -497,8 +498,7 @@ class napariTFMWidget(QWidget):
         from qtpy.QtCore import QTimer
         QTimer.singleShot(0, install_filter_on_inputs)
 
-        # Give the dock a comfortable default/minimum width so the toolbar's
-        # three columns fit without truncating "Save Project" → "Save".
+        # Give the dock a comfortable default/minimum width for the panel body.
         self.setMinimumWidth(400)
 
         # Create scroll area for widgets
@@ -514,36 +514,41 @@ class napariTFMWidget(QWidget):
         container_layout.setContentsMargins(0, 0, 8, 0)
         container.setLayout(container_layout)
 
-        # Brand row + the Project/Parameters toolbar (the front door), laid out
-        # as a 3x2 grid: New / Load / Save Project on top, Load / Save Params /
-        # Reset below. Save Project is always Save-as; the lower row is presets.
+        # Brand row + the Project/Parameters toolbar (the front door), all in
+        # one row now: icon-only buttons, right-aligned opposite the title,
+        # grouped Project | Params | Reset with thin dividers between groups.
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title = QLabel("napariTFM")
         title.setStyleSheet(title_style())
         title_row.addWidget(title)
         title_row.addStretch()
+
+        self.new_project_btn = self._make_toolbar_button("new", "Start a new project")
+        self.load_project_btn = self._make_toolbar_button("load", "Load a project")
+        self.save_project_btn = self._make_toolbar_button("save", "Save project as…")
+        self.load_params_btn = self._make_toolbar_button("load", "Load parameters preset")
+        self.save_params_btn = self._make_toolbar_button("save", "Save parameters preset")
+        self.reset_params_btn = self._make_toolbar_button("reset", "Reset parameters")
+
+        for button in (self.new_project_btn, self.load_project_btn, self.save_project_btn):
+            title_row.addWidget(button)
+        title_row.addWidget(self._toolbar_divider())
+        for button in (self.load_params_btn, self.save_params_btn):
+            title_row.addWidget(button)
+        title_row.addWidget(self._toolbar_divider())
+        title_row.addWidget(self.reset_params_btn)
+
+        self._toolbar_icon_buttons = [
+            (self.new_project_btn, "new"),
+            (self.load_project_btn, "load"),
+            (self.save_project_btn, "save"),
+            (self.load_params_btn, "load"),
+            (self.save_params_btn, "save"),
+            (self.reset_params_btn, "reset"),
+        ]
+
         container_layout.addLayout(title_row)
-
-        self.new_project_btn = self._make_toolbar_button("New Project", "Start a new project")
-        self.load_project_btn = self._make_toolbar_button("Load Project", "Load a project")
-        self.save_project_btn = self._make_toolbar_button("Save Project", "Save project as…")
-        self.load_params_btn = self._make_toolbar_button("Load Params", "Load parameters preset")
-        self.save_params_btn = self._make_toolbar_button("Save Params", "Save parameters preset")
-        self.reset_params_btn = self._make_toolbar_button("Reset", "Reset parameters")
-
-        toolbar_grid = QGridLayout()
-        toolbar_grid.setContentsMargins(0, 0, 0, 0)
-        grid_buttons = (
-            self.new_project_btn, self.load_project_btn, self.save_project_btn,
-            self.load_params_btn, self.save_params_btn, self.reset_params_btn,
-        )
-        for _idx, _btn in enumerate(grid_buttons):
-            toolbar_grid.addWidget(_btn, _idx // 3, _idx % 3)
-        # Park all surplus width in a trailing empty column so the buttons stay
-        # compact and left-aligned instead of spreading out when the panel grows.
-        toolbar_grid.setColumnStretch(3, 1)
-        container_layout.addLayout(toolbar_grid)
 
         # Progressive-disclosure gate (G0/G1/G2). No project is open at launch.
         self._project_open = False
@@ -767,13 +772,20 @@ class napariTFMWidget(QWidget):
         self.refresh_stage_statuses()
         self._update_disclosure()
 
-    def _make_toolbar_button(self, text: str, tooltip: str) -> QToolButton:
-        """A compact auto-raised text button for the title-bar config toolbar."""
+    def _make_toolbar_button(self, icon_name: str, tooltip: str) -> QToolButton:
+        """A compact, icon-only, auto-raised button for the title-row toolbar."""
         button = QToolButton()
-        button.setText(text)
+        button.setIcon(stage_action_icon(icon_name, muted_accent(stage_accent("project"))))
         button.setToolTip(tooltip)
         button.setAutoRaise(True)
         return button
+
+    @staticmethod
+    def _toolbar_divider() -> QFrame:
+        divider = QFrame()
+        divider.setFrameShape(QFrame.VLine)
+        divider.setFrameShadow(QFrame.Sunken)
+        return divider
 
     def _confirm_discard(self) -> bool:
         """True if it's safe to clear the workspace (clean, no project open, or user said yes)."""
@@ -905,6 +917,9 @@ class napariTFMWidget(QWidget):
         for key, section in self._stage_sections_by_key.items():
             section.set_accent(stage_accent(key))
         self._apply_spine_neighbours()
+        toolbar_accent = muted_accent(stage_accent("project"))
+        for button, icon_name in self._toolbar_icon_buttons:
+            button.setIcon(stage_action_icon(icon_name, toolbar_accent))
 
     def _apply_spine_neighbours(self):
         """Give each stage's spine its neighbours' accents so the rail blends."""

@@ -3,7 +3,7 @@
 Each discovered experiment is one row. The columns are *derived from the folder
 nesting* under the chosen discovery root: every nesting level becomes a column
 and the folder name at that level is the row's value for it (root ``/data`` and
-folder ``/data/Ctrl/pos_00`` → ``Level 1 = Ctrl``, ``Level 2 = pos_00``). The
+folder ``/data/Ctrl/pos_00`` → ``Column 1 = Ctrl``, ``Column 2 = pos_00``). The
 column *names* are an editable, table-wide header; the *values* are read-only
 (they are the folder names). Rows are multi-selectable (Ctrl/Shift-click) and
 deletable.
@@ -31,6 +31,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from napariTFM.widgets._collapsible_section import CollapsibleSection
 from napariTFM.widgets._icons import stage_action_icon
 from napariTFM.widgets._stage_spine import _node_style
 from napariTFM.widgets._ui_style import (
@@ -71,9 +72,9 @@ def nesting_columns(folder: str | Path, root: str | Path) -> dict[str, str]:
     """Derive a row's columns from *folder*'s nesting under *root*.
 
     Every path component of *folder* relative to *root* becomes a column named
-    ``Level 1``, ``Level 2`` … (left to right) whose value is that component's
+    ``Column 1``, ``Column 2`` … (left to right) whose value is that component's
     folder name. A folder that is not actually under *root* (or equals it) falls
-    back to a single ``Level 1`` column holding the leaf folder name, so a row
+    back to a single ``Column 1`` column holding the leaf folder name, so a row
     always carries at least one column.
     """
     folder = Path(folder)
@@ -83,7 +84,7 @@ def nesting_columns(folder: str | Path, root: str | Path) -> dict[str, str]:
         parts = ()
     if not parts:
         parts = (folder.name,)
-    return {f"Level {i + 1}": part for i, part in enumerate(parts)}
+    return {f"Column {i + 1}": part for i, part in enumerate(parts)}
 
 
 def discover_experiment_folders(
@@ -190,10 +191,18 @@ class ExperimentRow(QWidget):
     selected = Signal(str)  # legacy single-select (kept for back-compat callers)
     clicked = Signal(str, int)  # path, modifier flag: 0 plain, 1 ctrl, 2 shift
 
-    def __init__(self, path: str, values: Optional[list[str]] = None, parent=None):
+    def __init__(
+        self,
+        path: str,
+        values: Optional[list[str]] = None,
+        parent=None,
+        *,
+        preview: bool = False,
+    ):
         super().__init__(parent)
         self._path = path
         self._selected = False
+        self._preview = preview
         # The row paints its own (styled) background — selected rows lift.
         self.setObjectName("experiment_row")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -227,6 +236,13 @@ class ExperimentRow(QWidget):
         self._chip.setStyleSheet(f"color: {experiment_status_color('queued')};")
         layout.addWidget(self._chip)
 
+        if self._preview:
+            # Nothing has run for a not-yet-committed folder — no status to show.
+            self.mini_rail.setVisible(False)
+            self._chip.setVisible(False)
+            for value_label in self._value_labels:
+                value_label.setStyleSheet(f"color: {TEXT_DIM}; font-style: italic;")
+
         # Apply the deselected resting style (row + name colors).
         self.set_selected(False)
 
@@ -238,6 +254,10 @@ class ExperimentRow(QWidget):
     def name(self) -> str:
         return Path(self._path).name
 
+    @property
+    def is_preview(self) -> bool:
+        return self._preview
+
     def is_selected(self) -> bool:
         return self._selected
 
@@ -248,9 +268,10 @@ class ExperimentRow(QWidget):
             f"background: {accent};" if on else "background: transparent;"
         )
         self.setStyleSheet(experiment_row_style(on, accent))
-        color = experiment_name_color(on)
-        for label in self._value_labels:
-            label.setStyleSheet(f"color: {color};")
+        if not self._preview:
+            color = experiment_name_color(on)
+            for label in self._value_labels:
+                label.setStyleSheet(f"color: {color};")
 
     def set_stage_statuses(self, statuses: dict[str, str]) -> None:
         self.mini_rail.set_statuses(statuses)
@@ -303,6 +324,7 @@ class ExperimentsList(QWidget):
         # Ordered, editable column names shared by every row (the table header).
         self._column_names: list[str] = []
         self._rows: list[ExperimentRow] = []
+        self._preview_rows: list[ExperimentRow] = []
         self._active: Optional[str] = None
         # Multi-selection for delete (Ctrl/Shift-click); ``_anchor`` is the
         # range-select pivot (the last plainly-clicked row).
@@ -314,51 +336,30 @@ class ExperimentsList(QWidget):
         layout.setSpacing(COMPACT_SPACING)
         self.setLayout(layout)
 
-        # Header: a collapse caret, the section label, and a compact summary
-        # that only earns its place while the list is folded away.
-        self._collapsed = False
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        self.collapse_btn = QToolButton()
-        self.collapse_btn.setObjectName("experiments_collapse_button")
-        self.collapse_btn.setArrowType(Qt.DownArrow)
-        self.collapse_btn.setAutoRaise(True)
-        self.collapse_btn.setToolTip("Collapse the experiments list")
-        self.collapse_btn.clicked.connect(self.toggle_collapsed)
-        header.addWidget(self.collapse_btn)
-        label = QLabel("EXPERIMENTS")
+        # A plain, non-interactive label — the table below is always visible,
+        # so there's nothing to fold away (unlike the Setup section above it).
+        label = QLabel("Experiments")
+        label.setObjectName("experiments_panel_label")
         label.setStyleSheet(f"color: {TEXT_MID}; font-weight: bold;")
-        header.addWidget(label)
-        self._header_summary = QLabel("")
-        self._header_summary.setObjectName("experiments_header_summary")
-        self._header_summary.setStyleSheet(f"color: {TEXT_DIM};")
-        self._header_summary.setVisible(False)
-        header.addSpacing(COMPACT_SPACING)
-        header.addWidget(self._header_summary)
-        header.addStretch()
+        layout.addWidget(label)
 
-        layout.addLayout(header)
-
-        # Everything below the header lives in one collapsible body, so folding
-        # the list is a single setVisible on the container.
-        self._body = QWidget()
-        self._body.setObjectName("experiments_body")
         body_layout = QVBoxLayout()
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(COMPACT_SPACING)
-        self._body.setLayout(body_layout)
-        layout.addWidget(self._body)
+        layout.addLayout(body_layout)
 
-        # Project-level calibration + output directory (the aggregation layer
-        # owns these now; the old Project section is gone).
-        body_layout.addLayout(self._build_project_strip())
+        # Setup: calibration, input-file names, optional output dir — one
+        # collapsible block, auto-collapsing after the first commit.
+        self.setup_section = self._build_setup_section()
+        body_layout.addWidget(self.setup_section)
 
         # Staging for the two-step Discover→Commit flow (D2). The root is kept so
         # committed rows can derive their columns from the nesting under it.
         self._discovered: list[str] = []
         self._discover_root: Optional[str] = None
-
-        body_layout.addLayout(self._build_config_header())
+        # Preview-row selection (separate from the committed-row selection
+        # machinery — preview rows have no "active"/tuning concept).
+        self._discovered_selected: set[str] = set()
 
         self._staging_label = QLabel("")
         self._staging_label.setStyleSheet(f"color: {TEXT_DIM};")
@@ -454,15 +455,29 @@ class ExperimentsList(QWidget):
             self._parameter_manager.parameter_changed.connect(self._sync_parameter)
         if self._data_manager is not None:
             self._data_manager.add_change_callback(self._sync_output_dir)
-            self._sync_output_dir()
 
-    # -- project-level calibration + output (the aggregation layer) -------
-    def _build_project_strip(self) -> QVBoxLayout:
-        """Pixel/frame calibration + an output-directory picker, themed."""
+    # -- setup: calibration + input-file names + optional output dir ------
+    def _build_setup_section(self) -> CollapsibleSection:
+        """The one-time-per-batch config: calibration, input names, output dir.
+
+        Wrapped in a CollapsibleSection that starts expanded and auto-collapses
+        the first time the experiment table goes from empty to non-empty (see
+        ``set_experiments``/``set_records``) — these fields rarely change
+        between batches, so hiding them declutters the common case while
+        staying one click away.
+        """
+        inner = QWidget()
         box = QVBoxLayout()
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(COMPACT_SPACING)
+        box.addLayout(self._build_calibration_row())
+        box.addLayout(self._build_config_header())
+        box.addLayout(self._build_output_dir_row())
+        inner.setLayout(box)
+        return CollapsibleSection("Setup", inner, expanded=True, title_color=TEXT_MID)
 
+    def _build_calibration_row(self) -> QHBoxLayout:
+        """Pixel size + frame interval, free-text fields with a soft validator."""
         self.calibration_controls: dict[str, QLineEdit] = {}
         cal = QHBoxLayout()
         cal.setContentsMargins(0, 0, 0, 0)
@@ -491,24 +506,39 @@ class ExperimentsList(QWidget):
             cell.addWidget(caption)
             cell.addWidget(field)
             cal.addLayout(cell, 1)
-        box.addLayout(cal)
+        return cal
 
+    def _build_output_dir_row(self) -> QHBoxLayout:
+        """Optional output-directory override — last in Setup, after inputs."""
         out = QHBoxLayout()
         out.setContentsMargins(0, 0, 0, 0)
         self.choose_output_dir_btn = QToolButton()
         self.choose_output_dir_btn.setObjectName("experiments_output_dir_button")
-        self.choose_output_dir_btn.setToolTip("Choose output directory")
+        self.choose_output_dir_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.choose_output_dir_btn.setIcon(
-            stage_action_icon("files", muted_accent(stage_accent("project")))
+            stage_action_icon("plus", muted_accent(stage_accent("project")))
         )
         self.choose_output_dir_btn.clicked.connect(self._choose_output_dir)
-        self.output_dir_label = QLabel("No output directory")
+        self.output_dir_label = QLabel("")
         self.output_dir_label.setObjectName("project_output_dir_label")
         self.output_dir_label.setStyleSheet(f"color: {TEXT_DIM};")
+        self.clear_output_dir_btn = QToolButton()
+        self.clear_output_dir_btn.setObjectName("experiments_clear_output_dir_button")
+        self.clear_output_dir_btn.setText("×")
+        self.clear_output_dir_btn.setToolTip("Remove custom output directory")
+        self.clear_output_dir_btn.clicked.connect(self._clear_output_dir)
         out.addWidget(self.choose_output_dir_btn)
         out.addWidget(self.output_dir_label, 1)
-        box.addLayout(out)
-        return box
+        out.addWidget(self.clear_output_dir_btn)
+        self._sync_output_dir()
+        return out
+
+    def _clear_output_dir(self) -> None:
+        """Reset to the default per-experiment output location (unset override)."""
+        if self._data_manager is None:
+            return
+        self._data_manager.set_output_dir(None)
+        self.output_dir_changed.emit()
 
     def _commit_parameter(self, name: str, control: QLineEdit) -> None:
         """Parse a free-text calibration field; revert to last good value if junk."""
@@ -551,12 +581,22 @@ class ExperimentsList(QWidget):
     def _sync_output_dir(self) -> None:
         path = getattr(self._data_manager, "output_dir", None)
         if path is None:
-            self.output_dir_label.setText("No output directory")
+            self.output_dir_label.setText("")
+            self.output_dir_label.setVisible(False)
             self.output_dir_label.setToolTip("")
+            self.choose_output_dir_btn.setText("Add custom output directory")
+            self.choose_output_dir_btn.setToolTip(
+                "Optional — overrides the default per-experiment output location"
+            )
+            self.clear_output_dir_btn.setVisible(False)
             return
         text = str(path)
         self.output_dir_label.setText(text)
+        self.output_dir_label.setVisible(True)
         self.output_dir_label.setToolTip(text)
+        self.choose_output_dir_btn.setText("Change output directory")
+        self.choose_output_dir_btn.setToolTip("Choose a different output directory")
+        self.clear_output_dir_btn.setVisible(True)
 
     # -- input-file config (the discovery requirements) ------------------
     def _build_config_header(self) -> QVBoxLayout:
@@ -656,13 +696,18 @@ class ExperimentsList(QWidget):
         Folder-presence only — required inputs are beads + reference (cells is
         optional and excluded from the requirement). The root is remembered so
         committed rows can derive their columns from the nesting under it.
-        Staging never mutates the list; the second Commit step does.
+        Staging never mutates the committed list; the second Commit step does.
+        The staged set renders immediately as dimmed preview rows in the table;
+        a second call to ``discover`` *replaces* the current preview set rather
+        than merging into it.
         """
         cfg = self.input_file_config()
         required = [cfg.get("beads"), cfg.get("reference")]
         self._discover_root = str(root)
         self._discovered = discover_experiment_folders(root, required)
+        self._discovered_selected = set()
         self._update_staging()
+        self._rebuild_table()
         return list(self._discovered)
 
     def discovered(self) -> list[str]:
@@ -674,8 +719,9 @@ class ExperimentsList(QWidget):
             return
         root = self._discover_root
         pairs = [(path, nesting_columns(path, root)) for path in self._discovered]
-        self._add_records(pairs, self.input_file_config())
         self._discovered = []
+        self._discovered_selected = set()
+        self._add_records(pairs, self.input_file_config())
         self._update_staging()
 
     def _update_staging(self) -> None:
@@ -750,8 +796,11 @@ class ExperimentsList(QWidget):
         self.experiments_changed.emit()
         # Adding rows to a previously-empty list should preload an active
         # position rather than leaving the list with no selection.
-        if was_empty and self._paths:
+        if not self._paths:
+            self.setup_section.set_expanded(True)
+        elif was_empty:
             self.set_active(self._paths[0])
+            self.setup_section.set_expanded(False)
 
     def _add_records(self, pairs, input_files: Optional[dict] = None) -> None:
         """Append ``(path, columns)`` rows, extending the shared column header.
@@ -824,6 +873,7 @@ class ExperimentsList(QWidget):
         self.refresh_statuses()
         self._update_meta()
         self._update_delete_btn()
+        self.setup_section.set_expanded(not self._paths)
         self.experiments_changed.emit()
 
     def set_active(self, path: Optional[str], *, selection=None) -> None:
@@ -845,7 +895,16 @@ class ExperimentsList(QWidget):
         self.active_changed.emit(path or "")
 
     def delete_selected(self) -> None:
-        """Remove every multi-selected row from the table."""
+        """Remove selected rows: preview-staged first, else committed rows."""
+        if self._discovered_selected:
+            self._discovered = [
+                p for p in self._discovered if p not in self._discovered_selected
+            ]
+            self._discovered_selected = set()
+            self._update_staging()
+            self._rebuild_table()
+            self._update_delete_btn()
+            return
         if not self._selected_paths:
             return
         remaining = [p for p in self._paths if p not in self._selected_paths]
@@ -942,16 +1001,30 @@ class ExperimentsList(QWidget):
             self._anchor = path
             self.set_active(path)
 
+    def _on_preview_row_clicked(self, path: str, _flag: int) -> None:
+        """Toggle one not-yet-committed row in/out of the delete selection."""
+        if path in self._discovered_selected:
+            self._discovered_selected.discard(path)
+        else:
+            self._discovered_selected.add(path)
+        for row in self._preview_rows:
+            row.set_selected(row.path in self._discovered_selected)
+        self._update_delete_btn()
+
     def _apply_selection_styles(self) -> None:
         for row in self._rows:
             row.set_selected(row.path in self._selected_paths)
 
     def _update_delete_btn(self) -> None:
         if hasattr(self, "delete_btn"):
-            self.delete_btn.setEnabled(bool(self._selected_paths))
+            self.delete_btn.setEnabled(
+                bool(self._selected_paths) or bool(self._discovered_selected)
+            )
 
     def keyPressEvent(self, event) -> None:  # pragma: no cover - GUI event
-        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and self._selected_paths:
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and (
+            self._selected_paths or self._discovered_selected
+        ):
             self.delete_selected()
             event.accept()
             return
@@ -1001,6 +1074,7 @@ class ExperimentsList(QWidget):
             if item.widget() is not None:
                 item.widget().deleteLater()
         self._rows = []
+        self._preview_rows = []
         self._rows_box.addWidget(self._build_header_widget())
         for path in self._paths:
             values = [
@@ -1012,47 +1086,25 @@ class ExperimentsList(QWidget):
             row.set_selected(path in self._selected_paths)
             self._rows_box.addWidget(row)
             self._rows.append(row)
+        for path in self._discovered:
+            row = ExperimentRow(path, preview=True)
+            row.clicked.connect(self._on_preview_row_clicked)
+            row.set_selected(path in self._discovered_selected)
+            self._rows_box.addWidget(row)
+            self._preview_rows.append(row)
         self._update_table_visibility()
 
     def _update_table_visibility(self) -> None:
         """Collapse the empty table so the action bar sits flush under the
         input-file form. The bounded scroll region (and its "Folder" header
-        placeholder) only earns its 300px once there are rows to show."""
-        self._rows_scroll.setVisible(bool(self._paths))
+        placeholder) only earns its 300px once there are committed or
+        preview rows to show."""
+        self._rows_scroll.setVisible(bool(self._paths) or bool(self._discovered))
 
     def _update_meta(self) -> None:
         n = len(self._paths)
         self._meta.setText(f"{n} experiment{'s' if n != 1 else ''}")
         self.run_all_btn.setEnabled(n > 0)
-        # Keep the folded-away summary current even while collapsed.
-        self._header_summary.setText(self._meta.text())
-
-    # -- collapse / expand ----------------------------------------------
-    def is_collapsed(self) -> bool:
-        return self._collapsed
-
-    def set_collapsed(self, collapsed: bool) -> None:
-        """Fold the list down to its header row (or restore it).
-
-        Collapsing hides the whole body — calibration, input-file config, the
-        rows table, the action bar and the count — leaving only the header,
-        which then shows a compact experiment-count summary so the single
-        remaining row still says how much is hidden.
-        """
-        self._collapsed = bool(collapsed)
-        self._body.setVisible(not self._collapsed)
-        self._header_summary.setVisible(self._collapsed)
-        self.collapse_btn.setArrowType(
-            Qt.RightArrow if self._collapsed else Qt.DownArrow
-        )
-        self.collapse_btn.setToolTip(
-            "Expand the experiments list"
-            if self._collapsed
-            else "Collapse the experiments list"
-        )
-
-    def toggle_collapsed(self) -> None:
-        self.set_collapsed(not self._collapsed)
 
     def _on_add_clicked(self) -> None:  # pragma: no cover - GUI dialog
         dialog = QFileDialog(self, "Discover experiments under a root folder")

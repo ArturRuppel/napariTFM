@@ -2088,19 +2088,65 @@ def test_disabling_stress_refreshes_experiment_minirails(monkeypatch, app):
 
 def test_toolbar_exposes_project_and_parameter_buttons(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
-    # Project front-door buttons live on the brand row.
-    assert widget.new_project_btn.text() == "New Project"
-    assert widget.load_project_btn.text() == "Load Project"
-    assert widget.save_project_btn.text() == "Save Project"
-    # Parameter preset buttons, renamed and reordered (Load, Save, Reset).
-    assert widget.load_params_btn.text() == "Load Params"
-    assert widget.save_params_btn.text() == "Save Params"
-    assert widget.reset_params_btn.text() == "Reset"
+    # Project front-door buttons live on the brand row, icon-only now.
+    assert widget.new_project_btn.toolTip() == "Start a new project"
+    assert widget.load_project_btn.toolTip() == "Load a project"
+    assert widget.save_project_btn.toolTip() == "Save project as…"
+    # Parameter preset buttons, same row, grouped after a divider.
+    assert widget.load_params_btn.toolTip() == "Load parameters preset"
+    assert widget.save_params_btn.toolTip() == "Save parameters preset"
+    assert widget.reset_params_btn.toolTip() == "Reset parameters"
+    for button in (
+        widget.new_project_btn, widget.load_project_btn, widget.save_project_btn,
+        widget.load_params_btn, widget.save_params_btn, widget.reset_params_btn,
+    ):
+        assert not button.icon().isNull()
+        assert button.text() == ""
     # The experiments list no longer owns its own series Open/Save.
     assert not hasattr(widget.experiments_list, "load_series_btn")
     assert not hasattr(widget.experiments_list, "save_series_btn")
     assert not hasattr(widget, "_save_config")
     assert not hasattr(widget, "_load_config")
+
+
+def test_toolbar_buttons_share_the_title_row(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    assert not hasattr(widget, "toolbar_grid")
+
+
+def _icon_image(button):
+    # QIcon/QPixmap.cacheKey() is identity-based (a fresh render gets a new
+    # key even for pixel-identical content), so it can't tell us whether two
+    # *different* buttons carry the same icon — only whether one button's
+    # icon was *replaced*. Render to a QImage and compare pixels instead.
+    return button.icon().pixmap(18, 18).toImage()
+
+
+def test_toolbar_buttons_use_correct_distinct_icons(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    # load_project_btn and load_params_btn intentionally share the "load" icon
+    # (tooltip + grouping disambiguate); everything else should be distinct.
+    assert _icon_image(widget.load_project_btn) == _icon_image(widget.load_params_btn)
+    assert _icon_image(widget.save_project_btn) == _icon_image(widget.save_params_btn)
+    distinct_images = [
+        _icon_image(widget.new_project_btn),
+        _icon_image(widget.load_project_btn),
+        _icon_image(widget.save_project_btn),
+        _icon_image(widget.reset_params_btn),
+    ]
+    for i, image_a in enumerate(distinct_images):
+        for image_b in distinct_images[i + 1:]:
+            assert image_a != image_b
+
+
+def test_toolbar_icons_retint_on_theme_change(monkeypatch, app):
+    from napariTFM.widgets._ui_style import theme_names, active_theme_name
+    widget = _stub_main_widget(monkeypatch)
+    before = widget.new_project_btn.icon().cacheKey()
+    names = [n for n in theme_names() if n != active_theme_name()]
+    assert names, "need at least one non-default theme to test retinting"
+    widget._on_theme_selected(names[0])
+    assert widget.new_project_btn.icon().cacheKey() != before
 
 
 def test_save_params_writes_knobs_without_paths(monkeypatch, app, tmp_path):
@@ -2251,6 +2297,14 @@ def test_new_project_clears_to_empty_open_workspace(monkeypatch, app):
     assert widget.experiments_list.experiments() == []
     # Stress returns to its default-off state on a clean slate.
     assert widget._stage_sections_by_key["stress"].is_enabled is False
+
+
+def test_new_project_reexpands_setup_section_after_prior_collapse(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.set_records([{"path": "/data/a", "input_files": {}, "columns": {}}])
+    assert widget.experiments_list.setup_section.is_expanded is False
+    widget._new_project()
+    assert widget.experiments_list.setup_section.is_expanded is True
 
 
 def test_autosave_path_is_gone(monkeypatch, app):
