@@ -1174,6 +1174,70 @@ def test_run_all_parallel_reloads_only_the_followed_folder_on_done(monkeypatch, 
     assert widget.experiments_list.run_all_btn.text() == "Run all"
 
 
+def test_run_all_parallel_retargets_reload_when_followed_folder_changes_mid_run(monkeypatch, app):
+    """Proves the poll loop compares against the LIVE ``self._active_experiment``
+    on every tick, not a value captured once before the loop starts.
+
+    A buggy "frozen variable" implementation (e.g. ``followed =
+    self._active_experiment`` read once before entering the loop, then reused
+    on every tick) would pass ``test_run_all_parallel_reloads_only_the_followed_
+    folder_on_done`` identically to the correct implementation, because that
+    test never mutates ``self._active_experiment`` between polls. Here we do:
+    folder A is followed and reloads once; the user then clicks row B mid-run
+    (simulated by assigning ``widget._active_experiment`` directly, exactly as
+    the existing, untouched ``_on_active_experiment_changed`` handler would); a
+    later "done" event for the now-stale folder A must be ignored; a "done"
+    event for the newly-followed folder B must still be handled. A
+    frozen-variable implementation would keep reloading for A in the third
+    step (it never re-reads the live attribute) and this test would fail
+    there.
+    """
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
+    monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
+    _FakeTimer.instances = []
+
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.add_folders(["/data/exp_a", "/data/exp_b"])
+    widget._active_experiment = "/data/exp_a"
+    widget.experiments_list._num_workers_spinbox.setValue(2)
+
+    loaded = []
+    monkeypatch.setattr(
+        widget, "_load_active_experiment_results", lambda path: loaded.append(path)
+    )
+    monkeypatch.setattr(widget, "refresh_stage_statuses", lambda: None)
+
+    widget.experiments_list.run_all_requested.emit()
+
+    analyzer = _FakeParallelBatchAnalysis.last_instance
+    timer = _FakeTimer.instances[-1]
+
+    # 1. A is the followed folder when it reports done -> reload happens.
+    analyzer.queue_poll_result([("/data/exp_a", "done")], False)
+    timer.fire()
+    assert loaded == ["/data/exp_a"]
+
+    # 2. The user clicks a different, already-finished/still-running row
+    #    mid-run. In the real app this goes through active_changed ->
+    #    _on_active_experiment_changed, which reassigns this same attribute;
+    #    assigning it directly here is equivalent and avoids dragging that
+    #    unrelated handler's side effects into this test.
+    widget._active_experiment = "/data/exp_b"
+
+    # 3. A later event for the now-stale, originally-followed folder A must be
+    #    IGNORED -- this is the step a frozen-variable implementation would
+    #    get wrong, since it would still be comparing against "/data/exp_a".
+    analyzer.queue_poll_result([("/data/exp_a", "done")], False)
+    timer.fire()
+    assert loaded == ["/data/exp_a"]  # unchanged: no second reload for A
+
+    # 4. The newly-followed folder B reporting done IS handled, proving the
+    #    loop retargeted to wherever self._active_experiment currently points.
+    analyzer.queue_poll_result([("/data/exp_b", "done")], True)
+    timer.fire()
+    assert loaded == ["/data/exp_a", "/data/exp_b"]
+
+
 def test_run_all_parallel_keeps_polling_after_cancel_until_finished(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
     monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
