@@ -1797,19 +1797,30 @@ def test_disabling_stress_refreshes_experiment_minirails(monkeypatch, app):
 
 def test_toolbar_exposes_project_and_parameter_buttons(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
-    # Project front-door buttons live on the brand row.
-    assert widget.new_project_btn.text() == "New Project"
-    assert widget.load_project_btn.text() == "Load Project"
-    assert widget.save_project_btn.text() == "Save Project"
-    # Parameter preset buttons, renamed and reordered (Load, Save, Reset).
-    assert widget.load_params_btn.text() == "Load Params"
-    assert widget.save_params_btn.text() == "Save Params"
-    assert widget.reset_params_btn.text() == "Reset"
+    # Project front-door buttons live on the brand row, icon-only now.
+    assert widget.new_project_btn.toolTip() == "Start a new project"
+    assert widget.load_project_btn.toolTip() == "Load a project"
+    assert widget.save_project_btn.toolTip() == "Save project as…"
+    # Parameter preset buttons, same row, grouped after a divider.
+    assert widget.load_params_btn.toolTip() == "Load parameters preset"
+    assert widget.save_params_btn.toolTip() == "Save parameters preset"
+    assert widget.reset_params_btn.toolTip() == "Reset parameters"
+    for button in (
+        widget.new_project_btn, widget.load_project_btn, widget.save_project_btn,
+        widget.load_params_btn, widget.save_params_btn, widget.reset_params_btn,
+    ):
+        assert not button.icon().isNull()
+        assert button.text() == ""
     # The experiments list no longer owns its own series Open/Save.
     assert not hasattr(widget.experiments_list, "load_series_btn")
     assert not hasattr(widget.experiments_list, "save_series_btn")
     assert not hasattr(widget, "_save_config")
     assert not hasattr(widget, "_load_config")
+
+
+def test_toolbar_buttons_share_the_title_row(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    assert not hasattr(widget, "toolbar_grid")
 
 
 def test_save_params_writes_knobs_without_paths(monkeypatch, app, tmp_path):
