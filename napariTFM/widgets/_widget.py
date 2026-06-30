@@ -539,6 +539,15 @@ class napariTFMWidget(QWidget):
         title_row.addWidget(self._toolbar_divider())
         title_row.addWidget(self.reset_params_btn)
 
+        self._toolbar_icon_buttons = [
+            (self.new_project_btn, "new"),
+            (self.load_project_btn, "load"),
+            (self.save_project_btn, "save"),
+            (self.load_params_btn, "load"),
+            (self.save_params_btn, "save"),
+            (self.reset_params_btn, "reset"),
+        ]
+
         container_layout.addLayout(title_row)
 
         # Progressive-disclosure gate (G0/G1/G2). No project is open at launch.
@@ -908,6 +917,9 @@ class napariTFMWidget(QWidget):
         for key, section in self._stage_sections_by_key.items():
             section.set_accent(stage_accent(key))
         self._apply_spine_neighbours()
+        toolbar_accent = muted_accent(stage_accent("project"))
+        for button, icon_name in self._toolbar_icon_buttons:
+            button.setIcon(stage_action_icon(icon_name, toolbar_accent))
 
     def _apply_spine_neighbours(self):
         """Give each stage's spine its neighbours' accents so the rail blends."""

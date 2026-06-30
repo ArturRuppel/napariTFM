@@ -1823,6 +1823,41 @@ def test_toolbar_buttons_share_the_title_row(monkeypatch, app):
     assert not hasattr(widget, "toolbar_grid")
 
 
+def _icon_image(button):
+    # QIcon/QPixmap.cacheKey() is identity-based (a fresh render gets a new
+    # key even for pixel-identical content), so it can't tell us whether two
+    # *different* buttons carry the same icon — only whether one button's
+    # icon was *replaced*. Render to a QImage and compare pixels instead.
+    return button.icon().pixmap(18, 18).toImage()
+
+
+def test_toolbar_buttons_use_correct_distinct_icons(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    # load_project_btn and load_params_btn intentionally share the "load" icon
+    # (tooltip + grouping disambiguate); everything else should be distinct.
+    assert _icon_image(widget.load_project_btn) == _icon_image(widget.load_params_btn)
+    assert _icon_image(widget.save_project_btn) == _icon_image(widget.save_params_btn)
+    distinct_images = [
+        _icon_image(widget.new_project_btn),
+        _icon_image(widget.load_project_btn),
+        _icon_image(widget.save_project_btn),
+        _icon_image(widget.reset_params_btn),
+    ]
+    for i, image_a in enumerate(distinct_images):
+        for image_b in distinct_images[i + 1:]:
+            assert image_a != image_b
+
+
+def test_toolbar_icons_retint_on_theme_change(monkeypatch, app):
+    from napariTFM.widgets._ui_style import theme_names, active_theme_name
+    widget = _stub_main_widget(monkeypatch)
+    before = widget.new_project_btn.icon().cacheKey()
+    names = [n for n in theme_names() if n != active_theme_name()]
+    assert names, "need at least one non-default theme to test retinting"
+    widget._on_theme_selected(names[0])
+    assert widget.new_project_btn.icon().cacheKey() != before
+
+
 def test_save_params_writes_knobs_without_paths(monkeypatch, app, tmp_path):
     import yaml
 
