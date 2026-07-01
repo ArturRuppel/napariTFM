@@ -1136,7 +1136,9 @@ class napariTFMWidget(QWidget):
         timer.setInterval(150)
 
         def _poll():
-            events, finished = analyzer.poll_parallel_progress()
+            events, stage_events, finished = analyzer.poll_parallel_progress()
+            for folder, stage, status, fraction in stage_events:
+                self._on_batch_stage_progress(folder, stage, status, fraction)
             for folder, status in events:
                 # self._active_experiment may have changed since the run
                 # started (the user can click a different, already-finished
@@ -1298,6 +1300,19 @@ class napariTFMWidget(QWidget):
             section.set_status(status)
         if fraction is not None:
             section.set_progress(fraction)
+
+    def _on_batch_stage_progress(
+        self, folder: str, stage: str, status: str, fraction: float | None
+    ) -> None:
+        """Route one parallel-mode worker's real per-stage progress onto its row.
+
+        The parallel poll timer's per-tick stage events land here and go
+        straight to that one folder's one mini-rail dot -- the parallel-mode
+        sibling of ``_on_run_all_stage_progress``, which does the equivalent
+        for the single-experiment detail panel's ``StageSpine`` during a
+        sequential run.
+        """
+        self.experiments_list.set_row_stage_progress(folder, stage, status, fraction)
 
     def _on_batch_progress(self, folder: str, status: str) -> None:
         """Live per-folder feedback for Run-all: walk the rail, then refresh (P4).

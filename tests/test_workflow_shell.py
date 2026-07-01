@@ -1141,15 +1141,15 @@ class _FakeParallelBatchAnalysis:
     def request_cancel(self):
         self.cancel_calls += 1
 
-    def queue_poll_result(self, events, finished):
-        self._poll_queue.append((events, finished))
+    def queue_poll_result(self, events, finished, stage_events=None):
+        self._poll_queue.append((events, finished, stage_events or []))
 
     def poll_parallel_progress(self):
-        events, finished = self._poll_queue.pop(0)
+        events, finished, stage_events = self._poll_queue.pop(0)
         for folder, status in events:
             if self.progress_callback:
                 self.progress_callback(folder, status)
-        return events, finished
+        return events, stage_events, finished
 
 
 class _FakeTimer:
@@ -1378,6 +1378,41 @@ def test_run_all_parallel_keeps_polling_after_cancel_until_finished(monkeypatch,
     timer.fire()
     assert timer.stopped is True
     assert widget._active_batch is None
+
+
+def test_run_all_parallel_routes_stage_events_to_row_progress(monkeypatch, app):
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
+    monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
+    _FakeTimer.instances = []
+
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.add_folders(["/data/exp_a", "/data/exp_b"])
+    widget.experiments_list._num_workers_spinbox.setValue(2)
+
+    seen = []
+    monkeypatch.setattr(
+        widget.experiments_list, "set_row_stage_progress",
+        lambda path, stage, status, fraction: seen.append((path, stage, status, fraction)),
+    )
+
+    widget.experiments_list.run_all_requested.emit()
+
+    analyzer = _FakeParallelBatchAnalysis.last_instance
+    timer = _FakeTimer.instances[-1]
+
+    analyzer.queue_poll_result(
+        [], False,
+        stage_events=[
+            ("/data/exp_a", "displacement", "running", 0.5),
+            ("/data/exp_b", "force", "running", 0.25),
+        ],
+    )
+    timer.fire()
+
+    assert seen == [
+        ("/data/exp_a", "displacement", "running", 0.5),
+        ("/data/exp_b", "force", "running", 0.25),
+    ]
 
 
 def test_run_all_sequential_path_is_unchanged_for_default_num_workers(monkeypatch, app):
