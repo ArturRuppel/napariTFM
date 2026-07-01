@@ -385,12 +385,13 @@ class ExperimentsList(QWidget):
         body_layout.addWidget(self._rows_scroll)
         self._rebuild_table()
 
-        # List actions live at the foot of the list, just above the count:
-        # Discover stages folders, Add to list commits them, Delete removes the
-        # selected rows, Run all walks the whole list (P4 — batch is an action on
-        # the list, not a separate card).
-        actions = QHBoxLayout()
-        actions.setContentsMargins(0, 0, 0, 0)
+        # List actions live at the foot of the list, just above the count, on
+        # two rows so neither one needs the full panel width to stay legible:
+        # row 1 builds the list (Discover stages folders, Add to list commits
+        # them, Delete removes the selected rows); row 2 runs it (worker count,
+        # Run all — P4, batch is an action on the list, not a separate card).
+        list_actions = QHBoxLayout()
+        list_actions.setContentsMargins(0, 0, 0, 0)
 
         self.add_btn = QToolButton()
         self.add_btn.setObjectName("experiments_add_button")
@@ -399,14 +400,14 @@ class ExperimentsList(QWidget):
         self.add_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.add_btn.clicked.connect(self._on_add_clicked)
         self._update_discover_tooltip()
-        actions.addWidget(self.add_btn)
+        list_actions.addWidget(self.add_btn)
 
         self.commit_btn = QToolButton()
         self.commit_btn.setObjectName("experiments_commit_button")
         self.commit_btn.setText("Add to list")
         self.commit_btn.setEnabled(False)
         self.commit_btn.clicked.connect(self.commit_discovered)
-        actions.addWidget(self.commit_btn)
+        list_actions.addWidget(self.commit_btn)
 
         self.delete_btn = QToolButton()
         self.delete_btn.setObjectName("experiments_delete_button")
@@ -416,22 +417,13 @@ class ExperimentsList(QWidget):
         )
         self.delete_btn.setEnabled(False)
         self.delete_btn.clicked.connect(self.delete_selected)
-        actions.addWidget(self.delete_btn)
+        list_actions.addWidget(self.delete_btn)
 
-        actions.addStretch()
+        list_actions.addStretch()
+        body_layout.addLayout(list_actions)
 
-        workers_label = QLabel("Workers:")
-        workers_label.setStyleSheet(f"color: {TEXT_DIM};")
-        actions.addWidget(workers_label)
-
-        self._num_workers_spinbox = QSpinBox()
-        self._num_workers_spinbox.setObjectName("experiments_num_workers_spinbox")
-        self._num_workers_spinbox.setRange(1, os.cpu_count() or 1)
-        self._num_workers_spinbox.setValue(1)
-        self._num_workers_spinbox.setToolTip(
-            "How many positions Run-all processes in parallel"
-        )
-        actions.addWidget(self._num_workers_spinbox)
+        run_actions = QHBoxLayout()
+        run_actions.setContentsMargins(0, 0, 0, 0)
 
         self._run_all_active = False
         self.run_all_btn = QToolButton()
@@ -443,8 +435,23 @@ class ExperimentsList(QWidget):
         self.run_all_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.run_all_btn.setEnabled(False)
         self.run_all_btn.clicked.connect(self._on_run_all_clicked)
-        actions.addWidget(self.run_all_btn)
-        body_layout.addLayout(actions)
+        run_actions.addWidget(self.run_all_btn)
+
+        run_actions.addStretch()
+
+        workers_label = QLabel("Workers:")
+        workers_label.setStyleSheet(f"color: {TEXT_DIM};")
+        run_actions.addWidget(workers_label)
+
+        self._num_workers_spinbox = QSpinBox()
+        self._num_workers_spinbox.setObjectName("experiments_num_workers_spinbox")
+        self._num_workers_spinbox.setRange(1, os.cpu_count() or 1)
+        self._num_workers_spinbox.setValue(1)
+        self._num_workers_spinbox.setToolTip(
+            "How many positions Run-all processes in parallel"
+        )
+        run_actions.addWidget(self._num_workers_spinbox)
+        body_layout.addLayout(run_actions)
 
         self._meta = QLabel("")
         self._meta.setStyleSheet(f"color: {TEXT_DIM};")

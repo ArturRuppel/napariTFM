@@ -52,14 +52,17 @@ _ICON_BODIES = {
         '<line x1="9.5" y1="14" x2="15.5" y2="14"/>'
         '<line x1="12.5" y1="11" x2="12.5" y2="17"/>'
     ),
-    # open folder — "load a project or a preset"
-    "load": '<path d="M3 6.5 H9 L11 8.5 H21 V18.5 H3 Z"/>',
-    # tray with a downward arrow — "save a project or a preset"
+    # filled up-arrow lifting out of a tray — "load a project or a preset"
+    "load": (
+        '<path d="M8 13 L12 8 L16 13 Z" fill="{c}" stroke="none"/>'
+        '<line x1="12" y1="9" x2="12" y2="17"/>'
+        '<path d="M4 17 H20 V21 H4 Z"/>'
+    ),
+    # filled down-arrow dropping into a tray — "save a project or a preset"
     "save": (
-        '<path d="M4 4 H20 V14 H4 Z"/>'
-        '<path d="M9 8 L12 11 L15 8"/>'
-        '<line x1="12" y1="4.5" x2="12" y2="11"/>'
-        '<path d="M4 14 V20 H20 V14"/>'
+        '<path d="M8 12 L12 17 L16 12 Z" fill="{c}" stroke="none"/>'
+        '<line x1="12" y1="4" x2="12" y2="13"/>'
+        '<path d="M4 17 H20 V21 H4 Z"/>'
     ),
     # circular arrow — "reset parameters to defaults"
     "reset": (

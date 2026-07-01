@@ -22,7 +22,7 @@ from napariTFM.widgets.stress_widget import StressWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec
 from napariTFM.widgets._stage_file_status import StageFileStatusRow
 from napariTFM.widgets._stage_section import StageSection
-from napariTFM.widgets._ui_style import title_style, stage_accent, muted_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, add_section_labeled_full_row, section_label_style, section_subheader_style, TIGHT_SPACING
+from napariTFM.widgets._ui_style import title_style, stage_accent, muted_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, add_section_labeled_full_row, section_label_style, section_subheader_style, caption_style, TIGHT_SPACING
 from napariTFM.widgets._icons import stage_action_icon
 from napariTFM.widgets._param_controls import dslider, islider, rslider
 from superqt import QLabeledDoubleRangeSlider, QLabeledDoubleSlider, QLabeledSlider
@@ -516,7 +516,9 @@ class napariTFMWidget(QWidget):
 
         # Brand row + the Project/Parameters toolbar (the front door), all in
         # one row now: icon-only buttons, right-aligned opposite the title,
-        # grouped Project | Params | Reset with thin dividers between groups.
+        # grouped under inline "Project" / "Parameters" captions (the caption
+        # disambiguates the group; load/save share an icon across groups on
+        # purpose — direction of the icon's arrow disambiguates load vs save).
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title = QLabel("napariTFM")
@@ -531,13 +533,13 @@ class napariTFMWidget(QWidget):
         self.save_params_btn = self._make_toolbar_button("save", "Save parameters preset")
         self.reset_params_btn = self._make_toolbar_button("reset", "Reset parameters")
 
+        title_row.addWidget(self._toolbar_caption("Project"))
         for button in (self.new_project_btn, self.load_project_btn, self.save_project_btn):
             title_row.addWidget(button)
         title_row.addWidget(self._toolbar_divider())
-        for button in (self.load_params_btn, self.save_params_btn):
+        title_row.addWidget(self._toolbar_caption("Parameters"))
+        for button in (self.load_params_btn, self.save_params_btn, self.reset_params_btn):
             title_row.addWidget(button)
-        title_row.addWidget(self._toolbar_divider())
-        title_row.addWidget(self.reset_params_btn)
 
         self._toolbar_icon_buttons = [
             (self.new_project_btn, "new"),
@@ -786,6 +788,13 @@ class napariTFMWidget(QWidget):
         divider.setFrameShape(QFrame.VLine)
         divider.setFrameShadow(QFrame.Sunken)
         return divider
+
+    @staticmethod
+    def _toolbar_caption(text: str) -> QLabel:
+        """A small muted group label preceding a cluster of toolbar buttons."""
+        caption = QLabel(text)
+        caption.setStyleSheet(caption_style())
+        return caption
 
     def _confirm_discard(self) -> bool:
         """True if it's safe to clear the workspace (clean, no project open, or user said yes)."""
