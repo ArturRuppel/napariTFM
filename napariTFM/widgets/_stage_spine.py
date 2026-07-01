@@ -3,15 +3,27 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-from qtpy.QtCore import QRectF, Qt
+from qtpy.QtCore import QEvent, QRectF, Qt, Signal
 from qtpy.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPen
-from qtpy.QtWidgets import QSizePolicy, QWidget
+from qtpy.QtWidgets import QSizePolicy, QToolTip, QWidget
 
 # status -> node appearance; muted grey for inert, amber for active.
 _RUNNING = "#e3b341"
 _ERROR = "#d62828"
 _DIM = "#6b7484"
 _OFF = "#3c424c"  # recessed: a stage deliberately turned off (not "missing")
+
+# How each status reads in a node's tooltip. "done" is the only state that has
+# output pixels to bring on screen, so it's the only one that advertises the
+# click; the rest describe the stage's state so the empty click isn't a mystery.
+_STATUS_TOOLTIP = {
+    "done": "computed — click to view",
+    "running": "running…",
+    "ready": "ready to run (no output yet)",
+    "error": "failed",
+    "not_started": "not started (no output yet)",
+    "off": "disabled",
+}
 
 
 def _mix(hex_a: str, hex_b: str) -> QColor:
@@ -49,13 +61,27 @@ class StageSpine(QWidget):
     NODE_Y = 11
     NODE_R = 6
     LINE_W = 2
+    # Generous click target around the small painted node.
+    NODE_HIT_R = 14
 
-    def __init__(self, accent: str, status: str = "not_started", parent=None):
+    # Clicking the node decodes this stage's output series into the viewer
+    # (display-only, on demand) — the dot's status is already shown eagerly.
+    clicked = Signal()
+
+    def __init__(self, accent: str, status: str = "not_started", parent=None, *, label: str = ""):
         super().__init__(parent)
         self._accent = accent
         self._accent_above = accent
         self._accent_below = accent
         self._status = status
+        # The stage's human name, used only to caption the node's tooltip.
+        self._label = label
+        # True while the cursor is over the clickable node — drives a hover halo
+        # and the pointing-hand cursor so the small dot reads as a button.
+        self._hover = False
+        # Tooltips/hover only matter over the node, which is a fraction of the
+        # tall gutter, so track motion to know when the cursor is on it.
+        self.setMouseTracking(True)
         # Fractional completion (0..1) of an in-flight "running" stage, or None
         # when no per-frame progress is known. None falls back to the original
         # solid-fill node (the historical "running" look), which is also what a
@@ -127,6 +153,15 @@ class StageSpine(QWidget):
 
         fill, ring = _node_style(self._status, self._accent)
         r = self.NODE_R
+        if self._hover and self._status != "off":
+            # A soft halo behind the node on hover: the small dot is a button, so
+            # it should light up under the cursor the way a button does.
+            halo = QColor(ring)
+            halo.setAlpha(70)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(halo))
+            hr = r + 4
+            painter.drawEllipse(QRectF(cx - hr, self.NODE_Y - hr, 2 * hr, 2 * hr))
         if self._status == "off":
             # A short horizontal dash ("—") reads as a skipped/off stage.
             painter.setPen(QPen(ring, 2, Qt.SolidLine, Qt.RoundCap))
@@ -152,3 +187,42 @@ class StageSpine(QWidget):
         painter.setBrush(QBrush(centre))
         painter.drawEllipse(rect)
         painter.end()
+
+    def _over_node(self, pos) -> bool:
+        """True when *pos* falls within the node's (generous) click target."""
+        if self._status == "off":
+            return False
+        dx = pos.x() - self.width() / 2.0
+        dy = pos.y() - self.NODE_Y
+        return dx * dx + dy * dy <= self.NODE_HIT_R * self.NODE_HIT_R
+
+    def _tooltip_text(self) -> str:
+        phrase = _STATUS_TOOLTIP.get(self._status, self._status)
+        return f"{self._label}: {phrase}" if self._label else phrase
+
+    def mousePressEvent(self, event) -> None:  # pragma: no cover - GUI event
+        if self._over_node(event.pos()):
+            self.clicked.emit()
+
+    def mouseMoveEvent(self, event) -> None:  # pragma: no cover - GUI event
+        over = self._over_node(event.pos())
+        self.setCursor(Qt.PointingHandCursor if over else Qt.ArrowCursor)
+        if over != self._hover:
+            self._hover = over
+            self.update()
+
+    def leaveEvent(self, _event) -> None:  # pragma: no cover - GUI event
+        if self._hover:
+            self._hover = False
+            self.update()
+
+    def event(self, event):  # pragma: no cover - GUI event
+        # Only surface the tooltip over the node itself, not the whole tall
+        # gutter, so hovering the bare rail says nothing misleading.
+        if event.type() == QEvent.ToolTip:
+            if self._over_node(event.pos()):
+                QToolTip.showText(event.globalPos(), self._tooltip_text(), self)
+            else:
+                QToolTip.hideText()
+            return True
+        return super().event(event)

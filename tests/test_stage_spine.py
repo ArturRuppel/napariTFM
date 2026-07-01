@@ -147,6 +147,42 @@ def test_stage_section_set_accents_forwards_to_spine(app):
     assert section.spine._accent_below == "#7ad151"
 
 
+def test_spine_tooltip_names_stage_and_advertises_click_when_done(app):
+    """A computed node's tooltip both names the stage and says it's clickable."""
+    spine = StageSpine("#2a788e", status="done", label="Displacement")
+    text = spine._tooltip_text()
+    assert "Displacement" in text
+    assert "click" in text.lower()
+
+
+def test_spine_tooltip_does_not_advertise_click_without_output(app):
+    """A stage with no output yet mustn't promise a view that isn't there."""
+    spine = StageSpine("#2a788e", status="ready", label="Force")
+    text = spine._tooltip_text()
+    assert "Force" in text
+    assert "click" not in text.lower()
+
+
+def test_spine_over_node_is_false_off_true_on_node(app):
+    spine = StageSpine("#2a788e", status="done")
+    spine.resize(StageSpine.GUTTER_WIDTH, 60)
+    from qtpy.QtCore import QPoint
+
+    on_node = QPoint(spine.width() // 2, StageSpine.NODE_Y)
+    off_node = QPoint(spine.width() // 2, 50)
+    assert spine._over_node(on_node) is True
+    assert spine._over_node(off_node) is False
+
+
+def test_spine_off_stage_is_never_over_node(app):
+    """An 'off' stage has no output, so its node is inert to clicks/hover."""
+    spine = StageSpine("#2a788e", status="off")
+    spine.resize(StageSpine.GUTTER_WIDTH, 60)
+    from qtpy.QtCore import QPoint
+
+    assert spine._over_node(QPoint(spine.width() // 2, StageSpine.NODE_Y)) is False
+
+
 def test_spine_node_aligns_vertically_with_header_pills(app):
     """The spine status node centres on the header pill row (P8)."""
     from napariTFM.widgets._stage_section import StageSection

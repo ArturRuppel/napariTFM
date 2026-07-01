@@ -1,9 +1,11 @@
-"""Tests for interactive bug B fix: _load_active_experiment_results.
+"""Tests for decoding a processed experiment's output series into the viewer.
 
-When the user selects a previously-processed experiment from the list,
-_on_active_experiment_changed now calls _load_active_experiment_results
-which reads the experiment's .ntfm and restores the computed results into
-memory so that downstream widgets (Force, Stress) see their prerequisites.
+Selecting an experiment from the list loads its inputs only — it must NOT by
+itself decode `TFMresults.ome.tif` into memory (that's display-only and waits
+for a click). Loading is split into `_read_stage_arrays` (parse) +
+`_apply_*_result` (apply) + `_load_stage_results` (orchestrate, only the
+requested stages), driven on demand by `_on_stage_node_clicked` (a spine
+circle) or `_on_row_stage_clicked` (a list dot). Status, by contrast, is eager.
 """
 import sys
 import types as _types
@@ -98,7 +100,7 @@ class _ExtendedStubDataManager:
 
     Extends the minimal stub pattern used in test_workflow_shell.py to include
     set_displacement_results / set_force_results / set_stress_results so the
-    real _load_active_experiment_results method can call them without error.
+    real _load_stage_results method can call them without error.
     """
 
     def __init__(self):
@@ -422,7 +424,7 @@ def app():
 
 
 # ---------------------------------------------------------------------------
-# Tests: _load_active_experiment_results directly
+# Tests: _load_stage_results directly
 # ---------------------------------------------------------------------------
 
 
@@ -439,7 +441,7 @@ def test_load_displacement_sets_results(monkeypatch, app, tmp_path):
         displacement_field=disp,
     )
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     assert widget.data_manager.displacement_results is not None
 
@@ -457,7 +459,7 @@ def test_loaded_displacement_field_matches_stored(monkeypatch, app, tmp_path):
         displacement_field=disp,
     )
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     loaded = widget.data_manager.displacement_results.displacement_field
     np.testing.assert_allclose(loaded, disp, rtol=1e-5, atol=1e-7)
@@ -475,7 +477,7 @@ def test_loaded_result_physical_scale_is_usable(monkeypatch, app, tmp_path):
         displacement_field=np.ones((1, 2, 2, 2)),
     )
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     scale = widget.data_manager.displacement_results.physical_scale
     assert "grid_spacing" in scale
@@ -490,7 +492,7 @@ def test_no_ntfm_is_noop_no_exception(monkeypatch, app, tmp_path):
     folder = tmp_path / "empty_exp"
     folder.mkdir()
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     assert widget.data_manager.displacement_results is None
     assert widget.data_manager.force_results is None
@@ -507,7 +509,7 @@ def test_load_force_sets_force_results(monkeypatch, app, tmp_path):
     force = np.ones((1, 2, 3, 2)) * 100.0
     _write_ntfm(folder, displacement_field=disp, force_field=force)
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     assert widget.data_manager.displacement_results is not None
     assert widget.data_manager.force_results is not None
@@ -541,7 +543,7 @@ def test_loaded_results_carry_reconstructed_parameters(monkeypatch, app, tmp_pat
         stress_tensor=np.ones((1, 2, 2, 2, 2)) * 0.1,
     )
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     disp_params = widget.data_manager.displacement_results.parameters
     force_params = widget.data_manager.force_results.parameters
@@ -571,7 +573,7 @@ def test_loaded_parameters_default_when_config_empty(monkeypatch, app, tmp_path)
     # _write_ntfm defaults to config={} when none is passed.
     _write_ntfm(folder, displacement_field=np.ones((1, 2, 2, 2)))
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     params = widget.data_manager.displacement_results.parameters
     assert params is not None
@@ -590,7 +592,7 @@ def test_load_stress_sets_stress_results(monkeypatch, app, tmp_path):
     stress = np.ones((1, 2, 2, 2, 2)) * 0.01
     _write_ntfm(folder, displacement_field=disp, force_field=force, stress_tensor=stress)
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     assert widget.data_manager.stress_results is not None
     np.testing.assert_allclose(
@@ -616,7 +618,7 @@ def test_all_nan_displacement_stays_none(monkeypatch, app, tmp_path):
     real_force = np.ones((1, 2, 2, 2))
     _write_ntfm(folder, displacement_field=nan_disp, force_field=real_force)
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     assert widget.data_manager.displacement_results is None
     assert widget.data_manager.force_results is not None
@@ -642,7 +644,7 @@ def test_load_displacement_streams_to_viewer(monkeypatch, app, tmp_path):
         displacement_field=disp,
     )
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     viz = widget.visualization_manager
     assert len(viz.vector_stream_calls) == 1
@@ -671,7 +673,7 @@ def test_load_force_streams_to_viewer(monkeypatch, app, tmp_path):
         force_field=force,
     )
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     viz = widget.visualization_manager
     force_calls = [c for c in viz.vector_stream_calls if c[0] == "force"]
@@ -702,7 +704,7 @@ def test_load_stress_streams_to_viewer(monkeypatch, app, tmp_path):
         stress_tensor=stress,
     )
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     viz = widget.visualization_manager
     assert len(viz.stress_stream_calls) == 1
@@ -721,7 +723,7 @@ def test_no_ntfm_streams_nothing(monkeypatch, app, tmp_path):
     folder = tmp_path / "empty_exp_viz"
     folder.mkdir()
 
-    widget._load_active_experiment_results(str(folder))
+    widget._load_stage_results(str(folder), widget._NTFM_STAGES)
 
     viz = widget.visualization_manager
     assert viz.vector_stream_calls == []
@@ -733,8 +735,8 @@ def test_no_ntfm_streams_nothing(monkeypatch, app, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_on_active_experiment_changed_loads_displacement(monkeypatch, app, tmp_path):
-    """Selecting an experiment via the list drives _load_active_experiment_results."""
+def test_selecting_experiment_does_not_load_displacement(monkeypatch, app, tmp_path):
+    """Selecting an experiment alone must not read its `.ntfm` (P3-lazy data)."""
     widget = _stub_main_widget(monkeypatch)
     folder = tmp_path / "sel_00"
     folder.mkdir()
@@ -745,6 +747,23 @@ def test_on_active_experiment_changed_loads_displacement(monkeypatch, app, tmp_p
     _write_ntfm(folder, displacement_field=disp)
 
     _select(widget, folder)
+
+    assert widget.data_manager.displacement_results is None
+
+
+def test_clicking_displacement_node_loads_displacement(monkeypatch, app, tmp_path):
+    """Clicking the displacement stage's dot is what loads its array into memory."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "sel_00b"
+    folder.mkdir()
+    (folder / "beads.tif").write_bytes(b"x")
+    (folder / "reference.tif").write_bytes(b"x")
+
+    disp = np.ones((2, 3, 4, 2)) * 1.5
+    _write_ntfm(folder, displacement_field=disp)
+
+    _select(widget, folder)
+    widget._on_stage_node_clicked("displacement")
 
     assert widget.data_manager.displacement_results is not None
     np.testing.assert_allclose(
@@ -810,6 +829,7 @@ def test_deselection_clears_results(monkeypatch, app, tmp_path):
 
     _write_ntfm(folder, displacement_field=np.ones((1, 2, 2, 2)))
     _select(widget, folder)
+    widget._on_stage_node_clicked("displacement")
     assert widget.data_manager.displacement_results is not None
 
     # Clearing active experiment should drop results.
@@ -817,8 +837,13 @@ def test_deselection_clears_results(monkeypatch, app, tmp_path):
     assert widget.data_manager.displacement_results is None
 
 
-def test_switching_experiments_loads_new_results(monkeypatch, app, tmp_path):
-    """Switching to a different experiment loads its own results, not the previous one's."""
+def test_switching_experiments_does_not_auto_load(monkeypatch, app, tmp_path):
+    """Switching experiments must not leak stale data or auto-load the new one.
+
+    Only a circle click decodes a `.ntfm` into the viewer (display-only) —
+    switching to a position that was never clicked into leaves its output
+    unloaded, exactly like switching to it directly would.
+    """
     widget = _stub_main_widget(monkeypatch)
 
     folder_a = tmp_path / "exp_a"
@@ -835,6 +860,7 @@ def test_switching_experiments_loads_new_results(monkeypatch, app, tmp_path):
     widget._update_disclosure()
     widget.experiments_list.set_experiments([str(folder_a), str(folder_b)])
     widget.experiments_list.set_active(str(folder_a))
+    widget._on_stage_node_clicked("displacement")
 
     np.testing.assert_allclose(
         widget.data_manager.displacement_results.displacement_field,
@@ -844,9 +870,41 @@ def test_switching_experiments_loads_new_results(monkeypatch, app, tmp_path):
 
     widget.experiments_list.set_active(str(folder_b))
 
+    # Neither exp_a's stale data nor an eager read of exp_b's own .ntfm.
+    assert widget.data_manager.displacement_results is None
+
+
+def test_reselecting_an_experiment_does_not_replay_data_until_clicked_again(monkeypatch, app, tmp_path):
+    """Loaded output does not survive a round trip: switching away drops it, and
+    switching back loads inputs only. The data comes back when the circle is
+    clicked again — display is always on demand, never auto-restored.
+    """
+    widget = _stub_main_widget(monkeypatch)
+
+    folder_a = tmp_path / "exp_a2"
+    folder_a.mkdir()
+    disp_a = np.ones((1, 2, 2, 2)) * 1.0
+    _write_ntfm(folder_a, displacement_field=disp_a)
+
+    folder_b = tmp_path / "exp_b2"
+    folder_b.mkdir()
+
+    widget._project_open = True
+    widget._update_disclosure()
+    widget.experiments_list.set_experiments([str(folder_a), str(folder_b)])
+    widget.experiments_list.set_active(str(folder_a))
+    widget._on_stage_node_clicked("displacement")
+    assert widget.data_manager.displacement_results is not None
+
+    widget.experiments_list.set_active(str(folder_b))
+    widget.experiments_list.set_active(str(folder_a))
+    # Back on A, but nothing decoded until the circle is clicked again.
+    assert widget.data_manager.displacement_results is None
+
+    widget._on_stage_node_clicked("displacement")
     np.testing.assert_allclose(
         widget.data_manager.displacement_results.displacement_field,
-        disp_b,
+        disp_a,
         rtol=1e-5,
     )
 
@@ -859,7 +917,7 @@ def test_switching_experiments_loads_new_results(monkeypatch, app, tmp_path):
 def test_force_run_enabled_after_selection_with_displacement(app):
     """FTTCWidget._update_ui_state enables Run when displacement_results is not None.
 
-    This is the contract the bug fix satisfies: after _load_active_experiment_results
+    This is the contract the bug fix satisfies: after _load_stage_results
     stores the displacement result, FTTCWidget enables its Run button.
 
     The real FTTCWidget is loaded via importlib so the module-level stub for
@@ -934,7 +992,7 @@ def test_force_run_enabled_after_selection_with_displacement(app):
     # Before: no displacement → Run disabled.
     assert force_widget.action_states()["run"] is False
 
-    # Simulate _load_active_experiment_results storing a displacement result
+    # Simulate _load_stage_results storing a displacement result
     # (the bug fix path).  The widget observes data_manager via the data_updated
     # signal fired by set_displacement_results.  Here we skip the signal and
     # call _update_ui_state directly, which mirrors what the real DataManager

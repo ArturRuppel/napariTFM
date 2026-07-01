@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from qtpy.QtCore import QRectF, Qt, Signal
+from qtpy.QtCore import QEvent, QRectF, Qt, Signal
 from qtpy.QtGui import QBrush, QColor, QDoubleValidator, QPainter, QPen
 from qtpy.QtWidgets import (
     QFileDialog,
@@ -27,13 +27,14 @@ from qtpy.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
 
 from napariTFM.widgets._collapsible_section import CollapsibleSection
 from napariTFM.widgets._icons import stage_action_icon
-from napariTFM.widgets._stage_spine import _node_style
+from napariTFM.widgets._stage_spine import _STATUS_TOOLTIP, _node_style
 from napariTFM.widgets._ui_style import (
     COMPACT_SPACING,
     TEXT_DIM,
@@ -128,12 +129,22 @@ class MiniRail(QWidget):
     DOT_R = 4
     DOT_GAP = 12
 
+    # Clicking a dot asks to bring that stage's output on screen (the owner
+    # selects the row + decodes that one series). Emits the stage name; the
+    # row wraps it with its path.
+    stage_clicked = Signal(str)
+
     def __init__(self, stages=PIPELINE_STAGES, parent=None):
         super().__init__(parent)
         self.stages = tuple(stages)
         self._statuses = {key: "not_started" for key in self.stages}
+        # Index of the dot under the cursor (-1 = none), driving the hover halo.
+        self._hover_idx = -1
         self.setFixedSize(self.DOT_GAP * len(self.stages), 2 * self.DOT_R + 6)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        # Track motion so the dots can light up and swap the cursor per-dot; the
+        # tiny row is otherwise indistinguishable from a static status readout.
+        self.setMouseTracking(True)
 
     def set_statuses(self, statuses: dict[str, str]) -> None:
         for key in self.stages:
@@ -146,6 +157,50 @@ class MiniRail(QWidget):
         fill, ring = _node_style(self._statuses[stage], stage_accent(stage))
         return (fill.name() if fill is not None else None, ring.name())
 
+    def _clickable_idx_at(self, pos) -> int:
+        """Index of the dot under *pos*, or -1 if none / it's an 'off' stage.
+
+        An 'off' (disabled) stage has no output to show, so it neither responds
+        to a click nor lights up on hover — matching ``StageSpine``.
+        """
+        idx = int(pos.x() // self.DOT_GAP)
+        if 0 <= idx < len(self.stages) and self._statuses[self.stages[idx]] != "off":
+            return idx
+        return -1
+
+    def _tooltip_for(self, stage: str) -> str:
+        phrase = _STATUS_TOOLTIP.get(self._statuses[stage], self._statuses[stage])
+        return f"{stage.capitalize()}: {phrase}"
+
+    def mousePressEvent(self, event) -> None:  # pragma: no cover - GUI event
+        idx = self._clickable_idx_at(event.pos())
+        if idx >= 0:
+            self.stage_clicked.emit(self.stages[idx])
+
+    def mouseMoveEvent(self, event) -> None:  # pragma: no cover - GUI event
+        idx = self._clickable_idx_at(event.pos())
+        self.setCursor(Qt.PointingHandCursor if idx >= 0 else Qt.ArrowCursor)
+        if idx != self._hover_idx:
+            self._hover_idx = idx
+            self.update()
+
+    def leaveEvent(self, _event) -> None:  # pragma: no cover - GUI event
+        if self._hover_idx != -1:
+            self._hover_idx = -1
+            self.update()
+
+    def event(self, event):  # pragma: no cover - GUI event
+        if event.type() == QEvent.ToolTip:
+            idx = int(event.pos().x() // self.DOT_GAP)
+            if 0 <= idx < len(self.stages):
+                QToolTip.showText(
+                    event.globalPos(), self._tooltip_for(self.stages[idx]), self
+                )
+            else:
+                QToolTip.hideText()
+            return True
+        return super().event(event)
+
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -153,11 +208,20 @@ class MiniRail(QWidget):
         r = self.DOT_R
         for i, stage in enumerate(self.stages):
             cx = self.DOT_GAP * i + self.DOT_GAP / 2.0
-            fill, ring = _node_style(self._statuses[stage], stage_accent(stage))
-            if self._statuses[stage] == "off":
+            status = self._statuses[stage]
+            fill, ring = _node_style(status, stage_accent(stage))
+            if status == "off":
                 painter.setPen(QPen(ring, 2, Qt.SolidLine, Qt.RoundCap))
                 painter.drawLine(int(cx - r), int(cy), int(cx + r), int(cy))
                 continue
+            if i == self._hover_idx:
+                # Light the dot up under the cursor so it reads as a button.
+                halo = QColor(ring)
+                halo.setAlpha(70)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(halo))
+                hr = r + 3
+                painter.drawEllipse(QRectF(cx - hr, cy - hr, 2 * hr, 2 * hr))
             centre = fill if fill is not None else self.palette().color(self.backgroundRole())
             painter.setPen(QPen(ring, 1.5))
             painter.setBrush(QBrush(centre))
@@ -190,6 +254,7 @@ class ExperimentRow(QWidget):
 
     selected = Signal(str)  # legacy single-select (kept for back-compat callers)
     clicked = Signal(str, int)  # path, modifier flag: 0 plain, 1 ctrl, 2 shift
+    stage_clicked = Signal(str, str)  # path, stage — one dot's on-demand load
 
     def __init__(
         self,
@@ -228,6 +293,9 @@ class ExperimentRow(QWidget):
         self._name_label = self._value_labels[0]
 
         self.mini_rail = MiniRail()
+        self.mini_rail.stage_clicked.connect(
+            lambda stage: self.stage_clicked.emit(self._path, stage)
+        )
         layout.addWidget(self.mini_rail)
 
         self._chip = QLabel("queued")
@@ -274,8 +342,15 @@ class ExperimentRow(QWidget):
                 label.setStyleSheet(f"color: {color};")
 
     def set_stage_statuses(self, statuses: dict[str, str]) -> None:
+        """Merge in a (possibly partial) set of stage statuses.
+
+        ``statuses`` may name only some stages (e.g. a single row repainted by
+        ``apply_row_statuses``) — the chip label is derived from the mini-rail's
+        full merged state, not just this call's keys, so a partial update can't
+        under-report it.
+        """
         self.mini_rail.set_statuses(statuses)
-        label = overall_status(statuses)
+        label = overall_status(self.mini_rail._statuses)
         text = _CHIP_TEXT[label]
         self._chip.setText(text)
         self._chip.setStyleSheet(f"color: {experiment_status_color(text)};")
@@ -304,6 +379,9 @@ class ExperimentsList(QWidget):
     run_all_requested = Signal()
     cancel_run_all_requested = Signal()
     output_dir_changed = Signal()
+    # Emitted when a row's stage dot is clicked, asking the owner to bring that
+    # experiment's stage on screen (select the row + decode that one series).
+    stage_load_requested = Signal(str, str)  # path, stage
 
     def __init__(
         self,
@@ -921,11 +999,44 @@ class ExperimentsList(QWidget):
         self.set_experiments(remaining)
 
     def refresh_statuses(self) -> None:
+        """Re-read every row's stage status from disk and repaint (eager).
+
+        ``_status_fn`` reads which measures each row's `TFMresults.ome.tif`
+        carries — a header-only walk (no pixel decode), cached by
+        ``ntfm.populated_measures`` — so every row's dots show the real on-disk
+        status the moment folders land in the list. Cheap enough to run
+        synchronously across the whole list.
+        """
         if self._status_fn is None:
             return
         for row in self._rows:
-            row.set_stage_statuses(self._status_fn(row.path))
+            try:
+                statuses = self._status_fn(row.path)
+            except Exception:
+                statuses = {}
+            row.set_stage_statuses(statuses)
         self._update_meta()
+
+    def apply_row_statuses(self, path: str, statuses: dict[str, str]) -> None:
+        """Paint one row's already-known statuses directly, no re-scan of the list.
+
+        For a caller that already computed one experiment's status — a batch
+        folder that just finished — so a single row repaints without walking
+        every other row's `.ntfm`.
+        """
+        for row in self._rows:
+            if row.path == path:
+                row.set_stage_statuses(statuses)
+                break
+
+    def _on_row_stage_clicked(self, path: str, stage: str) -> None:
+        """A row's stage dot was clicked: ask the owner to show that stage.
+
+        The dots already carry the eager on-disk status, so nothing needs
+        fetching here — this just forwards the request to decode that stage's
+        pixels into the viewer (the owner selects the row and loads the series).
+        """
+        self.stage_load_requested.emit(path, stage)
 
     def follow_streaming(self, path: str) -> None:
         """Track the position a live run is processing (worklist §3).
@@ -1090,6 +1201,7 @@ class ExperimentsList(QWidget):
             ]
             row = ExperimentRow(path, values or None)
             row.clicked.connect(self._on_row_clicked)
+            row.stage_clicked.connect(self._on_row_stage_clicked)
             row.set_selected(path in self._selected_paths)
             self._rows_box.addWidget(row)
             self._rows.append(row)

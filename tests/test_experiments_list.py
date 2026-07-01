@@ -75,6 +75,60 @@ def test_minirail_off_dot_is_recessed_and_distinct_from_not_started(app):
     assert off_ring != none_ring  # off uses the recessed grey, not the dim grey
 
 
+def test_minirail_click_emits_the_stage_under_the_cursor(app):
+    from qtpy.QtCore import QEvent, QPointF, Qt as _Qt
+    from qtpy.QtGui import QMouseEvent
+
+    rail = MiniRail()
+    seen = []
+    rail.stage_clicked.connect(seen.append)
+    # The third dot (index 2, "force") sits at x ~= DOT_GAP*2.5.
+    x = rail.DOT_GAP * 2.5
+    event = QMouseEvent(
+        QEvent.MouseButtonPress, QPointF(x, rail.height() / 2),
+        _Qt.LeftButton, _Qt.LeftButton, _Qt.NoModifier,
+    )
+    rail.mousePressEvent(event)
+    assert seen == ["force"]
+
+
+def test_minirail_off_dot_is_not_clickable(app):
+    """A disabled stage has no output to bring up, so its dot ignores clicks."""
+    from qtpy.QtCore import QEvent, QPointF, Qt as _Qt
+    from qtpy.QtGui import QMouseEvent
+
+    rail = MiniRail()
+    rail.set_statuses({"stress": "off"})
+    seen = []
+    rail.stage_clicked.connect(seen.append)
+    x = rail.DOT_GAP * 3.5  # index 3, "stress"
+    event = QMouseEvent(
+        QEvent.MouseButtonPress, QPointF(x, rail.height() / 2),
+        _Qt.LeftButton, _Qt.LeftButton, _Qt.NoModifier,
+    )
+    rail.mousePressEvent(event)
+    assert seen == []
+
+
+def test_minirail_tooltip_names_stage_and_status(app):
+    rail = MiniRail()
+    rail.set_statuses({"displacement": "done", "force": "ready"})
+    assert "Displacement" in rail._tooltip_for("displacement")
+    assert "click" in rail._tooltip_for("displacement").lower()
+    # A stage with no output must not promise a view.
+    assert "click" not in rail._tooltip_for("force").lower()
+
+
+def test_minirail_clickable_idx_skips_off_and_out_of_range(app):
+    from qtpy.QtCore import QPoint
+
+    rail = MiniRail()
+    rail.set_statuses({"stress": "off"})
+    assert rail._clickable_idx_at(QPoint(int(rail.DOT_GAP * 1.5), 5)) == 1  # displacement
+    assert rail._clickable_idx_at(QPoint(int(rail.DOT_GAP * 3.5), 5)) == -1  # off stress
+    assert rail._clickable_idx_at(QPoint(rail.DOT_GAP * 10, 5)) == -1  # past the end
+
+
 from napariTFM.widgets._experiments_list import ExperimentRow, overall_status
 
 
@@ -432,6 +486,52 @@ def test_refresh_statuses_calls_status_fn_for_each_row(app):
     calls.clear()
     widget.refresh_statuses()
     assert set(calls) == {"/data/a", "/data/b"}
+
+
+def test_apply_row_statuses_paints_one_row_without_a_disk_read(app):
+    widget = ExperimentsList(status_fn=lambda path: {
+        "preprocessing": "not_started", "displacement": "not_started",
+        "force": "not_started", "stress": "off",
+    })
+    widget.set_experiments(["/data/a", "/data/b"])
+
+    widget.apply_row_statuses("/data/a", {
+        "preprocessing": "done", "displacement": "done",
+        "force": "done", "stress": "done",
+    })
+    assert widget._rows[0].mini_rail._statuses["force"] == "done"
+
+
+def test_on_row_stage_clicked_requests_that_stage_load(app):
+    """Clicking a row's 'force' dot forwards a load request (path, stage) to
+    the owner — the dots already carry eager status, so nothing is fetched here.
+    """
+    widget = ExperimentsList(status_fn=lambda path: {
+        "preprocessing": "done", "displacement": "done",
+        "force": "done", "stress": "not_started",
+    })
+    widget.set_experiments(["/data/a"])
+    seen = []
+    widget.stage_load_requested.connect(lambda p, s: seen.append((p, s)))
+
+    widget._on_row_stage_clicked("/data/a", "force")
+    assert seen == [("/data/a", "force")]
+
+
+def test_eager_status_paints_real_disk_state_on_every_refresh(app):
+    """Status is eager — each refresh paints exactly what `status_fn` reports
+    for every row (no per-stage 'reveal' gate holding dots back).
+    """
+    widget = ExperimentsList(status_fn=lambda path: {
+        "preprocessing": "done", "displacement": "done",
+        "force": "ready", "stress": "not_started",
+    })
+    widget.set_experiments(["/data/a"])
+    assert widget._rows[0].mini_rail._statuses["displacement"] == "done"
+
+    widget.refresh_statuses()
+    assert widget._rows[0].mini_rail._statuses["displacement"] == "done"
+    assert widget._rows[0].mini_rail._statuses["force"] == "ready"
 
 
 # -- Run all (P4.3) ------------------------------------------------------

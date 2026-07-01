@@ -140,11 +140,33 @@ class _StubDataManager:
     def mark_artifact_error(self, key, error):
         self.artifact_errors.append((key, error))
 
+    def set_displacement_results(self, results, path=None, source="", dirty=False):
+        self.displacement_results = results
+        if self.force_results is not None:
+            self.force_results = None
+        if self.stress_results is not None:
+            self.stress_results = None
+        self.notify_changed()
+
+    def set_force_results(self, results, path=None, source="", dirty=False):
+        self.force_results = results
+        if self.stress_results is not None:
+            self.stress_results = None
+        self.notify_changed()
+
+    def set_stress_results(self, results, path=None, source="", dirty=False):
+        self.stress_results = results
+        self.notify_changed()
+
 
 class _StubVisualizationManager:
     def __init__(self, viewer, data_manager):
         self.viewer = viewer
         self.data_manager = data_manager
+        self.vector_stream_calls = []
+        self.vector_stream_frames = []
+        self.stress_stream_calls = []
+        self.stress_stream_frames = []
 
     # Run-all snapshots/restores layer visibility around the streaming
     # takeover (worklist §4); the stub has no real viewer, so these no-op.
@@ -153,6 +175,18 @@ class _StubVisualizationManager:
 
     def restore_layer_visibility(self, snapshot):
         pass
+
+    def begin_vector_field_stream(self, kind, num_frames, vis_params):
+        self.vector_stream_calls.append((kind, num_frames, dict(vis_params)))
+
+    def stream_vector_field_frame(self, kind, frame_index, field_frame):
+        self.vector_stream_frames.append((kind, frame_index, field_frame))
+
+    def begin_stress_stream(self, num_frames, max_stress, downscale_factor):
+        self.stress_stream_calls.append((num_frames, max_stress, downscale_factor))
+
+    def stream_stress_frame(self, frame_index, stress_tensor_frame):
+        self.stress_stream_frames.append((frame_index, stress_tensor_frame))
 
 
 class _StubController(QObject):
@@ -702,6 +736,84 @@ def test_experiment_stage_status_disabled_stress_reads_off(monkeypatch, app, tmp
     assert statuses["force"] == "done"
 
 
+def test_experiment_stage_status_reads_output_eagerly(monkeypatch, app, tmp_path):
+    """Status is eager: a discovered row's dots reflect which measures the
+    `.ntfm` actually carries, right away — no click needed. Reading that is a
+    header-only walk, so it's fine to do for every row.
+    """
+    import numpy as np
+
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "exp"
+    folder.mkdir()
+    (folder / "beads.tif").write_bytes(b"x")
+    (folder / "reference.tif").write_bytes(b"x")
+    _write_stage_ntfm(folder, displacement_field=np.ones((1, 2, 2, 2)))
+
+    statuses = widget._experiment_stage_status(str(folder))
+    assert statuses["preprocessing"] == "done"     # a populated measure proves it ran
+    assert statuses["displacement"] == "done"      # its series is present on disk
+    assert statuses["force"] == "ready"            # displacement done -> force ready
+    assert statuses["stress"] == "off"             # disabled by default, takes priority
+
+
+def test_stage_node_click_loads_only_that_stage_data(monkeypatch, app, tmp_path):
+    """Clicking a stage circle decodes only that stage's series into the viewer
+    (display-only); other stages' data stays unloaded. Selection alone loads no
+    output, and the status dots are eager regardless of what's been clicked.
+    """
+    import numpy as np
+
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "exp"
+    folder.mkdir()
+    _write_stage_ntfm(
+        folder,
+        displacement_field=np.ones((1, 2, 2, 2)),
+        force_field=np.ones((1, 2, 2, 2)) * 5.0,
+    )
+    _select(widget, folder)
+    try:
+        # Selecting the experiment decodes no output series.
+        assert widget.data_manager.displacement_results is None
+        assert widget.data_manager.force_results is None
+
+        widget._on_stage_node_clicked("force")
+
+        # Only force's series was decoded; displacement stays unloaded.
+        assert widget.data_manager.force_results is not None
+        assert widget.data_manager.displacement_results is None
+    finally:
+        widget.close()
+        widget.deleteLater()
+
+
+def test_stage_node_click_narrates_load_in_status_label(monkeypatch, app, tmp_path):
+    """Clicking a circle reads/decodes on the GUI thread, so it must tell the
+    user what's happening: a 'loaded' confirmation for a stage with output, and
+    a plain 'nothing to show' for a stage with none (so the click isn't silent).
+    """
+    import numpy as np
+
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "exp"
+    folder.mkdir()
+    _write_stage_ntfm(folder, force_field=np.ones((1, 2, 2, 2)) * 5.0)
+    _select(widget, folder)
+    try:
+        widget._on_stage_node_clicked("force")
+        assert "Force" in widget.status_label.text()
+        assert "loaded" in widget.status_label.text().lower()
+
+        # Displacement has no series in this container.
+        widget._on_stage_node_clicked("displacement")
+        assert "Displacement" in widget.status_label.text()
+        assert "no" in widget.status_label.text().lower()
+    finally:
+        widget.close()
+        widget.deleteLater()
+
+
 class _StubResult:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
@@ -1142,7 +1254,7 @@ def test_run_all_parallel_reloads_only_the_followed_folder_on_done(monkeypatch, 
 
     loaded = []
     monkeypatch.setattr(
-        widget, "_load_active_experiment_results", lambda path: loaded.append(path)
+        widget, "_load_stage_results", lambda path, stages: loaded.append(path)
     )
     refreshed = []
     monkeypatch.setattr(widget, "refresh_stage_statuses", lambda: refreshed.append(True))
@@ -1203,7 +1315,7 @@ def test_run_all_parallel_retargets_reload_when_followed_folder_changes_mid_run(
 
     loaded = []
     monkeypatch.setattr(
-        widget, "_load_active_experiment_results", lambda path: loaded.append(path)
+        widget, "_load_stage_results", lambda path, stages: loaded.append(path)
     )
     monkeypatch.setattr(widget, "refresh_stage_statuses", lambda: None)
 

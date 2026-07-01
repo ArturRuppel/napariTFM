@@ -64,7 +64,7 @@ class StageSection(QWidget):
         self._accent_above = self._accent
         self._accent_below = self._accent
 
-        self.spine = StageSpine(self._accent, status=status)
+        self.spine = StageSpine(self._accent, status=status, label=self._title)
 
         outer = QHBoxLayout()
         outer.setContentsMargins(0, 0, 0, 0)

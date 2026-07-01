@@ -574,10 +574,17 @@ class napariTFMWidget(QWidget):
         )
         self.experiments_list.run_all_requested.connect(self._run_all_experiments)
         self.experiments_list.cancel_run_all_requested.connect(self._cancel_run_all)
+        self.experiments_list.stage_load_requested.connect(self._on_row_stage_clicked)
         self._active_batch = None
         container_layout.addWidget(self.experiments_list)
 
         self._active_experiment: str | None = None
+        # ntfm-backed stages whose arrays are currently decoded into DataManager
+        # + the viewer for the active experiment. Loading is display-only and
+        # on-demand: a stage's series is decoded from `TFMresults.ome.tif` only
+        # when its circle is clicked (calculations always re-read from disk, so
+        # nothing needs to be resident just to run). Reset on experiment switch.
+        self._loaded_stage_data: set[str] = set()
         self._pipeline_context_label = QLabel("Pipeline")
         self._pipeline_context_label.setStyleSheet(section_label_style())
         container_layout.addWidget(self._pipeline_context_label)
@@ -739,6 +746,7 @@ class napariTFMWidget(QWidget):
                 section.enabled_changed.connect(
                     lambda _enabled, k=key: self._on_stage_enabled_changed(k)
                 )
+            section.spine.clicked.connect(lambda k=key: self._on_stage_node_clicked(k))
 
         # While a stage's controller has the UI frozen for a long-running op, flip
         # that stage's pill into 'running' so the header's run/cancel button shows
@@ -1138,7 +1146,12 @@ class napariTFMWidget(QWidget):
                 # CURRENT value, not a value captured once at run start, so
                 # "follow" tracks whatever the user is looking at right now.
                 if status == "done" and folder == self._active_experiment:
-                    self._load_active_experiment_results(folder)
+                    # The user is following this run, so a finished folder's
+                    # results are decoded into the viewer for them (the live
+                    # "follow" feature — distinct from manual selection, which
+                    # loads no output until a circle is clicked). Status is
+                    # already eager; this just brings the pixels on screen.
+                    self._load_stage_results(folder, self._NTFM_STAGES)
                     self.refresh_stage_statuses()
             if finished:
                 timer.stop()
@@ -1158,6 +1171,10 @@ class napariTFMWidget(QWidget):
         dots (top) and the section dots (below) both read the one on-disk truth.
         """
         self._persist_active_experiment(stage_key)
+        # Whatever just got persisted is already the in-memory data that
+        # produced it (that's what "persist" means here) — it's on screen and
+        # resident, so mark it loaded without a disk re-read.
+        self._loaded_stage_data.update(self._NTFM_STAGES)
         self.refresh()
 
     def _persist_active_experiment(self, stage_key: str) -> None:
@@ -1283,7 +1300,13 @@ class napariTFMWidget(QWidget):
             section.set_progress(fraction)
 
     def _on_batch_progress(self, folder: str, status: str) -> None:
-        """Live per-folder feedback for Run-all: walk the rail, then refresh (P4)."""
+        """Live per-folder feedback for Run-all: walk the rail, then refresh (P4).
+
+        'done'/'error' name the one folder that just changed, so read *that*
+        folder's real `.ntfm` status directly instead of rescanning every row
+        in the list (the bulk `refresh_statuses` path is input-only/cheap and
+        would otherwise paint this just-finished folder back to 'not_started').
+        """
         from pathlib import Path
 
         name = Path(folder).name
@@ -1291,10 +1314,10 @@ class napariTFMWidget(QWidget):
             self.experiments_list.mark_running(folder)
             self.status_label.setText(f"Batch — running {name}")
         elif status == "done":
-            self.experiments_list.refresh_statuses()
+            self.experiments_list.apply_row_statuses(folder, self._experiment_stage_status(folder))
             self.status_label.setText(f"Batch — finished {name}")
         elif status == "error":
-            self.experiments_list.refresh_statuses()
+            self.experiments_list.apply_row_statuses(folder, self._experiment_stage_status(folder))
             self.status_label.setText(f"Batch — failed {name}")
         elif status == "cancelled":
             self.experiments_list.refresh_statuses()
@@ -1321,10 +1344,12 @@ class napariTFMWidget(QWidget):
         # The section dots (below) mirror the same persisted-.ntfm truth as the
         # experiments-list row dots (top), so the two can never disagree for the
         # active experiment — including treating an all-NaN stage (e.g. a failed
-        # force) as not-done in both. Each panel still refreshes to update its
-        # per-artifact file dots and tooltips (in-memory cache state), but the
-        # stage's overall spine verdict comes from disk. With no experiment
-        # selected there is no disk truth, so the in-memory verdict stands.
+        # force) as not-done in both. Status is eager: reading which measures a
+        # `.ntfm` carries is a cheap header read (no pixel decode), so every
+        # stage's dot shows the on-disk truth without waiting for a click. Each
+        # panel still refreshes to update its per-artifact file dots and tooltips
+        # (in-memory cache state). With no experiment selected there is no disk
+        # truth, so the in-memory verdict stands.
         disk_status = (
             self._experiment_stage_status(self._active_experiment)
             if self._active_experiment
@@ -1335,6 +1360,51 @@ class napariTFMWidget(QWidget):
             status = disk_status.get(key, memory_status) if disk_status else memory_status
             self._stage_sections_by_key[key].set_status(status)
         self.experiments_list.refresh_statuses()
+
+    def _on_stage_node_clicked(self, key: str) -> None:
+        """Decode one stage's series into the viewer (display-only, on demand).
+
+        Clicking a stage's spine circle is what pulls that stage's arrays out of
+        the active experiment's `TFMresults.ome.tif` and streams them to the
+        viewer — nothing else is loaded. Purely for display: calculations always
+        re-read from disk, so no prerequisite stage needs to be resident. Status
+        dots are already eager, so no status change is needed here.
+        """
+        if self._active_experiment:
+            self._load_stage_for_display(self._active_experiment, key)
+
+    def _on_row_stage_clicked(self, path: str, stage: str) -> None:
+        """A list row's stage dot was clicked: show that experiment's stage.
+
+        Selects the row if it isn't already active (loading its inputs, same as
+        any selection), then decodes just the clicked stage's series into the
+        viewer. Display-only, one series — the same action as clicking the
+        matching spine circle below, reachable straight from the list.
+        """
+        if path != self._active_experiment:
+            self.experiments_list.set_active(path)
+        self._load_stage_for_display(path, stage)
+
+    def _load_stage_for_display(self, path: str, stage: str) -> None:
+        """Load one stage's output for viewing, narrating it in the status line.
+
+        A circle click reads and decodes an OME-TIFF series on the GUI thread,
+        which can take a moment, so it announces "Loading …" (forcing that text
+        to paint before the blocking read) and then reports whether the stage
+        actually had output to show — a click on a stage with no output is
+        otherwise a silent no-op.
+        """
+        label = stage.capitalize()
+        self.status_label.setText(f"Loading {label}…")
+        self.status_label.repaint()
+        self._load_stage_results(path, [stage])
+        # Report by what actually landed in the data manager, not merely that a
+        # container existed: a container can hold force but no displacement, and
+        # a click on the empty stage must say so rather than claim a load.
+        shown = getattr(self.data_manager, f"{stage}_results", None) is not None
+        self.status_label.setText(
+            f"{label} loaded" if shown else f"No {label} output to show yet"
+        )
 
     def _on_stage_enabled_changed(self, key: str) -> None:
         self.refresh_stage_statuses()
@@ -1355,6 +1425,12 @@ class napariTFMWidget(QWidget):
         immediate predecessor being done makes it 'ready' (the single run-next
         frontier); upstream of that is 'not_started'. Disabled stages read
         'off' (stress is exempt from auto-skip per D1).
+
+        This is eager and runs for every discovered row: reading which measures
+        a `.ntfm` carries is a header-only walk of the OME-TIFF (no pixel decode)
+        and is cached by `ntfm.populated_measures`, so painting real dots the
+        moment folders land in the list is cheap. Decoding a stage's pixels into
+        the viewer is the separate, click-driven step (`_load_stage_results`).
         """
         from pathlib import Path
 
@@ -1404,16 +1480,16 @@ class napariTFMWidget(QWidget):
 
         return {stage: _status(stage) for stage in PIPELINE_STAGES}
 
-    def _load_active_experiment_results(self, path: str) -> None:
-        """Restore previously-computed results from an experiment's .ntfm into memory.
+    # ntfm-backed pipeline stages, in dependency order. "preprocessing" is
+    # excluded: it's input-file-only and never needs a `.ntfm` read.
+    _NTFM_STAGES = ("displacement", "force", "stress")
 
-        Called when a processed experiment is selected so downstream widgets
-        (Force, Stress) see their prerequisites and enable their Run buttons
-        without requiring the user to re-run upstream stages in this session.
+    def _read_stage_arrays(self, path: str):
+        """Read the active experiment's `.ntfm` once, for on-demand stage loads.
 
-        Reads the canonical .ntfm at the same path that the batch writer and
-        the stage-status dots use.  Silently returns if the file does not
-        exist or is unreadable.
+        Returns ``None`` if there's no persisted output yet, or it's
+        unreadable. Called on a circle click to bring a stage's pixels into the
+        viewer — display-only, so calculations never depend on it being resident.
         """
         import types
 
@@ -1421,7 +1497,6 @@ class napariTFMWidget(QWidget):
 
         from napariTFM.utilities import ntfm as _ntfm
         from napariTFM.utilities.batch_output import RESULTS_FILENAME, experiment_output_dir
-        from pathlib import Path
 
         try:
             ntfm_path = (
@@ -1429,7 +1504,7 @@ class napariTFMWidget(QWidget):
                 / RESULTS_FILENAME
             )
             if not ntfm_path.exists():
-                return
+                return None
 
             df, metadata = _ntfm.read_ntfm(ntfm_path)
             arrays = _ntfm.tidy_to_arrays(df)
@@ -1490,109 +1565,141 @@ class napariTFMWidget(QWidget):
                 "time_interval_units": "min",
             }
 
-            def _present(arr):
-                """True when an array has at least one non-NaN value."""
-                return arr is not None and not np.all(np.isnan(arr))
-
-            # Restore stages in dependency order (displacement → force → stress)
-            # so the downstream-invalidation in set_displacement_results never
-            # clears a stage we are about to set.
-            # Restoring into DataManager alone leaves the viewer empty until a
-            # stage re-runs, so each restored stage is also pushed through the
-            # same begin_*_stream/stream_*_frame calls a live run uses — same
-            # end state, including the "only this stage's layers visible"
-            # take-over (worklist §4), just sourced from disk instead of a
-            # fresh computation.
-            disp = arrays.get("displacement_field")
-            if _present(disp):
-                result = types.SimpleNamespace(
-                    displacement_field=disp,
-                    physical_scale=physical_scale,
-                    original_shape=disp.shape[1:3],
-                    displacement_field_shape=disp.shape[1:3],
-                    parameters=disp_params,
-                )
-                self.data_manager.set_displacement_results(
-                    result, source="loaded", dirty=False
-                )
-                self.visualization_manager.begin_vector_field_stream(
-                    'displacement', disp.shape[0],
-                    {
-                        'v_max': disp_params.d_max,
-                        'vector_stride': disp_params.disp_vector_stride,
-                        'arrow_scale': disp_params.disp_arrow_scale,
-                        'downscale_factor': disp_params.downscale_factor,
-                    },
-                )
-                for frame_index in range(disp.shape[0]):
-                    self.visualization_manager.stream_vector_field_frame(
-                        'displacement', frame_index, disp[frame_index]
-                    )
-
-            force = arrays.get("force_field")
-            if _present(force):
-                result = types.SimpleNamespace(
-                    force_field=force,
-                    physical_scale=physical_scale,
-                    original_shape=force.shape[1:3],
-                    force_shape=force.shape[1:3],
-                    parameters=force_params,
-                )
-                self.data_manager.set_force_results(
-                    result, source="loaded", dirty=False
-                )
-                self.visualization_manager.begin_vector_field_stream(
-                    'force', force.shape[0],
-                    {
-                        'v_max': force_params.f_max,
-                        'vector_stride': force_params.force_vector_stride,
-                        'arrow_scale': force_params.force_arrow_scale,
-                        'downscale_factor': force_params.downscale_factor,
-                    },
-                )
-                for frame_index in range(force.shape[0]):
-                    self.visualization_manager.stream_vector_field_frame(
-                        'force', frame_index, force[frame_index]
-                    )
-
-            stress = arrays.get("stress_tensor")
-            if _present(stress):
-                result = types.SimpleNamespace(
-                    stress_tensor=stress,
-                    physical_scale=physical_scale,
-                    original_shape=stress.shape[1:3],
-                    stress_shape=stress.shape[1:3],
-                    parameters=stress_params,
-                )
-                self.data_manager.set_stress_results(
-                    result, source="loaded", dirty=False
-                )
-                # Stress visualization upscales by the force grid's downscale
-                # factor — mirrors stress_widget's live-run lookup, with the
-                # same fallback to 1 when no force results are available.
-                force_results = self.data_manager.force_results
-                stress_downscale = (
-                    force_results.parameters.downscale_factor
-                    if force_results is not None
-                    else 1
-                )
-                self.visualization_manager.begin_stress_stream(
-                    num_frames=stress.shape[0],
-                    max_stress=stress_params.max_stress,
-                    downscale_factor=stress_downscale,
-                )
-                for frame_index in range(stress.shape[0]):
-                    self.visualization_manager.stream_stress_frame(
-                        frame_index, stress[frame_index]
-                    )
-
-        except Exception:
-            logger.exception(
-                "Failed to load results from .ntfm for %s", path
+            return types.SimpleNamespace(
+                arrays=arrays,
+                physical_scale=physical_scale,
+                disp_params=disp_params,
+                force_params=force_params,
+                stress_params=stress_params,
             )
+        except Exception:
+            logger.exception("Failed to load results from .ntfm for %s", path)
+            return None
+
+    @staticmethod
+    def _array_present(arr) -> bool:
+        """True when an array has at least one non-NaN value."""
+        import numpy as np
+
+        return arr is not None and not np.all(np.isnan(arr))
+
+    def _apply_displacement_result(self, data) -> None:
+        import types
+
+        disp = data.arrays.get("displacement_field")
+        if not self._array_present(disp):
+            return
+        result = types.SimpleNamespace(
+            displacement_field=disp,
+            physical_scale=data.physical_scale,
+            original_shape=disp.shape[1:3],
+            displacement_field_shape=disp.shape[1:3],
+            parameters=data.disp_params,
+        )
+        self.data_manager.set_displacement_results(result, source="loaded", dirty=False)
+        self.visualization_manager.begin_vector_field_stream(
+            'displacement', disp.shape[0],
+            {
+                'v_max': data.disp_params.d_max,
+                'vector_stride': data.disp_params.disp_vector_stride,
+                'arrow_scale': data.disp_params.disp_arrow_scale,
+                'downscale_factor': data.disp_params.downscale_factor,
+            },
+        )
+        for frame_index in range(disp.shape[0]):
+            self.visualization_manager.stream_vector_field_frame(
+                'displacement', frame_index, disp[frame_index]
+            )
+
+    def _apply_force_result(self, data) -> None:
+        import types
+
+        force = data.arrays.get("force_field")
+        if not self._array_present(force):
+            return
+        result = types.SimpleNamespace(
+            force_field=force,
+            physical_scale=data.physical_scale,
+            original_shape=force.shape[1:3],
+            force_shape=force.shape[1:3],
+            parameters=data.force_params,
+        )
+        self.data_manager.set_force_results(result, source="loaded", dirty=False)
+        self.visualization_manager.begin_vector_field_stream(
+            'force', force.shape[0],
+            {
+                'v_max': data.force_params.f_max,
+                'vector_stride': data.force_params.force_vector_stride,
+                'arrow_scale': data.force_params.force_arrow_scale,
+                'downscale_factor': data.force_params.downscale_factor,
+            },
+        )
+        for frame_index in range(force.shape[0]):
+            self.visualization_manager.stream_vector_field_frame(
+                'force', frame_index, force[frame_index]
+            )
+
+    def _apply_stress_result(self, data) -> None:
+        import types
+
+        stress = data.arrays.get("stress_tensor")
+        if not self._array_present(stress):
+            return
+        result = types.SimpleNamespace(
+            stress_tensor=stress,
+            physical_scale=data.physical_scale,
+            original_shape=stress.shape[1:3],
+            stress_shape=stress.shape[1:3],
+            parameters=data.stress_params,
+        )
+        self.data_manager.set_stress_results(result, source="loaded", dirty=False)
+        # Stress visualization upscales by the force grid's downscale factor.
+        # Read it from the parsed file params, not `data_manager.force_results`,
+        # so stress displays correctly even when its circle is clicked on its
+        # own (force never loaded into memory) — the two share one config.
+        stress_downscale = getattr(data.force_params, "downscale_factor", 1)
+        self.visualization_manager.begin_stress_stream(
+            num_frames=stress.shape[0],
+            max_stress=data.stress_params.max_stress,
+            downscale_factor=stress_downscale,
+        )
+        for frame_index in range(stress.shape[0]):
+            self.visualization_manager.stream_stress_frame(
+                frame_index, stress[frame_index]
+            )
+
+    def _load_stage_results(self, path: str, stages) -> None:
+        """Decode only the requested ntfm-backed stages' arrays into the viewer.
+
+        Reads the persisted table once (see `_read_stage_arrays`) but applies
+        only the requested stages, so clicking one stage's circle never also
+        streams a stage nobody asked to see. Display-only — calculations always
+        re-read from disk, so no prerequisite stage is pulled in.
+        """
+        stages = [s for s in self._NTFM_STAGES if s in stages]
+        if not stages:
+            return []
+        data = self._read_stage_arrays(path)
+        if data is None:
+            return []
+        # Applied in dependency order (displacement → force → stress) so that if
+        # a caller does ask for several at once, set_displacement_results'
+        # downstream-invalidation never clears a stage this same call just set.
+        if "displacement" in stages:
+            self._apply_displacement_result(data)
+        if "force" in stages:
+            self._apply_force_result(data)
+        if "stress" in stages:
+            self._apply_stress_result(data)
+        self._loaded_stage_data.update(stages)
+        return stages
 
     def _on_active_experiment_changed(self, path: str) -> None:
         self._active_experiment = path or None
+        # Selecting an experiment loads its inputs only (below); no output
+        # series is decoded until a circle is clicked, so nothing is resident
+        # for the newly-active experiment yet.
+        self._loaded_stage_data = set()
         # Switching experiments drops the previous one's in-memory results so they
         # can never be persisted into the newly selected experiment's .ntfm. The
         # dots fall back to the new experiment's on-disk truth (which may already
@@ -1614,10 +1721,10 @@ class napariTFMWidget(QWidget):
             # And actually load those files from disk into memory + the viewer, so
             # Preview and Run (which need the arrays loaded) work on selection.
             self.preprocessing_widget.load_input_files(self._active_experiment, input_files)
-            # Restore any previously-computed results from the experiment's .ntfm
-            # so downstream stages (Force, Stress) see their inputs and enable
-            # their Run buttons without requiring a re-run of upstream stages.
-            self._load_active_experiment_results(self._active_experiment)
+            # No output series is decoded on selection: the row/section dots
+            # already show the on-disk status eagerly, and a stage's pixels
+            # only stream in when its circle is clicked (calculations re-read
+            # from disk regardless, so nothing must be resident to run).
             # The mask is an external Stress input; load the discovered masks.tif
             # from disk into memory too, so Stress Run/Preview enable on selection
             # the same way beads/reference do — no manual layer load required.
