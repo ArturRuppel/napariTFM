@@ -1,16 +1,17 @@
 """A PipelineSink that reports stage/frame progress across a process boundary.
 
 Used by parallel Run-all workers (see ``batch_analysis._run_position_headless``):
-each worker process attaches one ``QueueProgressSink`` wrapping a
-``multiprocessing.Queue`` shared with the parent process, so the parent's
-150ms poll timer (``BatchAnalysis.poll_parallel_progress``) can drain real
-per-stage, per-frame progress instead of only learning a folder's terminal
-``done``/``error`` status when its worker fully returns.
+each worker process attaches one ``QueueProgressSink`` wrapping a queue
+(typically a ``multiprocessing.Manager().Queue()`` proxy -- see
+``BatchAnalysis.start_parallel``) shared with the parent process, so the
+parent's 150ms poll timer (``BatchAnalysis.poll_parallel_progress``) can
+drain real per-stage, per-frame progress instead of only learning a folder's
+terminal ``done``/``error`` status when its worker fully returns.
 
 Mirrors ``ViewerSink``'s fraction math exactly (see
 ``napariTFM.utilities.viewer_sink.ViewerSink``) so both sinks compute "how far
 into this stage are we" identically -- one delivers it via a Qt signal
-in-process, this one via a multiprocessing queue.
+in-process, this one via a cross-process queue.
 """
 
 from typing import Any, Optional
