@@ -41,20 +41,39 @@ Since `process_folder` already emits `stage_started` / `stage_frame` /
 to get those existing hooks across the process boundary and route them to the
 correct row's correct dot.
 
-### 1. IPC mechanism: a plain `multiprocessing.Queue`
+### 1. IPC mechanism: `multiprocessing.Manager().Queue()`
+
+> **Implementation-time correction (2026-07-01):** this section originally
+> chose option 1, a plain `multiprocessing.Queue`, and rejected option 2. That
+> turned out to be infeasible: a plain `ctx.Queue()` cannot be handed to an
+> already-running `ProcessPoolExecutor` via `submit()` — it raises
+> `RuntimeError: Queue objects should only be shared between processes
+> through inheritance`, because the executor re-pickles submitted args
+> through its own internal call queue, outside the process-launch
+> "inheritance" window a raw `Queue` requires. Verified independently with a
+> minimal repro during Task 2's implementation. Option 2 (rejected below) is
+> therefore the one actually used: a `Manager().Queue()` proxy pickles fine
+> through `submit()` at the cost of the extra manager-process IPC hop this
+> section originally argued against paying. The comparison below is kept for
+> the record; the "no capability actually needed" reasoning for rejecting
+> option 2 no longer applies — the capability needed turned out to be
+> "survives being pickled outside a process-launch context," which only a
+> proxy provides.
 
 Three options were considered:
 
-1. **Plain `multiprocessing.Queue`** (chosen). Created once per parallel run,
-   using the same spawn `mp_context` already used for the
-   `ProcessPoolExecutor`, and passed as an extra argument into every submitted
-   `_run_position_headless` call. Multiple worker processes `put()`
-   concurrently — exactly its designed usage. The parent drains it
-   non-blockingly (`get_nowait()` loop) from the existing 150ms poll timer.
-2. **`multiprocessing.Manager().Queue()`** — a proxy queue backed by an extra
-   manager server process. Same semantics as #1 with an added IPC hop per
-   message, for no capability actually needed (nothing here requires sharing
-   the queue with objects created after the workers are spawned).
+1. **Plain `multiprocessing.Queue`** (originally chosen; superseded, see
+   note above). Created once per parallel run, using the same spawn
+   `mp_context` already used for the `ProcessPoolExecutor`, and passed as an
+   extra argument into every submitted `_run_position_headless` call.
+   Multiple worker processes `put()` concurrently — exactly its designed
+   usage. The parent drains it non-blockingly (`get_nowait()` loop) from the
+   existing 150ms poll timer.
+2. **`multiprocessing.Manager().Queue()`** (now the actual implementation —
+   see note above). A proxy queue backed by an extra manager server process.
+   Same semantics as #1 with an added IPC hop per message, but unlike #1 it
+   actually survives being pickled into an already-running
+   `ProcessPoolExecutor`'s call queue.
 3. **Shared-memory counters** (`multiprocessing.Array` of per-slot floats) —
    avoids message passing, but `ProcessPoolExecutor` doesn't expose a stable
    "which physical worker owns which folder right now" mapping (futures are
