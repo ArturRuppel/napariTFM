@@ -75,6 +75,47 @@ def test_minirail_off_dot_is_recessed_and_distinct_from_not_started(app):
     assert off_ring != none_ring  # off uses the recessed grey, not the dim grey
 
 
+def test_minirail_set_stage_progress_stores_clamped_fraction(app):
+    rail = MiniRail()
+    rail.set_statuses({"force": "running"})
+    rail.set_stage_progress("force", 0.5)
+    assert rail._progress["force"] == 0.5
+    rail.set_stage_progress("force", 1.4)
+    assert rail._progress["force"] == 1.0
+    rail.set_stage_progress("force", -0.2)
+    assert rail._progress["force"] == 0.0
+
+
+def test_minirail_set_stage_progress_accepts_none(app):
+    rail = MiniRail()
+    rail.set_statuses({"force": "running"})
+    rail.set_stage_progress("force", 0.5)
+    rail.set_stage_progress("force", None)
+    assert rail._progress["force"] is None
+
+
+def test_minirail_status_change_away_from_running_clears_progress(app):
+    """A finished/restarted stage must not carry over its previous fill."""
+    rail = MiniRail()
+    rail.set_statuses({"force": "running"})
+    rail.set_stage_progress("force", 0.7)
+    rail.set_statuses({"force": "done"})
+    assert rail._progress["force"] is None
+
+    rail.set_statuses({"force": "running"})
+    assert rail._progress["force"] is None
+
+
+def test_minirail_paints_without_error_at_various_progress(app):
+    """Smoke test: the pie-wedge paint path doesn't raise for edge fractions."""
+    rail = MiniRail()
+    rail.set_statuses({"force": "running"})
+    for fraction in (0.0, 0.25, 0.99, 1.0):
+        rail.set_stage_progress("force", fraction)
+        rail.show()
+        app.processEvents()
+
+
 def test_minirail_click_emits_the_stage_under_the_cursor(app):
     from qtpy.QtCore import QEvent, QPointF, Qt as _Qt
     from qtpy.QtGui import QMouseEvent

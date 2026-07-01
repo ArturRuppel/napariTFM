@@ -138,6 +138,11 @@ class MiniRail(QWidget):
         super().__init__(parent)
         self.stages = tuple(stages)
         self._statuses = {key: "not_started" for key in self.stages}
+        # Fractional completion (0..1) of an in-flight "running" stage, or None
+        # when no per-frame progress is known (mirrors StageSpine._progress) --
+        # fed by a parallel Run-all's real per-stage/per-frame events instead of
+        # the flat placeholder mark_running() paints at submission time.
+        self._progress: dict[str, Optional[float]] = {key: None for key in self.stages}
         # Index of the dot under the cursor (-1 = none), driving the hover halo.
         self._hover_idx = -1
         self.setFixedSize(self.DOT_GAP * len(self.stages), 2 * self.DOT_R + 6)
@@ -150,6 +155,20 @@ class MiniRail(QWidget):
         for key in self.stages:
             if key in statuses:
                 self._statuses[key] = statuses[key]
+                if statuses[key] != "running":
+                    # Stale progress must not leak into this stage's next run
+                    # (mirrors StageSpine.set_status's same guard).
+                    self._progress[key] = None
+        self.update()
+
+    def set_stage_progress(self, stage: str, fraction: Optional[float]) -> None:
+        """Set the in-flight fractional completion (0..1) of one stage's dot.
+
+        Only visible while that stage's status is ``"running"``; harmless to
+        call at other times since :meth:`paintEvent` ignores it then. Pass
+        ``None`` to fall back to the plain solid-fill "running" dot.
+        """
+        self._progress[stage] = None if fraction is None else max(0.0, min(1.0, fraction))
         self.update()
 
     def appearance(self, stage: str) -> tuple[Optional[str], str]:
@@ -222,10 +241,25 @@ class MiniRail(QWidget):
                 painter.setBrush(QBrush(halo))
                 hr = r + 3
                 painter.drawEllipse(QRectF(cx - hr, cy - hr, 2 * hr, 2 * hr))
+            rect = QRectF(cx - r, cy - r, 2 * r, 2 * r)
+            progress = self._progress[stage]
+            if status == "running" and progress is not None:
+                # A pie wedge growing clockwise from 12 o'clock reads as a fill
+                # level (mirrors StageSpine), so a parallel run's dot shows its
+                # real per-stage progress instead of a flat "something is
+                # happening" dot for the worker's entire runtime.
+                painter.setPen(QPen(ring, 1.5))
+                painter.setBrush(QBrush(self.palette().color(self.backgroundRole())))
+                painter.drawEllipse(rect)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(ring))
+                span = -round(360 * 16 * progress)
+                painter.drawPie(rect, 90 * 16, span)
+                continue
             centre = fill if fill is not None else self.palette().color(self.backgroundRole())
             painter.setPen(QPen(ring, 1.5))
             painter.setBrush(QBrush(centre))
-            painter.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
+            painter.drawEllipse(rect)
         painter.end()
 
 
