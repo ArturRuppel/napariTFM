@@ -140,9 +140,11 @@ def _run_position_headless(
         folder: the input folder path for this position.
         output_dir: the resolved ``TFM_data/`` output directory for this
             position (one entry of ``OutputPlan.output_dirs``).
-        queue: the ``multiprocessing.Queue`` shared by every worker this run
-            submitted (created once by ``start_parallel``), for this
-            worker's ``QueueProgressSink`` to report progress on.
+        queue: the shared progress queue -- a ``multiprocessing.Manager().Queue()``
+            proxy, not a plain ``multiprocessing.Queue`` (see
+            :meth:`BatchAnalysis.start_parallel` for why) -- created once by
+            ``start_parallel`` and shared by every worker this run submitted,
+            for this worker's ``QueueProgressSink`` to report progress on.
 
     Returns:
         ``(folder, status, error_message)`` where ``status`` is ``"done"``

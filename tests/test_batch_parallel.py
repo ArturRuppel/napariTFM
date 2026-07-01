@@ -7,9 +7,13 @@ Two layers under test:
   no process pool involved.
 - The orchestration (``start_parallel`` / ``poll_parallel_progress`` /
   ``_process_all_folders_parallel``): tested with a synchronous fake standing
-  in for ``ProcessPoolExecutor`` (monkeypatched at the module level), so these
-  tests never spawn a real OS process and stay sub-second. The real
-  multi-process integration is a separate task.
+  in for ``ProcessPoolExecutor`` (monkeypatched at the module level) and a
+  fake standing in for the ``multiprocessing.Manager()`` that backs the
+  shared progress queue (see ``_stub_process_pool``), so these tests never
+  spawn a real OS process and stay sub-second. The real multi-process
+  integration -- a real spawn context, a real ``Manager`` server process, a
+  real ``ProcessPoolExecutor`` -- is exercised separately in
+  ``tests/test_batch_parallel_real_pool.py``.
 """
 
 from concurrent.futures import Future
@@ -160,6 +164,53 @@ class _QueuedExecutor:
         self.shutdown_calls.append(wait)
 
 
+class _FakeManager:
+    """Stand-in for ``ctx.Manager()`` -- records shutdown calls and hands
+    back a plain ``queue.Queue()`` (good enough for the ``put``/``get_nowait``/
+    ``Empty`` semantics ``start_parallel``/``poll_parallel_progress`` rely on;
+    no real ``Manager`` server process needed in these orchestration tests).
+    """
+
+    def __init__(self):
+        self.shutdown_calls = 0
+
+    def Queue(self):
+        return queue_module.Queue()
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+
+
+class _FakeSpawnContext:
+    """Stand-in for ``multiprocessing.get_context("spawn")`` -- hands back a
+    ``_FakeManager()`` from ``.Manager()`` instead of spawning a real Manager
+    server process (and its resource-tracker child), so these orchestration
+    tests stay process-free. Not a drop-in for the full context API: only
+    ``.Manager()`` is exercised by ``start_parallel`` (the ``ProcessPoolExecutor``
+    itself is separately faked, and ignores whatever ``mp_context`` it's given).
+    """
+
+    def __init__(self):
+        self.manager = _FakeManager()
+
+    def Manager(self):
+        return self.manager
+
+
+def _stub_process_pool(monkeypatch, executor):
+    """Stub both halves of ``start_parallel``'s process-pool machinery -- the
+    ``ProcessPoolExecutor`` itself (via *executor*, e.g. ``_FakeExecutor`` or
+    ``_QueuedExecutor``) and the ``multiprocessing.Manager()`` it creates for
+    the shared progress queue -- so a test never spawns a real OS process.
+    Returns the ``_FakeSpawnContext`` so a test can inspect
+    ``.manager.shutdown_calls``.
+    """
+    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: executor)
+    fake_ctx = _FakeSpawnContext()
+    monkeypatch.setattr(ba.multiprocessing, "get_context", lambda method: fake_ctx)
+    return fake_ctx
+
+
 def _plan_for(root_folders, tmp_path):
     return resolve_output_plan(root_folders, str(tmp_path / "processed"))
 
@@ -186,7 +237,7 @@ def test_start_parallel_submits_in_root_folders_order_and_reports_running(tmp_pa
 
     _stub_run_position_headless(monkeypatch)
     fake = _FakeExecutor()
-    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: fake)
+    _stub_process_pool(monkeypatch, fake)
     plan = _plan_for([a, b, c], tmp_path)
 
     analysis.start_parallel(plan, num_workers=2)
@@ -204,7 +255,7 @@ def test_start_parallel_passes_config_and_output_dir_to_worker(tmp_path, monkeyp
     analysis = _analysis([a])
     _stub_run_position_headless(monkeypatch)
     fake = _FakeExecutor()
-    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: fake)
+    _stub_process_pool(monkeypatch, fake)
     plan = _plan_for([a], tmp_path)
 
     analysis.start_parallel(plan, num_workers=1)
@@ -221,7 +272,7 @@ def test_start_parallel_shares_one_progress_queue_across_all_workers(tmp_path, m
     analysis = _analysis([a, b])
     _stub_run_position_headless(monkeypatch)
     fake = _FakeExecutor()
-    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: fake)
+    _stub_process_pool(monkeypatch, fake)
     plan = _plan_for([a, b], tmp_path)
 
     analysis.start_parallel(plan, num_workers=2)
@@ -241,7 +292,7 @@ def test_poll_parallel_progress_reports_done_and_finishes(tmp_path, monkeypatch)
 
     _stub_run_position_headless(monkeypatch)
     fake = _FakeExecutor()
-    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: fake)
+    fake_ctx = _stub_process_pool(monkeypatch, fake)
     plan = _plan_for([a, b], tmp_path)
     analysis.start_parallel(plan, num_workers=2)
 
@@ -252,6 +303,10 @@ def test_poll_parallel_progress_reports_done_and_finishes(tmp_path, monkeypatch)
     assert new_stage_events == []
     assert analysis._pending_futures == {}
     assert fake.shutdown_calls == [False]
+    # The progress Manager is torn down alongside the executor once every
+    # future is accounted for.
+    assert fake_ctx.manager.shutdown_calls == 1
+    assert analysis._progress_manager is None
     # "running" (at submit) then "done" (at completion) for each folder.
     assert events.count((a, "running")) == 1
     assert events.count((a, "done")) == 1
@@ -261,7 +316,7 @@ def test_poll_parallel_progress_reports_error_status(tmp_path, monkeypatch):
     a = str(tmp_path / "a")
     analysis = _analysis([a])
     fake = _FakeExecutor()
-    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: fake)
+    _stub_process_pool(monkeypatch, fake)
     plan = _plan_for([a], tmp_path)
 
     # Patch _run_position_headless itself so the "worker" reports an error
@@ -283,7 +338,7 @@ def test_poll_parallel_progress_is_non_blocking_when_nothing_finished(tmp_path, 
     a = str(tmp_path / "a")
     analysis = _analysis([a])
     queued = _QueuedExecutor()
-    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: queued)
+    _stub_process_pool(monkeypatch, queued)
     plan = _plan_for([a], tmp_path)
 
     analysis.start_parallel(plan, num_workers=1)
@@ -325,7 +380,7 @@ def test_poll_parallel_progress_cancels_not_yet_started_futures(tmp_path, monkey
     analysis._progress_callback = lambda folder, status: events.append((folder, status))
 
     queued = _QueuedExecutor()
-    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: queued)
+    _stub_process_pool(monkeypatch, queued)
     plan = _plan_for([a, b], tmp_path)
     analysis.start_parallel(plan, num_workers=1)
 
@@ -345,7 +400,7 @@ def test_poll_parallel_progress_lets_running_future_finish_after_cancel(tmp_path
     analysis = _analysis([a, b])
 
     queued = _QueuedExecutor()
-    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: queued)
+    _stub_process_pool(monkeypatch, queued)
     monkeypatch.setattr(
         ba, "_run_position_headless",
         lambda config, folder, output_dir, queue: (folder, "done", None),
@@ -375,7 +430,7 @@ def test_process_all_folders_parallel_blocks_until_all_done(tmp_path, monkeypatc
 
     _stub_run_position_headless(monkeypatch)
     fake = _FakeExecutor()
-    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: fake)
+    _stub_process_pool(monkeypatch, fake)
     plan = _plan_for([a, b], tmp_path)
 
     analysis._process_all_folders_parallel(plan, num_workers=2)
@@ -397,7 +452,7 @@ def test_process_all_folders_parallel_honors_cancellation(tmp_path, monkeypatch)
     # the blocking loop would spin forever waiting for futures that no one
     # ever completes.
     queued = _QueuedExecutor()
-    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: queued)
+    _stub_process_pool(monkeypatch, queued)
     plan = _plan_for([a, b], tmp_path)
 
     analysis._process_all_folders_parallel(plan, num_workers=2)

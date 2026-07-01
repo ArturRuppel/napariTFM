@@ -24,10 +24,16 @@ class QueueProgressSink(PipelineSink):
     Parameters
     ----------
     queue
-        A ``multiprocessing.Queue`` created by the parent process (spawn
-        context matching the ``ProcessPoolExecutor``) and passed into this
-        worker's task. Multiple worker processes ``put()`` onto it
-        concurrently; that is the queue's designed usage.
+        Any object exposing ``put()`` -- in the parallel-batch worker path
+        (``batch_analysis._run_position_headless``/``start_parallel``) this is
+        typically a ``multiprocessing.Manager().Queue()`` proxy created by the
+        parent process (spawn context matching the ``ProcessPoolExecutor``),
+        not a plain ``multiprocessing.Queue`` -- a raw ``Queue`` can't be handed
+        to an already-running pool via ``submit()`` (only a Manager proxy
+        survives that pickling trip). Multiple worker processes ``put()`` onto
+        it concurrently; that is the queue's designed usage. Duck-typed on
+        ``.put()`` only, so any queue-like object with that method works
+        (e.g. a plain ``queue.Queue()`` in tests).
     folder
         This worker's experiment folder path, stamped onto every message so
         the parent can route it to the right row.
