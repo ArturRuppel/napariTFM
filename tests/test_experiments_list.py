@@ -543,6 +543,50 @@ def test_apply_row_statuses_paints_one_row_without_a_disk_read(app):
     assert widget._rows[0].mini_rail._statuses["force"] == "done"
 
 
+def test_set_row_stage_progress_updates_one_dot_only(app):
+    widget = ExperimentsList(status_fn=lambda path: {
+        "preprocessing": "not_started", "displacement": "not_started",
+        "force": "not_started", "stress": "off",
+    })
+    widget.set_experiments(["/data/a", "/data/b"])
+
+    widget.set_row_stage_progress("/data/a", "displacement", "running", 0.5)
+
+    row_a, row_b = widget._rows
+    assert row_a.mini_rail._statuses["displacement"] == "running"
+    assert row_a.mini_rail._progress["displacement"] == 0.5
+    # Sibling dot on the same row, and the other row entirely, are untouched.
+    assert row_a.mini_rail._statuses["force"] == "not_started"
+    assert row_b.mini_rail._progress["displacement"] is None
+
+
+def test_set_row_stage_progress_ignores_unknown_path(app):
+    widget = ExperimentsList(status_fn=lambda path: {
+        "preprocessing": "not_started", "displacement": "not_started",
+        "force": "not_started", "stress": "off",
+    })
+    widget.set_experiments(["/data/a"])
+
+    # Must not raise for a path no longer in the table (e.g. a stale event
+    # arriving after the row was deleted mid-run).
+    widget.set_row_stage_progress("/data/gone", "force", "running", 0.5)
+
+
+def test_set_row_stage_progress_clears_on_stage_finish(app):
+    widget = ExperimentsList(status_fn=lambda path: {
+        "preprocessing": "not_started", "displacement": "not_started",
+        "force": "not_started", "stress": "off",
+    })
+    widget.set_experiments(["/data/a"])
+
+    widget.set_row_stage_progress("/data/a", "displacement", "running", 0.6)
+    widget.set_row_stage_progress("/data/a", "displacement", "done", None)
+
+    row_a = widget._rows[0]
+    assert row_a.mini_rail._statuses["displacement"] == "done"
+    assert row_a.mini_rail._progress["displacement"] is None
+
+
 def test_on_row_stage_clicked_requests_that_stage_load(app):
     """Clicking a row's 'force' dot forwards a load request (path, stage) to
     the owner — the dots already carry eager status, so nothing is fetched here.

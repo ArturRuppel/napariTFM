@@ -1105,6 +1105,25 @@ class ExperimentsList(QWidget):
             row.set_stage_statuses(statuses)
             return
 
+    def set_row_stage_progress(
+        self, path: str, stage: str, status: str, fraction: Optional[float]
+    ) -> None:
+        """Paint one row's one stage dot with real in-flight progress (P4/#10).
+
+        Fed by a parallel Run-all's per-stage/per-frame events (routed through
+        the shell's ``_on_batch_stage_progress``), so a parallel-mode row's dot
+        fills the same way the single-experiment detail panel's ``StageSpine``
+        already does, instead of sitting on the flat ``mark_running()``
+        placeholder for the worker's entire runtime. A no-op for a path not in
+        the table.
+        """
+        for row in self._rows:
+            if row.path != path:
+                continue
+            row.set_stage_statuses({stage: status})
+            row.mini_rail.set_stage_progress(stage, fraction)
+            return
+
     def _on_run_all_clicked(self) -> None:
         """One button, two roles: start a Run-all, or cancel the live one."""
         if self._run_all_active:
