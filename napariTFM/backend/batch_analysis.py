@@ -10,6 +10,7 @@ from concurrent.futures import Future, ProcessPoolExecutor, wait as futures_wait
 from dataclasses import asdict, fields
 from datetime import datetime
 from pathlib import Path
+from queue import Empty
 from time import sleep
 from time import time
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ from napariTFM.backend.bism import calculate_bism_stresses
 from napariTFM.backend.ntfm_writer import write_experiment_ntfm
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, StressParameters, PreprocessingParameters, UnifiedParameters
 from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
+from napariTFM.backend.queue_progress_sink import QueueProgressSink
 from napariTFM.utilities import ntfm
 from napariTFM.utilities.batch_output import RESULTS_FILENAME, resolve_output_plan
 
@@ -119,16 +121,17 @@ def save_preprocessed_tiffs(output_dir: Path, pixel_size: float, frame_interval:
     save_calibrated_tiff(cells, output_dir / "preprocessed_cells.tif", pixel_size, frame_interval)
 
 
-def _run_position_headless(config: dict, folder: str, output_dir: str) -> tuple[str, str, Optional[str]]:
+def _run_position_headless(
+    config: dict, folder: str, output_dir: str, queue,
+) -> tuple[str, str, Optional[str]]:
     """Process one position headlessly, in its own (spawned) worker process.
 
     Module-level (not a method or closure) so it is picklable for
     ``ProcessPoolExecutor`` under the ``spawn`` start method, which has to
-    ship the callable itself to the worker. Constructs a sink-less
-    ``BatchAnalysis`` and runs the same per-position pipeline as the
-    sequential path (``process_folder``) -- just without a ``sink`` to
-    stream frames into, since a worker process has no GUI to stream to
-    (``BatchAnalysis._emit`` already no-ops when ``sink`` is ``None``).
+    ship the callable itself to the worker. Constructs a ``BatchAnalysis``
+    wired with a ``QueueProgressSink`` -- so this worker's real per-stage/
+    per-frame progress reaches the parent process via *queue* -- and runs the
+    same per-position pipeline as the sequential path (``process_folder``).
 
     Args:
         config: the run's plain-dict config (pickled across the process
@@ -137,6 +140,9 @@ def _run_position_headless(config: dict, folder: str, output_dir: str) -> tuple[
         folder: the input folder path for this position.
         output_dir: the resolved ``TFM_data/`` output directory for this
             position (one entry of ``OutputPlan.output_dirs``).
+        queue: the ``multiprocessing.Queue`` shared by every worker this run
+            submitted (created once by ``start_parallel``), for this
+            worker's ``QueueProgressSink`` to report progress on.
 
     Returns:
         ``(folder, status, error_message)`` where ``status`` is ``"done"``
@@ -147,7 +153,8 @@ def _run_position_headless(config: dict, folder: str, output_dir: str) -> tuple[
         would otherwise surface as a ``BrokenProcessPool`` for every other
         future in the pool).
     """
-    analysis = BatchAnalysis(config, sink=None)
+    sink = QueueProgressSink(queue, folder)
+    analysis = BatchAnalysis(config, sink=sink)
     try:
         analysis.process_folder(folder, output_dir)
     except Exception as e:
@@ -303,6 +310,8 @@ class BatchAnalysis:
         # Parallel-mode pool state (populated by start_parallel).
         self._executor = None
         self._pending_futures = {}
+        self._progress_manager = None
+        self._progress_queue = None
 
     def _emit(self, method: str, *args) -> None:
         """Notify the optional sink; never let it break a run (worklist §5).
@@ -410,7 +419,7 @@ class BatchAnalysis:
         self.start_parallel(plan, num_workers)
         finished = False
         while not finished:
-            _events, finished = self.poll_parallel_progress()
+            _events, _stage_events, finished = self.poll_parallel_progress()
             if not finished:
                 sleep(0.05)
 
@@ -431,31 +440,55 @@ class BatchAnalysis:
         a slot frees, which alone satisfies "top positions first" -- no
         explicit priority queue is needed.
 
-        Stores the executor and a ``{Future: folder}`` map on
-        ``self._executor`` / ``self._pending_futures`` for
-        :meth:`poll_parallel_progress` to drain.
+        Also creates one shared queue -- via a ``multiprocessing.Manager``
+        (same spawn context as the pool), not a plain ``ctx.Queue()`` -- for
+        every worker this run submitted, and passes it into each
+        ``_run_position_headless`` call so a worker's ``QueueProgressSink``
+        can report real per-stage/per-frame progress back across the process
+        boundary; :meth:`poll_parallel_progress` drains it every call. A
+        plain ``ctx.Queue()`` cannot be handed to an already-running pool
+        this way: ``ProcessPoolExecutor`` ships submitted args to workers
+        through its own internal call queue, which re-pickles them outside
+        the normal process-launch "inheritance" a raw ``Queue`` requires --
+        that raises ``RuntimeError: Queue objects should only be shared
+        between processes through inheritance``. A ``Manager().Queue()`` is
+        a proxy (a thin client to a small server process the ``Manager``
+        owns) and pickles like any other object, so it survives that trip.
+
+        Stores the executor, a ``{Future: folder}`` map, the manager, and the
+        progress queue on ``self._executor`` / ``self._pending_futures`` /
+        ``self._progress_manager`` / ``self._progress_queue`` for
+        :meth:`poll_parallel_progress` to drain (and, once every future is
+        accounted for, to shut the manager down alongside the executor).
         """
         ctx = multiprocessing.get_context("spawn")
         self._executor = ProcessPoolExecutor(max_workers=num_workers, mp_context=ctx)
         self._pending_futures: dict[Future, str] = {}
+        self._progress_manager = ctx.Manager()
+        self._progress_queue = self._progress_manager.Queue()
         for folder in self.config['root_folders']:
             output_dir = str(plan.output_dirs[folder])
-            future = self._executor.submit(_run_position_headless, self.config, folder, output_dir)
+            future = self._executor.submit(
+                _run_position_headless, self.config, folder, output_dir, self._progress_queue,
+            )
             self._pending_futures[future] = folder
             # "running" at submission time is an acceptable approximation (a
             # queued-but-not-yet-started task reports "running" slightly
             # early), matching the "running" semantics used elsewhere in this
-            # file -- there is no finer-grained signal from inside a worker
-            # process back to this side without a sink.
+            # file -- the queue above reports real per-stage progress once the
+            # worker actually starts.
             self._report_progress(folder, "running")
 
-    def poll_parallel_progress(self) -> tuple[list[tuple[str, str]], bool]:
-        """Drain whatever parallel-mode futures have completed since the last
-        call, without blocking. Intended to be called repeatedly (e.g. from a
-        Qt timer) until ``finished`` is ``True``.
+    def poll_parallel_progress(
+        self,
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str, str, Optional[float]]], bool]:
+        """Drain whatever parallel-mode futures have completed, and whatever
+        per-stage progress messages have arrived, since the last call --
+        without blocking. Intended to be called repeatedly (e.g. from a Qt
+        timer) until ``finished`` is ``True``.
 
         Returns:
-            ``(events, finished)`` --
+            ``(events, stage_events, finished)`` --
 
             - ``events``: a list of ``(folder, status)`` pairs that newly
               completed during *this* call, where ``status`` is one of
@@ -465,6 +498,13 @@ class BatchAnalysis:
               listen on one channel; the returned list is for callers (e.g.
               the GUI) that want to react inline without a callback, such as
               reloading a finished position's ``.ntfm`` from disk.
+            - ``stage_events``: a list of ``(folder, stage, status, fraction)``
+              tuples drained from the shared progress queue (one entry per
+              ``QueueProgressSink`` message a worker put since the last poll)
+              -- ``status`` is ``"running"`` (with a growing ``fraction``) or
+              ``"done"`` (``fraction`` is then ``None``), mirroring
+              ``ViewerSink.on_stage_progress``'s shape. Always drained fully,
+              even on a call where ``events``/``finished`` report nothing new.
             - ``finished``: ``True`` once every submitted folder has been
               accounted for (no futures left pending after this call's
               bookkeeping). When it flips to ``True`` the executor is shut
@@ -482,6 +522,15 @@ class BatchAnalysis:
         they finish naturally and report their real ``done``/``error`` status
         on a later poll.
         """
+        stage_events: list[tuple[str, str, str, Optional[float]]] = []
+        progress_queue = getattr(self, "_progress_queue", None)
+        if progress_queue is not None:
+            while True:
+                try:
+                    stage_events.append(progress_queue.get_nowait())
+                except Empty:
+                    break
+
         events: list[tuple[str, str]] = []
 
         if getattr(self, "_cancelled", False):
@@ -511,8 +560,16 @@ class BatchAnalysis:
         if finished and getattr(self, "_executor", None) is not None:
             self._executor.shutdown(wait=False)
             self._executor = None
+        if finished and getattr(self, "_progress_manager", None) is not None:
+            # Every future is accounted for, so every worker has already
+            # returned -- any ``QueueProgressSink.put()`` it was going to do
+            # already happened, and the drain above at the top of this call
+            # (or a prior one) collected it. Safe to tear down the Manager's
+            # server process now rather than leak it past this run.
+            self._progress_manager.shutdown()
+            self._progress_manager = None
 
-        return events, finished
+        return events, stage_events, finished
 
     def _report_progress(self, folder: str, status: str) -> None:
         """Notify the optional progress callback; never let it break a run."""

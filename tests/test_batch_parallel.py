@@ -18,6 +18,10 @@ from napariTFM.backend import batch_analysis as ba
 from napariTFM.backend.batch_analysis import BatchAnalysis, _run_position_headless
 from napariTFM.utilities.batch_output import resolve_output_plan
 
+import queue as queue_module
+
+from napariTFM.backend.queue_progress_sink import QueueProgressSink
+
 
 def _minimal_config(**overrides):
     """The smallest config that lets ``process_folder`` run to completion
@@ -53,7 +57,7 @@ def test_run_position_headless_returns_done_on_success(tmp_path):
     folder = str(tmp_path / "input")
     output_dir = str(tmp_path / "TFM_data" / "input")
 
-    result = _run_position_headless(config, folder, output_dir)
+    result = _run_position_headless(config, folder, output_dir, queue_module.Queue())
 
     assert result == (folder, "done", None)
 
@@ -68,14 +72,16 @@ def test_run_position_headless_returns_error_with_message_on_failure(tmp_path):
     folder = str(tmp_path / "input")
     output_dir = str(tmp_path / "TFM_data" / "input")
 
-    folder_out, status, err = _run_position_headless(config, folder, output_dir)
+    folder_out, status, err = _run_position_headless(
+        config, folder, output_dir, queue_module.Queue()
+    )
 
     assert folder_out == folder
     assert status == "error"
     assert err is not None and "analysis_steps" in err
 
 
-def test_run_position_headless_constructs_sinkless_batch_analysis(monkeypatch, tmp_path):
+def test_run_position_headless_constructs_queue_progress_sink(monkeypatch, tmp_path):
     captured = {}
 
     def _fake_process_folder(self, folder, output_dir=None):
@@ -86,10 +92,13 @@ def test_run_position_headless_constructs_sinkless_batch_analysis(monkeypatch, t
 
     folder = str(tmp_path / "input")
     output_dir = str(tmp_path / "TFM_data" / "input")
-    result = _run_position_headless(_minimal_config(), folder, output_dir)
+    q = queue_module.Queue()
+    result = _run_position_headless(_minimal_config(), folder, output_dir, q)
 
     assert result == (folder, "done", None)
-    assert captured["sink"] is None
+    assert isinstance(captured["sink"], QueueProgressSink)
+    assert captured["sink"]._queue is q
+    assert captured["sink"]._folder == folder
     assert captured["progress_callback"] is None
 
 
@@ -163,7 +172,7 @@ def _stub_run_position_headless(monkeypatch, status="done", err=None):
     """
     monkeypatch.setattr(
         ba, "_run_position_headless",
-        lambda config, folder, output_dir: (folder, status, err),
+        lambda config, folder, output_dir, queue: (folder, status, err),
     )
 
 
@@ -200,10 +209,26 @@ def test_start_parallel_passes_config_and_output_dir_to_worker(tmp_path, monkeyp
 
     analysis.start_parallel(plan, num_workers=1)
 
-    (fn_config, fn_folder, fn_output_dir), = [args for args in fake.submitted_args]
+    (fn_config, fn_folder, fn_output_dir, fn_queue), = [args for args in fake.submitted_args]
     assert fn_config is analysis.config
     assert fn_folder == a
     assert fn_output_dir == str(plan.output_dirs[a])
+    assert fn_queue is analysis._progress_queue
+
+
+def test_start_parallel_shares_one_progress_queue_across_all_workers(tmp_path, monkeypatch):
+    a, b = str(tmp_path / "a"), str(tmp_path / "b")
+    analysis = _analysis([a, b])
+    _stub_run_position_headless(monkeypatch)
+    fake = _FakeExecutor()
+    monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: fake)
+    plan = _plan_for([a, b], tmp_path)
+
+    analysis.start_parallel(plan, num_workers=2)
+
+    queues_passed = [args[3] for args in fake.submitted_args]
+    assert queues_passed[0] is analysis._progress_queue
+    assert queues_passed[1] is analysis._progress_queue
 
 
 # --- poll_parallel_progress: normal completion -----------------------------
@@ -220,10 +245,11 @@ def test_poll_parallel_progress_reports_done_and_finishes(tmp_path, monkeypatch)
     plan = _plan_for([a, b], tmp_path)
     analysis.start_parallel(plan, num_workers=2)
 
-    new_events, finished = analysis.poll_parallel_progress()
+    new_events, new_stage_events, finished = analysis.poll_parallel_progress()
 
     assert finished is True
     assert set(new_events) == {(a, "done"), (b, "done")}
+    assert new_stage_events == []
     assert analysis._pending_futures == {}
     assert fake.shutdown_calls == [False]
     # "running" (at submit) then "done" (at completion) for each folder.
@@ -240,13 +266,17 @@ def test_poll_parallel_progress_reports_error_status(tmp_path, monkeypatch):
 
     # Patch _run_position_headless itself so the "worker" reports an error
     # without needing a real failing pipeline.
-    monkeypatch.setattr(ba, "_run_position_headless", lambda config, folder, output_dir: (folder, "error", "boom"))
+    monkeypatch.setattr(
+        ba, "_run_position_headless",
+        lambda config, folder, output_dir, queue: (folder, "error", "boom"),
+    )
 
     analysis.start_parallel(plan, num_workers=1)
-    events, finished = analysis.poll_parallel_progress()
+    events, stage_events, finished = analysis.poll_parallel_progress()
 
     assert finished is True
     assert events == [(a, "error")]
+    assert stage_events == []
 
 
 def test_poll_parallel_progress_is_non_blocking_when_nothing_finished(tmp_path, monkeypatch):
@@ -258,12 +288,32 @@ def test_poll_parallel_progress_is_non_blocking_when_nothing_finished(tmp_path, 
 
     analysis.start_parallel(plan, num_workers=1)
 
-    events, finished = analysis.poll_parallel_progress()
+    events, stage_events, finished = analysis.poll_parallel_progress()
 
     assert events == []
+    assert stage_events == []
     assert finished is False
     assert len(analysis._pending_futures) == 1
     assert queued.shutdown_calls == []  # not finished yet -> no shutdown
+
+
+def test_poll_parallel_progress_drains_queued_stage_events(tmp_path):
+    a = str(tmp_path / "a")
+    analysis = _analysis([a])
+    analysis._pending_futures = {}
+    analysis._executor = None
+    analysis._progress_queue = queue_module.Queue()
+    analysis._progress_queue.put((a, "displacement", "running", 0.5))
+    analysis._progress_queue.put((a, "displacement", "running", 1.0))
+
+    events, stage_events, finished = analysis.poll_parallel_progress()
+
+    assert stage_events == [
+        (a, "displacement", "running", 0.5),
+        (a, "displacement", "running", 1.0),
+    ]
+    assert events == []
+    assert finished is True
 
 
 # --- poll_parallel_progress: cancellation -----------------------------------
@@ -280,10 +330,11 @@ def test_poll_parallel_progress_cancels_not_yet_started_futures(tmp_path, monkey
     analysis.start_parallel(plan, num_workers=1)
 
     analysis.request_cancel()
-    new_events, finished = analysis.poll_parallel_progress()
+    new_events, new_stage_events, finished = analysis.poll_parallel_progress()
 
     # Neither future had started ("run") yet, so both are cancellable.
     assert set(new_events) == {(a, "cancelled"), (b, "cancelled")}
+    assert new_stage_events == []
     assert finished is True
     assert (a, "cancelled") in events
     assert (b, "cancelled") in events
@@ -297,7 +348,7 @@ def test_poll_parallel_progress_lets_running_future_finish_after_cancel(tmp_path
     monkeypatch.setattr(ba, "ProcessPoolExecutor", lambda *a, **kw: queued)
     monkeypatch.setattr(
         ba, "_run_position_headless",
-        lambda config, folder, output_dir: (folder, "done", None),
+        lambda config, folder, output_dir, queue: (folder, "done", None),
     )
     plan = _plan_for([a, b], tmp_path)
     analysis.start_parallel(plan, num_workers=1)
@@ -307,9 +358,10 @@ def test_poll_parallel_progress_lets_running_future_finish_after_cancel(tmp_path
     queued.run(0)
 
     analysis.request_cancel()
-    events, finished = analysis.poll_parallel_progress()
+    events, stage_events, finished = analysis.poll_parallel_progress()
 
     assert set(events) == {(a, "done"), (b, "cancelled")}
+    assert stage_events == []
     assert finished is True
 
 
