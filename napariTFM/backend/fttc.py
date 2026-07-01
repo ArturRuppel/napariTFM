@@ -159,7 +159,13 @@ class FTTC:
         self.E = params.young_modulus
         self.nu = params.poisson_ratio_substrate
         self.lanczos_exp = params.lanczos_exp
-        self.gel_height = params.gel_height
+        # 0 is the UI/config sentinel for "infinite thickness" (ParameterManager
+        # flattens gel_height=None to 0 when serializing to a plain dict/YAML,
+        # e.g. for batch configs, but never converts it back). A gel height of
+        # exactly 0 is otherwise physically meaningless, and the finite-
+        # thickness correction below divides by tanh(kh), which is 0 when
+        # kh == 0 -- so leaving it as 0 here would produce all-NaN forces.
+        self.gel_height = params.gel_height if params.gel_height else None
 
 
     def calculate_traction(self, displacements: Tuple[np.ndarray, np.ndarray],
