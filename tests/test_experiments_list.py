@@ -568,8 +568,13 @@ def test_set_row_stage_progress_ignores_unknown_path(app):
     widget.set_experiments(["/data/a"])
 
     # Must not raise for a path no longer in the table (e.g. a stale event
-    # arriving after the row was deleted mid-run).
+    # arriving after the row was deleted mid-run), and must not touch the
+    # one real row that IS in the table.
     widget.set_row_stage_progress("/data/gone", "force", "running", 0.5)
+
+    row_a = widget._rows[0]
+    assert row_a.mini_rail._statuses["force"] == "not_started"
+    assert row_a.mini_rail._progress["force"] is None
 
 
 def test_set_row_stage_progress_clears_on_stage_finish(app):
