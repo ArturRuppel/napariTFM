@@ -625,8 +625,8 @@ def merge_tidy_preserving(new_df: pd.DataFrame, old_df: pd.DataFrame) -> pd.Data
 
     Stage column groups (displacement / force / stress) use
     ``_STAGE_MEASURE_COLUMN`` as the representative-column presence indicator
-    and ``_STAGE_COLUMNS`` for the full list of columns to copy.  ``mask``
-    uses an all-zero / absence check.
+    and ``_STAGE_COLUMNS`` for the full list of columns to copy.  The ``mask``
+    is deliberately *not* preserved — the new mask always wins (see body).
 
     Args:
         new_df: The tidy table produced by the current run.
@@ -677,11 +677,14 @@ def merge_tidy_preserving(new_df: pd.DataFrame, old_df: pd.DataFrame) -> pd.Data
                 if col in old_aligned.columns:
                     result_df[col] = old_aligned[col].to_numpy()
 
-    # Fill mask (all-zero / absence check).
-    new_mask_absent = ("mask" not in new_df.columns) or (new_df["mask"] == 0).all()
-    old_mask_present = ("mask" in old_df.columns) and not (old_df["mask"] == 0).all()
-    if new_mask_absent and old_mask_present and "mask" in old_aligned.columns:
-        result_df["mask"] = old_aligned["mask"].to_numpy()
+    # The mask is NOT preserved from the old container: unlike the measure
+    # stages (where all-NaN unambiguously means "not computed this run"), an
+    # all-zero mask has no legitimate "deliberately empty" meaning — it only
+    # ever means "no mask supplied". The real mask is re-read from the input
+    # folder on every run (batch _load_mask), so the only case this branch would
+    # ever have fired is when the mask file was removed before a re-write, in
+    # which case the stored mask should clear, not silently resurrect
+    # (CODE_REVIEW_FINDINGS.md #6). The new mask therefore always wins.
 
     # Preserve COLUMNS ordering, include only columns present.
     ordered_cols = [c for c in COLUMNS if c in result_df.columns]

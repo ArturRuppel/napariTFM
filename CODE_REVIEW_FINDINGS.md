@@ -120,12 +120,26 @@ isn't present) — those are deliberate, test-blessed behavior, not failures. Ne
 test `test_stage_exception_reports_error_but_keeps_partial` asserts both halves: the folder
 raises, and the successful upstream stage is still persisted.
 
-**6. A cleared mask silently resurrects on re-write.** `utilities/ntfm.py:681-684` treats
+**6. A cleared mask silently resurrects on re-write. — DONE (mask now always clobbered).**
+`utilities/ntfm.py:681-684` treats
 an all-zero `mask` in the new frame as "absent" and restores the old mask from disk
 (`merge_existing=True` is the default write path). There is no way to clear a mask by
 re-running a stage. The same "all-NaN means absent" logic applies to stages (`:669-678`,
 at least documented there). Note: this is partly a behavioral choice (merge-preserving),
 so decide the intended semantics before changing.
+
+_Note:_ the review's `.ntfm` references are stale — the container migrated to a
+multi-series OME-TIFF (`TFM_results.ome.tif`), but `merge_tidy_preserving` still runs on
+the in-memory tidy df on every default write, so the behavior was live.
+
+_Resolution (semantics decided):_ an intentionally-empty mask is not a real use case, so
+an all-zero mask should always win. Removed the mask-preservation branch entirely — unlike
+the measure stages (all-NaN unambiguously = "not computed this run"), an all-zero mask only
+ever means "no mask supplied". The real mask is re-read from the input folder on every run
+(`_load_mask`), so the branch only ever fired when the mask file had been removed before a
+re-write — exactly the case where the stored mask should clear, not resurrect. New
+regression test `test_merge_cleared_mask_does_not_resurrect`. (Measure-stage preservation
+is untouched — that behavior is correct and desired.)
 
 **7. `.ntfm` metadata drifts on round-trip.** `utilities/ntfm.py:403` writes config via
 `json.dumps(..., default=str)`, so numpy scalars / `Path` / tuples degrade to strings and

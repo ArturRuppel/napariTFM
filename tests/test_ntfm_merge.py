@@ -108,6 +108,24 @@ def test_merge_does_not_overwrite_force_present_in_new():
     np.testing.assert_allclose(merged["F_x[Pa]"].to_numpy(), new_df["F_x[Pa]"].to_numpy())
 
 
+def test_merge_cleared_mask_does_not_resurrect():
+    """A re-write with no mask must clear the stored mask, not restore the old
+    one — an all-zero mask only ever means 'no mask supplied', never a
+    deliberately-empty region (CODE_REVIEW_FINDINGS.md #6)."""
+    nt, ny, nx = 2, 3, 3
+    force = np.ones((nt, ny, nx, 2))
+    old_mask = np.ones((ny, nx), dtype=np.int64)  # a real mask was saved before
+
+    # new run supplies force but no mask -> all-zero mask column
+    new_df = ntfm.arrays_to_tidy(force_field=force, grid_spacing=1.0, frame_interval=1.0)
+    old_df = ntfm.arrays_to_tidy(force_field=force, mask=old_mask,
+                                 grid_spacing=1.0, frame_interval=1.0)
+
+    merged = ntfm.merge_tidy_preserving(new_df, old_df)
+
+    assert (merged["mask"] == 0).all()
+
+
 # ---------------------------------------------------------------------------
 # 3. merge_tidy_preserving: grid mismatch → returns new_df unchanged, no crash
 # ---------------------------------------------------------------------------
