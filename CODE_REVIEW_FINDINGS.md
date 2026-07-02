@@ -141,11 +141,26 @@ re-write — exactly the case where the stored mask should clear, not resurrect.
 regression test `test_merge_cleared_mask_does_not_resurrect`. (Measure-stage preservation
 is untouched — that behavior is correct and desired.)
 
-**7. `.ntfm` metadata drifts on round-trip.** `utilities/ntfm.py:403` writes config via
+**7. `.ntfm` metadata drifts on round-trip. — DONE (false alarm; verified empirically).**
+`utilities/ntfm.py:403` writes config via
 `json.dumps(..., default=str)`, so numpy scalars / `Path` / tuples degrade to strings and
 never recover their type on read. And the mask is written `uint16` (`:414`) but read back
 `int64` (`:517`) — labels >65535 or signed sentinels wrap silently, which contradicts the
 "lossless round-trip" docstring.
+
+_Resolution:_ Neither sub-claim bites in practice; proved by a write→read round-trip test.
+(a) `config` is `asdict(UnifiedParameters)`, and that dataclass is entirely native types
+(float/int/bool/str/`Optional[float]`) — no numpy scalars, `Path`, or tuples — so every
+field serializes natively and `default=str` never fires for the config. Measured drift is
+NONE (`gel_height=None` → `None` included). `default=str` is only a safety net for
+provenance fields (`git_provenance`/`inputs`/`labels`) that are never re-parsed by type,
+and the sole resume consumer (`batch_analysis.py`) discards the metadata anyway.
+(b) The mask read cast is a *widening* uint16→int64, which is lossless — multi-label masks
+(0, 2, 3, 1000, 65535) round-trip exactly, and int64 matches the tidy-df's in-memory mask
+convention (so it's consistent, not asymmetric-by-accident). The only loss is a label
+>65535 wrapping *on write* (70000→4464), but TFM masks are external cell/monolayer
+footprints — binary or a handful of non-negative labels — so that ceiling is physically
+unreachable and there are no signed sentinels. No code change.
 
 **8. Clicking the already-active experiment row drops in-memory overlays.**
 `widgets/_experiments_list.py:998-1014` (`set_active`) has no same-path guard, so a repeat
