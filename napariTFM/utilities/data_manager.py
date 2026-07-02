@@ -17,7 +17,6 @@ class ArtifactState:
     path: Optional[Path] = None
     source: str = ""
     dirty: bool = False
-    error: str = ""
 
     @property
     def available(self) -> bool:
@@ -133,12 +132,6 @@ class DataManager:
         state.path = Path(path) if path else None
         state.source = source
         state.dirty = dirty
-        state.error = ""
-        self._notify_changed()
-
-    def mark_artifact_error(self, key: str, error: str) -> None:
-        state = self.get_artifact(key)
-        state.error = error
         self._notify_changed()
 
     def set_bead_stack(self, data: np.ndarray, path=None, source: str = "") -> None:
@@ -211,13 +204,12 @@ class DataManager:
             "mask_stack",
         ):
             state = self.get_artifact(key)
-            if state.value is not None or state.error:
+            if state.value is not None:
                 changed = True
             state.value = None
             state.path = None
             state.source = ""
             state.dirty = False
-            state.error = ""
         if changed:
             self._notify_changed()
 

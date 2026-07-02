@@ -62,9 +62,6 @@ def artifact_info_text(data_manager: Any, spec: DataArtifactSpec) -> str:
     """
     state = artifact_state(data_manager, spec)
     available = artifact_available(data_manager, spec)
-    if state is not None and getattr(state, "error", ""):
-        return str(state.error)
-
     value = state.value if state is not None else artifact_value(data_manager, spec)
     if value is not None:
         base = _shape_text(value) or "Loaded"

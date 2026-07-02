@@ -26,29 +26,24 @@ def _spec(role="output", required=True):
 
 
 def test_info_text_reports_array_shape_when_loaded():
-    state = SimpleNamespace(value=SimpleNamespace(shape=(512, 512)), dirty=False, path=None, error="")
+    state = SimpleNamespace(value=SimpleNamespace(shape=(512, 512)), dirty=False, path=None)
     assert artifact_info_text(_DM(available=True, state=state), _spec()) == "512×512"
 
 
 def test_info_text_flags_cache_unsaved_when_dirty():
     # A cache-only (unsaved) value is what run-all clobbers — say so plainly.
-    state = SimpleNamespace(value=object(), dirty=True, path=None, error="")
+    state = SimpleNamespace(value=object(), dirty=True, path=None)
     assert artifact_info_text(_DM(available=True, state=state), _spec()) == "Loaded · cache (unsaved)"
 
 
 def test_info_text_names_the_file_on_disk(tmp_path):
     path = tmp_path / "foo.npy"
-    state = SimpleNamespace(value=object(), dirty=False, path=path, error="")
+    state = SimpleNamespace(value=object(), dirty=False, path=path)
     assert artifact_info_text(_DM(available=True, state=state), _spec()) == "Loaded · foo.npy"
 
 
-def test_info_text_surfaces_error():
-    state = SimpleNamespace(value=object(), dirty=True, path=None, error="save failed")
-    assert artifact_info_text(_DM(available=True, state=state), _spec()) == "save failed"
-
-
 def test_info_text_saved_when_on_disk_without_value():
-    state = SimpleNamespace(value=None, dirty=False, path=None, error="")
+    state = SimpleNamespace(value=None, dirty=False, path=None)
     assert artifact_info_text(_DM(available=True, state=state), _spec()) == "Saved"
 
 

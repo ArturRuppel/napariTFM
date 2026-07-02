@@ -191,12 +191,21 @@ config knobs and the whole module can go (or the feature needs wiring up). Note
 `calculate_polarization` also uses `np.linalg.eigvals` on the non-symmetric moment
 tensor, which can return complex eigenvalues — a latent bug, but moot while dead.
 
-**10. Error-handler registration is inert.** `utilities/error_handling.py:42,60`
+**10. Error-handler registration is inert. — DONE (removed).** `utilities/error_handling.py:42,60`
 (`ErrorHandlingMixin._error_handlers`) is never populated — no register method exists — so
 `handle_error` only logs; every `create_error` in `visualization_manager.py` is
 effectively a swallow. Relatedly, `utilities/data_manager.py:139` (`mark_artifact_error`)
 has no production caller, so `ArtifactState.error` is never set and the error display at
 `widgets/_stage_data_status.py:66` is unreachable.
+
+_Resolution:_ Confirmed inert. Removed the `_error_handlers` list, the empty `__init__` that
+seeded it, and the never-populated notify loop from `ErrorHandlingMixin` — `handle_error`
+is now purely the (real) severity logger, and `create_error`/`ApplicationError` stay since
+`VisualizationManager` uses them. Removed the whole unreachable artifact-error path:
+`mark_artifact_error`, `ArtifactState.error`, its always-empty read in
+`artifact_info_text`, and the dead `or state.error` clear-check. Updated
+`test_artifact_row.py` (dropped the error-render test). `VisualizationManager.__init__`'s
+`super().__init__()` now resolves to `object.__init__`, harmless.
 
 **11. Other confirmed-unused symbols:**
 - `widgets/_widget.py`: the whole `WHEN`/`AND` conditional-visibility machinery

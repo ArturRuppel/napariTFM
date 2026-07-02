@@ -38,15 +38,10 @@ class ApplicationError(Exception):
 class ErrorHandlingMixin:
     """Mixin class providing error handling functionality."""
 
-    def __init__(self):
-        self._error_handlers = []
-
-
     def handle_error(self, error: ApplicationError):
-        """Handle an error by passing it to all registered handlers."""
+        """Log an application error at its severity level."""
         error_str = str(error)
 
-        # Log the error
         if error.severity == ErrorSeverity.CRITICAL:
             logger.critical(error_str, exc_info=error.original_error)
         elif error.severity == ErrorSeverity.ERROR:
@@ -55,13 +50,6 @@ class ErrorHandlingMixin:
             logger.warning(error_str)
         else:
             logger.info(error_str)
-
-        # Notify handlers
-        for handler in self._error_handlers:
-            try:
-                handler(error)
-            except Exception as e:
-                logger.error(f"Error in error handler: {e}")
 
     @staticmethod
     def create_error(
