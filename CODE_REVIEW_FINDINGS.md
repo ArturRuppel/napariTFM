@@ -64,12 +64,21 @@ alarm**: `d_max`/`f_max`/`vmax`/`max_stress` are user display parameters (defaul
 `max_stress = cfg['max_stress']`), so a null field does not zero them and the division is
 unreachable in normal use. Left unchanged.
 
-**3. GCV can return a negative λ.** `backend/fttc.py:417` runs `optimize.fmin`
+**3. GCV can return a negative λ. — DONE (real; fixed at source).**
+`backend/fttc.py:417` runs `optimize.fmin`
 unconstrained on `_gcvfun`, which depends on λ only via `λ**2` (even function). The
 solver can land on a negative value; `_perform_tfm` squares it so the force is fine, but
 the value is stored as `regularization` and `utilities/parameter_manager.py:49-52`
 (`get_ui_parameter`) then calls `math.log10(negative)` → error/NaN in the UI. Wrap the
 result in `abs()`.
+
+_Resolution:_ Confirmed end to end — `_find_regularization` → `find_optimal_regularization`
+→ `_handle_gcv_results` stores the raw value via `set_parameter('regularization', ...)`
+(`fttc_widget.py:285`), which then hits `math.log10(value)` in `get_ui_parameter` and
+raises `ValueError: math domain error` on a negative λ. Because `_gcvfun` is even in λ,
+the negative root and its magnitude are the identical regularizer, so `abs()` is exact
+and lossless. Applied at the source (`_find_regularization` return) so both the UI-display
+path and the auto-GCV batch path (which uses `regularization ** 2`) see a non-negative λ.
 
 **4. Displacement and stress parameters are never validated in production.**
 `validate_displacement_parameters` and `validate_stress_parameters`

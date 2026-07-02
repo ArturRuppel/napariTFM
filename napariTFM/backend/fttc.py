@@ -456,7 +456,12 @@ class FTTC:
         blockU, s, b = self._svd_block(pos0, vec0, forcemap_pixel_size,
                                        i_max=input_width, j_max=input_height)
         reg_min, _, _, _ = self._gcv_blockdiag(blockU, s, b, lambdarange, plot=False)
-        return reg_min
+        # _gcvfun depends on lambda only via lambda**2, so the unconstrained
+        # optimizer can settle on a negative root that is numerically identical
+        # to its magnitude. The force path squares it, but the raw value is
+        # stored as `regularization` and later hits math.log10() in the UI, which
+        # rejects negatives. Return the magnitude — an exact, lossless fix.
+        return abs(reg_min)
 
     def _svd_block(self, pos: np.ndarray, vec: np.ndarray, forcemap_pixel_size: float,
                    i_max: int = None, j_max: int = None):
