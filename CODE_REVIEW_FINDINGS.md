@@ -98,13 +98,27 @@ and `validate_fttc_parameters`, which *are* invoked in the backend.
 
 ## Correctness / data-integrity bugs
 
-**5. Failed folders are reported as "done" (silent data loss).** Every batch stage
+**5. Failed folders are reported as "done" (silent data loss). — DONE (real; fixed).**
+Every batch stage
 handler (`backend/batch_analysis.py:696-700, 707-724, 731-745, 752-773`) catches all
 exceptions, prints, and returns `None`. A real failure cascades to all-`None` results;
 `_write_experiment_ntfm` then hits the `written is None` branch (`:860-862`), prints, and
 returns *without raising*. The deliberate re-raise at `:853-859` only covers a write-time
 error, not upstream failures — so `process_folder` completes and the row shows green with
 nothing on disk. Verified end to end.
+
+_Resolution:_ Real bug. The headline mechanism is the swallowed exception: an enabled
+stage that raises was caught, printed, and turned into `None`, indistinguishable from a
+disabled stage or a legitimate skip. Each stage handler now records the caught exception
+in a per-folder `self._stage_failures` list (via `_record_stage_failure`); the exception
+is still caught so any stages that *did* succeed are written to the `.ntfm` first, then
+`process_folder` raises a `RuntimeError` summarizing the failed stage(s). That propagates
+through `process_folder_task` / `_run_position_headless` to the existing `"error"` status,
+so the row goes red instead of green. Left the *graceful* `return None` skips untouched
+(disabled stage; stress with no external mask; resume-from-`.ntfm` when the upstream field
+isn't present) — those are deliberate, test-blessed behavior, not failures. New regression
+test `test_stage_exception_reports_error_but_keeps_partial` asserts both halves: the folder
+raises, and the successful upstream stage is still persisted.
 
 **6. A cleared mask silently resurrects on re-write.** `utilities/ntfm.py:681-684` treats
 an all-zero `mask` in the new frame as "absent" and restores the old mask from disk

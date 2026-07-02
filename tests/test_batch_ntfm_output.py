@@ -112,6 +112,52 @@ def test_write_failure_propagates(tmp_path, monkeypatch):
         analysis._write_experiment_ntfm(tmp_path, tmp_path / "exp", disp, None, None, None)
 
 
+def test_stage_exception_reports_error_but_keeps_partial(tmp_path, monkeypatch):
+    """A stage that raises is caught so a successful upstream stage is still
+    written, but the folder must surface as an error rather than a silent 'done'
+    (CODE_REVIEW_FINDINGS.md #5)."""
+    import pytest
+
+    scale = {"grid_spacing": 0.4, "time_interval": 2.0}
+    disp = _Result(displacement_field=np.ones((1, 3, 3, 2)), physical_scale=scale)
+
+    analysis = _analysis(
+        analysis_steps={"preprocessing": False, "displacement": True,
+                        "force": True, "stress": False},
+        visualizations={},
+        input_files={},
+    )
+    analysis._sink = None
+    analysis._progress_callback = None
+    analysis._cancelled = False
+    analysis._tee_logger = None
+
+    out = tmp_path / "out"
+
+    # Neutralize machinery unrelated to the fix (logging redirect, previews).
+    monkeypatch.setattr(BatchAnalysis, "_initialize_folder",
+                        lambda self, o: (o.mkdir(parents=True, exist_ok=True), o)[1])
+    monkeypatch.setattr(BatchAnalysis, "_handle_visualization", lambda *a, **k: None)
+    monkeypatch.setattr(BatchAnalysis, "_cleanup", lambda self: None)
+    monkeypatch.setattr(BatchAnalysis, "_load_mask", lambda self, folder: None)
+
+    # Displacement succeeds; force raises inside its real handler.
+    monkeypatch.setattr(BatchAnalysis, "_handle_displacement_execution",
+                        lambda self, tfm_folder, pre: disp)
+
+    def _boom_force(self, tfm_folder, displacement_data):
+        raise RuntimeError("force kaboom")
+
+    monkeypatch.setattr(BatchAnalysis, "_execute_force_analysis", _boom_force)
+
+    with pytest.raises(RuntimeError, match="force"):
+        analysis.process_folder(str(tmp_path / "exp"), out)
+
+    # The successful displacement stage was still persisted before the raise.
+    df, _ = ntfm.read_ntfm(out / RESULTS_FILENAME)
+    assert not df["u_x[µm]"].isna().all()
+
+
 def test_load_mask_returns_none_when_absent(tmp_path):
     analysis = _analysis(input_files={"beads": "b.tif"})
     assert analysis._load_mask(tmp_path) is None

@@ -318,6 +318,19 @@ class BatchAnalysis:
         self._pending_futures = {}
         self._progress_manager = None
         self._progress_queue = None
+        # Per-folder record of stages that raised. process_folder resets this at
+        # the start of each folder and raises at the end if it is non-empty, so a
+        # swallowed stage exception surfaces as "error" instead of a silent "done"
+        # (CODE_REVIEW_FINDINGS.md #5).
+        self._stage_failures = []
+
+    def _record_stage_failure(self, stage: str, error: Exception) -> None:
+        """Note that ``stage`` raised, so process_folder can report the folder
+        as failed rather than green-with-nothing-on-disk. The exception is still
+        caught (other stages' partial results are written) but not forgotten."""
+        if not hasattr(self, "_stage_failures"):
+            self._stage_failures = []
+        self._stage_failures.append(f"{stage}: {error}")
 
     def _emit(self, method: str, *args) -> None:
         """Notify the optional sink; never let it break a run (worklist §5).
@@ -656,6 +669,7 @@ class BatchAnalysis:
 
         tfm_folder = self._initialize_folder(output_dir)
         viz_saver = BatchVisualizationSaver(output_dir)
+        self._stage_failures = []
 
         try:
             print(f"Processing folder: {folder_path}")
@@ -682,9 +696,20 @@ class BatchAnalysis:
             self._handle_visualization(tfm_folder, viz_saver, 'stress', stress_data)
 
             # Write the sole data artifact: one .ntfm per experiment (ROADMAP §4).
+            # Written *before* the failure check below so any stages that did
+            # succeed are still persisted on a partial failure.
             self._write_experiment_ntfm(
                 output_dir, folder, displacement_data, force_data, stress_data, mask_data
             )
+
+            # A stage that raised was caught so downstream stages and the write
+            # could still run, but a folder with any failed stage did not fully
+            # succeed and must not be reported "done" (CODE_REVIEW_FINDINGS.md #5).
+            if self._stage_failures:
+                raise RuntimeError(
+                    "Folder processing failed for stage(s): "
+                    + "; ".join(self._stage_failures)
+                )
 
             print("Folder processing completed successfully!")
             print("=" * 50)
@@ -701,6 +726,7 @@ class BatchAnalysis:
             return self._execute_preprocessing(folder, tfm_folder)
         except Exception as e:
             print(f"Preprocessing failed: {str(e)}")
+            self._record_stage_failure("preprocessing", e)
             return None
 
     def _handle_displacement_execution(self, tfm_folder: Path, preprocessed_data: Optional[dict]) -> Optional[dict]:
@@ -726,11 +752,13 @@ class BatchAnalysis:
                 }
             except Exception as e:
                 print(f"Could not load preprocessed files: {str(e)}")
+                self._record_stage_failure("displacement", e)
                 return None
 
             return self._execute_displacement_analysis(tfm_folder, preprocessed_data)
         except Exception as e:
             print(f"Displacement analysis failed: {str(e)}")
+            self._record_stage_failure("displacement", e)
             return None
 
     def _handle_force_execution(self, tfm_folder: Path, folder: Path, displacement_data: Optional[dict]) -> Optional[dict]:
@@ -752,6 +780,7 @@ class BatchAnalysis:
             return self._execute_force_analysis(tfm_folder, displacement_data)
         except Exception as e:
             print(f"Force analysis failed: {str(e)}")
+            self._record_stage_failure("force", e)
             return None
 
     def _handle_stress_execution(self, tfm_folder: Path, folder: Path, force_data: Optional[dict], mask_data: Optional[np.ndarray]) -> Optional[dict]:
@@ -780,6 +809,7 @@ class BatchAnalysis:
 
         except Exception as e:
             print(f"Stress analysis failed: {str(e)}")
+            self._record_stage_failure("stress", e)
             return None
 
     def _resume_field_from_ntfm(self, tfm_folder: Path, folder: Path, field_key: str) -> Optional[np.ndarray]:
