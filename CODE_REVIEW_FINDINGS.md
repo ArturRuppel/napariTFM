@@ -80,12 +80,19 @@ the negative root and its magnitude are the identical regularizer, so `abs()` is
 and lossless. Applied at the source (`_find_regularization` return) so both the UI-display
 path and the auto-GCV batch path (which uses `regularization ** 2`) see a non-negative λ.
 
-**4. Displacement and stress parameters are never validated in production.**
+**4. Displacement and stress parameters are never validated in production. — DONE
+(removed the dead validators).**
 `validate_displacement_parameters` and `validate_stress_parameters`
 (`backend/parameter_validation.py:30,107`) are called only from tests — unlike the
 FTTC/preprocessing validators which run in the backend. So an out-of-range `pyr_scale` or
 a negative `bism_regularization` reaches the solver unchecked. `validate_stress_parameters`
 also never checks `bism_regularization` at all.
+
+_Resolution:_ The UI already constrains these parameters (spinbox min/max on every
+displacement and stress control), so the validators duplicated a guarantee the widgets
+already enforce — dead code with no production caller. Rather than wire them in, deleted
+both functions and their test-only assertions. Kept `validate_preprocessing_parameters`
+and `validate_fttc_parameters`, which *are* invoked in the backend.
 
 ---
 

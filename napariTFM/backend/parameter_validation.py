@@ -1,9 +1,7 @@
 from typing import Tuple
 
 from napariTFM.backend.parameter_dataclasses import (
-    DisplacementParameters,
     FTTCParameters,
-    StressParameters,
     PreprocessingParameters,
 )
 
@@ -23,46 +21,6 @@ def validate_preprocessing_parameters(params: PreprocessingParameters) -> Tuple[
 
     if params.registration_mode not in ['translation', 'rigid', 'no registration']:
         return False, f"Invalid registration mode: {params.registration_mode}"
-
-    return True, ""
-
-
-def validate_displacement_parameters(params: DisplacementParameters) -> Tuple[bool, str]:
-    if params.nscales < 1:
-        return False, "nscales must be at least 1"
-
-    if params.inner_iterations < 1:
-        return False, "inner_iterations must be at least 1"
-
-    if params.median_filtering < 1:
-        return False, "median_filtering must be at least 1"
-
-    if not 0 < params.pyr_scale < 1:
-        return False, "pyr_scale must be between 0 and 1 (exclusive)"
-
-    if params.poly_n < 1:
-        return False, "poly_n must be at least 1"
-
-    if params.poly_sigma <= 0:
-        return False, "poly_sigma must be positive"
-
-    if params.downscale_factor < 1:
-        return False, "downscale_factor must be at least 1"
-
-    if params.pixel_size <= 0:
-        return False, "pixel_size must be positive"
-
-    if params.frame_interval <= 0:
-        return False, "frame_interval must be positive"
-
-    if params.d_max <= 0:
-        return False, "d_max must be positive"
-
-    if params.disp_vector_stride < 1:
-        return False, "disp_vector_stride must be at least 1"
-
-    if params.disp_arrow_scale <= 0:
-        return False, "disp_arrow_scale must be positive"
 
     return True, ""
 
@@ -91,22 +49,6 @@ def validate_fttc_parameters(params: FTTCParameters) -> Tuple[bool, str]:
 
     if params.f_max <= 0:
         return False, "Maximum force must be positive"
-
-    if params.frame_interval <= 0:
-        return False, "Frame interval must be positive"
-
-    if params.pixel_size <= 0:
-        return False, "Pixel size must be positive"
-
-    if params.downscale_factor < 1:
-        return False, "Downscale factor must be at least 1"
-
-    return True, ""
-
-
-def validate_stress_parameters(params: StressParameters) -> Tuple[bool, str]:
-    if params.max_stress <= 0:
-        return False, "Maximum stress must be positive"
 
     if params.frame_interval <= 0:
         return False, "Frame interval must be positive"

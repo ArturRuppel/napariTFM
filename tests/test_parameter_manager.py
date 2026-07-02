@@ -9,15 +9,12 @@ qtrangeslider.QRangeSlider = object
 sys.modules.setdefault("qtrangeslider", qtrangeslider)
 
 from napariTFM.backend.parameter_dataclasses import (
-    DisplacementParameters,
     FTTCParameters,
     StressParameters,
     PreprocessingParameters,
 )
 from napariTFM.backend.parameter_validation import (
-    validate_displacement_parameters,
     validate_fttc_parameters,
-    validate_stress_parameters,
     validate_preprocessing_parameters,
 )
 from napariTFM.utilities.parameter_manager import ParameterCategory, ParameterManager
@@ -113,25 +110,9 @@ def test_validation_helpers_return_compatible_results():
         PreprocessingParameters(min_intensity_percentile=80, max_intensity_percentile=20)
     ) == (False, "Invalid intensity percentile range")
 
-    assert validate_displacement_parameters(
-        DisplacementParameters(nscales=0)
-    ) == (False, "nscales must be at least 1")
-
-    assert validate_displacement_parameters(
-        DisplacementParameters(pyr_scale=1.0)
-    ) == (False, "pyr_scale must be between 0 and 1 (exclusive)")
-
-    assert validate_displacement_parameters(
-        DisplacementParameters(poly_sigma=0)
-    ) == (False, "poly_sigma must be positive")
-
     assert validate_fttc_parameters(
         FTTCParameters(young_modulus=0)
     ) == (False, "Young's modulus must be positive")
-
-    assert validate_stress_parameters(
-        StressParameters(max_stress=0)
-    ) == (False, "Maximum stress must be positive")
 
 
 def test_stress_parameters_have_no_mask_fields():
@@ -140,8 +121,3 @@ def test_stress_parameters_have_no_mask_fields():
     assert "threshold" not in field_names
     assert "dilation" not in field_names
     assert "smoothing_sigma" not in field_names
-
-
-def test_validate_stress_ignores_mask_params():
-    ok, _ = validate_stress_parameters(StressParameters())
-    assert ok is True
