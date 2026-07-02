@@ -270,6 +270,39 @@ def test_selecting_a_row_sets_single_active_and_emits(app):
     assert rows[0].is_selected() is False
 
 
+def test_reselecting_active_row_does_not_reemit(app):
+    """Re-clicking the already-active row must not re-fire active_changed, which
+    would needlessly clear the active experiment's overlays and reload from disk
+    (CODE_REVIEW_FINDINGS.md #8)."""
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b"])
+    widget.set_active("/data/b")
+    seen = []
+    widget.active_changed.connect(seen.append)
+
+    widget.set_active("/data/b")  # same row again
+
+    assert widget.active() == "/data/b"
+    assert seen == []  # no re-emit
+
+
+def test_selection_change_without_active_change_does_not_reemit(app):
+    """A multi-select gesture that leaves the active row unchanged refreshes the
+    selection but does not re-fire active_changed."""
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b"])
+    widget.set_active("/data/a")
+    seen = []
+    widget.active_changed.connect(seen.append)
+
+    # active stays /data/a, selection grows to include /data/b
+    widget.set_active("/data/a", selection={"/data/a", "/data/b"})
+
+    assert widget.active() == "/data/a"
+    assert seen == []
+    assert widget._selected_paths == {"/data/a", "/data/b"}
+
+
 def test_set_active_ignores_unknown_path(app):
     widget = ExperimentsList()
     widget.set_experiments(["/data/a"])

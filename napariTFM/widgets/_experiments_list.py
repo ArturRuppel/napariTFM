@@ -1004,6 +1004,13 @@ class ExperimentsList(QWidget):
         """
         if path is not None and path not in self._paths:
             return
+        # Only a genuine change of the active row drives the downstream
+        # clear-and-reload. Re-clicking the already-active row (or a multi-select
+        # gesture that leaves the active row unchanged) still refreshes the
+        # selection styling below, but must NOT re-emit active_changed —
+        # otherwise it would wipe the active experiment's in-memory overlays and
+        # reload from disk for no reason (CODE_REVIEW_FINDINGS.md #8).
+        active_changed = path != self._active
         self._active = path
         if selection is None:
             self._selected_paths = {path} if path else set()
@@ -1011,7 +1018,8 @@ class ExperimentsList(QWidget):
             self._selected_paths = {p for p in selection if p in self._paths}
         self._apply_selection_styles()
         self._update_delete_btn()
-        self.active_changed.emit(path or "")
+        if active_changed:
+            self.active_changed.emit(path or "")
 
     def delete_selected(self) -> None:
         """Remove selected rows: preview-staged first, else committed rows."""

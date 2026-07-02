@@ -162,10 +162,21 @@ convention (so it's consistent, not asymmetric-by-accident). The only loss is a 
 footprints — binary or a handful of non-negative labels — so that ceiling is physically
 unreachable and there are no signed sentinels. No code change.
 
-**8. Clicking the already-active experiment row drops in-memory overlays.**
+**8. Clicking the already-active experiment row drops in-memory overlays. — DONE
+(real; fixed with a same-path guard).**
 `widgets/_experiments_list.py:998-1014` (`set_active`) has no same-path guard, so a repeat
 click re-emits `active_changed`, which calls `data_manager.clear_generated_results()` and
 reloads from disk — streamed force/stress overlays vanish until re-triggered.
+
+_Resolution:_ Real bug, and already tacitly known — `_on_row_stage_clicked` in `_widget.py`
+guards its own `set_active` call with `if path != self._active_experiment` precisely to
+dodge this cost. Centralized the guard in `set_active`: it now computes
+`active_changed = path != self._active` and only re-emits `active_changed` on a genuine
+change. Selection styling / delete-button state still update unconditionally, so multi-select
+gestures (Ctrl/Shift) that leave the active row unchanged refresh correctly *without*
+triggering the heavy clear-and-reload — a bonus fix, since building a delete-selection over
+the active experiment previously wiped its overlays too. Two regression tests added
+(`test_reselecting_active_row_does_not_reemit`, `test_selection_change_without_active_change_does_not_reemit`).
 
 ---
 
