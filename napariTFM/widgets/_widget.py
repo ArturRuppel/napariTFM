@@ -507,8 +507,8 @@ class napariTFMWidget(QWidget):
         self.experiments_list.experiments_changed.connect(
             self._on_experiments_changed
         )
-        self.experiments_list.run_all_requested.connect(self._run_all_experiments)
-        self.experiments_list.cancel_run_all_requested.connect(self._cancel_run_all)
+        self.experiments_list.run_selected_requested.connect(self._run_selected_experiments)
+        self.experiments_list.cancel_run_selected_requested.connect(self._cancel_run_selected)
         self.experiments_list.stage_load_requested.connect(self._on_row_stage_clicked)
         self._active_batch = None
         container_layout.addWidget(self.experiments_list)
@@ -570,7 +570,7 @@ class napariTFMWidget(QWidget):
         )
 
         # Funnel every pipeline stage's progress into the single global status
-        # label (P2). Run-all (the retired batch widget's successor) reports via
+        # label (P2). Run-selected (the retired batch widget's successor) reports via
         # its own per-folder callback, not a controller progress signal.
         for stage_widget, stage_label in (
             (self.preprocessing_widget, "Preprocessing"),
@@ -980,22 +980,32 @@ class napariTFMWidget(QWidget):
         if section is not None:
             section.set_progress(progress / 100.0)
 
-    def _run_all_experiments(self) -> None:
-        """Run the whole config table through the pipeline, walking the rail (P4).
+    def _run_selected_experiments(self) -> None:
+        """Run the selected rows through the pipeline, walking the rail (P4).
 
         The experiments list is the single run source: its records + the shared
         parameters build the run config, and stress is skipped when its on/off
         glyph is off (D1). A per-folder progress callback drives the live
         mini-rails as the batch advances.
 
+        Only the currently-selected rows are run: the records are filtered down
+        to ``ExperimentsList.selected_rows()`` (row order) before building the
+        config. The button is disabled when nothing is selected, so this is a
+        no-op guard rather than the normal path.
+
         ``num_workers`` (read once here from the experiments-list spinbox)
         decides which of two code paths runs: ``<= 1`` keeps the original
         synchronous, single-process, live-streaming path unchanged; ``> 1``
         hands the folders to a process pool and polls it from a Qt timer
         instead (no live viewer streaming in that mode -- see
-        :meth:`_run_all_experiments_parallel`).
+        :meth:`_run_selected_experiments_parallel`).
         """
-        records = self.experiments_list.experiment_records()
+        selected = set(self.experiments_list.selected_rows())
+        records = [
+            record
+            for record in self.experiments_list.experiment_records()
+            if record["path"] in selected
+        ]
         if not records:
             return
         num_workers = self.experiments_list.num_workers()
@@ -1007,12 +1017,12 @@ class napariTFMWidget(QWidget):
             num_workers=num_workers,
         )
         if num_workers > 1:
-            self._run_all_experiments_parallel(config)
+            self._run_selected_experiments_parallel(config)
         else:
-            self._run_all_experiments_sequential(config)
+            self._run_selected_experiments_sequential(config)
 
-    def _run_all_experiments_sequential(self, config: dict) -> None:
-        """Original single-process run-all path (unchanged behaviour).
+    def _run_selected_experiments_sequential(self, config: dict) -> None:
+        """Original single-process run path (unchanged behaviour).
 
         Streams each stage into the live viewer as it runs (worklist §5): the
         same ``BatchAnalysis`` that drives a headless run also walks the rail
@@ -1024,7 +1034,7 @@ class napariTFMWidget(QWidget):
             self.visualization_manager,
             pump=QApplication.processEvents,
             on_experiment=self._on_experiment_streaming,
-            on_stage_progress=self._on_run_all_stage_progress,
+            on_stage_progress=self._on_run_selected_stage_progress,
         )
         analyzer = BatchAnalysis(
             config,
@@ -1032,23 +1042,23 @@ class napariTFMWidget(QWidget):
             sink=sink,
         )
         self._active_batch = analyzer
-        self.experiments_list.set_run_all_active(True)
+        self.experiments_list.set_run_selected_active(True)
         # The sink takes over layer visibility per stage while it streams
         # (worklist §4); snapshot now so end_run restores it however the run ends.
         sink.begin_run()
         try:
             analyzer.process_all_folders()
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("Run-all failed")
-            QMessageBox.critical(self, "Run all", f"Batch run failed: {exc}")
+            logger.exception("Run-selected failed")
+            QMessageBox.critical(self, "Run selected", f"Batch run failed: {exc}")
         finally:
             sink.end_run()
             self._active_batch = None
-            self.experiments_list.set_run_all_active(False)
+            self.experiments_list.set_run_selected_active(False)
             self.refresh_stage_statuses()
 
-    def _run_all_experiments_parallel(self, config: dict) -> None:
-        """Process-pool run-all path: submit once, poll non-blockingly from a timer.
+    def _run_selected_experiments_parallel(self, config: dict) -> None:
+        """Process-pool run path: submit once, poll non-blockingly from a timer.
 
         No ``ViewerSink`` is constructed here -- nothing streams into one in
         parallel mode (workers run headless in separate processes), so
@@ -1060,13 +1070,13 @@ class napariTFMWidget(QWidget):
 
         The viewer follows the currently-selected row, or the topmost folder
         if nothing is selected yet. Cancellation reuses the existing
-        ``_cancel_run_all`` wiring unchanged -- it calls
+        ``_cancel_run_selected`` wiring unchanged -- it calls
         ``self._active_batch.request_cancel()``, and ``self._active_batch`` is
         the same analyzer instance used here.
         """
         analyzer = BatchAnalysis(config, progress_callback=self._on_batch_progress, sink=None)
         self._active_batch = analyzer
-        self.experiments_list.set_run_all_active(True)
+        self.experiments_list.set_run_selected_active(True)
 
         try:
             plan = resolve_output_plan(config['root_folders'], config.get('processed_root'))
@@ -1082,10 +1092,10 @@ class napariTFMWidget(QWidget):
 
             analyzer.start_parallel(plan, config['num_workers'])
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("Run-all failed")
-            QMessageBox.critical(self, "Run all", f"Batch run failed: {exc}")
+            logger.exception("Run-selected failed")
+            QMessageBox.critical(self, "Run selected", f"Batch run failed: {exc}")
             self._active_batch = None
-            self.experiments_list.set_run_all_active(False)
+            self.experiments_list.set_run_selected_active(False)
             self.refresh_stage_statuses()
             return
 
@@ -1115,7 +1125,7 @@ class napariTFMWidget(QWidget):
             if finished:
                 timer.stop()
                 self._active_batch = None
-                self.experiments_list.set_run_all_active(False)
+                self.experiments_list.set_run_selected_active(False)
                 self.refresh_stage_statuses()
 
         timer.timeout.connect(_poll)
@@ -1207,7 +1217,7 @@ class napariTFMWidget(QWidget):
             logger.exception("Could not persist preprocessed TIFFs for %s", path)
             self.status_label.setText(f"Save failed: {exc}")
 
-    def _cancel_run_all(self) -> None:
+    def _cancel_run_selected(self) -> None:
         """Ask the live batch to stop at the next folder boundary (P4 / item 1).
 
         The batch runs synchronously on the GUI thread; the per-folder progress
@@ -1239,11 +1249,11 @@ class napariTFMWidget(QWidget):
             )
         self._update_disclosure()
 
-    def _on_run_all_stage_progress(self, stage: str, status: str, fraction: float | None) -> None:
-        """Walk a run-all's progress onto the matching stage pill's spine node.
+    def _on_run_selected_stage_progress(self, stage: str, status: str, fraction: float | None) -> None:
+        """Walk a run's progress onto the matching stage pill's spine node.
 
         Mirrors the live single-stage path (``_relay_stage_status``) so a
-        run-all's rail fills frame by frame too, instead of sitting static
+        run's rail fills frame by frame too, instead of sitting static
         until ``refresh_stage_statuses`` reconciles everything at the very end.
         """
         section = self._stage_sections_by_key.get(stage)
@@ -1261,14 +1271,14 @@ class napariTFMWidget(QWidget):
 
         The parallel poll timer's per-tick stage events land here and go
         straight to that one folder's one mini-rail dot -- the parallel-mode
-        sibling of ``_on_run_all_stage_progress``, which does the equivalent
+        sibling of ``_on_run_selected_stage_progress``, which does the equivalent
         for the single-experiment detail panel's ``StageSpine`` during a
         sequential run.
         """
         self.experiments_list.set_row_stage_progress(folder, stage, status, fraction)
 
     def _on_batch_progress(self, folder: str, status: str) -> None:
-        """Live per-folder feedback for Run-all: walk the rail, then refresh (P4).
+        """Live per-folder feedback for Run-selected: walk the rail, then refresh (P4).
 
         'done'/'error' name the one folder that just changed, so read *that*
         folder's real `.ntfm` status directly instead of rescanning every row

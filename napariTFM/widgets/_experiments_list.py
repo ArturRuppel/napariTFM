@@ -140,7 +140,7 @@ class MiniRail(QWidget):
         self._statuses = {key: "not_started" for key in self.stages}
         # Fractional completion (0..1) of an in-flight "running" stage, or None
         # when no per-frame progress is known (mirrors StageSpine._progress) --
-        # fed by a parallel Run-all's real per-stage/per-frame events instead of
+        # fed by a parallel Run-selected's real per-stage/per-frame events instead of
         # the flat placeholder mark_running() paints at submission time.
         self._progress: dict[str, Optional[float]] = {key: None for key in self.stages}
         # Index of the dot under the cursor (-1 = none), driving the hover halo.
@@ -405,8 +405,8 @@ class ExperimentsList(QWidget):
 
     experiments_changed = Signal()
     active_changed = Signal(str)
-    run_all_requested = Signal()
-    cancel_run_all_requested = Signal()
+    run_selected_requested = Signal()
+    cancel_run_selected_requested = Signal()
     # Emitted when a row's stage dot is clicked, asking the owner to bring that
     # experiment's stage on screen (select the row + decode that one series).
     stage_load_requested = Signal(str, str)  # path, stage
@@ -495,7 +495,7 @@ class ExperimentsList(QWidget):
         # two rows so neither one needs the full panel width to stay legible:
         # row 1 builds the list (Discover stages folders, Add to list commits
         # them, Delete removes the selected rows); row 2 runs it (worker count,
-        # Run all — P4, batch is an action on the list, not a separate card).
+        # Run selected — P4, batch is an action on the list, not a separate card).
         list_actions = QHBoxLayout()
         list_actions.setContentsMargins(0, 0, 0, 0)
 
@@ -531,17 +531,21 @@ class ExperimentsList(QWidget):
         run_actions = QHBoxLayout()
         run_actions.setContentsMargins(0, 0, 0, 0)
 
-        self._run_all_active = False
-        self.run_all_btn = QToolButton()
-        self.run_all_btn.setObjectName("experiments_run_all_button")
-        self.run_all_btn.setText("Run all")
-        self.run_all_btn.setIcon(
+        self._run_selected_active = False
+        self.run_selected_btn = QToolButton()
+        self.run_selected_btn.setObjectName("experiments_run_selected_button")
+        self.run_selected_btn.setText("Run selected")
+        self.run_selected_btn.setIcon(
             stage_action_icon("run", muted_accent(stage_accent("force")))
         )
-        self.run_all_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.run_all_btn.setEnabled(False)
-        self.run_all_btn.clicked.connect(self._on_run_all_clicked)
-        run_actions.addWidget(self.run_all_btn)
+        self.run_selected_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.run_selected_btn.setToolTip(
+            "Run the selected rows (Ctrl/Shift-click to select several, "
+            "Ctrl+A for all)"
+        )
+        self.run_selected_btn.setEnabled(False)
+        self.run_selected_btn.clicked.connect(self._on_run_selected_clicked)
+        run_actions.addWidget(self.run_selected_btn)
 
         run_actions.addStretch()
 
@@ -554,7 +558,7 @@ class ExperimentsList(QWidget):
         self._num_workers_spinbox.setRange(1, os.cpu_count() or 1)
         self._num_workers_spinbox.setValue(1)
         self._num_workers_spinbox.setToolTip(
-            "How many positions Run-all processes in parallel"
+            "How many positions Run-selected processes in parallel"
         )
         run_actions.addWidget(self._num_workers_spinbox)
         body_layout.addLayout(run_actions)
@@ -873,7 +877,7 @@ class ExperimentsList(QWidget):
         return self._active
 
     def num_workers(self) -> int:
-        """Chosen parallel batch-worker count for Run-all."""
+        """Chosen parallel batch-worker count for Run-selected."""
         return self._num_workers_spinbox.value()
 
     def selected_rows(self) -> list[str]:
@@ -1110,7 +1114,7 @@ class ExperimentsList(QWidget):
     ) -> None:
         """Paint one row's one stage dot with real in-flight progress (P4/#10).
 
-        Fed by a parallel Run-all's per-stage/per-frame events (routed through
+        Fed by a parallel Run-selected's per-stage/per-frame events (routed through
         the shell's ``_on_batch_stage_progress``), so a parallel-mode row's dot
         fills the same way the single-experiment detail panel's ``StageSpine``
         already does, instead of sitting on the flat ``mark_running()``
@@ -1124,27 +1128,30 @@ class ExperimentsList(QWidget):
             row.mini_rail.set_stage_progress(stage, fraction)
             return
 
-    def _on_run_all_clicked(self) -> None:
-        """One button, two roles: start a Run-all, or cancel the live one."""
-        if self._run_all_active:
-            self.cancel_run_all_requested.emit()
+    def _on_run_selected_clicked(self) -> None:
+        """One button, two roles: start a Run-selected, or cancel the live one."""
+        if self._run_selected_active:
+            self.cancel_run_selected_requested.emit()
         else:
-            self.run_all_requested.emit()
+            self.run_selected_requested.emit()
 
-    def set_run_all_active(self, active: bool) -> None:
-        """Toggle the Run-all button between 'Run all' and a live 'Cancel'.
+    def set_run_selected_active(self, active: bool) -> None:
+        """Toggle the button between 'Run selected' and a live 'Cancel'.
 
-        While active the button stays enabled (independent of row count) so the
-        in-flight batch can always be cancelled.
+        While active the button stays enabled (independent of selection) so the
+        in-flight batch can always be cancelled; when it goes inactive the
+        enablement falls back to whatever is currently selected.
         """
-        self._run_all_active = active
+        self._run_selected_active = active
         icon = "cancel" if active else "run"
-        self.run_all_btn.setText("Cancel" if active else "Run all")
-        self.run_all_btn.setIcon(
+        self.run_selected_btn.setText("Cancel" if active else "Run selected")
+        self.run_selected_btn.setIcon(
             stage_action_icon(icon, muted_accent(stage_accent("force")))
         )
         if active:
-            self.run_all_btn.setEnabled(True)
+            self.run_selected_btn.setEnabled(True)
+        else:
+            self._update_run_btn()
 
     # -- internals -------------------------------------------------------
     def _on_row_clicked(self, path: str, flag: int) -> None:
@@ -1191,6 +1198,18 @@ class ExperimentsList(QWidget):
             self.delete_btn.setEnabled(
                 bool(self._selected_paths) or bool(self._discovered_selected)
             )
+        self._update_run_btn()
+
+    def _update_run_btn(self) -> None:
+        """Enable Run-selected iff committed rows are selected (or a run is live).
+
+        Preview/discovered rows aren't run targets, so only ``_selected_paths``
+        drives enablement — mirroring how Delete keys off the same set.
+        """
+        if hasattr(self, "run_selected_btn"):
+            self.run_selected_btn.setEnabled(
+                self._run_selected_active or bool(self._selected_paths)
+            )
 
     def keyPressEvent(self, event) -> None:  # pragma: no cover - GUI event
         if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and (
@@ -1199,7 +1218,22 @@ class ExperimentsList(QWidget):
             self.delete_selected()
             event.accept()
             return
+        if event.key() == Qt.Key_A and event.modifiers() & Qt.ControlModifier:
+            self.select_all()
+            event.accept()
+            return
         super().keyPressEvent(event)
+
+    def select_all(self) -> None:
+        """Select every committed row (Ctrl+A).
+
+        Preview/discovered rows are excluded — they aren't run or delete
+        targets. Restyles the rows and re-evaluates Run-selected/Delete
+        enablement through the shared ``_update_delete_btn`` path.
+        """
+        self._selected_paths = set(self._paths)
+        self._apply_selection_styles()
+        self._update_delete_btn()
 
     def _build_header_widget(self) -> QWidget:
         """The editable column-name header, aligned over the value cells."""
@@ -1276,7 +1310,10 @@ class ExperimentsList(QWidget):
     def _update_meta(self) -> None:
         n = len(self._paths)
         self._meta.setText(f"{n} experiment{'s' if n != 1 else ''}")
-        self.run_all_btn.setEnabled(n > 0)
+        # Run-selected enablement is selection-driven (see _update_run_btn),
+        # not row-count-driven; refresh it in case row changes pruned the
+        # selection.
+        self._update_run_btn()
 
     def _on_add_clicked(self) -> None:  # pragma: no cover - GUI dialog
         dialog = QFileDialog(self, "Discover experiments under a root folder")

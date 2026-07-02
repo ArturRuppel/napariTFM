@@ -1,6 +1,6 @@
 """QueueProgressSink: the process-boundary counterpart to ViewerSink.
 
-A parallel Run-all worker (backend/batch_analysis.py's _run_position_headless)
+A parallel Run-selected worker (backend/batch_analysis.py's _run_position_headless)
 attaches one of these instead of a ViewerSink, so its stage/frame lifecycle
 hooks reach the parent process via a plain queue instead of a Qt signal.
 """

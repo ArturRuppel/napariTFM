@@ -1,6 +1,6 @@
 """A PipelineSink that reports stage/frame progress across a process boundary.
 
-Used by parallel Run-all workers (see ``batch_analysis._run_position_headless``):
+Used by parallel Run-selected workers (see ``batch_analysis._run_position_headless``):
 each worker process attaches one ``QueueProgressSink`` wrapping a queue
 (typically a ``multiprocessing.Manager().Queue()`` proxy -- see
 ``BatchAnalysis.start_parallel``) shared with the parent process, so the

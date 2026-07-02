@@ -445,7 +445,7 @@ def test_process_all_folders_parallel_honors_cancellation(tmp_path, monkeypatch)
     analysis = _analysis([a, b])
     analysis._progress_callback = lambda folder, status: events.append((folder, status))
     # Already cancelled before the blocking call starts (e.g. the GUI's
-    # Cancel control was clicked just before "Run all" finished submitting).
+    # Cancel control was clicked just before "Run selected" finished submitting).
     analysis._cancelled = True
 
     # A queued (never auto-run) executor: if cancellation weren't honored,

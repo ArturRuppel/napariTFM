@@ -15,16 +15,32 @@
 Redundant with the colormap-spine rail, which already shows per-stage status —
 drop the separate green/red icons that indicate input/output file presence.
 
-### Replace "Run all" with "Run selected"
+### Replace "Run all" with "Run selected"  ·  DONE (2026-07-02)
 Scope batch runs to the experiments-list's existing row-selection mechanism
 (the same one "Delete selected" already uses) instead of always running
 every committed row. Design spec:
 [`docs/superpowers/specs/2026-07-01-run-selected-design.md`](docs/superpowers/specs/2026-07-01-run-selected-design.md).
+**Done as specced** — pure widget-layer change, `BatchAnalysis` untouched.
+`_run_selected_experiments` (`_widget.py`) filters `experiment_records()` down
+to `ExperimentsList.selected_rows()` (row order) before `build_run_config`, so
+`root_folders` carries only the selected paths. The button is now
+selection-driven (enabled iff `_selected_paths`, recomputed via the new
+`_update_run_btn` folded into `_update_delete_btn`; no more `n > 0`), text is
+"Run selected", and a new `ExperimentsList.select_all()` (Ctrl+A, committed
+rows only — preview rows excluded) covers "run everything". All `run_all_*`
+identifiers/signals/strings renamed to `run_selected_*` across `_widget.py`,
+`_experiments_list.py`, `viewer_sink.py`, `queue_progress_sink.py`,
+`batch_analysis.py`. Tests updated + added (partial-selection config, Ctrl+A
+select-all, preview-exclusion, no-selection no-op) in `test_experiments_list.py`
+and `test_workflow_shell.py`; 243 passed in the affected suites, 630 in the full
+run (the only 5 failures are a pre-existing imageio/tifffile `fps`-kwarg env
+drift in `test_batch_visualizations.py`, unrelated).
 
-### BUG: Run All stops before finishing all queued tasks
-"Run All" terminates early, leaving some queued positions/tasks unprocessed
-instead of running through the full queue. Needs repro + root-cause (which
-queue/loop condition ends the run prematurely) before a fix.
+### BUG: Run All stops before finishing all queued tasks  ·  LIKELY FALSE ALARM (2026-07-02)
+Per the owner (2026-07-02): probably **not** a queue/loop bug — the run most
+likely crashed on **bad input images** and aborted, rather than terminating
+early through a faulty loop condition. Leave un-fixed pending a real repro; if
+it resurfaces, look at the failing position's images first, not the queue logic.
 
 ### BUG: Clicking the preprocessing rail circle wouldn't load its output  ·  DONE (2026-07-01)
 Clicking the first (preprocessing) icon on either rail claimed "no output" even

@@ -350,7 +350,7 @@ class BatchAnalysis:
     def request_cancel(self) -> None:
         """Ask the batch to stop at the next folder boundary (cooperative).
 
-        Set by a Cancel control during a Run-all; the folder loop checks the flag
+        Set by a Cancel control during a Run-selected; the folder loop checks the flag
         before starting each folder, so an in-flight folder finishes but no
         further folders are processed.
         """

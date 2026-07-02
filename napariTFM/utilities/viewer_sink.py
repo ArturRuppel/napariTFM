@@ -1,11 +1,11 @@
 """A live :class:`PipelineSink` that streams a batch run into the napari viewer.
 
 This is the viewer half of worklist §5: the *same* :class:`BatchAnalysis`
-orchestrator drives both a headless run and the in-napari "Run all". Headless
+orchestrator drives both a headless run and the in-napari "Run selected". Headless
 attaches no sink; the in-napari run attaches a :class:`ViewerSink`, which turns
 the orchestrator's stage/frame notifications into the very same
 ``VisualizationManager`` streaming calls the interactive per-stage controllers
-use — so a run-all walks the rail in the viewer, filling each stage's layers
+use — so a run walks the rail in the viewer, filling each stage's layers
 frame by frame, exactly as if each stage button were pressed in turn.
 
 No background thread is introduced: the batch runs synchronously on the GUI

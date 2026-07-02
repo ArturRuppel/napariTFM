@@ -649,51 +649,82 @@ def test_eager_status_paints_real_disk_state_on_every_refresh(app):
     assert widget._rows[0].mini_rail._statuses["force"] == "ready"
 
 
-# -- Run all (P4.3) ------------------------------------------------------
+# -- Run selected (P4.3) -------------------------------------------------
 
-def test_run_all_button_exists_and_is_disabled_when_empty(app):
+def test_run_selected_button_exists_and_is_disabled_when_empty(app):
     widget = ExperimentsList()
-    assert hasattr(widget, "run_all_btn")
-    assert widget.run_all_btn.isEnabled() is False
+    assert hasattr(widget, "run_selected_btn")
+    assert widget.run_selected_btn.isEnabled() is False
 
 
-def test_run_all_button_enables_once_experiments_exist(app):
+def test_run_selected_button_enablement_follows_selection(app):
+    widget = ExperimentsList()
+    # Two rows: adding to an empty list auto-selects only the first (preload),
+    # so the button is enabled by that selection.
+    widget.set_experiments(["/data/a", "/data/b"])
+    assert widget.selected_rows() == ["/data/a"]
+    assert widget.run_selected_btn.isEnabled() is True
+
+    # Clearing the selection (deselect the only selected row) disables it.
+    widget.set_active(None)
+    assert widget.selected_rows() == []
+    assert widget.run_selected_btn.isEnabled() is False
+
+    # Selecting a row re-enables it.
+    widget.set_active("/data/b")
+    assert widget.run_selected_btn.isEnabled() is True
+
+
+def test_select_all_selects_all_committed_rows(app):
+    widget = ExperimentsList()
+    widget.set_experiments(["/data/a", "/data/b", "/data/c"])
+    widget.set_active(None)
+    assert widget.run_selected_btn.isEnabled() is False
+
+    widget.select_all()  # what Ctrl+A invokes
+    assert widget.selected_rows() == ["/data/a", "/data/b", "/data/c"]
+    assert widget.run_selected_btn.isEnabled() is True
+
+
+def test_select_all_excludes_preview_rows(app):
     widget = ExperimentsList()
     widget.set_experiments(["/data/a"])
-    assert widget.run_all_btn.isEnabled() is True
+    widget._discovered = ["/data/preview"]  # staged, not committed
+    widget.select_all()
+    assert widget.selected_rows() == ["/data/a"]
 
 
-def test_run_all_button_click_emits_run_all_requested(app):
+def test_run_selected_button_click_emits_run_selected_requested(app):
     widget = ExperimentsList()
     widget.set_experiments(["/data/a"])
     seen = []
-    widget.run_all_requested.connect(lambda: seen.append(True))
-    widget.run_all_btn.click()
+    widget.run_selected_requested.connect(lambda: seen.append(True))
+    widget.run_selected_btn.click()
     assert seen == [True]
 
 
-def test_run_all_button_becomes_cancel_while_active(app):
+def test_run_selected_button_becomes_cancel_while_active(app):
     widget = ExperimentsList()
     widget.set_experiments(["/data/a"])
-    assert widget.run_all_btn.text() == "Run all"
+    assert widget.run_selected_btn.text() == "Run selected"
 
-    widget.set_run_all_active(True)
-    assert widget.run_all_btn.text() == "Cancel"
-    assert widget.run_all_btn.isEnabled() is True
+    widget.set_run_selected_active(True)
+    assert widget.run_selected_btn.text() == "Cancel"
+    assert widget.run_selected_btn.isEnabled() is True
 
-    widget.set_run_all_active(False)
-    assert widget.run_all_btn.text() == "Run all"
+    widget.set_run_selected_active(False)
+    assert widget.run_selected_btn.text() == "Run selected"
 
 
-def test_active_run_all_button_click_emits_cancel_not_run(app):
+def test_active_run_selected_button_click_emits_cancel_not_run(app):
     widget = ExperimentsList()
     widget.set_experiments(["/data/a"])
     runs, cancels = [], []
-    widget.run_all_requested.connect(lambda: runs.append(True))
-    widget.cancel_run_all_requested.connect(lambda: cancels.append(True))
+    widget.run_selected_requested.connect(lambda: runs.append(True))
+    widget.cancel_run_selected_requested.connect(lambda: cancels.append(True))
 
-    widget.set_run_all_active(True)
-    widget.run_all_btn.click()
+    widget.set_run_selected_active(True)
+    widget.run_selected_btn.click()
     assert runs == []
     assert cancels == [True]
 

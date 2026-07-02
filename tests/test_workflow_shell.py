@@ -168,7 +168,7 @@ class _StubVisualizationManager:
         self.stress_stream_calls = []
         self.stress_stream_frames = []
 
-    # Run-all snapshots/restores layer visibility around the streaming
+    # Run-selected snapshots/restores layer visibility around the streaming
     # takeover (worklist §4); the stub has no real viewer, so these no-op.
     def capture_layer_visibility(self):
         return {}
@@ -589,29 +589,29 @@ def test_stage_progress_also_fills_the_matching_spine_node(monkeypatch, app):
     assert section.spine._progress == 1.0
 
 
-def test_run_all_stage_progress_drives_status_and_fill(monkeypatch, app):
-    """The run-all path (ViewerSink's on_stage_progress) drives the same spine
+def test_run_selected_stage_progress_drives_status_and_fill(monkeypatch, app):
+    """The run path (ViewerSink's on_stage_progress) drives the same spine
     nodes the live single-stage path does, including flipping running/done."""
     widget = _stub_main_widget(monkeypatch)
     section = widget._stage_sections_by_key["force"]
     assert section.status != "running"
 
-    widget._on_run_all_stage_progress("force", "running", 0.0)
+    widget._on_run_selected_stage_progress("force", "running", 0.0)
     assert section.status == "running"
     assert section.spine._progress == 0.0
 
-    widget._on_run_all_stage_progress("force", "running", 0.5)
+    widget._on_run_selected_stage_progress("force", "running", 0.5)
     assert section.spine._progress == 0.5
 
-    widget._on_run_all_stage_progress("force", "done", None)
+    widget._on_run_selected_stage_progress("force", "done", None)
     assert section.status == "done"
     # Finishing must not leave a stale partial fill behind on the next run.
     assert section.spine._progress is None
 
 
-def test_run_all_stage_progress_ignores_unknown_stage(monkeypatch, app):
+def test_run_selected_stage_progress_ignores_unknown_stage(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
-    widget._on_run_all_stage_progress("not_a_stage", "running", 0.5)  # must not raise
+    widget._on_run_selected_stage_progress("not_a_stage", "running", 0.5)  # must not raise
 
 
 def _write_stage_ntfm(folder, **arrays):
@@ -1003,7 +1003,7 @@ class _FakeBatchAnalysis:
                 self.progress_callback(folder, "done")
 
 
-def test_run_all_builds_config_from_table_and_runs_batch(monkeypatch, app):
+def test_run_selected_builds_config_from_selection_and_runs_batch(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
     widget = _stub_main_widget(monkeypatch)
     widget._stage_sections_by_key["stress"].set_enabled(True)
@@ -1012,8 +1012,9 @@ def test_run_all_builds_config_from_table_and_runs_batch(monkeypatch, app):
         input_files={"beads": "beads.tif", "reference": "reference.tif"},
         columns={"condition": "soft"},
     )
+    widget.experiments_list.select_all()
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.run_selected_requested.emit()
 
     cfg = _FakeBatchAnalysis.last_config
     assert cfg["root_folders"] == ["/data/exp_a", "/data/exp_b"]
@@ -1021,18 +1022,39 @@ def test_run_all_builds_config_from_table_and_runs_batch(monkeypatch, app):
     assert cfg["analysis_steps"]["stress"] is True
 
 
-def test_run_all_honours_disabled_stress(monkeypatch, app):
+def test_run_selected_runs_only_the_selected_rows(monkeypatch, app):
+    """A partial selection (2 of 5) runs only those rows, in row order."""
+    monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
+    widget = _stub_main_widget(monkeypatch)
+    widget.experiments_list.add_folders(
+        ["/data/exp_a", "/data/exp_b", "/data/exp_c", "/data/exp_d", "/data/exp_e"]
+    )
+    # Select exp_b and exp_d only (out of insertion order to prove row-ordering).
+    widget.experiments_list.set_active(
+        "/data/exp_d", selection={"/data/exp_d", "/data/exp_b"}
+    )
+
+    widget.experiments_list.run_selected_requested.emit()
+
+    assert _FakeBatchAnalysis.last_config["root_folders"] == [
+        "/data/exp_b",
+        "/data/exp_d",
+    ]
+
+
+def test_run_selected_honours_disabled_stress(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
     widget = _stub_main_widget(monkeypatch)
     widget._stage_sections_by_key["stress"].set_enabled(False)
     widget.experiments_list.add_folders(["/data/exp_a"])
+    widget.experiments_list.select_all()
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.run_selected_requested.emit()
 
     assert _FakeBatchAnalysis.last_config["analysis_steps"]["stress"] is False
 
 
-def test_run_all_progress_marks_running_then_refreshes(monkeypatch, app, tmp_path):
+def test_run_selected_progress_marks_running_then_refreshes(monkeypatch, app, tmp_path):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
     widget = _stub_main_widget(monkeypatch)
 
@@ -1044,8 +1066,9 @@ def test_run_all_progress_marks_running_then_refreshes(monkeypatch, app, tmp_pat
         widget.experiments_list, "refresh_statuses", lambda: seen.append(("refresh",))
     )
     widget.experiments_list.add_folders(["/data/exp_a"])
+    widget.experiments_list.select_all()
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.run_selected_requested.emit()
 
     # running -> mark_running; done -> refresh from disk.
     assert ("run", "/data/exp_a") in seen
@@ -1079,15 +1102,15 @@ def test_stage_unfreeze_refreshes_statuses(monkeypatch, app):
     assert refreshed == [True]
 
 
-def test_run_all_toggles_cancel_button_and_cancels_batch(monkeypatch, app):
+def test_run_selected_toggles_cancel_button_and_cancels_batch(monkeypatch, app):
     cancelled = []
 
     class _CancellableBatch(_FakeBatchAnalysis):
         def process_all_folders(self):
             # Mid-run, the active button is a Cancel; clicking it must reach
             # the live batch's request_cancel.
-            assert self.parent_list.run_all_btn.text() == "Cancel"
-            self.parent_list._on_run_all_clicked()
+            assert self.parent_list.run_selected_btn.text() == "Cancel"
+            self.parent_list._on_run_selected_clicked()
 
         def request_cancel(self):
             cancelled.append(True)
@@ -1096,21 +1119,25 @@ def test_run_all_toggles_cancel_button_and_cancels_batch(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     _CancellableBatch.parent_list = widget.experiments_list
     widget.experiments_list.add_folders(["/data/exp_a"])
+    widget.experiments_list.select_all()
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.run_selected_requested.emit()
 
     assert cancelled == [True]
     # The button is restored once the run returns.
-    assert widget.experiments_list.run_all_btn.text() == "Run all"
+    assert widget.experiments_list.run_selected_btn.text() == "Run selected"
     assert widget._active_batch is None
 
 
-def test_run_all_with_no_experiments_is_a_noop(monkeypatch, app):
+def test_run_selected_with_no_selection_is_a_noop(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeBatchAnalysis)
     _FakeBatchAnalysis.last_config = None
     widget = _stub_main_widget(monkeypatch)
+    # Rows exist but none are selected -> nothing to run.
+    widget.experiments_list.add_folders(["/data/exp_a"])
+    widget.experiments_list.set_active(None)
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.run_selected_requested.emit()
 
     assert _FakeBatchAnalysis.last_config is None
 
@@ -1187,7 +1214,7 @@ class _FakeTimer:
         self._slot()
 
 
-def test_run_all_parallel_constructs_no_viewer_sink(monkeypatch, app):
+def test_run_selected_parallel_constructs_no_viewer_sink(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
     monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
     _FakeTimer.instances = []
@@ -1201,7 +1228,8 @@ def test_run_all_parallel_constructs_no_viewer_sink(monkeypatch, app):
     widget.experiments_list.add_folders(["/data/exp_a", "/data/exp_b"])
     widget.experiments_list._num_workers_spinbox.setValue(4)
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.select_all()
+    widget.experiments_list.run_selected_requested.emit()
 
     analyzer = _FakeParallelBatchAnalysis.last_instance
     assert analyzer is not None
@@ -1212,7 +1240,7 @@ def test_run_all_parallel_constructs_no_viewer_sink(monkeypatch, app):
     assert num_workers == 4
 
 
-def test_run_all_parallel_follows_topmost_folder_when_none_selected(monkeypatch, app):
+def test_run_selected_parallel_follows_topmost_folder_when_none_selected(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
     monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
     _FakeTimer.instances = []
@@ -1222,12 +1250,13 @@ def test_run_all_parallel_follows_topmost_folder_when_none_selected(monkeypatch,
     widget.experiments_list.add_folders(["/data/exp_a", "/data/exp_b"])
     widget.experiments_list._num_workers_spinbox.setValue(2)
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.select_all()
+    widget.experiments_list.run_selected_requested.emit()
 
     assert widget._active_experiment == "/data/exp_a"
 
 
-def test_run_all_parallel_leaves_existing_selection_alone(monkeypatch, app):
+def test_run_selected_parallel_leaves_existing_selection_alone(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
     monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
     _FakeTimer.instances = []
@@ -1237,12 +1266,13 @@ def test_run_all_parallel_leaves_existing_selection_alone(monkeypatch, app):
     widget._active_experiment = "/data/exp_b"
     widget.experiments_list._num_workers_spinbox.setValue(2)
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.select_all()
+    widget.experiments_list.run_selected_requested.emit()
 
     assert widget._active_experiment == "/data/exp_b"
 
 
-def test_run_all_parallel_reloads_only_the_followed_folder_on_done(monkeypatch, app):
+def test_run_selected_parallel_reloads_only_the_followed_folder_on_done(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
     monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
     _FakeTimer.instances = []
@@ -1259,7 +1289,8 @@ def test_run_all_parallel_reloads_only_the_followed_folder_on_done(monkeypatch, 
     refreshed = []
     monkeypatch.setattr(widget, "refresh_stage_statuses", lambda: refreshed.append(True))
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.select_all()
+    widget.experiments_list.run_selected_requested.emit()
 
     analyzer = _FakeParallelBatchAnalysis.last_instance
     timer = _FakeTimer.instances[-1]
@@ -1283,16 +1314,16 @@ def test_run_all_parallel_reloads_only_the_followed_folder_on_done(monkeypatch, 
     assert refreshed == [True, True]
     assert timer.stopped is True
     assert widget._active_batch is None
-    assert widget.experiments_list.run_all_btn.text() == "Run all"
+    assert widget.experiments_list.run_selected_btn.text() == "Run selected"
 
 
-def test_run_all_parallel_retargets_reload_when_followed_folder_changes_mid_run(monkeypatch, app):
+def test_run_selected_parallel_retargets_reload_when_followed_folder_changes_mid_run(monkeypatch, app):
     """Proves the poll loop compares against the LIVE ``self._active_experiment``
     on every tick, not a value captured once before the loop starts.
 
     A buggy "frozen variable" implementation (e.g. ``followed =
     self._active_experiment`` read once before entering the loop, then reused
-    on every tick) would pass ``test_run_all_parallel_reloads_only_the_followed_
+    on every tick) would pass ``test_run_selected_parallel_reloads_only_the_followed_
     folder_on_done`` identically to the correct implementation, because that
     test never mutates ``self._active_experiment`` between polls. Here we do:
     folder A is followed and reloads once; the user then clicks row B mid-run
@@ -1319,7 +1350,8 @@ def test_run_all_parallel_retargets_reload_when_followed_folder_changes_mid_run(
     )
     monkeypatch.setattr(widget, "refresh_stage_statuses", lambda: None)
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.select_all()
+    widget.experiments_list.run_selected_requested.emit()
 
     analyzer = _FakeParallelBatchAnalysis.last_instance
     timer = _FakeTimer.instances[-1]
@@ -1350,7 +1382,7 @@ def test_run_all_parallel_retargets_reload_when_followed_folder_changes_mid_run(
     assert loaded == ["/data/exp_a", "/data/exp_b"]
 
 
-def test_run_all_parallel_keeps_polling_after_cancel_until_finished(monkeypatch, app):
+def test_run_selected_parallel_keeps_polling_after_cancel_until_finished(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
     monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
     _FakeTimer.instances = []
@@ -1359,12 +1391,13 @@ def test_run_all_parallel_keeps_polling_after_cancel_until_finished(monkeypatch,
     widget.experiments_list.add_folders(["/data/exp_a"])
     widget.experiments_list._num_workers_spinbox.setValue(2)
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.select_all()
+    widget.experiments_list.run_selected_requested.emit()
 
     analyzer = _FakeParallelBatchAnalysis.last_instance
     timer = _FakeTimer.instances[-1]
 
-    widget._cancel_run_all()
+    widget._cancel_run_selected()
     assert analyzer.cancel_calls == 1
 
     # An in-flight worker keeps reporting after cancel; the loop must keep
@@ -1380,7 +1413,7 @@ def test_run_all_parallel_keeps_polling_after_cancel_until_finished(monkeypatch,
     assert widget._active_batch is None
 
 
-def test_run_all_parallel_routes_stage_events_to_row_progress(monkeypatch, app):
+def test_run_selected_parallel_routes_stage_events_to_row_progress(monkeypatch, app):
     monkeypatch.setattr(_widget, "BatchAnalysis", _FakeParallelBatchAnalysis)
     monkeypatch.setattr(_widget, "QTimer", _FakeTimer)
     _FakeTimer.instances = []
@@ -1395,7 +1428,8 @@ def test_run_all_parallel_routes_stage_events_to_row_progress(monkeypatch, app):
         lambda path, stage, status, fraction: seen.append((path, stage, status, fraction)),
     )
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.select_all()
+    widget.experiments_list.run_selected_requested.emit()
 
     analyzer = _FakeParallelBatchAnalysis.last_instance
     timer = _FakeTimer.instances[-1]
@@ -1415,7 +1449,7 @@ def test_run_all_parallel_routes_stage_events_to_row_progress(monkeypatch, app):
     ]
 
 
-def test_run_all_sequential_path_is_unchanged_for_default_num_workers(monkeypatch, app):
+def test_run_selected_sequential_path_is_unchanged_for_default_num_workers(monkeypatch, app):
     """num_workers <= 1 (including the spinbox default of 1) keeps the exact
     pre-existing sequential, ViewerSink-streaming path -- a regression guard
     against the new branch swallowing the default case."""
@@ -1433,7 +1467,8 @@ def test_run_all_sequential_path_is_unchanged_for_default_num_workers(monkeypatc
     assert widget.experiments_list.num_workers() == 1
     widget.experiments_list.add_folders(["/data/exp_a"])
 
-    widget.experiments_list.run_all_requested.emit()
+    widget.experiments_list.select_all()
+    widget.experiments_list.run_selected_requested.emit()
 
     assert len(sink_calls) == 1
     cfg = _FakeBatchAnalysis.last_config
