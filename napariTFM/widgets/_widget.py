@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 
 import napari
-from qtpy.QtCore import Qt, QObject, QTimer
+from qtpy.QtCore import Qt, QObject, QTimer, QSize
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox,
     QHBoxLayout, QFrame, QSpinBox, QComboBox, QFileDialog, QCheckBox,
@@ -713,10 +713,27 @@ class napariTFMWidget(QWidget):
         self.refresh_stage_statuses()
         self._update_disclosure()
 
+    # Title-row icons: larger and thinner-lined than the stage-header icons,
+    # and drawn with the document-set's sharp square caps / miter joins.
+    _TOOLBAR_ICON_SIZE = 22
+    _TOOLBAR_ICON_STROKE = 1.5
+    _TOOLBAR_ICON_CAP = "square"
+    _TOOLBAR_ICON_JOIN = "miter"
+
     def _make_toolbar_button(self, icon_name: str, tooltip: str) -> QToolButton:
         """A compact, icon-only, auto-raised button for the title-row toolbar."""
         button = QToolButton()
-        button.setIcon(stage_action_icon(icon_name, muted_accent(stage_accent("project"))))
+        button.setIcon(
+            stage_action_icon(
+                icon_name,
+                muted_accent(stage_accent("project")),
+                size=self._TOOLBAR_ICON_SIZE,
+                stroke_width=self._TOOLBAR_ICON_STROKE,
+                linecap=self._TOOLBAR_ICON_CAP,
+                linejoin=self._TOOLBAR_ICON_JOIN,
+            )
+        )
+        button.setIconSize(QSize(self._TOOLBAR_ICON_SIZE, self._TOOLBAR_ICON_SIZE))
         button.setToolTip(tooltip)
         button.setAutoRaise(True)
         return button
@@ -867,7 +884,16 @@ class napariTFMWidget(QWidget):
         self._apply_spine_neighbours()
         toolbar_accent = muted_accent(stage_accent("project"))
         for button, icon_name in self._toolbar_icon_buttons:
-            button.setIcon(stage_action_icon(icon_name, toolbar_accent))
+            button.setIcon(
+                stage_action_icon(
+                    icon_name,
+                    toolbar_accent,
+                    size=self._TOOLBAR_ICON_SIZE,
+                    stroke_width=self._TOOLBAR_ICON_STROKE,
+                    linecap=self._TOOLBAR_ICON_CAP,
+                    linejoin=self._TOOLBAR_ICON_JOIN,
+                )
+            )
 
     def _apply_spine_neighbours(self):
         """Give each stage's spine its neighbours' accents so the rail blends."""

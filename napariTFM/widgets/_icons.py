@@ -45,36 +45,32 @@ _ICON_BODIES = {
         '<line x1="1.5" y1="12" x2="5" y2="12"/>'
         '<line x1="19" y1="12" x2="22.5" y2="12"/>'
     ),
-    # document with a plus corner — "start a new project"
+    # page with a folded corner + plus — "start a new project"
     "new": (
-        '<path d="M7 3 H14 L18 7 V21 H7 Z"/>'
+        '<path d="M6 3 H14 L18 7 V21 H6 Z"/>'
         '<path d="M14 3 V7 H18"/>'
-        '<line x1="9.5" y1="14" x2="15.5" y2="14"/>'
-        '<line x1="12.5" y1="11" x2="12.5" y2="17"/>'
+        '<path d="M9 15 H15"/>'
+        '<path d="M12 12 V18"/>'
     ),
-    # filled up-arrow lifting out of a tray — "load a project or a preset"
-    "load": (
-        '<path d="M8 13 L12 8 L16 13 Z" fill="{c}" stroke="none"/>'
-        '<line x1="12" y1="9" x2="12" y2="17"/>'
-        '<path d="M4 17 H20 V21 H4 Z"/>'
-    ),
-    # filled down-arrow dropping into a tray — "save a project or a preset"
+    # tabbed folder — "load / open a project or a preset"
+    "load": '<path d="M3 6 H9 L11 8 H21 V19 H3 Z"/>',
+    # floppy disk — "save a project or a preset"
     "save": (
-        '<path d="M8 12 L12 17 L16 12 Z" fill="{c}" stroke="none"/>'
-        '<line x1="12" y1="4" x2="12" y2="13"/>'
-        '<path d="M4 17 H20 V21 H4 Z"/>'
+        '<path d="M5 4 H15.5 L20 8.5 V20 H5 Z"/>'
+        '<path d="M8 20 V14 H16 V20"/>'
+        '<path d="M9 4 V8 H13.5 V4"/>'
     ),
-    # circular arrow — "reset parameters to defaults"
+    # counterclockwise rewind — "reset parameters / reload"
     "reset": (
-        '<path d="M5 12 A7 7 0 1 0 7.5 6.5"/>'
-        '<path d="M5 6 L5 12 L11 12"/>'
+        '<path d="M5.5 6.5 A8.5 8.5 0 1 0 18 6"/>'
+        '<path d="M6.06 8.89 L6.80 4.01 L2.94 7.08"/>'
     ),
 }
 
 _SVG_TEMPLATE = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
-    'fill="none" stroke="{c}" stroke-width="2" '
-    'stroke-linecap="round" stroke-linejoin="round">{body}</svg>'
+    'fill="none" stroke="{c}" stroke-width="{w}" '
+    'stroke-linecap="{cap}" stroke-linejoin="{join}">{body}</svg>'
 )
 
 ICON_NAMES = tuple(_ICON_BODIES)
@@ -90,20 +86,40 @@ def _render(svg: str, size: int) -> QPixmap:
     return pixmap
 
 
-def stage_action_pixmap(name: str, color: str, size: int = 18) -> QPixmap:
+def stage_action_pixmap(
+    name: str,
+    color: str,
+    size: int = 18,
+    stroke_width: float = 2.0,
+    linecap: str = "round",
+    linejoin: str = "round",
+) -> QPixmap:
     """Render a single tinted action icon to a transparent pixmap."""
     body = _ICON_BODIES[name].format(c=color)
-    svg = _SVG_TEMPLATE.format(c=color, body=body)
+    svg = _SVG_TEMPLATE.format(
+        c=color, w=stroke_width, cap=linecap, join=linejoin, body=body
+    )
     return _render(svg, size)
 
 
 def stage_action_icon(
-    name: str, color: str, disabled_color: str | None = None, size: int = 18
+    name: str,
+    color: str,
+    disabled_color: str | None = None,
+    size: int = 18,
+    stroke_width: float = 2.0,
+    linecap: str = "round",
+    linejoin: str = "round",
 ) -> QIcon:
     """A QIcon for an action button, optionally carrying a dimmed disabled mode."""
-    icon = QIcon(stage_action_pixmap(name, color, size))
+    icon = QIcon(
+        stage_action_pixmap(name, color, size, stroke_width, linecap, linejoin)
+    )
     if disabled_color is not None:
         icon.addPixmap(
-            stage_action_pixmap(name, disabled_color, size), QIcon.Disabled
+            stage_action_pixmap(
+                name, disabled_color, size, stroke_width, linecap, linejoin
+            ),
+            QIcon.Disabled,
         )
     return icon
