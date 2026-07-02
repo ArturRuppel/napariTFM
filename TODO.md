@@ -11,6 +11,42 @@
 
 ## Ranked open work (2026-06-29)
 
+### Remove the green/red input/output-file status icons
+Redundant with the colormap-spine rail, which already shows per-stage status —
+drop the separate green/red icons that indicate input/output file presence.
+
+### Replace "Run all" with "Run selected"
+Scope batch runs to the experiments-list's existing row-selection mechanism
+(the same one "Delete selected" already uses) instead of always running
+every committed row. Design spec:
+[`docs/superpowers/specs/2026-07-01-run-selected-design.md`](docs/superpowers/specs/2026-07-01-run-selected-design.md).
+
+### BUG: Run All stops before finishing all queued tasks
+"Run All" terminates early, leaving some queued positions/tasks unprocessed
+instead of running through the full queue. Needs repro + root-cause (which
+queue/loop condition ends the run prematurely) before a fix.
+
+### BUG: Clicking the preprocessing rail circle wouldn't load its output  ·  DONE (2026-07-01)
+Clicking the first (preprocessing) icon on either rail claimed "no output" even
+when `preprocessed_beads.tif`/`preprocessed_reference.tif` existed on disk, and
+on the mini rail the viewer was left showing raw input data instead.
+**Root cause:** `_load_stage_results` (`widgets/_widget.py`) filtered every
+requested stage through `_NTFM_STAGES = ("displacement", "force", "stress")` —
+a stale hardcode from before preprocessing persisted its own output — so a
+"preprocessing" click was silently dropped before any disk read happened. The
+status dot (`_experiment_stage_status`) correctly checked for the TIFFs and
+said "done"; only the click-to-load path disagreed. The mini rail's "loads
+input instead" symptom was downstream of the same no-op: selecting the row
+loads raw inputs, and the failed preprocessing load never overwrote them.
+**Fix:** added `_apply_preprocessing_result`, a load path for preprocessing
+that reads the persisted TIFFs from `experiment_output_dir` directly (no
+`.ntfm`/tidy-table involved) and binds them via
+`visualization_manager.begin_preprocessing_stream()` — mirrors the live
+interactive-run path. `_load_stage_results` now handles preprocessing
+separately from the `_NTFM_STAGES` filter instead of dropping it. Test-locked
+in `test_reload_on_selection.py` (load, no-op-when-missing, and status-line
+regression tests). 624 passed.
+
 ### 3b. Per-stage layer isolation during streaming  ·  DONE (2026-06-30)
 The `120d0a0` machinery only ever ran on the **run-all** path (`ViewerSink`
 calls `isolate_layers` per stage) — and it was provably correct there (drove the

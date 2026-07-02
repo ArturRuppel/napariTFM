@@ -183,6 +183,18 @@ class _ExtendedStubDataManager:
         self.stress_results = results
         self.notify_changed()
 
+    def set_preprocessed_bead_stack(self, data, path=None, source="", dirty=False):
+        self.preprocessed_bead_stack = data
+        self.notify_changed()
+
+    def set_preprocessed_reference(self, data, path=None, source="", dirty=False):
+        self.preprocessed_reference = data
+        self.notify_changed()
+
+    def set_preprocessed_cell_stack(self, data, path=None, source="", dirty=False):
+        self.preprocessed_cell_stack = data
+        self.notify_changed()
+
     def mark_artifact_error(self, key, error):
         self.artifact_errors.append((key, error))
 
@@ -201,6 +213,10 @@ class _StubVisualizationManager:
         self.vector_stream_frames = []
         self.stress_stream_calls = []
         self.stress_stream_frames = []
+        self.preprocessing_stream_calls = 0
+
+    def begin_preprocessing_stream(self):
+        self.preprocessing_stream_calls += 1
 
     def begin_vector_field_stream(self, kind, num_frames, vis_params):
         self.vector_stream_calls.append((kind, num_frames, dict(vis_params)))
@@ -405,6 +421,21 @@ def _write_ntfm(folder, config=None, **arrays):
     return ntfm_path
 
 
+def _write_preprocessed_tiffs(folder, beads, reference, cells=None):
+    """Write preprocessed TIFFs at the canonical in-place output dir."""
+    import tifffile
+
+    from napariTFM.utilities.batch_output import experiment_output_dir
+
+    out_dir = experiment_output_dir(str(folder), None)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tifffile.imwrite(str(out_dir / "preprocessed_beads.tif"), beads)
+    tifffile.imwrite(str(out_dir / "preprocessed_reference.tif"), reference)
+    if cells is not None:
+        tifffile.imwrite(str(out_dir / "preprocessed_cells.tif"), cells)
+    return out_dir
+
+
 def _select(widget, folder):
     """Drive a stub shell widget into state G2 (project open + experiment selected)."""
     widget._project_open = True
@@ -484,6 +515,56 @@ def test_loaded_result_physical_scale_is_usable(monkeypatch, app, tmp_path):
     assert "time_interval" in scale
     assert scale["grid_spacing"] == pytest.approx(0.4, rel=1e-4)
     assert scale["time_interval"] == pytest.approx(2.0, rel=1e-4)
+
+
+def test_load_preprocessing_sets_preprocessed_stacks(monkeypatch, app, tmp_path):
+    """Clicking preprocessing's circle decodes the persisted TIFFs, not the .ntfm."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_pp"
+    folder.mkdir()
+
+    beads = (np.ones((2, 5, 6)) * 0.4).astype(np.float32)
+    reference = (np.ones((2, 5, 6)) * 0.6).astype(np.float32)
+    _write_preprocessed_tiffs(folder, beads, reference)
+
+    loaded = widget._load_stage_results(str(folder), ["preprocessing"])
+
+    assert loaded == ["preprocessing"]
+    np.testing.assert_allclose(widget.data_manager.preprocessed_bead_stack, beads)
+    np.testing.assert_allclose(widget.data_manager.preprocessed_reference, reference)
+    assert widget.visualization_manager.preprocessing_stream_calls == 1
+
+
+def test_load_preprocessing_no_tiffs_is_noop(monkeypatch, app, tmp_path):
+    """Regression: the old `_NTFM_STAGES` filter silently dropped preprocessing
+    even when its TIFFs existed. With no TIFFs at all, it's still a no-op."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_pp_empty"
+    folder.mkdir()
+
+    loaded = widget._load_stage_results(str(folder), ["preprocessing"])
+
+    assert loaded == []
+    assert widget.data_manager.preprocessed_bead_stack is None
+    assert widget.visualization_manager.preprocessing_stream_calls == 0
+
+
+def test_stage_node_clicked_preprocessing_reports_loaded(monkeypatch, app, tmp_path):
+    """The status line must say "Preprocessing loaded", not the stale
+    "No Preprocessing output to show yet" (the bug: clicking the first rail
+    icon claimed no output existed even when the TIFFs were on disk)."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_pp_click"
+    folder.mkdir()
+
+    beads = (np.ones((1, 2, 2)) * 0.1).astype(np.float32)
+    reference = (np.ones((1, 2, 2)) * 0.2).astype(np.float32)
+    _write_preprocessed_tiffs(folder, beads, reference)
+
+    widget._active_experiment = str(folder)
+    widget._on_stage_node_clicked("preprocessing")
+
+    assert widget.status_label.text() == "Preprocessing loaded"
 
 
 def test_no_ntfm_is_noop_no_exception(monkeypatch, app, tmp_path):

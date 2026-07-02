@@ -1416,7 +1416,15 @@ class napariTFMWidget(QWidget):
         # Report by what actually landed in the data manager, not merely that a
         # container existed: a container can hold force but no displacement, and
         # a click on the empty stage must say so rather than claim a load.
-        shown = getattr(self.data_manager, f"{stage}_results", None) is not None
+        # Preprocessing has no "_results" artifact (it's the preprocessed
+        # stacks themselves), so it's checked separately.
+        if stage == "preprocessing":
+            shown = (
+                self.data_manager.preprocessed_bead_stack is not None
+                or self.data_manager.preprocessed_reference is not None
+            )
+        else:
+            shown = getattr(self.data_manager, f"{stage}_results", None) is not None
         self.status_label.setText(
             f"{label} loaded" if shown else f"No {label} output to show yet"
         )
@@ -1496,7 +1504,9 @@ class napariTFMWidget(QWidget):
         return {stage: _status(stage) for stage in PIPELINE_STAGES}
 
     # ntfm-backed pipeline stages, in dependency order. "preprocessing" is
-    # excluded: it's input-file-only and never needs a `.ntfm` read.
+    # excluded: its persisted output is TIFFs, not a tidy-table measure, so it
+    # never needs a `.ntfm` read — see `_apply_preprocessing_result` for its
+    # own on-demand load path.
     _NTFM_STAGES = ("displacement", "force", "stress")
 
     def _read_stage_arrays(self, path: str):
@@ -1683,31 +1693,72 @@ class napariTFMWidget(QWidget):
                 frame_index, stress[frame_index]
             )
 
-    def _load_stage_results(self, path: str, stages) -> None:
-        """Decode only the requested ntfm-backed stages' arrays into the viewer.
+    def _apply_preprocessing_result(self, path: str) -> bool:
+        """Load a position's persisted preprocessed TIFFs into the viewer.
 
-        Reads the persisted table once (see `_read_stage_arrays`) but applies
-        only the requested stages, so clicking one stage's circle never also
-        streams a stage nobody asked to see. Display-only — calculations always
-        re-read from disk, so no prerequisite stage is pulled in.
+        Preprocessing has no measure column in the tidy `.ntfm` table — its
+        output is the calibrated TIFFs `_persist_preprocessed_tiffs`/
+        `save_preprocessed_tiffs` write to the same canonical output dir
+        `_experiment_stage_status` already checks for the "done" dot. Unlike
+        the ntfm-backed stages there's no frame-by-frame streaming to do:
+        `begin_preprocessing_stream` binds the whole resident stack at once,
+        so setting the arrays and calling it is enough. Returns whether
+        anything was actually loaded.
         """
-        stages = [s for s in self._NTFM_STAGES if s in stages]
-        if not stages:
-            return []
-        data = self._read_stage_arrays(path)
-        if data is None:
-            return []
-        # Applied in dependency order (displacement → force → stress) so that if
-        # a caller does ask for several at once, set_displacement_results'
-        # downstream-invalidation never clears a stage this same call just set.
-        if "displacement" in stages:
-            self._apply_displacement_result(data)
-        if "force" in stages:
-            self._apply_force_result(data)
-        if "stress" in stages:
-            self._apply_stress_result(data)
-        self._loaded_stage_data.update(stages)
-        return stages
+        import tifffile
+
+        from napariTFM.utilities.batch_output import experiment_output_dir
+
+        out_dir = experiment_output_dir(path, self.data_manager.output_dir)
+        beads_path = out_dir / "preprocessed_beads.tif"
+        reference_path = out_dir / "preprocessed_reference.tif"
+        cells_path = out_dir / "preprocessed_cells.tif"
+        if not (beads_path.exists() and reference_path.exists()):
+            return False
+        try:
+            beads = tifffile.imread(str(beads_path))
+            reference = tifffile.imread(str(reference_path))
+            cells = tifffile.imread(str(cells_path)) if cells_path.exists() else None
+        except Exception:
+            logger.exception("Failed to load preprocessed TIFFs for %s", path)
+            return False
+        self.data_manager.set_preprocessed_bead_stack(beads, source="loaded", dirty=False)
+        self.data_manager.set_preprocessed_reference(reference, source="loaded", dirty=False)
+        if cells is not None:
+            self.data_manager.set_preprocessed_cell_stack(cells, source="loaded", dirty=False)
+        self.visualization_manager.begin_preprocessing_stream()
+        return True
+
+    def _load_stage_results(self, path: str, stages) -> None:
+        """Decode the requested stages' persisted output into the viewer.
+
+        Reads the ntfm-backed table once (see `_read_stage_arrays`) but applies
+        only the requested stages, so clicking one stage's circle never also
+        streams a stage nobody asked to see. Preprocessing isn't in that table
+        (see `_apply_preprocessing_result`) so it's handled on its own before
+        the ntfm read. Display-only — calculations always re-read from disk, so
+        no prerequisite stage is pulled in.
+        """
+        loaded = []
+        if "preprocessing" in stages and self._apply_preprocessing_result(path):
+            loaded.append("preprocessing")
+        ntfm_stages = [s for s in self._NTFM_STAGES if s in stages]
+        if ntfm_stages:
+            data = self._read_stage_arrays(path)
+            if data is not None:
+                # Applied in dependency order (displacement → force → stress) so
+                # that if a caller does ask for several at once,
+                # set_displacement_results' downstream-invalidation never clears
+                # a stage this same call just set.
+                if "displacement" in ntfm_stages:
+                    self._apply_displacement_result(data)
+                if "force" in ntfm_stages:
+                    self._apply_force_result(data)
+                if "stress" in ntfm_stages:
+                    self._apply_stress_result(data)
+                loaded.extend(ntfm_stages)
+        self._loaded_stage_data.update(loaded)
+        return loaded
 
     def _on_active_experiment_changed(self, path: str) -> None:
         self._active_experiment = path or None

@@ -89,6 +89,18 @@ def test_no_per_stage_status_label(app, stress_widget):
     assert not hasattr(stress_widget, "status_label")
 
 
+def test_stress_does_not_manually_reslice_image_layers_on_frame_change(app, stress_widget):
+    """Regression: stress must not reassign `.data` on the 3D stress image
+    layers when the viewer's frame slider moves. Napari already slices a 3D
+    image layer live from `dims.current_step`; doing it manually (the old
+    `update_stress_frame`) collapsed the layer to 2D mid-dispatch of the very
+    `current_step` event that triggered it, corrupting napari's Qt
+    dims-slider bookkeeping (IndexError in QtDims._update_slider on the next
+    slider touch)."""
+    assert not hasattr(stress_widget, "_on_frame_changed")
+    assert not hasattr(mw.VisualizationManager, "update_stress_frame")
+
+
 def test_parameter_panel_class_is_removed():
     assert not hasattr(mw, "StressParameterPanel")
 

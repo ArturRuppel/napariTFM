@@ -293,9 +293,6 @@ class StressWidget(BaseAnalysisWidget):
         self._setup_ui()
         self._connect_signals()
 
-        # Monitor frame changes
-        self.viewer.dims.events.current_step.connect(self._on_frame_changed)
-
         # Keep service parameters synced with the shared parameter manager
         parameter_manager.parameters_reset.connect(self._update_stress_parameters)
         parameter_manager.parameter_changed.connect(self._handle_parameter_change)
@@ -324,13 +321,6 @@ class StressWidget(BaseAnalysisWidget):
 
         # Update enablement when the active layer changes
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
-
-    def _on_frame_changed(self, event=None):
-        """Handle frame change events."""
-        if self.data_manager.stress_results is not None:
-            self.visualization_manager.update_stress_frame(
-                self.viewer.dims.current_step[0]
-            )
 
     def load_result_artifact(self, key: str):
         """Load an external input layer. Only the mask is loadable (ROADMAP §2 —

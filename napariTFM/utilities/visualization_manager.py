@@ -442,44 +442,6 @@ class VisualizationManager(ErrorHandlingMixin):
     # endregion
 
     # region === Stress Visualization
-    def update_stress_frame(self, frame_index: int) -> None:
-        """Update stress tensor visualization for the current frame."""
-        try:
-            # Check if stress components exist
-            if not hasattr(self.data_manager, 'stress_components'):
-                return
-
-            components = self.data_manager.stress_components
-            if components is None:
-                return
-
-            # Get number of frames and validate frame index
-            num_frames = components.get('num_frames', 0)
-            if num_frames == 0:
-                return
-
-            # Validate frame index
-            valid_frame = self._validate_frame_index(frame_index, num_frames)
-
-            # Update stress layers if they exist
-            if 'stress_xx' in self._layers and self._layers['stress_xx'] is not None:
-                with self.viewer.events.blocker_all():
-                    # Update normal stress components
-                    self._layers['stress_xx'].data = components['sigma_xx'][valid_frame]
-                    self._layers['stress_yy'].data = components['sigma_yy'][valid_frame]
-                    self._layers['stress_normal'].data = components['sigma_normal'][valid_frame]
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to update stress frame",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Check stress results and layer consistency",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
-
     def visualize_stress_preview(
             self,
             stress_tensor: np.ndarray,
