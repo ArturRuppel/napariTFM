@@ -207,7 +207,7 @@ is now purely the (real) severity logger, and `create_error`/`ApplicationError` 
 `test_artifact_row.py` (dropped the error-render test). `VisualizationManager.__init__`'s
 `super().__init__()` now resolves to `object.__init__`, harmless.
 
-**11. Other confirmed-unused symbols:**
+**11. Other confirmed-unused symbols. — PARTIALLY DONE (see per-item status).**
 - `widgets/_widget.py`: the whole `WHEN`/`AND` conditional-visibility machinery
   (~50 lines, `_conditional_rows`/`_register_conditional`/`_apply_conditional_visibility`)
   is never triggered by any `PARAMETER_SECTIONS` entry; `_loaded_stage_data` is
@@ -226,6 +226,27 @@ is now purely the (real) severity logger, and `create_error`/`ApplicationError` 
   arg that are all unused; `i_bound_size`/`j_bound_size` are always 0; the `(x, y)`
   coordinate grid built in `_perform_tfm:331-338` is never consumed downstream
   (`calculate_force_field` uses only `result[1]`).
+
+_Resolution:_
+- **DONE** — `_experiments_list.py`: removed the legacy `selected` signal (live clicks
+  use `clicked`) and `output_dir_changed` (output changes propagate via the data-manager
+  change-callback); dropped `_emit_selected` and the two test-only connections.
+- **DONE** — `data_manager.py`: removed `remove_change_callback` (no production caller;
+  `add_change_callback` has no matching remover in use).
+- **DONE** — `fttc.py`: removed the redundant `import *`; simplified `_gcv_blockdiag` to
+  return just the optimal λ (dropped the unused `plot` arg and the `minG`/`G`/`reg_param`
+  returns); unpacked the always-0 `i_bound_size`/`j_bound_size` to `_`.
+- **REVIEW WRONG** — `ArtifactState.dirty` is **not** write-only: `artifact_info_text`
+  (`_stage_data_status.py`, live via `_stage_file_status.py`) reads it to render the
+  "· cache (unsaved)" label. Kept.
+- **SKIPPED (deliberate)** — `fttc.py` `(x, y)` grid: verified genuinely dead, but removing
+  it changes the return signature of `_perform_tfm`/`calculate_traction` in the
+  numerically-sensitive FTTC core (in paper revision) for negligible gain. Not worth the risk.
+- **DEFERRED** — `_widget.py` (WHEN/AND machinery, write-only `_loaded_stage_data`,
+  `STAGE_DATA_ARTIFACTS` copy, redundant `QTimer` import, ignored `_load_stage_results`
+  return) and `visualization_manager.py` (`get_displacement_statistics`, `PreviewConfig`,
+  `_clear_layers`): both files carry unrelated uncommitted work predating this review pass,
+  so editing them would entangle that work into the cleanup commit. Pending a clean tree.
 
 ---
 

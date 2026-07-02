@@ -197,14 +197,6 @@ def test_experiment_row_exposes_path_and_name(app):
     assert row.name == "pos_00"
 
 
-def test_experiment_row_click_emits_selected_path(app):
-    row = ExperimentRow("/data/Ctrl/pos_00")
-    seen = []
-    row.selected.connect(seen.append)
-    row._emit_selected()  # proxy for mousePressEvent (offscreen-safe)
-    assert seen == ["/data/Ctrl/pos_00"]
-
-
 def test_experiment_row_set_selected_toggles_state(app):
     row = ExperimentRow("/data/Ctrl/pos_00")
     assert row.is_selected() is False
@@ -1077,14 +1069,11 @@ def test_clear_output_dir_resets_manager_and_label(app, tmp_path):
     assert widget.choose_output_dir_btn.text() == "Add custom output directory"
 
 
-def test_apply_output_dir_sets_manager_and_emits(app, tmp_path):
+def test_apply_output_dir_sets_manager(app, tmp_path):
     dm = _StubDM()
     widget = ExperimentsList(data_manager=dm)
-    seen = []
-    widget.output_dir_changed.connect(lambda: seen.append(True))
     widget._apply_output_dir(str(tmp_path))
     assert dm.output_dir == Path(tmp_path)
-    assert seen == [True]
 
 
 def test_output_dir_button_has_expected_object_name(app):

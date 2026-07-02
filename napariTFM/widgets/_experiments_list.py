@@ -286,7 +286,6 @@ _CHIP_TEXT = {"running": "run", "done": "done", "queued": "queued"}
 class ExperimentRow(QWidget):
     """One experiment: accent select-bar, per-column value cells, mini-rail, chip."""
 
-    selected = Signal(str)  # legacy single-select (kept for back-compat callers)
     clicked = Signal(str, int)  # path, modifier flag: 0 plain, 1 ctrl, 2 shift
     stage_clicked = Signal(str, str)  # path, stage — one dot's on-demand load
 
@@ -389,9 +388,6 @@ class ExperimentRow(QWidget):
         self._chip.setText(text)
         self._chip.setStyleSheet(f"color: {experiment_status_color(text)};")
 
-    def _emit_selected(self) -> None:
-        self.selected.emit(self._path)
-
     def mousePressEvent(self, event) -> None:  # pragma: no cover - GUI event
         mods = event.modifiers()
         if mods & Qt.ControlModifier:
@@ -401,7 +397,6 @@ class ExperimentRow(QWidget):
         else:
             flag = 0
         self.clicked.emit(self._path, flag)
-        self._emit_selected()
         super().mousePressEvent(event)
 
 
@@ -412,7 +407,6 @@ class ExperimentsList(QWidget):
     active_changed = Signal(str)
     run_all_requested = Signal()
     cancel_run_all_requested = Signal()
-    output_dir_changed = Signal()
     # Emitted when a row's stage dot is clicked, asking the owner to bring that
     # experiment's stage on screen (select the row + decode that one series).
     stage_load_requested = Signal(str, str)  # path, stage
@@ -657,7 +651,6 @@ class ExperimentsList(QWidget):
         if self._data_manager is None:
             return
         self._data_manager.set_output_dir(None)
-        self.output_dir_changed.emit()
 
     def _commit_parameter(self, name: str, control: QLineEdit) -> None:
         """Parse a free-text calibration field; revert to last good value if junk."""
@@ -695,7 +688,6 @@ class ExperimentsList(QWidget):
     def _apply_output_dir(self, path: str) -> None:
         """Commit a chosen output dir to the data manager and announce it."""
         self._data_manager.set_output_dir(path)
-        self.output_dir_changed.emit()
 
     def _sync_output_dir(self) -> None:
         path = getattr(self._data_manager, "output_dir", None)

@@ -29,7 +29,6 @@ from scipy import optimize
 import numpy as np
 
 from napariTFM.backend.fttc_numba_functions import calculate_traction_2d, blkmul_adj
-from napariTFM.backend.fttc_numba_functions import *
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 from napariTFM.backend.parameter_validation import validate_fttc_parameters
 
@@ -309,7 +308,7 @@ class FTTC:
             This prevents dimension mismatches in downstream processing.
         """
         # Interpolate to regular grid using exact input dimensions
-        grid_mat, u, i_max, j_max, i_bound_size, j_bound_size = self._interp_vec2grid(
+        grid_mat, u, i_max, j_max, _, _ = self._interp_vec2grid(
             pos, vec, i_max=i_max, j_max=j_max)
 
         # Calculate in Fourier space using physical units
@@ -401,8 +400,8 @@ class FTTC:
         return G
 
     def _gcv_blockdiag(self, U: np.ndarray, s: np.ndarray, b: np.ndarray,
-                       lambdarange: np.ndarray, plot: bool = False) -> Tuple[float, float, np.ndarray, np.ndarray]:
-        """Calculate generalized cross validation"""
+                       lambdarange: np.ndarray) -> float:
+        """Return the GCV-optimal regularization for the block-diagonal system."""
         npoints = lambdarange.size
         beta = blkmul_adj(U, b)
 
@@ -420,9 +419,8 @@ class FTTC:
             args=(s2, beta[:s.size], 0., 0),
             disp=0,
         )[0]
-        minG = self._gcvfun(reg_min, s2, beta[:s.size], 0., 0)
 
-        return float(reg_min), float(minG), G, reg_param
+        return float(reg_min)
 
     def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray,
                              forcemap_pixel_size: float, input_width: int,
@@ -455,7 +453,7 @@ class FTTC:
 
         blockU, s, b = self._svd_block(pos0, vec0, forcemap_pixel_size,
                                        i_max=input_width, j_max=input_height)
-        reg_min, _, _, _ = self._gcv_blockdiag(blockU, s, b, lambdarange, plot=False)
+        reg_min = self._gcv_blockdiag(blockU, s, b, lambdarange)
         # _gcvfun depends on lambda only via lambda**2, so the unconstrained
         # optimizer can settle on a negative root that is numerically identical
         # to its magnitude. The force path squares it, but the raw value is

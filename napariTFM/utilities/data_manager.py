@@ -65,10 +65,6 @@ class DataManager:
         if callback not in self._callbacks:
             self._callbacks.append(callback)
 
-    def remove_change_callback(self, callback: Callable[[], None]) -> None:
-        if callback in self._callbacks:
-            self._callbacks.remove(callback)
-
     def _notify_changed(self) -> None:
         for callback in list(self._callbacks):
             callback()
