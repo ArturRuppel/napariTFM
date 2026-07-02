@@ -215,7 +215,13 @@ class ImageProcessor:
         min_val = np.percentile(image, min_percentile)
         max_val = np.percentile(image, max_percentile)
         processed = np.clip(image, min_val, max_val)
-        processed = (processed - min_val) / (max_val - min_val)
+        # A globally flat frame (dead detector, all-black, saturated) gives
+        # max_val == min_val; scale to zeros instead of emitting silent NaNs.
+        span = max_val - min_val
+        if span == 0:
+            processed = np.zeros_like(processed, dtype=float)
+        else:
+            processed = (processed - min_val) / span
         return processed, (min_val, max_val)
 
     @staticmethod
@@ -244,11 +250,16 @@ class ImageProcessor:
             for registration. If registration fails, returns the original
             image and an identity transformation matrix.
         """
-        # Convert images to 8-bit for registration
-        moving_norm = ((moving_image - moving_image.min()) * 255 /
-                       (moving_image.max() - moving_image.min())).astype(np.uint8)
-        ref_norm = ((reference_image - reference_image.min()) * 255 /
-                    (reference_image.max() - reference_image.min())).astype(np.uint8)
+        # Convert images to 8-bit for registration. A flat frame has zero
+        # span; map it to all-zeros rather than dividing by zero.
+        def _to_uint8(img: np.ndarray) -> np.ndarray:
+            span = img.max() - img.min()
+            if span == 0:
+                return np.zeros_like(img, dtype=np.uint8)
+            return ((img - img.min()) * 255 / span).astype(np.uint8)
+
+        moving_norm = _to_uint8(moving_image)
+        ref_norm = _to_uint8(reference_image)
 
         # Define registration method
         warp_mode = cv2.MOTION_TRANSLATION if mode == 'translation' else cv2.MOTION_EUCLIDEAN

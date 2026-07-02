@@ -53,10 +53,14 @@ def save_calibrated_tiff(data: np.ndarray, filepath: Path, pixel_size: float,
     if data is None:
         return
 
-    # Convert to 16-bit
+    # Convert to 16-bit. A globally flat array has zero span; write zeros
+    # instead of an undefined 0/0 cast.
     data_normalized = data.astype(float)
-    data_normalized = (data_normalized - data_normalized.min()) / (
-            data_normalized.max() - data_normalized.min())
+    span = data_normalized.max() - data_normalized.min()
+    if span == 0:
+        data_normalized = np.zeros_like(data_normalized)
+    else:
+        data_normalized = (data_normalized - data_normalized.min()) / span
     data_16bit = (data_normalized * 65535).astype(np.uint16)
 
     # Create ImageJ-compatible metadata

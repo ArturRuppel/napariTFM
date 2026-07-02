@@ -41,7 +41,8 @@ rare quantization boundaries — fresh and resume were not byte-identical. Fixed
 run and stage-resume alike), collapsing the two into a single input path. Consistent with
 the project-wide "calcs always read from disk" invariant.
 
-**2. Unguarded divisions produce NaN/inf or crashes on constant/null frames.** None of
+**2. Unguarded divisions produce NaN/inf or crashes on constant/null frames. — DONE
+(preprocessing guards added; viz portion is a false alarm).** None of
 these guard the denominator:
 - `backend/preprocessing.py:218` — `(processed - min_val)/(max_val - min_val)` when
   percentiles are equal (flat region).
@@ -52,6 +53,16 @@ these guard the denominator:
   `/ f_max`, `/ vmax`; a null field gives `d_max==0` → inf arrows *and*
   `contrast_limits=(0,0)` (`:292/:399/:899`), which napari rejects, throwing the whole
   visualization call.
+
+_Resolution:_ The three preprocessing/writer divisions are real (a globally flat frame —
+dead detector, all-black, saturated — gives `max == min` → silent NaN/inf). Guarded each:
+`apply_intensity_scaling`, `register_to_reference`, and `save_calibrated_tiff` now map a
+zero-span array to zeros instead of dividing. The **visualization portion is a false
+alarm**: `d_max`/`f_max`/`vmax`/`max_stress` are user display parameters (defaults 1.0 /
+500.0; UI min 0.1), not derived from the field — every assignment in
+`visualization_manager.py` reads them straight from the params (`vmax = vis['v_max']`,
+`max_stress = cfg['max_stress']`), so a null field does not zero them and the division is
+unreachable in normal use. Left unchanged.
 
 **3. GCV can return a negative λ.** `backend/fttc.py:417` runs `optimize.fmin`
 unconstrained on `_gcvfun`, which depends on λ only via `λ**2` (even function). The
