@@ -243,17 +243,31 @@ _Resolution:_
 - **DONE** — `fttc.py`: removed the redundant `import *`; simplified `_gcv_blockdiag` to
   return just the optimal λ (dropped the unused `plot` arg and the `minG`/`G`/`reg_param`
   returns); unpacked the always-0 `i_bound_size`/`j_bound_size` to `_`.
-- **REVIEW WRONG** — `ArtifactState.dirty` is **not** write-only: `artifact_info_text`
-  (`_stage_data_status.py`, live via `_stage_file_status.py`) reads it to render the
-  "· cache (unsaved)" label. Kept.
+- **DONE** — `_widget.py`: removed the entire `WHEN`/`AND` conditional-visibility machinery
+  (sentinels, `_conditional_rows`/`_conditional_controllers`, `_register_conditional`,
+  `_apply_conditional_visibility`, the loop branches and the controller-change handler) —
+  no `PARAMETER_SECTIONS` entry ever used it (`GROUP` is used and stays); removed the
+  write-only `_loaded_stage_data`; replaced the pointless `dict(STAGE_DATA_ARTIFACTS)` copy
+  (all four keys were immediately overwritten) with `{}`.
+- **DONE** — `visualization_manager.py`: removed the caller-less `get_displacement_statistics`
+  (the widget has its own live copy) and the write-only `PreviewConfig` / `_preview_config`.
+- **REVIEW WRONG (kept)** —
+  - `ArtifactState.dirty` is **not** write-only: `artifact_info_text` reads it for the
+    "· cache (unsaved)" label.
+  - `_load_stage_results`' return is **not** ignored: recently-added regression tests
+    (`test_reload_on_selection.py`) assert on it; kept the return (only dropped the
+    write-only `_loaded_stage_data.update`).
+  - the local `from qtpy.QtCore import QTimer` is **not** safely redundant: it fetches the
+    real `QTimer` so `singleShot` works when tests monkeypatch the module-level `QTimer`;
+    removing it broke 7 tests. Kept (with a comment explaining why).
+  - `STAGE_DATA_ARTIFACTS` the constant is kept (a test references it); only the dead copy
+    was removed.
+  - `_clear_layers` key check: the review's "can never match" is wrong — `cleanup` passes
+    the dict's own keys, which *do* match. The branch is a harmless no-op in every path, so
+    it wasn't worth touching viewer-critical code; left as-is.
 - **SKIPPED (deliberate)** — `fttc.py` `(x, y)` grid: verified genuinely dead, but removing
   it changes the return signature of `_perform_tfm`/`calculate_traction` in the
   numerically-sensitive FTTC core (in paper revision) for negligible gain. Not worth the risk.
-- **DEFERRED** — `_widget.py` (WHEN/AND machinery, write-only `_loaded_stage_data`,
-  `STAGE_DATA_ARTIFACTS` copy, redundant `QTimer` import, ignored `_load_stage_results`
-  return) and `visualization_manager.py` (`get_displacement_statistics`, `PreviewConfig`,
-  `_clear_layers`): both files carry unrelated uncommitted work predating this review pass,
-  so editing them would entangle that work into the cleanup commit. Pending a clean tree.
 
 ---
 

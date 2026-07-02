@@ -203,20 +203,6 @@ def _build_stress_specs(stress_widget):
 # two-per-row run; it is not a parameter control.
 GROUP = object()
 
-# Sentinel opening a conditional block. A spec of the form
-# (WHEN, "stress_method", "BISM") makes every following control row visible only
-# while parameter "stress_method" equals "BISM"; the block runs until the next
-# WHEN or GROUP (GROUP resets to always-visible). Lets one panel host several
-# mutually exclusive engines — retiring an engine is deleting its block.
-WHEN = object()
-
-# Sentinel adding a second clause to the active WHEN gate (logical AND). A spec
-# of the form (AND, "bism_lambda_method", "Fixed") right after a WHEN block makes
-# the following rows visible only while BOTH the WHEN clause and this clause
-# match — e.g. show the Lambda slider only when stress_method == BISM *and*
-# bism_lambda_method == Fixed. Cleared by the next WHEN or GROUP.
-AND = object()
-
 
 class WorkflowParameterPanel(QWidget):
     """Single visible parameter editor for the workflow shell."""
@@ -277,13 +263,8 @@ class WorkflowParameterPanel(QWidget):
         self.parameter_manager = parameter_manager
         self._section_titles = set(section_titles) if section_titles is not None else None
         self.parameter_controls = {}
-        # Rows gated by a WHEN/AND block: (clauses, [cells]) where clauses is a
-        # tuple of (param, expected) all of which must match for the row to show.
-        self._conditional_rows = []
-        self._conditional_controllers = set()
         self._setup_ui()
         self._sync_all_controls()
-        self._apply_conditional_visibility()
         self.parameter_manager.parameter_changed.connect(self._sync_parameter)
 
     def _setup_ui(self):
@@ -300,87 +281,43 @@ class WorkflowParameterPanel(QWidget):
             header.setStyleSheet(section_label_style())
             add_section_header(grid, 0, header)
 
-            # Lay out specs two-per-row, but a range slider takes a full row.
-            # A scalar spec waits in `pending` for a partner; a range spec, a
-            # GROUP/WHEN marker, or a change of condition flushes the waiting
-            # scalar (as a solo row) first. `condition` is the active WHEN gate
-            # (None = always visible); pending carries the condition it was born
-            # under so a flushed solo row is registered correctly.
+            # Lay out specs two-per-row, but a range slider (or a GROUP marker)
+            # takes a full row and flushes any scalar still waiting for a partner.
             row = 1
-            pending = None  # (label, control, condition)
-            condition = ()  # tuple of (param, expected) clauses; () = always visible
+            pending = None  # (label, control)
 
             def flush_pending():
                 nonlocal pending, row
                 if pending is not None:
-                    left, _ = add_section_pair_row(grid, row, pending[0], pending[1])
-                    self._register_conditional(pending[2], left)
+                    add_section_pair_row(grid, row, pending[0], pending[1])
                     row += 1
                     pending = None
 
             for spec in specs:
                 if spec[0] is GROUP:
                     flush_pending()
-                    condition = ()
                     subheader = QLabel(spec[1])
                     subheader.setStyleSheet(section_subheader_style())
                     add_section_header(grid, row, subheader)
                     row += 1
-                elif spec[0] is WHEN:
-                    flush_pending()
-                    condition = ((spec[1], spec[2]),)
-                elif spec[0] is AND:
-                    flush_pending()
-                    condition = condition + ((spec[1], spec[2]),)
                 elif spec[2] == "range":
                     flush_pending()
                     label, control = self._control_for_spec(spec)
-                    container = add_section_labeled_full_row(grid, row, label, control)
-                    self._register_conditional(condition, container)
+                    add_section_labeled_full_row(grid, row, label, control)
                     row += 1
                 elif pending is None:
                     label, control = self._control_for_spec(spec)
-                    pending = (label, control, condition)
-                elif pending[2] == condition:
+                    pending = (label, control)
+                else:
                     label, control = self._control_for_spec(spec)
-                    left, right = add_section_pair_row(grid, row, pending[0], pending[1], label, control)
-                    self._register_conditional(condition, left, right)
+                    add_section_pair_row(grid, row, pending[0], pending[1], label, control)
                     row += 1
                     pending = None
-                else:
-                    # Condition changed without a marker between two scalars;
-                    # don't pair across conditions — flush and start fresh.
-                    flush_pending()
-                    label, control = self._control_for_spec(spec)
-                    pending = (label, control, condition)
             flush_pending()
 
             layout.addLayout(grid)
 
         self.setLayout(layout)
-
-    def _register_conditional(self, condition, *cells):
-        """Record a row's cell container(s) under a WHEN/AND gate so visibility
-        can track the controlling parameter(s). ``condition`` is a tuple of
-        (param, expected) clauses, all of which must match for the row to show.
-        No-op for unconditional rows (empty tuple)."""
-        if not condition:
-            return
-        for param, _ in condition:
-            self._conditional_controllers.add(param)
-        self._conditional_rows.append(
-            (condition, [c for c in cells if c is not None])
-        )
-
-    def _apply_conditional_visibility(self):
-        """Show each gated row only while all its clauses match."""
-        for clauses, cells in self._conditional_rows:
-            visible = all(
-                self.parameter_manager.get_ui_parameter(param) == expected
-                for param, expected in clauses
-            )
-            for cell in cells:
-                cell.setVisible(visible)
 
     def _control_for_spec(self, spec):
         name, label, kind, min_val, max_val, step, decimals, choices = spec
@@ -460,11 +397,6 @@ class WorkflowParameterPanel(QWidget):
         finally:
             control.blockSignals(False)
 
-        # A change to a WHEN controller (e.g. stress_method) re-evaluates which
-        # engine-specific rows are shown.
-        if param_name in self._conditional_controllers:
-            self._apply_conditional_visibility()
-
 
 class SpinBoxEventFilter(QObject):
     def eventFilter(self, obj, event):
@@ -494,7 +426,10 @@ class napariTFMWidget(QWidget):
                 widget.installEventFilter(self.spinbox_filter)
                 widget.setFocusPolicy(Qt.StrongFocus)
 
-        # Install filters after a short delay to ensure all widgets are created
+        # Install filters after a short delay to ensure all widgets are created.
+        # Import QTimer locally (not the module-level name) so singleShot uses the
+        # real Qt timer even when tests monkeypatch the module-level QTimer with a
+        # fake poll-timer stand-in.
         from qtpy.QtCore import QTimer
         QTimer.singleShot(0, install_filter_on_inputs)
 
@@ -581,10 +516,6 @@ class napariTFMWidget(QWidget):
         self._active_experiment: str | None = None
         # ntfm-backed stages whose arrays are currently decoded into DataManager
         # + the viewer for the active experiment. Loading is display-only and
-        # on-demand: a stage's series is decoded from `TFMresults.ome.tif` only
-        # when its circle is clicked (calculations always re-read from disk, so
-        # nothing needs to be resident just to run). Reset on experiment switch.
-        self._loaded_stage_data: set[str] = set()
         self._pipeline_context_label = QLabel("Pipeline")
         self._pipeline_context_label.setStyleSheet(section_label_style())
         container_layout.addWidget(self._pipeline_context_label)
@@ -653,7 +584,7 @@ class napariTFMWidget(QWidget):
                 )
             )
 
-        stage_data_artifacts = dict(STAGE_DATA_ARTIFACTS)
+        stage_data_artifacts = {}
         stage_data_artifacts["preprocessing"] = _build_preprocessing_specs(
             self.preprocessing_widget,
             self.visualization_manager,
@@ -1173,10 +1104,6 @@ class napariTFMWidget(QWidget):
         dots (top) and the section dots (below) both read the one on-disk truth.
         """
         self._persist_active_experiment(stage_key)
-        # Whatever just got persisted is already the in-memory data that
-        # produced it (that's what "persist" means here) — it's on screen and
-        # resident, so mark it loaded without a disk re-read.
-        self._loaded_stage_data.update(self._NTFM_STAGES)
         self.refresh()
 
     def _persist_active_experiment(self, stage_key: str) -> None:
@@ -1729,8 +1656,11 @@ class napariTFMWidget(QWidget):
         self.visualization_manager.begin_preprocessing_stream()
         return True
 
-    def _load_stage_results(self, path: str, stages) -> None:
+    def _load_stage_results(self, path: str, stages) -> list:
         """Decode the requested stages' persisted output into the viewer.
+
+        Returns the list of stage keys actually loaded (used by callers/tests to
+        confirm what was decoded).
 
         Reads the ntfm-backed table once (see `_read_stage_arrays`) but applies
         only the requested stages, so clicking one stage's circle never also
@@ -1757,15 +1687,10 @@ class napariTFMWidget(QWidget):
                 if "stress" in ntfm_stages:
                     self._apply_stress_result(data)
                 loaded.extend(ntfm_stages)
-        self._loaded_stage_data.update(loaded)
         return loaded
 
     def _on_active_experiment_changed(self, path: str) -> None:
         self._active_experiment = path or None
-        # Selecting an experiment loads its inputs only (below); no output
-        # series is decoded until a circle is clicked, so nothing is resident
-        # for the newly-active experiment yet.
-        self._loaded_stage_data = set()
         # Switching experiments drops the previous one's in-memory results so they
         # can never be persisted into the newly selected experiment's .ntfm. The
         # dots fall back to the new experiment's on-disk truth (which may already

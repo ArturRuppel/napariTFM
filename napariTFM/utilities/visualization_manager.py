@@ -14,15 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 
-@dataclass
-class PreviewConfig:
-    """Configuration for preview visualization"""
-    enabled: bool = False
-    current_data_type: str = 'beads'  # 'beads', 'reference', or 'cells'
-    original_layer: Optional["napari.layers.Layer"] = None
-    preview_layer: Optional["napari.layers.Layer"] = None
-
-
 class VisualizationManager(ErrorHandlingMixin):
     # region === Initialization
     def __init__(self, viewer: "napari.Viewer", data_manager: "DataManager"):
@@ -31,7 +22,6 @@ class VisualizationManager(ErrorHandlingMixin):
         self.data_manager = data_manager
         self._layers: Dict[str, Any] = {}
         self.colorbar_manager = ViewerColorbarManager(viewer)
-        self._preview_config = PreviewConfig()
 
         # Connect to viewer events
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
@@ -210,18 +200,6 @@ class VisualizationManager(ErrorHandlingMixin):
             Vector data and colors arrays
         """
         return build_frame_vectors(flow_scaled, original_flow, stride, d_max, colormap)
-
-    def get_displacement_statistics(self, flow: np.ndarray) -> dict:
-        """Calculate displacement statistics."""
-        magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
-        return {
-            'max': magnitude.max(),
-            'mean': magnitude.mean(),
-            'std': magnitude.std(),
-            'median': np.median(magnitude)
-        }
-
-    # endregion
 
     # region === Displacement Visualization
     def update_displacement_frame(self, frame_index: int) -> None:
@@ -1074,14 +1052,11 @@ class VisualizationManager(ErrorHandlingMixin):
                         visible=True,
                     )
 
-            self._preview_config.enabled = enable
-
         except Exception as e:
             logger.error(f"Preprocessing preview handling failed: {str(e)}")
             for layer_name, _ in layer_specs.values():
                 if layer_name in self.viewer.layers:
                     self.viewer.layers.remove(layer_name)
-            self._preview_config.enabled = False
             raise
 
     # endregion
