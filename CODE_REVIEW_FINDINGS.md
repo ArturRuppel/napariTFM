@@ -182,7 +182,14 @@ the active experiment previously wiped its overlays too. Two regression tests ad
 
 ## Dead code
 
-**9. The entire metrics feature is dead.** `backend/metrics_calculator.py` (strain
+**9. The entire metrics feature is dead. — DEFERRED (will be wired up, not deleted).**
+Decision: the metrics feature is wanted, so it will be *wired into the pipeline* later
+rather than removed. Leave `metrics_calculator.py` and the `calculate_metrics` /
+`metrics_parameters` config knobs in place. When wiring it up, also fix the latent
+`calculate_polarization` bug (`np.linalg.eigvals` on the non-symmetric moment tensor can
+return complex eigenvalues — use `eigvalsh` on the symmetric part, or document why not).
+
+**9 (original). The entire metrics feature is dead.** `backend/metrics_calculator.py` (strain
 energy, moment tensor, polarization, eigenvalues) is imported nowhere in the app;
 `backend/batch_analysis.py` contains no reference to `calculate_metrics` or
 `metrics_parameters` even though `widgets/_run_config.py:28-32,60-66` sets
