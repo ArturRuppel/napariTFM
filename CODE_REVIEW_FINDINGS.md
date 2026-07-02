@@ -18,7 +18,8 @@ entire metrics module that the pipeline never runs.
 
 ## Numerical / scientific bugs
 
-**1. Resume path silently changes displacement results (reproducibility bug).**
+**1. Resume path silently changes displacement results (reproducibility bug). — DONE
+(finding overstated; real residual fixed).**
 `backend/batch_analysis.py:57-60` (`save_calibrated_tiff`) rescales each array to its
 *own* min/max before casting to uint16, so the saved reference and the saved bead stack
 no longer share an intensity scale. When preprocessing is skipped and displacement
@@ -27,6 +28,18 @@ Farneback optical flow runs on inconsistently-scaled images, whereas a fresh in-
 run uses the un-renormalized float arrays. Same inputs → different displacement field
 depending on whether you resumed. Most important scientific issue: it silently
 undermines reproducibility.
+
+_Resolution:_ The stated mechanism does **not** hold. `DisplacementAnalyzer.calculate_flow`
+(`backend/displacement_analysis.py:66-67`) runs both the reference and every bead frame
+through `_normalize_for_optical_flow`, which renormalizes each image *independently* to
+uint8 by its own min/max immediately before the Farneback call — so the reference/beads
+"shared scale" is irrelevant, and Farneback is scale-invariant here. The genuine residual
+was smaller: the fresh path fed displacement `float→uint8`, while the resume path fed
+`float→uint16 (disk)→uint8`, so the extra uint16 round-trip could shift ≤1 uint8 level at
+rare quantization boundaries — fresh and resume were not byte-identical. Fixed by making
+`_handle_displacement_execution` **always** read the persisted preprocessed tiffs (fresh
+run and stage-resume alike), collapsing the two into a single input path. Consistent with
+the project-wide "calcs always read from disk" invariant.
 
 **2. Unguarded divisions produce NaN/inf or crashes on constant/null frames.** None of
 these guard the denominator:

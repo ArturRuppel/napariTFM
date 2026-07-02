@@ -705,18 +705,24 @@ class BatchAnalysis:
             return None
 
         try:
-            if preprocessed_data is None:
-                print("Loading preprocessed images from file...")
-                try:
-                    preprocessed_bead_stack = tifffile.imread(str(tfm_folder / "preprocessed_beads.tif"))
-                    preprocessed_reference = tifffile.imread(str(tfm_folder / "preprocessed_reference.tif"))
-                    preprocessed_data = {
-                        'beads': preprocessed_bead_stack,
-                        'reference': preprocessed_reference,
-                    }
-                except Exception as e:
-                    print(f"Could not load preprocessed files: {str(e)}")
-                    return None
+            # Displacement always consumes the *persisted* preprocessed tiffs,
+            # never the in-session float arrays. Preprocessing always writes the
+            # calibrated tiffs (see _execute_preprocessing), so reading them back
+            # here means a fresh run and a stage-resume feed Farneback byte-
+            # identical inputs. Otherwise the resume path's extra uint16 round-
+            # trip (save_calibrated_tiff) would leave displacement results
+            # depending on whether preprocessing happened to run this session.
+            # Consistent with the project-wide "calcs always read from disk"
+            # invariant. See CODE_REVIEW_FINDINGS.md #1.
+            print("Loading preprocessed images from file...")
+            try:
+                preprocessed_data = {
+                    'beads': tifffile.imread(str(tfm_folder / "preprocessed_beads.tif")),
+                    'reference': tifffile.imread(str(tfm_folder / "preprocessed_reference.tif")),
+                }
+            except Exception as e:
+                print(f"Could not load preprocessed files: {str(e)}")
+                return None
 
             return self._execute_displacement_analysis(tfm_folder, preprocessed_data)
         except Exception as e:
