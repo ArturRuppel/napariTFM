@@ -718,57 +718,61 @@ class BatchAnalysis:
         finally:
             self._cleanup()
 
+    def _guard_stage(self, stage: str, body) -> Optional[dict]:
+        """Run a stage's ``body`` iff enabled; record any exception as a failure.
+
+        Returns ``body()``'s result, ``None`` if the stage is disabled, or
+        ``None`` after recording a failure if it raised. Centralizing the
+        enabled-check + failure-recording in one place is what guarantees every
+        enabled stage that raises is reported as an ``error`` (not a silent
+        "done") — the four handlers used to each re-implement this, and the one
+        that swallowed its own exception (stress) reintroduced
+        CODE_REVIEW_FINDINGS.md #5. A graceful ``return None`` from ``body``
+        (disabled upstream, no mask, nothing to resume) is a deliberate skip and
+        is left untouched.
+        """
+        if not self.config['analysis_steps'][stage]:
+            return None
+        try:
+            return body()
+        except Exception as e:
+            print(f"{stage.capitalize()} failed: {str(e)}")
+            self._record_stage_failure(stage, e)
+            return None
+
     def _handle_preprocessing_execution(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
         """Handle preprocessing execution. Always runs if enabled."""
-        if not self.config['analysis_steps']['preprocessing']:
-            return None
-
-        try:
-            return self._execute_preprocessing(folder, tfm_folder)
-        except Exception as e:
-            print(f"Preprocessing failed: {str(e)}")
-            self._record_stage_failure("preprocessing", e)
-            return None
+        return self._guard_stage(
+            "preprocessing", lambda: self._execute_preprocessing(folder, tfm_folder)
+        )
 
     def _handle_displacement_execution(self, tfm_folder: Path, preprocessed_data: Optional[dict]) -> Optional[dict]:
-        """Handle displacement analysis execution. Always runs if enabled."""
-        if not self.config['analysis_steps']['displacement']:
-            return None
+        """Handle displacement analysis execution. Always runs if enabled.
 
-        try:
-            # Displacement always consumes the *persisted* preprocessed tiffs,
-            # never the in-session float arrays. Preprocessing always writes the
-            # calibrated tiffs (see _execute_preprocessing), so reading them back
-            # here means a fresh run and a stage-resume feed Farneback byte-
-            # identical inputs. Otherwise the resume path's extra uint16 round-
-            # trip (save_calibrated_tiff) would leave displacement results
-            # depending on whether preprocessing happened to run this session.
-            # Consistent with the project-wide "calcs always read from disk"
-            # invariant. See CODE_REVIEW_FINDINGS.md #1.
+        ``preprocessed_data`` is ignored: displacement always consumes the
+        *persisted* preprocessed tiffs, never the in-session float arrays.
+        Preprocessing always writes the calibrated tiffs (see
+        ``_execute_preprocessing``), so reading them back here means a fresh run
+        and a stage-resume feed Farneback byte-identical inputs — consistent with
+        the project-wide "calcs always read from disk" invariant
+        (CODE_REVIEW_FINDINGS.md #1). A missing/unreadable tiff raises and is
+        recorded as a displacement failure by ``_guard_stage``.
+        """
+        def body():
             print("Loading preprocessed images from file...")
-            try:
-                preprocessed_data = {
-                    'beads': tifffile.imread(str(tfm_folder / "preprocessed_beads.tif")),
-                    'reference': tifffile.imread(str(tfm_folder / "preprocessed_reference.tif")),
-                }
-            except Exception as e:
-                print(f"Could not load preprocessed files: {str(e)}")
-                self._record_stage_failure("displacement", e)
-                return None
+            preprocessed = {
+                'beads': tifffile.imread(str(tfm_folder / "preprocessed_beads.tif")),
+                'reference': tifffile.imread(str(tfm_folder / "preprocessed_reference.tif")),
+            }
+            return self._execute_displacement_analysis(tfm_folder, preprocessed)
 
-            return self._execute_displacement_analysis(tfm_folder, preprocessed_data)
-        except Exception as e:
-            print(f"Displacement analysis failed: {str(e)}")
-            self._record_stage_failure("displacement", e)
-            return None
+        return self._guard_stage("displacement", body)
 
     def _handle_force_execution(self, tfm_folder: Path, folder: Path, displacement_data: Optional[dict]) -> Optional[dict]:
         """Handle force analysis execution. Always runs if enabled."""
-        if not self.config['analysis_steps']['force']:
-            return None
-
-        try:
-            if displacement_data is None:
+        def body():
+            dd = displacement_data
+            if dd is None:
                 # Stage-resume: read the displacement field back from the prior
                 # run's .ntfm (ROADMAP §4 — no intermediate .npy). Force analysis
                 # consumes only ``.displacement_field``, so a one-field shim is
@@ -777,28 +781,23 @@ class BatchAnalysis:
                 field = self._resume_field_from_ntfm(tfm_folder, folder, "displacement_field")
                 if field is None:
                     return None
-                displacement_data = SimpleNamespace(displacement_field=field)
-            return self._execute_force_analysis(tfm_folder, displacement_data)
-        except Exception as e:
-            print(f"Force analysis failed: {str(e)}")
-            self._record_stage_failure("force", e)
-            return None
+                dd = SimpleNamespace(displacement_field=field)
+            return self._execute_force_analysis(tfm_folder, dd)
+
+        return self._guard_stage("force", body)
 
     def _handle_stress_execution(self, tfm_folder: Path, folder: Path, force_data: Optional[dict], mask_data: Optional[np.ndarray]) -> Optional[dict]:
         """Handle stress analysis execution. Always runs if enabled."""
-        if not self.config['analysis_steps']['stress']:
-            return None
-
-        try:
-            if force_data is None:
+        def body():
+            fd = force_data
+            if fd is None:
                 # Stage-resume: read the force field back from the prior run's
-                # .ntfm (ROADMAP §4). Stress analysis consumes only
-                # ``.force_field``.
+                # .ntfm (ROADMAP §4). Stress analysis consumes only ``.force_field``.
                 print("Resuming force from existing .ntfm...")
                 field = self._resume_field_from_ntfm(tfm_folder, folder, "force_field")
                 if field is None:
                     return None
-                force_data = SimpleNamespace(force_field=field)
+                fd = SimpleNamespace(force_field=field)
 
             if mask_data is None:
                 print("Stress analysis requires an external mask; napariTFM does "
@@ -806,12 +805,9 @@ class BatchAnalysis:
                       "skipping stress analysis.")
                 return None
 
-            return self._execute_stress_analysis(tfm_folder, mask_data, force_data)
+            return self._execute_stress_analysis(tfm_folder, mask_data, fd)
 
-        except Exception as e:
-            print(f"Stress analysis failed: {str(e)}")
-            self._record_stage_failure("stress", e)
-            return None
+        return self._guard_stage("stress", body)
 
     def _resume_field_from_ntfm(self, tfm_folder: Path, folder: Path, field_key: str) -> Optional[np.ndarray]:
         """Read a grid field back from the experiment's ``.ntfm`` for stage-resume.
@@ -1103,7 +1099,7 @@ class BatchAnalysis:
             while True:
                 # Get next intermediate result
                 displacement_field, frame, total = next(displacement_field_generator)
-                self._log_displacement_progress(displacement_field, frame, total)
+                self._log_stage_progress(displacement_field, frame, total, "displacement", "µm")
                 # The backend yields a 1-based frame number; the viewer (and its
                 # slider) want it 0-based.
                 self._emit('stage_frame', 'displacement', frame - 1, displacement_field)
@@ -1198,7 +1194,7 @@ class BatchAnalysis:
             while True:
                 # Get next intermediate result
                 force_field, frame, total = next(force_generator)
-                self._log_force_progress(force_field, frame, total)
+                self._log_stage_progress(force_field, frame, total, "force", "Pa")
                 # 1-based from the backend; the viewer wants it 0-based.
                 self._emit('stage_frame', 'force', frame - 1, force_field)
         except StopIteration as e:
@@ -1304,7 +1300,7 @@ class BatchAnalysis:
         try:
             while True:
                 stress_result, frame, total = next(stress_generator)
-                self._log_stress_progress(stress_result, frame, total)
+                self._log_stage_progress(stress_result.stress_tensor, frame, total, "stress", "mN/m")
                 # Cumulative stack; newest frame is its last slice. 1-based → 0.
                 self._emit('stage_frame', 'stress', frame - 1,
                            stress_result.stress_tensor[-1])
@@ -1347,23 +1343,16 @@ class BatchAnalysis:
         """Create stress (BISM) parameters from config."""
         return self._unified_parameters().to_stress_parameters()
 
-    def _log_displacement_progress(self, result, frame, total):
-        displacement_field_magnitude = np.sqrt(np.sum(result ** 2, axis=-1))
-        print(f"Frame {frame}/{total}: "
-              f"Mean displacement: {np.mean(displacement_field_magnitude):.2f} µm, "
-              f"Max displacement: {np.max(displacement_field_magnitude):.2f} µm")
+    def _log_stage_progress(self, array, frame, total, quantity, unit):
+        """Print per-frame mean/max magnitude for a streamed stage array.
 
-    def _log_force_progress(self, result, frame, total):
-        force_magnitude = np.sqrt(np.sum(result ** 2, axis=-1))
+        One helper for all three measure stages (displacement / force / stress),
+        which differ only in the printed quantity name and unit.
+        """
+        magnitude = np.sqrt(np.sum(array ** 2, axis=-1))
         print(f"Frame {frame}/{total}: "
-              f"Mean force: {np.mean(force_magnitude):.2f} Pa, "
-              f"Max force: {np.max(force_magnitude):.2f} Pa")
-
-    def _log_stress_progress(self, result, frame, total):
-        magnitude = np.sqrt(np.sum(result.stress_tensor ** 2, axis=-1))
-        print(f"Frame {frame}/{total}: "
-              f"Mean stress: {np.mean(magnitude):.2f} mN/m, "
-              f"Max stress: {np.max(magnitude):.2f} mN/m")
+              f"Mean {quantity}: {np.mean(magnitude):.2f} {unit}, "
+              f"Max {quantity}: {np.max(magnitude):.2f} {unit}")
 
     def _initialize_folder(self, output_dir: Path) -> Path:
         """Set up the TFM_data/ output folder and logging (ROADMAP §4).
