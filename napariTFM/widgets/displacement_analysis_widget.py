@@ -75,36 +75,11 @@ class DisplacementController(BaseAnalysisController):
                 downscale_factor=params.downscale_factor
             )
 
-            # Manage layer visibility and order
-            vector_layer = None
-            magnitude_layer = None
-
-            # First pass: find the displacement layers and disable all others
-            for layer in self.viewer.layers:
-                if layer.name == 'Displacement Vectors':
-                    vector_layer = layer
-                    layer.visible = True
-                elif layer.name == 'Displacement Magnitude':
-                    magnitude_layer = layer
-                    layer.visible = True
-                elif self.visualization_manager.colorbar_manager.is_colorbar_layer(layer.name):
-                    # Keep the scale legend visible alongside the preview.
-                    layer.visible = True
-                else:
-                    layer.visible = False
-
-            # Move layers to desired positions if they exist
-            if magnitude_layer is not None:
-                current_index = self.viewer.layers.index(magnitude_layer)
-                # Move magnitude layer to second from top (-2)
-                if current_index != -2:
-                    self.viewer.layers.move(current_index, -2)
-
-            if vector_layer is not None:
-                current_index = self.viewer.layers.index(vector_layer)
-                # Move vector layer to top (-1)
-                if current_index != -1:
-                    self.viewer.layers.move(current_index, -1)
+            # Show only the displacement layers (magnitude below, vectors on top).
+            self.visualization_manager.bring_layers_to_front([
+                ('Displacement Magnitude', True),
+                ('Displacement Vectors', True),
+            ])
 
             # Update status with statistics
             stats = self.get_displacement_statistics(final_result.displacement_field[0])

@@ -102,6 +102,39 @@ class VisualizationManager(ErrorHandlingMixin):
             if layer.name not in keep:
                 layer.visible = False
 
+    def bring_layers_to_front(self, layers) -> None:
+        """Stack the named preview layers on top, hiding everything else.
+
+        ``layers`` is an ordered list of ``(name, visible)`` from bottom-most to
+        top-most among the front slots. Each named layer is set to its given
+        visibility and moved into the top ``len(layers)`` positions in that
+        order; the active colorbar legend stays visible; every other layer is
+        hidden. This is the shared body of the displacement / force / stress
+        preview layer-management (which differ only in the names and per-layer
+        visibility) — previously copy-pasted three times.
+        """
+        spec = list(layers)
+        visible_by_name = dict(spec)
+        found = {}
+        for layer in self.viewer.layers:
+            if layer.name in visible_by_name:
+                layer.visible = visible_by_name[layer.name]
+                found[layer.name] = layer
+            elif self.colorbar_manager.is_colorbar_layer(layer.name):
+                layer.visible = True
+            else:
+                layer.visible = False
+
+        n = len(spec)
+        for i, (name, _visible) in enumerate(spec):
+            layer = found.get(name)
+            if layer is None:
+                continue
+            current = self.viewer.layers.index(layer)
+            target = -(n - i)  # top-most slot is -1, next -2, ...
+            if current != target:
+                self.viewer.layers.move(current, target)
+
     def capture_layer_visibility(self) -> dict:
         """Snapshot ``{layer_name: visible}`` for every layer in the viewer.
 
