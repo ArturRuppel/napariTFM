@@ -282,6 +282,44 @@ misleading.
 
 ---
 
+## Implementation status (2026-07-03)
+
+Landed on `claude/codebase-analysis-refactor-m8do2m`, each commit test-green:
+
+- **Tier 1 bugs** — B-1 (odd-grid FFT), B-2 (stress error-swallow, + regression
+  test), B-4 (progress monotonicity), B-5 (NaN optical-flow guard), B-6 (stress
+  freeze-UI). ✅
+- **Tier 2 dead code** — D-1 (unmasked BISM path), D-2/D-3 (dead ParameterManager
+  methods), D-4 (`source` plumbing), D-5 (`save_cache`), D-6 (`NullSink`), D-7,
+  D-8/D-9, D-10, D-11 (`files` icon), D-12 (`worker.running`). ✅ Deferred: the
+  dead params (`tfm_folder`/`folder`/`preprocessed_data`) and the fttc GCV
+  micro-cleanups — low value, fttc numerically sensitive.
+- **A-1** — container read/write **and** merge made array-native;
+  `write_series_ntfm`/`read_series_ntfm`/`merge_arrays`; tidy demoted to a lazy
+  adapter; the third scatter impl and the tidy merge removed. ✅
+- **A-3** — one `_guard_stage` + one `_log_stage_progress` collapse the four
+  batch handler triplets. ✅
+- **A-4** — `UnifiedParameters` projects per-stage subsets by field name; no-op
+  ParameterManager branches removed. ✅
+- **A-2** — the triplicated preview layer-management extracted to
+  `VisualizationManager.bring_layers_to_front` (tested). ✅ **Remaining (sequenced
+  follow-up):** collapse the three result Widget/Controller pairs into one
+  parameterized `VectorStageController` and hoist the
+  run→freeze→progress→complete/fail→**one blessed cancel** lifecycle into the
+  base as a non-overridable template method — killing the residual drift
+  (divergent cancel semantics; displacement/stress preview running synchronously
+  on the GUI thread while force uses a `thread_worker`). This touches Qt worker
+  teardown across four controllers, and the suite leans on fakes there, so it
+  wants its own reviewed change with manual in-app verification rather than a
+  blind headless refactor. B-6 (the highest-impact drift bug) and D-12 are
+  already fixed.
+
+- **B-3** (stale downstream resurrection) — **left for a semantics decision**: the
+  merge's preserve-behaviour is wanted for a force-only resume but wrong for an
+  interactive upstream re-run. Fix once the intended rule is chosen (interactive
+  upstream persist writes `merge_existing=False`, or the merge mirrors
+  `_DOWNSTREAM`).
+
 ## Suggested priority
 
 1. **B-1** (odd-grid FFT), **B-2** (stress swallow) — small, exact, high-value
