@@ -647,9 +647,9 @@ class BatchAnalysis:
             - <experiment>.ntfm: the sole data artifact (tidy table + metadata)
             - figures/: per-stage PNG/GIF previews (human-facing, not data)
             - batch.log: detailed processing log
-            - preprocessed_*.tif (optional, ``save_cache``): the one stage-resume
-              cache item not held by the .ntfm (images upstream of the analysis
-              grid). Displacement/force/stress are not re-cached as .npy — resume
+            - preprocessed_*.tif: the one stage-resume cache item not held by the
+              .ntfm (images upstream of the analysis grid), always written.
+              Displacement/force/stress are not re-cached as .npy — resume
               reads them from the .ntfm. The external mask is an input read from
               the input folder.
 

@@ -230,9 +230,6 @@ class _FakeVisualizationManager:
     def isolate_layers(self, keep_names):
         self.isolated.append(list(keep_names))
 
-    def update_preprocessing_visualization(self):
-        pass
-
     def cleanup(self):
         pass
 
@@ -399,23 +396,6 @@ def test_preprocessing_preview_error_unchecks_widget_preview_control(monkeypatch
 
     assert not widget.preview_check.isChecked()
     assert widget.controller.preview_enabled is False
-
-
-def test_visualization_manager_uses_additive_preprocessing_layers_without_overlay(monkeypatch):
-    viewer = _FakeViewer()
-    data_manager = DataManager()
-    data_manager.set_preprocessed_bead_stack(np.ones((1, 2, 2), dtype=np.float32))
-    data_manager.set_preprocessed_reference(np.ones((2, 2), dtype=np.float32))
-    data_manager.set_preprocessed_cell_stack(np.ones((1, 2, 2), dtype=np.float32))
-    manager = VisualizationManager(viewer, data_manager)
-    monkeypatch.setattr(manager.colorbar_manager, "clear", lambda: None)
-
-    manager.update_preprocessing_visualization()
-
-    names = [layer.name for layer in viewer.layers]
-    assert "Bead Overlay" not in names
-    assert names == ["Preprocessed Cells", "Preprocessed Reference", "Preprocessed Beads"]
-    assert all(layer.blending == "additive" for layer in viewer.layers)
 
 
 def test_visualization_manager_preprocessing_preview_layers_are_separate():

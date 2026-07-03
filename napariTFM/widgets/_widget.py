@@ -1481,7 +1481,7 @@ class napariTFMWidget(QWidget):
             displacement_field_shape=disp.shape[1:3],
             parameters=data.disp_params,
         )
-        self.data_manager.set_displacement_results(result, source="loaded", dirty=False)
+        self.data_manager.set_displacement_results(result, dirty=False)
         self.visualization_manager.begin_vector_field_stream(
             'displacement', disp.shape[0],
             {
@@ -1509,7 +1509,7 @@ class napariTFMWidget(QWidget):
             force_shape=force.shape[1:3],
             parameters=data.force_params,
         )
-        self.data_manager.set_force_results(result, source="loaded", dirty=False)
+        self.data_manager.set_force_results(result, dirty=False)
         self.visualization_manager.begin_vector_field_stream(
             'force', force.shape[0],
             {
@@ -1537,7 +1537,7 @@ class napariTFMWidget(QWidget):
             stress_shape=stress.shape[1:3],
             parameters=data.stress_params,
         )
-        self.data_manager.set_stress_results(result, source="loaded", dirty=False)
+        self.data_manager.set_stress_results(result, dirty=False)
         # Stress visualization upscales by the force grid's downscale factor.
         # Read it from the parsed file params, not `data_manager.force_results`,
         # so stress displays correctly even when its circle is clicked on its
@@ -1582,10 +1582,10 @@ class napariTFMWidget(QWidget):
         except Exception:
             logger.exception("Failed to load preprocessed TIFFs for %s", path)
             return False
-        self.data_manager.set_preprocessed_bead_stack(beads, source="loaded", dirty=False)
-        self.data_manager.set_preprocessed_reference(reference, source="loaded", dirty=False)
+        self.data_manager.set_preprocessed_bead_stack(beads, dirty=False)
+        self.data_manager.set_preprocessed_reference(reference, dirty=False)
         if cells is not None:
-            self.data_manager.set_preprocessed_cell_stack(cells, source="loaded", dirty=False)
+            self.data_manager.set_preprocessed_cell_stack(cells, dirty=False)
         # Display-only load of on-disk uint16 stacks: autoscale contrast to the
         # data's own range so the [0, 1] streaming default doesn't render the
         # reloaded image fully saturated (see begin_preprocessing_stream).

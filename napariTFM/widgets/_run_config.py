@@ -37,7 +37,6 @@ def build_run_config(
     parameters: Mapping,
     *,
     disabled_stages: Iterable[str] = (),
-    save_cache: bool = False,
     processed_root: object = None,
     apply_mask_on_save: bool = False,
     num_workers: int = 1,
@@ -76,7 +75,6 @@ def build_run_config(
         "visualizations": dict(_VISUALIZATIONS),
         "parameters": dict(parameters),
         "metrics_parameters": dict(_METRICS_PARAMETERS),
-        "save_cache": bool(save_cache),
         "num_workers": int(num_workers),
         "experiment_metadata": experiment_metadata,
         # Where derived output lands; ``None`` means in-place (a ``TFM_data/``

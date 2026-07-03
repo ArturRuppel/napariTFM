@@ -173,11 +173,11 @@ class ViewerSink(PipelineSink):
         if result is None:
             return
         if stage == 'displacement':
-            self.data_manager.set_displacement_results(result, source="generated", dirty=True)
+            self.data_manager.set_displacement_results(result, dirty=True)
         elif stage == 'force':
-            self.data_manager.set_force_results(result, source="generated", dirty=True)
+            self.data_manager.set_force_results(result, dirty=True)
         elif stage == 'stress':
-            self.data_manager.set_stress_results(result, source="generated", dirty=True)
+            self.data_manager.set_stress_results(result, dirty=True)
 
     # --- helpers ----------------------------------------------------------
 
@@ -195,15 +195,15 @@ class ViewerSink(PipelineSink):
 
         if beads_shape is not None:
             self.data_manager.set_preprocessed_bead_stack(
-                np.zeros(beads_shape, dtype=np.float32), source="generated", dirty=True
+                np.zeros(beads_shape, dtype=np.float32), dirty=True
             )
         if reference_shape is not None:
             self.data_manager.set_preprocessed_reference(
-                np.zeros(reference_shape, dtype=np.float32), source="generated", dirty=True
+                np.zeros(reference_shape, dtype=np.float32), dirty=True
             )
         if cells_shape is not None:
             self.data_manager.set_preprocessed_cell_stack(
-                np.zeros(cells_shape, dtype=np.float32), source="generated", dirty=True
+                np.zeros(cells_shape, dtype=np.float32), dirty=True
             )
 
         self.vis.begin_preprocessing_stream()

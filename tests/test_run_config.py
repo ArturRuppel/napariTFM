@@ -60,11 +60,6 @@ def test_experiment_metadata_maps_path_to_columns():
     }
 
 
-def test_save_cache_flag_is_carried():
-    assert build_run_config(_RECORDS, {})["save_cache"] is False
-    assert build_run_config(_RECORDS, {}, save_cache=True)["save_cache"] is True
-
-
 def test_apply_mask_on_save_flag_is_carried():
     assert build_run_config(_RECORDS, {})["apply_mask_on_save"] is False
     assert build_run_config(_RECORDS, {}, apply_mask_on_save=True)["apply_mask_on_save"] is True

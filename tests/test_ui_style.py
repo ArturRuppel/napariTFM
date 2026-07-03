@@ -4,8 +4,6 @@ from qtpy.QtWidgets import QApplication, QGridLayout, QLabel
 from napariTFM.widgets._ui_style import (
     MUTED_TEXT_COLOR,
     caption_style,
-    danger_text_style,
-    muted_stage_accent,
     section_label_style,
     stage_accent,
     stage_header_style,
@@ -52,32 +50,6 @@ def test_stage_accent_falls_back_to_inputs_for_unknown_key():
     assert stage_accent("nonexistent_stage") == stage_accent("inputs")
 
 
-def test_muted_stage_accent_reduces_saturation():
-    full = stage_accent("preprocessing").lstrip("#")
-    muted = muted_stage_accent("preprocessing").lstrip("#")
-
-    assert muted != full
-    assert len(muted) == 6
-
-
-def test_muted_stage_accent_preserves_hue_family():
-    import colorsys
-
-    def hue(hex_str: str) -> float:
-        c = hex_str.lstrip("#")
-        r, g, b = (int(c[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
-        return colorsys.rgb_to_hls(r, g, b)[0]
-
-    full = stage_accent("preprocessing")
-    muted = muted_stage_accent("preprocessing")
-    # Muting drops saturation/lightness but keeps the hue (the colour family).
-    assert abs(hue(full) - hue(muted)) < 0.02
-
-
-def test_muted_stage_accent_falls_back_for_unknown_key():
-    assert muted_stage_accent("nonexistent") == muted_stage_accent("inputs")
-
-
 def test_caption_style_uses_muted_text_color():
     style = caption_style()
     assert MUTED_TEXT_COLOR in style
@@ -90,10 +62,6 @@ def test_title_style_is_bold_and_sized():
 
 def test_section_label_style_is_bold():
     assert section_label_style() == "font-weight: bold;"
-
-
-def test_danger_text_style_is_red():
-    assert danger_text_style() == "color: red;"
 
 
 def test_stage_header_style_is_accent_pill():

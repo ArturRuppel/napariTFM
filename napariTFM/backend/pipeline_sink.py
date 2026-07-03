@@ -8,10 +8,11 @@ notifies the sink at each stage and frame boundary, and a live ``ViewerSink``
 turns those notifications into napari layer updates so a run streams into the
 viewer exactly as if each stage button were pressed in turn.
 
-A headless run attaches no sink (or :class:`NullSink`); every hook is then a
-silent no-op and the run is byte-for-byte what it was before sinks existed. The
-sink is therefore purely additive — it never alters what is computed or written
-to disk, only what (optionally) gets shown while it runs.
+A headless run attaches no sink (``sink=None``); every hook is then a silent
+no-op (the orchestrator short-circuits on ``sink is None``) and the run is
+byte-for-byte what it was before sinks existed. The sink is therefore purely
+additive — it never alters what is computed or written to disk, only what
+(optionally) gets shown while it runs.
 
 This module is deliberately free of Qt and napari imports so the backend stays
 headless-importable; the viewer-coupled implementation lives in
@@ -63,12 +64,3 @@ class PipelineSink:
 
     def stage_finished(self, stage: str, result: Any) -> None:
         """A stage finished; ``result`` is its final result object (or ``None``)."""
-
-
-class NullSink(PipelineSink):
-    """A sink that does nothing — the explicit form of "no viewer attached".
-
-    Passing ``NullSink()`` is equivalent to passing ``None``; both make every
-    hook a no-op. It exists so call sites can hold a non-optional sink reference
-    without sprinkling ``if sink is not None`` everywhere.
-    """

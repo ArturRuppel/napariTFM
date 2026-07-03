@@ -77,7 +77,6 @@ class StressController(BaseAnalysisController):
                     return e.value
 
             worker = stress_calculation_worker()
-            worker.running = True
             self.active_workers.append(worker)
 
             def on_yielded(data):
@@ -92,7 +91,7 @@ class StressController(BaseAnalysisController):
                 # The three stress stacks were filled in place as frames arrived
                 # and are already on screen; just store the full result for
                 # downstream steps. Other layers' visibility is left untouched.
-                self.data_manager.set_stress_results(final_result, source="generated", dirty=True)
+                self.data_manager.set_stress_results(final_result, dirty=True)
 
                 r2 = final_result.r2_traction
                 r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
@@ -250,7 +249,6 @@ class StressController(BaseAnalysisController):
         """Cancel all running background operations"""
         for worker in self.active_workers:
             try:
-                worker.running = False  # Set cancellation flag
                 worker.quit()
                 worker.wait(500)  # Wait up to 500ms
                 if worker.isRunning():

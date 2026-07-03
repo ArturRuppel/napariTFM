@@ -94,10 +94,9 @@ def test_stress_handler_skips_when_no_ntfm(tmp_path):
 
 # --- preprocessed .tif files are always persisted --------------------------
 
-def _drive_preprocessing(tmp_path, monkeypatch, save_cache=False):
+def _drive_preprocessing(tmp_path, monkeypatch):
     analysis = _analysis(
         input_files={"beads": "beads.tif", "reference": "ref.tif"},
-        save_cache=save_cache,
     )
     analysis.config["parameters"]["frame_interval"] = 1.0
 
@@ -117,14 +116,8 @@ def _drive_preprocessing(tmp_path, monkeypatch, save_cache=False):
 
 
 def test_preprocessing_tiffs_always_written(tmp_path, monkeypatch):
-    # TIFFs are written unconditionally; save_cache no longer gates them.
-    saved = _drive_preprocessing(tmp_path, monkeypatch, save_cache=False)
-    assert [p.name for p in saved] == ["preprocessed_beads.tif", "preprocessed_reference.tif"]
-
-
-def test_preprocessing_tiffs_written_with_save_cache_true(tmp_path, monkeypatch):
-    # Behaviour is unchanged when save_cache=True — still written.
-    saved = _drive_preprocessing(tmp_path, monkeypatch, save_cache=True)
+    # TIFFs are the stage-resume cache and are written unconditionally.
+    saved = _drive_preprocessing(tmp_path, monkeypatch)
     assert [p.name for p in saved] == ["preprocessed_beads.tif", "preprocessed_reference.tif"]
 
 

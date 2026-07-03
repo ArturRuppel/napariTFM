@@ -28,7 +28,7 @@ from typing import Generator, Optional, Tuple
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.linalg import spsolve, splu
+from scipy.sparse.linalg import spsolve
 from skimage.transform import resize
 
 from napariTFM.backend.parameter_dataclasses import StressParameters
@@ -50,91 +50,7 @@ class BISMResult:
     sxy: np.ndarray
     lam: float
     r2_traction: float
-    error_sxx: Optional[np.ndarray] = None
-    error_syy: Optional[np.ndarray] = None
-    error_sxy: Optional[np.ndarray] = None
     meta: dict = field(default_factory=dict)
-
-
-def _build_A(R: int, C: int, l: float) -> sp.csr_matrix:
-    """Discretized divergence operator A such that A @ sigma = T (2N x Ninf)."""
-    # Forward-difference stencils on the staggered grid.
-    Dx = sp.diags([-np.ones(C), np.ones(C)], [0, 1], shape=(C, C + 1))   # C x (C+1)
-    Dy = sp.diags([-np.ones(R), np.ones(R)], [0, 1], shape=(R, R + 1))   # R x (R+1)
-    Ax = sp.kron(sp.eye(R), Dx)            # N x (N+R), d/dx on a R x (C+1) grid
-    Ay = sp.kron(Dy, sp.eye(C))            # N x (N+C), d/dy on a (R+1) x C grid
-
-    # Component order in sigma: [sxx(N+R), syy(N+C), sxy(N+C), syx(N+R)]
-    # Tx eqn: d(sxx)/dx + d(sxy)/dy = Tx
-    # Ty eqn: d(syy)/dy + d(syx)/dx = Ty
-    A = sp.bmat([
-        [Ax,   None, Ay,   None],
-        [None, Ay,   None, Ax],
-    ], format="csr") / l
-    return A
-
-
-def _build_B(R: int, C: int, free_bc: bool,
-             alpha_xy: float, alpha_bc: float) -> sp.csr_matrix:
-    """Prior covariance B (Ninf x Ninf): identity + shear-symmetry + free-BC."""
-    N = R * C
-    Ninf = 4 * N + 2 * (C + R)
-
-    # (1) stress-norm (L2) regularization
-    B = sp.eye(Ninf, format="csr")
-
-    # (2) shear-symmetry: enforce interpolated sxy == syx
-    Sy = sp.diags([np.ones(R), np.ones(R)], [0, 1], shape=(R, R + 1))    # sum stencil
-    Sx = sp.diags([-np.ones(C), -np.ones(C)], [0, 1], shape=(C, C + 1))  # neg sum stencil
-    bd1 = sp.kron(Sy, sp.eye(C))            # N x (N+C), averages sxy
-    bd2 = sp.kron(sp.eye(R), Sx)            # N x (N+R), -averages syx
-    # Leading zero columns cover the sxx (N+R) and syy (N+C) blocks.
-    pad = sp.csr_matrix((N, (N + R) + (N + C)))
-    Bdiff = sp.hstack([pad, bd1, bd2], format="csr")   # N x Ninf
-    B = B + (alpha_xy ** 2) * (Bdiff.T @ Bdiff)
-
-    # (3) free-stress boundary conditions: normal stress = 0 on the domain edge
-    if free_bc:
-        # Bbcy: picks left & right edge values on a R x (C+1) grid  (sxx, syx)
-        rows_y, cols_y = [], []
-        for i in range(R):
-            rows_y.append(i);     cols_y.append(i * (C + 1) + 0)      # left edge
-            rows_y.append(R + i); cols_y.append(i * (C + 1) + C)      # right edge
-        Bbcy = sp.csr_matrix((np.ones(len(rows_y)), (rows_y, cols_y)),
-                             shape=(2 * R, N + R))
-        # Bbcx: picks top & bottom edge values on a (R+1) x C grid   (syy, sxy)
-        rows_x, cols_x = [], []
-        for j in range(C):
-            rows_x.append(j);     cols_x.append(0 * C + j)            # top edge
-            rows_x.append(C + j); cols_x.append(R * C + j)            # bottom edge
-        Bbcx = sp.csr_matrix((np.ones(len(rows_x)), (rows_x, cols_x)),
-                             shape=(2 * C, N + C))
-        # Block-diagonal over [sxx, syy, sxy, syx]
-        Bbc = sp.block_diag([Bbcy, Bbcx, Bbcx, Bbcy], format="csr")
-        B = B + (alpha_bc ** 2) * (Bbc.T @ Bbc)
-
-    return B.tocsr()
-
-
-def _interp_to_grid(sigma: np.ndarray, R: int, C: int):
-    """Average the four staggered stress fields onto the R x C data grid."""
-    N = R * C
-    sxx_v = sigma[0:N + R]
-    syy_v = sigma[N + R:2 * N + R + C]
-    sxy_v = sigma[2 * N + R + C:3 * N + R + 2 * C]
-    syx_v = sigma[3 * N + R + 2 * C:4 * N + 2 * R + 2 * C]
-
-    g_xx = sxx_v.reshape(R, C + 1)
-    g_yy = syy_v.reshape(R + 1, C)
-    g_xy = sxy_v.reshape(R + 1, C)
-    g_yx = syx_v.reshape(R, C + 1)
-
-    sxx = 0.5 * (g_xx[:, :-1] + g_xx[:, 1:])      # horizontal average
-    syy = 0.5 * (g_yy[:-1, :] + g_yy[1:, :])      # vertical average
-    sxy = 0.5 * (g_xy[:-1, :] + g_xy[1:, :])
-    syx = 0.5 * (g_yx[:, :-1] + g_yx[:, 1:])
-    sxy = 0.5 * (sxy + syx)                        # symmetrize
-    return sxx, syy, sxy
 
 
 def compute_bism_stress(
@@ -144,12 +60,9 @@ def compute_bism_stress(
     lam: float = 1e-6,
     alpha_xy: float = 1e3,
     alpha_bc: float = 1e3,
-    free_bc: bool = True,
-    noise_value: float = 0.0,
-    return_uncertainty: bool = False,
     mask: Optional[np.ndarray] = None,
 ) -> BISMResult:
-    """Infer the internal stress tensor from a traction field via BISM.
+    """Infer the internal stress tensor from a traction field via masked BISM.
 
     Args:
         tx, ty: (R, C) traction components (Pa). NaNs are treated as 0.
@@ -157,83 +70,23 @@ def compute_bism_stress(
         lam:    regularization hyperparameter Lambda (fixed value).
         alpha_xy:  shear-symmetry hyperparameter (large).
         alpha_bc:  free-BC hyperparameter (large).
-        free_bc:   impose free-stress boundary conditions in the prior.
-        noise_value: traction noise amplitude (sets posterior variance scale).
-        return_uncertainty: also compute per-pixel stress std (small grids only).
-        mask:   optional boolean (R, C). When given, the divergence operator and
-                free-stress boundary conditions are restricted to the masked
-                region and its actual contour (masked BISM) — the correct
-                formulation for a monolayer that does not fill the field. The
-                full rectangular formulation is used when mask is None.
+        mask:   boolean (R, C). The divergence operator and free-stress boundary
+                conditions are restricted to the masked region and its actual
+                contour — the correct formulation for a monolayer that does not
+                fill the field. A mask is required (a TFM stress solve is always
+                over an externally supplied cell/monolayer mask, ROADMAP §2).
 
     Returns:
         BISMResult with sxx, syy, sxy in units of [traction]*[l] (Pa*um).
-        With a mask, pixels outside the mask are NaN. ``result.lam`` is the
-        Lambda used (the fixed value passed in).
+        Pixels outside the mask are NaN. ``result.lam`` is the Lambda used.
     """
-    if mask is not None:
-        return _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc)
-
-    tx = np.nan_to_num(np.asarray(tx, dtype=float), nan=0.0)
-    ty = np.nan_to_num(np.asarray(ty, dtype=float), nan=0.0)
-    R, C = tx.shape
-    N = R * C
-    Ninf = 4 * N + 2 * (C + R)
-
-    A = _build_A(R, C, l)
-    B = _build_B(R, C, free_bc, alpha_xy, alpha_bc)
-
-    vTx = tx.ravel()          # row-major == MATLAB reshape(mTx', N, 1)
-    vTy = ty.ravel()
-    T = np.concatenate([vTx, vTy])
-
-    AtA = (A.T @ A).tocsc()
-    M = (lam * B + (l ** 2) * AtA).tocsc()
-    rhs = (l ** 2) * (A.T @ T)
-    sigma = spsolve(M, rhs)
-
-    sxx, syy, sxy = _interp_to_grid(sigma, R, C)
-
-    # Traction-reconstruction R^2 (should be close to 1)
-    T_inf = A @ sigma
-    Tx_inf, Ty_inf = T_inf[:N], T_inf[N:]
-    def _r2(obs, pred):
-        ss_res = np.sum((obs - pred) ** 2)
-        ss_tot = np.sum((obs - obs.mean()) ** 2)
-        return 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
-    r2 = 0.5 * (_r2(vTx, Tx_inf) + _r2(vTy, Ty_inf))
-
-    result = BISMResult(
-        sxx=sxx, syy=syy, sxy=sxy, lam=lam, r2_traction=r2,
-        meta={"R": R, "C": C, "l": l, "free_bc": free_bc,
-              "alpha_xy": alpha_xy, "alpha_bc": alpha_bc, "Ninf": Ninf},
-    )
-
-    if return_uncertainty and noise_value > 0:
-        lu = splu(M)
-        diagS = np.empty(Ninf)
-        chunk = 512
-        for start in range(0, Ninf, chunk):
-            cols = np.arange(start, min(start + chunk, Ninf))
-            E = np.zeros((Ninf, len(cols)))
-            E[cols, np.arange(len(cols))] = 1.0
-            X = lu.solve(E)
-            diagS[cols] = X[cols, np.arange(len(cols))]
-        Spost = (noise_value ** 2) * (l ** 2) * diagS
-
-        S_xx = Spost[0:N + R].reshape(R, C + 1)
-        S_yy = Spost[N + R:2 * N + R + C].reshape(R + 1, C)
-        S_xy = Spost[2 * N + R + C:3 * N + R + 2 * C].reshape(R + 1, C)
-        S_yx = Spost[3 * N + R + 2 * C:4 * N + 2 * R + 2 * C].reshape(R, C + 1)
-        e_xx = 0.25 * (S_xx[:, :-1] + S_xx[:, 1:])
-        e_yy = 0.25 * (S_yy[:-1, :] + S_yy[1:, :])
-        e_xy = 0.25 * (S_xy[:-1, :] + S_xy[1:, :])
-        e_yx = 0.25 * (S_yx[:, :-1] + S_yx[:, 1:])
-        result.error_sxx = np.sqrt(e_xx)
-        result.error_syy = np.sqrt(e_yy)
-        result.error_sxy = np.sqrt(0.25 * (e_xy + e_yx))
-
-    return result
+    if mask is None:
+        raise ValueError(
+            "compute_bism_stress requires a mask — the rectangular (unmasked) "
+            "formulation was removed as unused (napariTFM always solves over an "
+            "external mask)."
+        )
+    return _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc)
 
 
 def _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc) -> BISMResult:

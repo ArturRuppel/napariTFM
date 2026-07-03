@@ -1001,58 +1001,6 @@ class VisualizationManager(ErrorHandlingMixin):
             label='Stress (mN/m)',
         )
 
-    def update_preprocessing_visualization(self) -> None:
-        """Update visualization after preprocessing."""
-        try:
-            self.colorbar_manager.clear()
-
-            for layer_name in [
-                'Preprocessed Beads',
-                'Preprocessed Reference',
-                'Preprocessed Cells',
-                'Bead Overlay',
-            ]:
-                if layer_name in self.viewer.layers:
-                    self.viewer.layers.remove(layer_name)
-
-            if self.data_manager.preprocessed_cell_stack is not None:
-                self.viewer.add_image(
-                    self.data_manager.preprocessed_cell_stack,
-                    name='Preprocessed Cells',
-                    colormap='gray',
-                    blending='additive',
-                    visible=True
-                )
-
-            if self.data_manager.preprocessed_reference is not None:
-                self.viewer.add_image(
-                    self.data_manager.preprocessed_reference,
-                    name='Preprocessed Reference',
-                    colormap='magenta',
-                    blending='additive',
-                    visible=True
-                )
-
-            if self.data_manager.preprocessed_bead_stack is not None:
-                self.viewer.add_image(
-                    self.data_manager.preprocessed_bead_stack,
-                    name='Preprocessed Beads',
-                    colormap='green',
-                    blending='additive',
-                    visible=True
-                )
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to update preprocessing visualization",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Check data availability and consistency",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
-
     def handle_preprocessing_preview(self, frames: Dict[str, np.ndarray], enable: bool = True) -> None:
         """Render preprocessing preview inputs as separate additive layers."""
         layer_specs = {

@@ -267,7 +267,7 @@ class FTTCController(BaseAnalysisController):
                 raise RuntimeError("Analysis failed to produce results")
 
             # Store the full result; the live layers already reflect it.
-            self.data_manager.set_force_results(result, source="generated", dirty=True)
+            self.data_manager.set_force_results(result, dirty=True)
 
             self.progress_updated.emit(100, "Analysis completed successfully")
             self.analysis_completed.emit(result)

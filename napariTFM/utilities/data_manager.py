@@ -15,7 +15,6 @@ class ArtifactState:
     label: str
     value: object = None
     path: Optional[Path] = None
-    source: str = ""
     dirty: bool = False
 
     @property
@@ -122,48 +121,47 @@ class DataManager:
             return True
         return self._raw_input_on_disk(key)
 
-    def set_artifact(self, key: str, value, path=None, source: str = "", dirty: bool = False) -> None:
+    def set_artifact(self, key: str, value, path=None, dirty: bool = False) -> None:
         state = self.get_artifact(key)
         state.value = value
         state.path = Path(path) if path else None
-        state.source = source
         state.dirty = dirty
         self._notify_changed()
 
-    def set_bead_stack(self, data: np.ndarray, path=None, source: str = "") -> None:
+    def set_bead_stack(self, data: np.ndarray, path=None) -> None:
         """Set and validate input bead stack."""
         self._validate_input_stack(data, "bead stack")
-        self.set_artifact("bead_stack", data, path=path, source=source)
+        self.set_artifact("bead_stack", data, path=path)
 
-    def set_reference(self, data: np.ndarray, path=None, source: str = "") -> None:
+    def set_reference(self, data: np.ndarray, path=None) -> None:
         """Set and validate input reference image."""
         self._validate_reference_image(data)
-        self.set_artifact("reference", data, path=path, source=source)
+        self.set_artifact("reference", data, path=path)
 
-    def set_cell_stack(self, data: np.ndarray, path=None, source: str = "") -> None:
+    def set_cell_stack(self, data: np.ndarray, path=None) -> None:
         """Set and validate input cell stack."""
         self._validate_input_stack(data, "cell stack")
-        self.set_artifact("cell_stack", data, path=path, source=source)
+        self.set_artifact("cell_stack", data, path=path)
 
-    def set_preprocessed_bead_stack(self, data: np.ndarray, path=None, source: str = "", dirty: bool = False) -> None:
+    def set_preprocessed_bead_stack(self, data: np.ndarray, path=None, dirty: bool = False) -> None:
         """Set and validate preprocessed bead stack."""
         self._validate_input_stack(data, "bead stack")
-        self.set_artifact("preprocessed_bead_stack", data, path=path, source=source, dirty=dirty)
+        self.set_artifact("preprocessed_bead_stack", data, path=path, dirty=dirty)
 
-    def set_preprocessed_cell_stack(self, data: np.ndarray, path=None, source: str = "", dirty: bool = False) -> None:
+    def set_preprocessed_cell_stack(self, data: np.ndarray, path=None, dirty: bool = False) -> None:
         """Set and validate preprocessed cell stack."""
         self._validate_input_stack(data, "cell stack")
-        self.set_artifact("preprocessed_cell_stack", data, path=path, source=source, dirty=dirty)
+        self.set_artifact("preprocessed_cell_stack", data, path=path, dirty=dirty)
 
-    def set_preprocessed_reference(self, data: np.ndarray, path=None, source: str = "", dirty: bool = False) -> None:
+    def set_preprocessed_reference(self, data: np.ndarray, path=None, dirty: bool = False) -> None:
         """Set and validate preprocessed reference image."""
         self._validate_reference_image(data)
-        self.set_artifact("preprocessed_reference", data, path=path, source=source, dirty=dirty)
+        self.set_artifact("preprocessed_reference", data, path=path, dirty=dirty)
 
-    def set_mask_stack(self, data: np.ndarray, path=None, source: str = "") -> None:
+    def set_mask_stack(self, data: np.ndarray, path=None) -> None:
         """Set and validate mask stack."""
         self._validate_input_stack(data, "mask stack")
-        self.set_artifact("mask_stack", data, path=path, source=source)
+        self.set_artifact("mask_stack", data, path=path)
 
     # Pipeline dependency chain: (re)computing or clearing a stage makes every
     # stage downstream of it stale. Invalidating them keeps a stale result from
@@ -204,24 +202,23 @@ class DataManager:
                 changed = True
             state.value = None
             state.path = None
-            state.source = ""
             state.dirty = False
         if changed:
             self._notify_changed()
 
-    def set_displacement_results(self, results: DisplacementResult, path=None, source: str = "", dirty: bool = False) -> None:
+    def set_displacement_results(self, results: DisplacementResult, path=None, dirty: bool = False) -> None:
         """Store displacement results and invalidate dependent analyses."""
-        self.set_artifact("displacement_results", results, path=path, source=source, dirty=dirty)
+        self.set_artifact("displacement_results", results, path=path, dirty=dirty)
         self._invalidate_downstream("displacement_results")
 
-    def set_force_results(self, results: FTTCResult, path=None, source: str = "", dirty: bool = False) -> None:
+    def set_force_results(self, results: FTTCResult, path=None, dirty: bool = False) -> None:
         """Store force results and invalidate dependent analyses."""
-        self.set_artifact("force_results", results, path=path, source=source, dirty=dirty)
+        self.set_artifact("force_results", results, path=path, dirty=dirty)
         self._invalidate_downstream("force_results")
 
-    def set_stress_results(self, results: StressResult, path=None, source: str = "", dirty: bool = False) -> None:
+    def set_stress_results(self, results: StressResult, path=None, dirty: bool = False) -> None:
         """Store stress results."""
-        self.set_artifact("stress_results", results, path=path, source=source, dirty=dirty)
+        self.set_artifact("stress_results", results, path=path, dirty=dirty)
 
     # Input data properties
     @property
