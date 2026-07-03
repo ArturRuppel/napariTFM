@@ -2,10 +2,7 @@ import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal
-from qtpy.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QMessageBox, QSpacerItem,
-    QSizePolicy
-)
+from qtpy.QtWidgets import QHBoxLayout, QMessageBox
 
 from napariTFM.widgets._base_widget import BaseAnalysisController, BaseAnalysisWidget
 from napariTFM.backend.displacement_analysis import (
@@ -341,37 +338,16 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     # region === UI Creation
     def _setup_ui(self):
-        """Set up the user interface."""
+        """Set up the user interface.
+
+        All stage actions (run/preview/cancel) live on the stage header, so this
+        widget owns no visible body content — an empty layout that collapses to
+        zero height, matching the force stage.
+        """
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        content_container = self._create_content_container()
-        main_layout.addWidget(content_container)
-
         self.setLayout(main_layout)
-
-    def _create_content_container(self) -> QWidget:
-        """Create the main content container."""
-        container = QWidget()
-        container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-
-        layout = QVBoxLayout()
-
-        layout.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        layout.addWidget(self._create_action_row())
-        layout.addItem(QSpacerItem(0, -10, QSizePolicy.Minimum, QSizePolicy.Fixed))
-
-        container.setLayout(layout)
-        return container
-
-    def _create_action_row(self) -> QWidget:
-        """Action buttons live on the stage header; this container is empty."""
-        container = QWidget()
-        layout = QVBoxLayout()
-        container.setLayout(layout)
-        return container
 
     # endregion
 

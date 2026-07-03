@@ -44,6 +44,15 @@ def save_calibrated_tiff(data: np.ndarray, filepath: Path, pixel_size: float,
     interactive widget so that preprocessed images are byte-identical
     regardless of how they were produced.
 
+    Written as float32 with the pixels untouched. Preprocessing already
+    normalizes each stack to [0, 1] (``apply_intensity_scaling``), so the old
+    second min-max rescale to uint16 both quantized the data and silently
+    re-stretched each stack to its own range — the reloaded image no longer
+    matched what preprocessing produced, and batch resume fed rescaled uint16
+    back into a pipeline that fresh runs feed float [0, 1]. float32 keeps disk
+    byte-consistent with memory (and stays Fiji-openable via the ImageJ
+    metadata below).
+
     Args:
         data: numpy array to save
         filepath: path where to save the file
@@ -53,15 +62,7 @@ def save_calibrated_tiff(data: np.ndarray, filepath: Path, pixel_size: float,
     if data is None:
         return
 
-    # Convert to 16-bit. A globally flat array has zero span; write zeros
-    # instead of an undefined 0/0 cast.
-    data_normalized = data.astype(float)
-    span = data_normalized.max() - data_normalized.min()
-    if span == 0:
-        data_normalized = np.zeros_like(data_normalized)
-    else:
-        data_normalized = (data_normalized - data_normalized.min()) / span
-    data_16bit = (data_normalized * 65535).astype(np.uint16)
+    data_out = np.asarray(data, dtype=np.float32)
 
     # Create ImageJ-compatible metadata
     imagej_metadata = {
@@ -96,7 +97,7 @@ def save_calibrated_tiff(data: np.ndarray, filepath: Path, pixel_size: float,
     filepath.parent.mkdir(parents=True, exist_ok=True)
     tifffile.imwrite(
         str(filepath),
-        data_16bit,
+        data_out,
         imagej=True,
         metadata=metadata,
         resolution=(1 / pixel_size, 1 / pixel_size),  # resolution in pixels per unit

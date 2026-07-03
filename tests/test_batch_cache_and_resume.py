@@ -126,3 +126,28 @@ def test_preprocessing_tiffs_written_with_save_cache_true(tmp_path, monkeypatch)
     # Behaviour is unchanged when save_cache=True — still written.
     saved = _drive_preprocessing(tmp_path, monkeypatch, save_cache=True)
     assert [p.name for p in saved] == ["preprocessed_beads.tif", "preprocessed_reference.tif"]
+
+
+def test_save_calibrated_tiff_preserves_pixels_losslessly(tmp_path):
+    # Regression: preprocessing already normalizes to [0, 1] floats, so the old
+    # second min-max rescale to uint16 both quantized the data and re-stretched
+    # each stack independently — the reloaded image no longer matched what was
+    # preprocessed (and resume fed rescaled uint16 into a float [0, 1] pipeline).
+    # The writer must persist float32 pixels verbatim.
+    import tifffile
+
+    data = np.zeros((3, 4, 4), dtype=np.float32)
+    data[0, 0, 0] = 0.97
+    data[1, 1, 1] = 0.5
+    data[2, 2, 2] = 0.123456
+    path = tmp_path / "preprocessed_beads.tif"
+
+    ba.save_calibrated_tiff(data, path, pixel_size=0.42, frame_interval=2.0)
+    back = tifffile.imread(str(path))
+
+    assert back.dtype == np.float32
+    np.testing.assert_array_equal(back, data)
+    # Calibration still travels with the file (Fiji-openable ImageJ metadata).
+    with tifffile.TiffFile(str(path)) as tf:
+        assert tf.is_imagej
+        assert tf.imagej_metadata.get("spacing") == 0.42

@@ -6,7 +6,7 @@ from qtpy.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from napariTFM.widgets._ui_style import (
     COMPACT_SPACING,
-    TINY_MARGIN,
+    SECTION_MARGIN,
     make_stage_action_button,
     stage_accent,
     stage_action_button_icon,
@@ -31,7 +31,6 @@ class StageSection(QWidget):
         action_states_changed=None,
         status: str = "not_started",
         accent: str | None = None,
-        status_panel: QWidget | None = None,
         parameter_panel: QWidget | None = None,
         parameters_expanded: bool = False,
         optional: bool = False,
@@ -55,7 +54,6 @@ class StageSection(QWidget):
         # the other stages use.
         self._preview_is_toggle = preview_is_toggle
         self.enable_btn = None
-        self.status_panel = status_panel
         self.parameter_panel = parameter_panel
         if accent is not None:
             self._accent = accent
@@ -177,12 +175,11 @@ class StageSection(QWidget):
         content_layout.addWidget(child)
 
         layout.addLayout(header_layout)
-        # The file-status dot row sits directly under the header, always visible
-        # (no toggle): it IS the data inspector now. A hair of breathing room
-        # separates the pill from the dots; everything below collapses flush.
-        if self.status_panel is not None:
-            layout.addSpacing(TINY_MARGIN)
-            layout.addWidget(self.status_panel)
+        # The one deliberate gap in this zero-spacing column: a uniform hair of
+        # air under every pill so adjacent sections never glue together when
+        # their bodies/param panels are collapsed. Applied unconditionally so all
+        # stages space identically.
+        layout.addSpacing(SECTION_MARGIN)
         if self._param_section is not None:
             layout.addWidget(self._param_section)
         layout.addWidget(self._content)

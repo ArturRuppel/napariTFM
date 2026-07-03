@@ -66,7 +66,9 @@ def test_displacement_analyzer_calls_standard_opencv_farneback(monkeypatch):
         "napariTFM.backend.displacement_analysis.cv2.calcOpticalFlowFarneback",
         fake_farneback,
     )
-    params = DisplacementParameters(nscales=10, inner_iterations=10, median_filtering=9)
+    params = DisplacementParameters(
+        nscales=10, inner_iterations=10, median_filtering=9, use_gaussian_window=False
+    )
     analyzer = DisplacementAnalyzer(params)
 
     flow = analyzer.calculate_flow(np.zeros((8, 8)), np.ones((8, 8)))

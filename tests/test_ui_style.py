@@ -78,29 +78,6 @@ def test_muted_stage_accent_falls_back_for_unknown_key():
     assert muted_stage_accent("nonexistent") == muted_stage_accent("inputs")
 
 
-def test_file_status_color_maps_presence_to_red_green():
-    from napariTFM.widgets._ui_style import file_status_color
-
-    # Present (in cache or on disk) reads green; required-and-absent reads red.
-    # The hues are muted (quiet, not alarming) but stay clearly red vs green.
-    assert file_status_color("present") == "#5e9468"
-    assert file_status_color("missing") == "#b05751"
-    # Optional-and-absent is a quiet grey, not an alarming red.
-    assert file_status_color("optional") == "#5b626d"
-    assert file_status_color("error") == "#c2a04e"
-    # Unknown states fall back to the optional grey rather than crashing.
-    assert file_status_color("nonsense") == "#5b626d"
-
-
-def test_file_status_state_classifies_availability():
-    from napariTFM.widgets._ui_style import file_status_state
-
-    assert file_status_state(available=True, required=True, error=False) == "present"
-    assert file_status_state(available=False, required=True, error=False) == "missing"
-    assert file_status_state(available=False, required=False, error=False) == "optional"
-    assert file_status_state(available=True, required=True, error=True) == "error"
-
-
 def test_caption_style_uses_muted_text_color():
     style = caption_style()
     assert MUTED_TEXT_COLOR in style

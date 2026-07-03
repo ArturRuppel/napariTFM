@@ -58,30 +58,6 @@ STATUS_GLYPHS = {
     "error": "⚠",
 }
 
-# File-status dot colours: a stage's input/output artifacts read red (missing)
-# → green (present, in cache or on disk), with a quiet grey for absent optionals.
-FILE_STATUS_COLORS = {
-    "present": "#5e9468",  # muted green — value is in cache or a file is on disk
-    "missing": "#b05751",  # muted brick — a required artifact is absent
-    "optional": "#5b626d",  # quiet grey — an optional artifact is absent (no alarm)
-    "error": "#c2a04e",  # muted amber — the artifact failed to load
-}
-
-
-def file_status_color(state: str) -> str:
-    """Colour for a file-status dot; unknown states fall back to the grey."""
-    return FILE_STATUS_COLORS.get(state, FILE_STATUS_COLORS["optional"])
-
-
-def file_status_state(available: bool, required: bool, error: bool) -> str:
-    """Classify an artifact into a file-status state (present/missing/optional/error)."""
-    if error:
-        return "error"
-    if available:
-        return "present"
-    return "missing" if required else "optional"
-
-
 def theme_names() -> tuple[str, ...]:
     return tuple(THEME_RAMPS)
 
@@ -348,7 +324,8 @@ def add_section_header(grid, row, widget):
     return widget
 
 
-def add_section_pair_row(grid, row, left_label, left_widget, right_label=None, right_widget=None):
+def add_section_pair_row(grid, row, left_label, left_widget, right_label=None, right_widget=None,
+                         left_tooltip=None, right_tooltip=None):
     """Add a row with up to two [label][widget] pairs. Widgets keep their
     natural size policy (no fixed-width wrap) so sliders/combos can stretch.
 
@@ -357,15 +334,17 @@ def add_section_pair_row(grid, row, left_label, left_widget, right_label=None, r
     cell as a unit — hiding both containers collapses the grid row."""
     left_label_widget = _block_label(left_label)
     left_container = _add_section_pair_cell(grid, row, 0, left_label_widget, left_widget)
+    _apply_cell_tooltip(left_container, left_label_widget, left_tooltip)
 
     right_container = None
     if right_widget is not None:
         right_label_widget = _block_label(right_label or "")
         right_container = _add_section_pair_cell(grid, row, 2, right_label_widget, right_widget)
+        _apply_cell_tooltip(right_container, right_label_widget, right_tooltip)
     return left_container, right_container
 
 
-def add_section_labeled_full_row(grid, row, label_text, widget):
+def add_section_labeled_full_row(grid, row, label_text, widget, tooltip=None):
     """Add a [label-above-widget] cell spanning all 4 columns — for wide
     controls (e.g. a two-handle range slider) that need the full row width."""
     container = QWidget()
@@ -377,7 +356,17 @@ def add_section_labeled_full_row(grid, row, label_text, widget):
     layout.addWidget(label_widget)
     layout.addWidget(widget)
     grid.addWidget(container, row, 0, 1, 4)
+    _apply_cell_tooltip(container, label_widget, tooltip)
     return container
+
+
+def _apply_cell_tooltip(container, label_widget, tooltip):
+    """Set a tooltip on both the cell container and its label so hovering the
+    label text (or the cell padding) shows it. The control widget gets its own
+    tooltip separately, as Qt does not propagate tooltips to child widgets."""
+    if tooltip:
+        container.setToolTip(tooltip)
+        label_widget.setToolTip(tooltip)
 
 
 def _add_section_pair_cell(grid, row, column, label_widget, widget):

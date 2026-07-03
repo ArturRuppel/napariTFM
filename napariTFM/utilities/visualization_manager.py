@@ -514,7 +514,7 @@ class VisualizationManager(ErrorHandlingMixin):
         'cells': 'Preprocessed Cells',
     }
 
-    def begin_preprocessing_stream(self) -> None:
+    def begin_preprocessing_stream(self, autoscale_contrast: bool = False) -> None:
         """Create or reuse the Preprocessed layers so a run can stream into them.
 
         The controller pre-allocates the output stacks (zeros) and holds them in
@@ -523,6 +523,14 @@ class VisualizationManager(ErrorHandlingMixin):
         visibility — only the backing array is swapped — so a re-run never resets
         the settings the user dialled in. A first-ever run falls back to the
         normalized [0, 1] defaults.
+
+        ``autoscale_contrast`` is for the display-only load path (a circle click
+        on the Preprocessing stage): unlike a live run — which binds zeroed
+        stacks and streams normalized [0, 1] floats into them — the load binds
+        fully-populated stacks read back from disk, where ``save_calibrated_tiff``
+        rescaled the pixels to uint16 [0, 65535]. The [0, 1] window would clip
+        every non-zero pixel to white, so each layer's contrast is snapped to the
+        data's own range instead.
         """
         try:
             self.colorbar_manager.clear()
@@ -543,9 +551,9 @@ class VisualizationManager(ErrorHandlingMixin):
                     continue
 
                 if name in self.viewer.layers:
-                    self._rebind_image_layer(self.viewer.layers[name], data)
+                    layer = self._rebind_image_layer(self.viewer.layers[name], data)
                 else:
-                    self.viewer.add_image(
+                    layer = self.viewer.add_image(
                         data,
                         name=name,
                         colormap=colormap,
@@ -553,6 +561,8 @@ class VisualizationManager(ErrorHandlingMixin):
                         contrast_limits=(0, 1),
                         visible=True,
                     )
+                if autoscale_contrast and layer is not None:
+                    self._autoscale_contrast_to_data(layer, data)
 
             # Take the viewer over for the preprocessing run (worklist §4): hide
             # the raw inputs and any other stage, leaving only the preprocessed
@@ -570,6 +580,28 @@ class VisualizationManager(ErrorHandlingMixin):
                 source="visualization",
             )
             self.handle_error(error)
+
+    def _autoscale_contrast_to_data(self, layer, data: np.ndarray) -> None:
+        """Snap a layer's contrast window to its data's own finite min/max.
+
+        Used only by the display-only preprocessing load: the on-disk stacks are
+        uint16 [0, 65535], so the streaming default of [0, 1] would render them
+        fully saturated. Setting the range before the limits keeps napari from
+        clamping the window back into a stale [0, 1] range. A flat (or empty)
+        stack is left untouched — there's no meaningful window to set.
+        """
+        finite = data[np.isfinite(data)]
+        if finite.size == 0:
+            return
+        lo = float(finite.min())
+        hi = float(finite.max())
+        if hi <= lo:
+            return
+        try:
+            layer.contrast_limits_range = [lo, hi]
+            layer.contrast_limits = [lo, hi]
+        except Exception:
+            pass
 
     def _rebind_image_layer(self, layer, data: np.ndarray):
         """Swap an image layer's backing array without disturbing its settings.

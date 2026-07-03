@@ -1724,101 +1724,6 @@ def test_main_widget_experiments_layer_tracks_output_directory(monkeypatch, app,
     assert widget.experiments_list.output_dir_label.text() == str(tmp_path)
 
 
-def test_preprocessing_data_rows_route_assignment_actions(monkeypatch, app):
-    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
-
-    widget = _widget.napariTFMWidget(object())
-    dots = widget._stage_status_panels_by_key["preprocessing"].dots
-
-    # Inputs are missing in the stub, so clicking a red input dot assigns the
-    # active napari layer (the on_action path).
-    dots["reference"].click()
-    dots["bead_stack"].click()
-    dots["cell_stack"].click()
-
-    assert widget.preprocessing_widget.loaded_active_layers == [
-        "reference",
-        "beads",
-        "cells",
-    ]
-
-
-def test_generated_output_dots_are_inert_when_missing(monkeypatch, app):
-    # Preview-only (ROADMAP §4): stage runs write nothing to disk and outputs
-    # carry no assign action, so a missing output dot is not clickable.
-    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
-
-    widget = _widget.napariTFMWidget(object())
-
-    panels = widget._stage_status_panels_by_key
-    output_dots = [
-        panels["preprocessing"].dots["preprocessed_bead_stack"],
-        panels["preprocessing"].dots["preprocessed_reference"],
-        panels["displacement"].dots["displacement_results"],
-        panels["force"].dots["force_results"],
-        panels["stress"].dots["stress_results"],
-    ]
-    assert all(dot.isEnabled() is False for dot in output_dots)
-
-
-def test_displacement_data_rows_route_assignment_actions(monkeypatch, app):
-    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
-
-    widget = _widget.napariTFMWidget(object())
-    dots = widget._stage_status_panels_by_key["displacement"].dots
-
-    dots["preprocessed_reference"].click()
-    dots["preprocessed_bead_stack"].click()
-
-    assert widget.displacement_widget.loaded_active_layers == ["reference", "beads"]
-
-
-def test_only_mask_input_row_routes_a_load_action(monkeypatch, app):
-    # Results chain in-memory (ROADMAP §4): the displacement/force input rows are
-    # status-only. The mask is an external input (ROADMAP §2), so its row keeps a
-    # Load action.
-    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
-
-    widget = _widget.napariTFMWidget(object())
-
-    force_input = widget._stage_status_panels_by_key["force"].dots["displacement_results"]
-    stress_force_input = widget._stage_status_panels_by_key["stress"].dots["force_results"]
-    mask_dot = widget._stage_status_panels_by_key["stress"].dots["mask_stack"]
-
-    # The in-memory chained inputs are status-only (no assign action), so their
-    # missing dots are inert; only the external mask input is assignable.
-    assert force_input.isEnabled() is False
-    assert stress_force_input.isEnabled() is False
-
-    mask_dot.click()
-    assert widget.stress_widget.loaded_files == ["mask_stack"]
-
-
-
 def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
@@ -1865,31 +1770,6 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     assert displacement_panel.isVisibleTo(widget)
 
 
-def test_main_widget_embeds_always_visible_stage_file_status_rows(monkeypatch, app):
-    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
-
-    widget = _widget.napariTFMWidget(object())
-    widget.show()
-    app.processEvents()
-    _enter_tuning(widget)
-    app.processEvents()
-
-    displacement_panel = widget._stage_status_panels_by_key["displacement"]
-    section = widget._stage_sections_by_key["displacement"]
-
-    assert displacement_panel.objectName() == "stage_displacement_file_status_row"
-    # The status row is always visible now — no 🔍 toggle.
-    assert not hasattr(section, "files_btn")
-    assert displacement_panel.isVisibleTo(widget)
-    assert widget.displacement_widget.isVisible()
-
-
 def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
@@ -1901,26 +1781,22 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
 
     widget = _widget.napariTFMWidget(object())
     section = widget._stage_sections_by_key["preprocessing"]
-    panel = widget._stage_status_panels_by_key["preprocessing"]
 
+    # With no experiment selected, the spine node's status is the in-memory
+    # verdict derived from the data manager (compute_stage_status).
     assert section.status == "not_started"
-    assert "Missing" in panel.dots["reference"].toolTip()
 
     widget.data_manager.reference = object()
     widget.data_manager.bead_stack = object()
     widget.refresh_stage_statuses()
 
     assert section.status == "ready"
-    ref_tip = panel.dots["reference"].toolTip()
-    assert "×" in ref_tip or "Loaded" in ref_tip
 
     widget.data_manager.preprocessed_reference = object()
     widget.data_manager.preprocessed_bead_stack = object()
     widget.refresh_stage_statuses()
 
     assert section.status == "done"
-    beads_tip = panel.dots["preprocessed_bead_stack"].toolTip()
-    assert "×" in beads_tip or "Loaded" in beads_tip
 
 
 def test_stage_status_is_done_when_results_are_in_memory(monkeypatch, app, tmp_path):

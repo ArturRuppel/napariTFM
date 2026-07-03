@@ -88,9 +88,9 @@ def test_preprocessing_exposes_action_contract(app, preprocessing_widget):
 
 
 def test_load_active_layer_delegates_to_controller(app, preprocessing_widget):
-    # The file-status dot row (shell) calls widget.load_active_layer(role) to
-    # assign the active napari layer; it must delegate to the controller (which
-    # owns the real implementation), like the displacement widget does.
+    # widget.load_active_layer(role) assigns the active napari layer as an input;
+    # it must delegate to the controller (which owns the real implementation),
+    # like the displacement widget does.
     calls = []
     preprocessing_widget.controller.load_active_layer = lambda role: calls.append(role)
 

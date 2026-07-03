@@ -19,8 +19,7 @@ from napariTFM.widgets.preprocessing_widget import PreprocessingWidget
 from napariTFM.widgets.displacement_analysis_widget import DisplacementAnalysisWidget
 from napariTFM.widgets.fttc_widget import FTTCWidget
 from napariTFM.widgets.stress_widget import StressWidget
-from napariTFM.widgets._stage_data_status import DataArtifactSpec
-from napariTFM.widgets._stage_file_status import StageFileStatusRow
+from napariTFM.widgets._stage_data_status import DataArtifactSpec, compute_stage_status
 from napariTFM.widgets._stage_section import StageSection
 from napariTFM.widgets._ui_style import title_style, stage_accent, muted_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, add_section_labeled_full_row, section_label_style, section_subheader_style, caption_style, TIGHT_SPACING
 from napariTFM.widgets._icons import stage_action_icon
@@ -42,6 +41,10 @@ logger = logging.getLogger(__name__)
 PROJECT_FORMAT_VERSION = 2
 
 
+# Per-stage input/output artifact specs, used only to derive each stage's
+# in-memory status (compute_stage_status) for the spine node when no experiment
+# is selected. No on_view/on_action callbacks: the old per-artifact status-dot
+# row was removed as redundant with the colormap-spine rail.
 STAGE_DATA_ARTIFACTS = {
     "preprocessing": [
         DataArtifactSpec("bead_stack", "Beads", "bead_stack", "input"),
@@ -65,137 +68,6 @@ STAGE_DATA_ARTIFACTS = {
         DataArtifactSpec("stress_results", "Stress map", "stress_results", "output"),
     ],
 }
-
-def _build_preprocessing_specs(preprocessing_widget, visualization_manager):
-    def assign(role: str):
-        return lambda: preprocessing_widget.load_active_layer(role)
-
-    def view(key: str):
-        def _show():
-            show_artifact = getattr(visualization_manager, "show_artifact", None)
-            if show_artifact is not None:
-                show_artifact(key)
-                return
-            if key.startswith("preprocessed_") and hasattr(
-                visualization_manager, "update_preprocessing_visualization"
-            ):
-                visualization_manager.update_preprocessing_visualization()
-
-        return _show
-
-    return [
-        DataArtifactSpec(
-            "bead_stack",
-            "Beads",
-            "bead_stack",
-            "input",
-            on_view=view("bead_stack"),
-            on_action=assign("beads"),
-        ),
-        DataArtifactSpec(
-            "reference",
-            "Reference",
-            "reference",
-            "input",
-            on_view=view("reference"),
-            on_action=assign("reference"),
-        ),
-        DataArtifactSpec(
-            "cell_stack",
-            "Cells",
-            "cell_stack",
-            "input",
-            required=False,
-            on_view=view("cell_stack"),
-            on_action=assign("cells"),
-        ),
-        DataArtifactSpec(
-            "preprocessed_reference",
-            "Preprocessed reference",
-            "preprocessed_reference",
-            "output",
-            on_view=view("preprocessed_reference"),
-        ),
-        DataArtifactSpec(
-            "preprocessed_bead_stack",
-            "Preprocessed beads",
-            "preprocessed_bead_stack",
-            "output",
-            on_view=view("preprocessed_bead_stack"),
-        ),
-    ]
-
-
-def _build_displacement_specs(displacement_widget):
-    def assign(role: str):
-        return lambda: displacement_widget.load_active_layer(role)
-
-    return [
-        DataArtifactSpec(
-            "preprocessed_reference",
-            "Preprocessed reference",
-            "preprocessed_reference",
-            "input",
-            on_action=assign("reference"),
-        ),
-        DataArtifactSpec(
-            "preprocessed_bead_stack",
-            "Preprocessed beads",
-            "preprocessed_bead_stack",
-            "input",
-            on_action=assign("beads"),
-        ),
-        DataArtifactSpec(
-            "displacement_results",
-            "Displacement field",
-            "displacement_results",
-            "output",
-        ),
-    ]
-
-
-def _build_force_specs(force_widget):
-    # Results chain in-memory (ROADMAP §4); the upstream input row is status-only.
-    return [
-        DataArtifactSpec(
-            "displacement_results",
-            "Displacement field",
-            "displacement_results",
-            "input",
-        ),
-        DataArtifactSpec(
-            "force_results",
-            "Traction map",
-            "force_results",
-            "output",
-        ),
-    ]
-
-
-def _build_stress_specs(stress_widget):
-    return [
-        DataArtifactSpec(
-            "force_results",
-            "Traction map",
-            "force_results",
-            "input",
-        ),
-        DataArtifactSpec(
-            "mask_stack",
-            "Mask stack",
-            "mask_stack",
-            "input",
-            # Masks are an external input (ROADMAP §2): loaded from the active
-            # layer. Stress can't run without one, so this input is required.
-            on_action=lambda: stress_widget.load_result_artifact("mask_stack"),
-        ),
-        DataArtifactSpec(
-            "stress_results",
-            "Stress map",
-            "stress_results",
-            "output",
-        ),
-    ]
 
 
 # Sentinel marking a sub-group heading inside a section's spec list. A spec of
@@ -223,7 +95,7 @@ class WorkflowParameterPanel(QWidget):
              ["translation", "rigid", "no registration"]),
         ]),
         ("Displacement", [
-            ("median_filtering", "Window Size", "int", 1, 51, 2, 0, None),
+            ("median_filtering", "Window Size", "int", 1, 200, 2, 0, None),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
             (GROUP, "Advanced"),
             ("nscales", "Farneback Levels", "int", 1, 50, 1, 0, None),
@@ -258,6 +130,46 @@ class WorkflowParameterPanel(QWidget):
         ]),
     ]
 
+    # Tooltips keyed by parameter name, applied to both the label and control.
+    # The Farneback set maps onto OpenCV's calcOpticalFlowFarneback arguments
+    # (winsize, levels, iterations, pyr_scale, poly_n, poly_sigma, flags).
+    PARAMETER_TOOLTIPS = {
+        "median_filtering": (
+            "Farneback averaging window (winsize), in pixels. Rounded up to the "
+            "next odd value. Larger windows are more robust to noise and give a "
+            "smoother field, but blur fine detail and can miss small displacements."
+        ),
+        "nscales": (
+            "Number of pyramid levels (levels). More levels resolve larger "
+            "displacements by matching on progressively downscaled images; 1 uses "
+            "the original image only."
+        ),
+        "inner_iterations": (
+            "Farneback iterations per pyramid level. More iterations refine the "
+            "flow estimate at the cost of runtime; gains taper off quickly."
+        ),
+        "pyr_scale": (
+            "Pyramid scale (pyr_scale): the size ratio between successive levels. "
+            "0.5 halves the resolution each level; values closer to 1 build a "
+            "finer pyramid with more, smaller steps."
+        ),
+        "poly_n": (
+            "Neighborhood size for the polynomial expansion (poly_n), in pixels. "
+            "Larger values yield a smoother field robust to noise; typical "
+            "choices are 5 or 7."
+        ),
+        "poly_sigma": (
+            "Gaussian standard deviation used to smooth derivatives for the "
+            "polynomial expansion (poly_sigma). Should scale with Poly N; ~1.1 "
+            "for poly_n=5, ~1.5 for poly_n=7."
+        ),
+        "use_gaussian_window": (
+            "Use a Gaussian averaging window instead of a box window "
+            "(OPTFLOW_FARNEBACK_GAUSSIAN). More accurate but slower; typically "
+            "pair with a larger Window Size."
+        ),
+    }
+
     def __init__(self, parameter_manager: ParameterManager, section_titles: tuple[str, ...] | None = None):
         super().__init__()
         self.parameter_manager = parameter_manager
@@ -284,12 +196,13 @@ class WorkflowParameterPanel(QWidget):
             # Lay out specs two-per-row, but a range slider (or a GROUP marker)
             # takes a full row and flushes any scalar still waiting for a partner.
             row = 1
-            pending = None  # (label, control)
+            pending = None  # (label, control, tooltip)
 
             def flush_pending():
                 nonlocal pending, row
                 if pending is not None:
-                    add_section_pair_row(grid, row, pending[0], pending[1])
+                    add_section_pair_row(grid, row, pending[0], pending[1],
+                                         left_tooltip=pending[2])
                     row += 1
                     pending = None
 
@@ -302,15 +215,15 @@ class WorkflowParameterPanel(QWidget):
                     row += 1
                 elif spec[2] == "range":
                     flush_pending()
-                    label, control = self._control_for_spec(spec)
-                    add_section_labeled_full_row(grid, row, label, control)
+                    label, control, tooltip = self._control_for_spec(spec)
+                    add_section_labeled_full_row(grid, row, label, control, tooltip=tooltip)
                     row += 1
                 elif pending is None:
-                    label, control = self._control_for_spec(spec)
-                    pending = (label, control)
+                    pending = self._control_for_spec(spec)
                 else:
-                    label, control = self._control_for_spec(spec)
-                    add_section_pair_row(grid, row, pending[0], pending[1], label, control)
+                    label, control, tooltip = self._control_for_spec(spec)
+                    add_section_pair_row(grid, row, pending[0], pending[1], label, control,
+                                         left_tooltip=pending[2], right_tooltip=tooltip)
                     row += 1
                     pending = None
             flush_pending()
@@ -322,7 +235,10 @@ class WorkflowParameterPanel(QWidget):
     def _control_for_spec(self, spec):
         name, label, kind, min_val, max_val, step, decimals, choices = spec
         control = self._create_control(name, kind, min_val, max_val, step, decimals, choices)
-        return label, control
+        tooltip = self.PARAMETER_TOOLTIPS.get(name)
+        if tooltip:
+            control.setToolTip(tooltip)
+        return label, control, tooltip
 
     def _create_control(self, name, kind, min_val, max_val, step, decimals, choices):
         if kind == "range":
@@ -358,8 +274,11 @@ class WorkflowParameterPanel(QWidget):
             control.currentTextChanged.connect(lambda value, n=name: self.parameter_manager.set_ui_parameter(n, value))
         elif kind == "bool":
             control = QCheckBox()
+            # bool(state) rather than `state == Qt.Checked`: stateChanged emits a
+            # plain int (0/2), and under PyQt6/PySide6 comparing it to the
+            # Qt.CheckState enum silently yields False, leaving the box stuck off.
             control.stateChanged.connect(
-                lambda state, n=name: self.parameter_manager.set_ui_parameter(n, state == Qt.Checked)
+                lambda state, n=name: self.parameter_manager.set_ui_parameter(n, bool(state))
             )
         else:
             raise ValueError(f"Unsupported parameter control type: {kind}")
@@ -584,30 +503,10 @@ class napariTFMWidget(QWidget):
                 )
             )
 
-        stage_data_artifacts = {}
-        stage_data_artifacts["preprocessing"] = _build_preprocessing_specs(
-            self.preprocessing_widget,
-            self.visualization_manager,
-        )
-        stage_data_artifacts["displacement"] = _build_displacement_specs(
-            self.displacement_widget,
-        )
-        stage_data_artifacts["force"] = _build_force_specs(
-            self.force_widget,
-        )
-        stage_data_artifacts["stress"] = _build_stress_specs(
-            self.stress_widget,
-        )
-        self._stage_status_panels_by_key = {
-            key: StageFileStatusRow(key, self.data_manager, artifacts)
-            for key, artifacts in stage_data_artifacts.items()
-        }
-
         self._stage_sections_by_key = {
             "preprocessing": StageSection(
                 "Preprocessing",
                 self.preprocessing_widget,
-                status_panel=self._stage_status_panels_by_key["preprocessing"],
                 parameter_panel=self._stage_parameter_panels_by_key.get("preprocessing"),
                 actions={
                     "run": self.preprocessing_widget.run_action,
@@ -621,7 +520,6 @@ class napariTFMWidget(QWidget):
             "displacement": StageSection(
                 "Displacement",
                 self.displacement_widget,
-                status_panel=self._stage_status_panels_by_key["displacement"],
                 parameter_panel=self._stage_parameter_panels_by_key.get("displacement"),
                 actions={
                     "run": self.displacement_widget.run_action,
@@ -634,7 +532,6 @@ class napariTFMWidget(QWidget):
             "force": StageSection(
                 "Force Analysis",
                 self.force_widget,
-                status_panel=self._stage_status_panels_by_key["force"],
                 parameter_panel=self._stage_parameter_panels_by_key.get("force"),
                 actions={
                     "run": self.force_widget.run_action,
@@ -655,7 +552,6 @@ class napariTFMWidget(QWidget):
             "stress": StageSection(
                 "Stress Analysis",
                 self.stress_widget,
-                status_panel=self._stage_status_panels_by_key["stress"],
                 parameter_panel=self._stage_parameter_panels_by_key.get("stress"),
                 actions={
                     "run": self.stress_widget.run_action,
@@ -1319,24 +1215,25 @@ class napariTFMWidget(QWidget):
             self.refresh_stage_statuses()
 
     def refresh_stage_statuses(self):
-        # The section dots (below) mirror the same persisted-.ntfm truth as the
+        # Each stage's spine node mirrors the same persisted-.ntfm truth as the
         # experiments-list row dots (top), so the two can never disagree for the
         # active experiment — including treating an all-NaN stage (e.g. a failed
         # force) as not-done in both. Status is eager: reading which measures a
         # `.ntfm` carries is a cheap header read (no pixel decode), so every
-        # stage's dot shows the on-disk truth without waiting for a click. Each
-        # panel still refreshes to update its per-artifact file dots and tooltips
-        # (in-memory cache state). With no experiment selected there is no disk
-        # truth, so the in-memory verdict stands.
+        # stage's node shows the on-disk truth without waiting for a click. With
+        # no experiment selected there is no disk truth, so the in-memory verdict
+        # (computed from the data manager) stands.
         disk_status = (
             self._experiment_stage_status(self._active_experiment)
             if self._active_experiment
             else None
         )
-        for key, panel in self._stage_status_panels_by_key.items():
-            memory_status = panel.refresh()
+        for key, section in self._stage_sections_by_key.items():
+            memory_status = compute_stage_status(
+                self.data_manager, STAGE_DATA_ARTIFACTS[key]
+            )
             status = disk_status.get(key, memory_status) if disk_status else memory_status
-            self._stage_sections_by_key[key].set_status(status)
+            section.set_status(status)
         self.experiments_list.refresh_statuses()
 
     def _on_stage_node_clicked(self, key: str) -> None:
@@ -1689,7 +1586,10 @@ class napariTFMWidget(QWidget):
         self.data_manager.set_preprocessed_reference(reference, source="loaded", dirty=False)
         if cells is not None:
             self.data_manager.set_preprocessed_cell_stack(cells, source="loaded", dirty=False)
-        self.visualization_manager.begin_preprocessing_stream()
+        # Display-only load of on-disk uint16 stacks: autoscale contrast to the
+        # data's own range so the [0, 1] streaming default doesn't render the
+        # reloaded image fully saturated (see begin_preprocessing_stream).
+        self.visualization_manager.begin_preprocessing_stream(autoscale_contrast=True)
         return True
 
     def _load_stage_results(self, path: str, stages) -> list:

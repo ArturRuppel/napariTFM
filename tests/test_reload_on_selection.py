@@ -214,9 +214,11 @@ class _StubVisualizationManager:
         self.stress_stream_calls = []
         self.stress_stream_frames = []
         self.preprocessing_stream_calls = 0
+        self.preprocessing_autoscale_calls = []
 
-    def begin_preprocessing_stream(self):
+    def begin_preprocessing_stream(self, autoscale_contrast=False):
         self.preprocessing_stream_calls += 1
+        self.preprocessing_autoscale_calls.append(autoscale_contrast)
 
     def begin_vector_field_stream(self, kind, num_frames, vis_params):
         self.vector_stream_calls.append((kind, num_frames, dict(vis_params)))
@@ -533,6 +535,10 @@ def test_load_preprocessing_sets_preprocessed_stacks(monkeypatch, app, tmp_path)
     np.testing.assert_allclose(widget.data_manager.preprocessed_bead_stack, beads)
     np.testing.assert_allclose(widget.data_manager.preprocessed_reference, reference)
     assert widget.visualization_manager.preprocessing_stream_calls == 1
+    # A display-only load must request contrast autoscaling: the on-disk stacks
+    # are uint16 [0, 65535], and the streaming default of [0, 1] would render
+    # them fully saturated.
+    assert widget.visualization_manager.preprocessing_autoscale_calls == [True]
 
 
 def test_load_preprocessing_no_tiffs_is_noop(monkeypatch, app, tmp_path):

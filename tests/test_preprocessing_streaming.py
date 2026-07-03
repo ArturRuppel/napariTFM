@@ -222,6 +222,58 @@ def test_begin_stream_hides_unrelated_layers_but_does_not_force_show():
     assert viewer.layers["Raw beads"].visible is False
 
 
+def test_begin_stream_defaults_to_normalized_contrast_window():
+    # The live-run default binds zeroed stacks then streams normalized floats,
+    # so a first-ever add must keep the [0, 1] window (not scale to the zeros).
+    viewer = _FakeViewer()
+    dm = _DataManager()
+    dm.preprocessed_bead_stack = np.zeros((2, 2, 2), dtype=np.float32)
+    manager = _make_manager(viewer, dm)
+
+    manager.begin_preprocessing_stream()
+
+    assert list(viewer.layers["Preprocessed Beads"].contrast_limits) == [0.0, 1.0]
+
+
+def test_load_autoscales_contrast_to_uint16_range():
+    # Regression: a display-only load binds fully-populated uint16 stacks read
+    # back from disk (0..65535). The [0, 1] streaming default would clip every
+    # non-zero pixel to white; autoscale_contrast must snap the window to the
+    # data's actual range so the reloaded image matches what was saved.
+    viewer = _FakeViewer()
+    dm = _DataManager()
+    beads = np.zeros((2, 4, 4), dtype=np.uint16)
+    beads[0, 0, 0] = 65535
+    beads[1, 1, 1] = 20000
+    dm.preprocessed_bead_stack = beads
+    manager = _make_manager(viewer, dm)
+
+    manager.begin_preprocessing_stream(autoscale_contrast=True)
+
+    layer = viewer.layers["Preprocessed Beads"]
+    assert list(layer.contrast_limits) == [0.0, 65535.0]
+    assert list(layer.contrast_limits_range) == [0.0, 65535.0]
+
+
+def test_load_autoscale_overrides_preserved_streaming_window_on_rerun():
+    # A prior live run leaves a layer at [0, 1]; rebinding preserves it. A later
+    # display-only load into that same layer must override the stale window so a
+    # click after a run doesn't inherit the saturating [0, 1] range.
+    viewer = _FakeViewer()
+    dm = _DataManager()
+    dm.preprocessed_bead_stack = np.zeros((2, 2, 2), dtype=np.float32)
+    manager = _make_manager(viewer, dm)
+    manager.begin_preprocessing_stream()  # live run: layer created at [0, 1]
+    assert list(viewer.layers["Preprocessed Beads"].contrast_limits) == [0.0, 1.0]
+
+    loaded = np.full((2, 2, 2), 30000, dtype=np.uint16)
+    loaded[0, 0, 0] = 0
+    dm.preprocessed_bead_stack = loaded
+    manager.begin_preprocessing_stream(autoscale_contrast=True)
+
+    assert list(viewer.layers["Preprocessed Beads"].contrast_limits) == [0.0, 30000.0]
+
+
 # --- controller wiring ----------------------------------------------------
 
 class _ParameterManager(QObject):

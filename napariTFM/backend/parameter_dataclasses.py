@@ -32,7 +32,10 @@ class DisplacementParameters:
     pyr_scale: float = 0.5
     poly_n: int = 5
     poly_sigma: float = 1.2
-    use_gaussian_window: bool = False
+    # Gaussian (not box) windowing by default: a box window makes the flow
+    # piecewise-constant over its winsize footprint, tiling sparse-bead fields
+    # into blocks. The Gaussian window weights the neighbourhood smoothly.
+    use_gaussian_window: bool = True
 
     # Analysis parameters
     downscale_factor: int = 4
@@ -111,7 +114,7 @@ class UnifiedParameters:
     pyr_scale: float = 0.5
     poly_n: int = 5
     poly_sigma: float = 1.2
-    use_gaussian_window: bool = False
+    use_gaussian_window: bool = True  # Gaussian window avoids box-window block tiling
     downscale_factor: int = 4
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0

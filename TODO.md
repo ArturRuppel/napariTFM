@@ -11,9 +11,30 @@
 
 ## Ranked open work (2026-06-29)
 
-### Remove the green/red input/output-file status icons
+### Remove the green/red input/output-file status icons  ·  DONE (2026-07-02)
 Redundant with the colormap-spine rail, which already shows per-stage status —
 drop the separate green/red icons that indicate input/output file presence.
+**Done.** Removed the `StageFileStatusRow` widget (the per-*artifact* red→green
+dot row under each stage header) and its logic: deleted
+`widgets/_stage_file_status.py`, the `FILE_STATUS_COLORS`/`file_status_color`/
+`file_status_state` helpers in `_ui_style.py`, the `_build_*_specs` builders +
+`_stage_status_panels_by_key` construction + `status_panel` plumbing in
+`_widget.py`/`_stage_section.py`. The colormap-spine rail (`StageSpine`) and the
+experiments-list rail (`MiniRail`) — the per-*stage* status nodes — are
+untouched. **One coupling preserved:** the spine node's in-memory status when no
+experiment is selected used to come from `panel.refresh()`; `refresh_stage_statuses`
+now calls `compute_stage_status(data_manager, STAGE_DATA_ARTIFACTS[key])` directly
+(kept `STAGE_DATA_ARTIFACTS` + `_stage_data_status.py` for exactly this).
+**One capability removed with the dots:** clicking a red input dot was the *only*
+UI trigger for "assign the active napari layer as this input"
+(`load_active_layer`/`load_result_artifact`) — no button or shortcut for it
+survives. In the experiments-list-driven workflow inputs load from disk on row
+selection, so this was a legacy manual override; the widget/controller methods
+still exist (just unreachable from the UI) if we want to re-expose them via a
+dedicated control later. Tests: deleted `test_stage_file_status.py` + the
+dot-routing/embedding tests in `test_workflow_shell.py` and the file-status-color
+tests in `test_ui_style.py`; adapted the status-transition test to assert the
+spine node (not the dots). 623 passed (full suite).
 
 ### Replace "Run all" with "Run selected"  ·  DONE (2026-07-02)
 Scope batch runs to the experiments-list's existing row-selection mechanism

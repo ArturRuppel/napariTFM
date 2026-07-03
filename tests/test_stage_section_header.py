@@ -227,19 +227,9 @@ def test_status_is_readable_via_property(app):
     assert section.status == "done"
 
 
-def test_status_panel_is_embedded_always_visible(app):
-    panel = QWidget()
-    section = StageSection("Preprocessing", QWidget(), status_panel=panel)
-    section.show()
-    app.processEvents()
-    # The file-status row is a direct child of the section, shown without a toggle.
-    assert panel.parent() is not None
-    assert panel.isVisibleTo(section) is True
-
-
 def test_no_files_toggle_button(app):
-    section = StageSection("Preprocessing", QWidget(), status_panel=QWidget())
-    # The 🔍 inspector toggle is retired; the status row is always visible.
+    section = StageSection("Preprocessing", QWidget())
+    # The 🔍 inspector toggle is retired (as is the file-status row it opened).
     assert not hasattr(section, "files_btn")
 
 
