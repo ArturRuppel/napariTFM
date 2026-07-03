@@ -1,8 +1,6 @@
 """Tests for tidy-table merge: prior-run stage preservation on re-write."""
 
 import numpy as np
-import pandas as pd
-import pytest
 
 from napariTFM.utilities import ntfm
 from napariTFM.backend.ntfm_writer import write_experiment_ntfm
@@ -28,153 +26,115 @@ def _force_result(arr, scale=None):
 
 
 # ---------------------------------------------------------------------------
-# 1. merge_tidy_preserving: fills absent stage from old
+# 1. merge_arrays: fills absent stage from old
 # ---------------------------------------------------------------------------
 
+def _arrays(displacement_field=None, force_field=None, stress_tensor=None, mask=None):
+    return {
+        "displacement_field": displacement_field,
+        "force_field": force_field,
+        "stress_tensor": stress_tensor,
+        "mask": mask,
+    }
+
+
 def test_merge_fills_absent_displacement_from_old():
-    """A force-only new_df should inherit displacement columns from old_df."""
+    """A force-only new dict should inherit displacement from old."""
     rng = np.random.default_rng(42)
     nt, ny, nx = 2, 3, 4
     disp = rng.standard_normal((nt, ny, nx, 2))
     force = rng.standard_normal((nt, ny, nx, 2)) * 10.0
 
-    # new_df has only force (displacement columns are all-NaN)
-    new_df = ntfm.arrays_to_tidy(force_field=force, grid_spacing=1.0, frame_interval=1.0)
-    # old_df has displacement (force columns are all-NaN)
-    old_df = ntfm.arrays_to_tidy(displacement_field=disp, grid_spacing=1.0, frame_interval=1.0)
+    merged = ntfm.merge_arrays(_arrays(force_field=force), _arrays(displacement_field=disp))
 
-    merged = ntfm.merge_tidy_preserving(new_df, old_df)
-
-    # Displacement should be filled from old_df
-    assert not merged["u_x[µm]"].isna().all()
-    assert not merged["u_y[µm]"].isna().all()
-    # Force should still come from new_df (unchanged)
-    np.testing.assert_allclose(merged["F_x[Pa]"].to_numpy(), new_df["F_x[Pa]"].to_numpy())
-    # Column order should match COLUMNS
-    assert list(merged.columns) == ntfm.COLUMNS
+    np.testing.assert_allclose(merged["displacement_field"], disp)
+    np.testing.assert_allclose(merged["force_field"], force)  # new force untouched
 
 
 def test_merge_fills_absent_force_from_old():
-    """A displacement-only new_df should inherit force columns from old_df."""
+    """A displacement-only new dict should inherit force from old."""
     rng = np.random.default_rng(10)
     nt, ny, nx = 2, 3, 3
     disp = rng.standard_normal((nt, ny, nx, 2))
     force = rng.standard_normal((nt, ny, nx, 2)) * 5.0
 
-    new_df = ntfm.arrays_to_tidy(displacement_field=disp, grid_spacing=1.0, frame_interval=1.0)
-    old_df = ntfm.arrays_to_tidy(force_field=force, grid_spacing=1.0, frame_interval=1.0)
+    merged = ntfm.merge_arrays(_arrays(displacement_field=disp), _arrays(force_field=force))
 
-    merged = ntfm.merge_tidy_preserving(new_df, old_df)
-
-    assert not merged["F_x[Pa]"].isna().all()
-    assert not merged["F_y[Pa]"].isna().all()
-    np.testing.assert_allclose(merged["u_x[µm]"].to_numpy(), new_df["u_x[µm]"].to_numpy())
+    np.testing.assert_allclose(merged["force_field"], force)
+    np.testing.assert_allclose(merged["displacement_field"], disp)
 
 
 # ---------------------------------------------------------------------------
-# 2. merge_tidy_preserving: does NOT overwrite stage present in new
+# 2. merge_arrays: does NOT overwrite stage present in new
 # ---------------------------------------------------------------------------
 
 def test_merge_does_not_overwrite_displacement_present_in_new():
-    """When new_df already has displacement, old_df's values must not override it."""
+    """When new already has displacement, old's values must not override it."""
     rng = np.random.default_rng(7)
     nt, ny, nx = 2, 3, 3
     disp_new = rng.standard_normal((nt, ny, nx, 2))
     disp_old = rng.standard_normal((nt, ny, nx, 2)) + 1000.0  # clearly different
 
-    new_df = ntfm.arrays_to_tidy(displacement_field=disp_new, grid_spacing=1.0, frame_interval=1.0)
-    old_df = ntfm.arrays_to_tidy(displacement_field=disp_old, grid_spacing=1.0, frame_interval=1.0)
+    merged = ntfm.merge_arrays(
+        _arrays(displacement_field=disp_new), _arrays(displacement_field=disp_old)
+    )
 
-    merged = ntfm.merge_tidy_preserving(new_df, old_df)
-
-    # new_df values must be unchanged — old_df must not overwrite them
-    np.testing.assert_allclose(merged["u_x[µm]"].to_numpy(), new_df["u_x[µm]"].to_numpy())
-    # Sanity: none of the large old values leaked in
-    assert not np.any(merged["u_x[µm]"].to_numpy() > 100.0)
+    np.testing.assert_allclose(merged["displacement_field"], disp_new)
+    assert not np.any(merged["displacement_field"] > 100.0)
 
 
 def test_merge_does_not_overwrite_force_present_in_new():
-    """When new_df has force, old_df's force must not override it."""
+    """When new has force, old's force must not override it."""
     rng = np.random.default_rng(13)
     nt, ny, nx = 2, 3, 3
     force_new = rng.standard_normal((nt, ny, nx, 2)) * 1.0
     force_old = rng.standard_normal((nt, ny, nx, 2)) * 1000.0
 
-    new_df = ntfm.arrays_to_tidy(force_field=force_new, grid_spacing=1.0, frame_interval=1.0)
-    old_df = ntfm.arrays_to_tidy(force_field=force_old, grid_spacing=1.0, frame_interval=1.0)
+    merged = ntfm.merge_arrays(_arrays(force_field=force_new), _arrays(force_field=force_old))
 
-    merged = ntfm.merge_tidy_preserving(new_df, old_df)
-
-    np.testing.assert_allclose(merged["F_x[Pa]"].to_numpy(), new_df["F_x[Pa]"].to_numpy())
+    np.testing.assert_allclose(merged["force_field"], force_new)
 
 
 def test_merge_cleared_mask_does_not_resurrect():
     """A re-write with no mask must clear the stored mask, not restore the old
-    one — an all-zero mask only ever means 'no mask supplied', never a
+    one — an absent/all-zero mask only ever means 'no mask supplied', never a
     deliberately-empty region (CODE_REVIEW_FINDINGS.md #6)."""
     nt, ny, nx = 2, 3, 3
     force = np.ones((nt, ny, nx, 2))
-    old_mask = np.ones((ny, nx), dtype=np.int64)  # a real mask was saved before
+    old_mask = np.ones((nt, ny, nx), dtype=np.int64)  # a real mask was saved before
 
-    # new run supplies force but no mask -> all-zero mask column
-    new_df = ntfm.arrays_to_tidy(force_field=force, grid_spacing=1.0, frame_interval=1.0)
-    old_df = ntfm.arrays_to_tidy(force_field=force, mask=old_mask,
-                                 grid_spacing=1.0, frame_interval=1.0)
+    merged = ntfm.merge_arrays(
+        _arrays(force_field=force),  # new run: force but no mask
+        _arrays(force_field=force, mask=old_mask),
+    )
 
-    merged = ntfm.merge_tidy_preserving(new_df, old_df)
-
-    assert (merged["mask"] == 0).all()
+    assert merged["mask"] is None  # new mask (absent) wins; old is not resurrected
 
 
 # ---------------------------------------------------------------------------
-# 3. merge_tidy_preserving: grid mismatch → returns new_df unchanged, no crash
+# 3. merge_arrays: grid mismatch → returns new unchanged, no crash
 # ---------------------------------------------------------------------------
 
 def test_merge_grid_mismatch_different_row_extent_returns_new_unchanged():
-    """Different row max → merge skipped, new_df returned unchanged."""
+    """Different (T, Y, X) → merge skipped, new returned unchanged."""
     nt, ny, nx = 2, 3, 4
     disp = np.ones((nt, ny, nx, 2))
+    new = _arrays(displacement_field=disp)
+    old = _arrays(displacement_field=np.ones((nt, ny + 1, nx, 2)))  # extra row
 
-    new_df = ntfm.arrays_to_tidy(displacement_field=disp, grid_spacing=1.0, frame_interval=1.0)
-    # old_df has an extra row
-    old_df = ntfm.arrays_to_tidy(
-        displacement_field=np.ones((nt, ny + 1, nx, 2)), grid_spacing=1.0, frame_interval=1.0
-    )
+    merged = ntfm.merge_arrays(new, old)
 
-    merged = ntfm.merge_tidy_preserving(new_df, old_df)
-
-    pd.testing.assert_frame_equal(merged, new_df)
-
-
-def test_merge_grid_mismatch_different_t_values_returns_new_unchanged():
-    """Different t[min] values → merge skipped, new_df returned unchanged."""
-    nt, ny, nx = 2, 3, 4
-    disp = np.ones((nt, ny, nx, 2))
-
-    new_df = ntfm.arrays_to_tidy(
-        displacement_field=disp, grid_spacing=1.0, frame_interval=1.0
-    )
-    old_df = ntfm.arrays_to_tidy(
-        displacement_field=disp, grid_spacing=1.0, frame_interval=5.0  # different time step
-    )
-
-    merged = ntfm.merge_tidy_preserving(new_df, old_df)
-
-    pd.testing.assert_frame_equal(merged, new_df)
+    assert merged is new
 
 
 def test_merge_grid_mismatch_no_crash():
-    """Grid mismatch must never raise; it just logs and returns new_df."""
-    disp_new = np.ones((1, 3, 3, 2))
-    disp_old = np.ones((1, 4, 3, 2))
+    """Grid mismatch must never raise; it just logs and returns new."""
+    new = _arrays(displacement_field=np.ones((1, 3, 3, 2)))
+    old = _arrays(displacement_field=np.ones((1, 4, 3, 2)))
 
-    new_df = ntfm.arrays_to_tidy(displacement_field=disp_new, grid_spacing=1.0, frame_interval=1.0)
-    old_df = ntfm.arrays_to_tidy(displacement_field=disp_old, grid_spacing=1.0, frame_interval=1.0)
-
-    # Must not raise
-    merged = ntfm.merge_tidy_preserving(new_df, old_df)
+    merged = ntfm.merge_arrays(new, old)
     assert merged is not None
-    assert len(merged) == len(new_df)
+    np.testing.assert_allclose(merged["displacement_field"], new["displacement_field"])
 
 
 # ---------------------------------------------------------------------------

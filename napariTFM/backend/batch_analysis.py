@@ -818,17 +818,17 @@ class BatchAnalysis:
 
         The ``.ntfm`` is the sole persisted result (ROADMAP §4); when an upstream
         stage was skipped this run, the field is reconstructed from a prior run's
-        container. ``field_key`` is one of ``tidy_to_arrays``' output keys
-        (e.g. ``displacement_field``, ``force_field``). Returns ``None`` (with a
-        message) if the container or the field is missing.
+        container. ``field_key`` is one of :func:`ntfm.read_series_ntfm`'s array
+        keys (e.g. ``displacement_field``, ``force_field``). Returns ``None``
+        (with a message) if the container or the field is missing.
         """
         ntfm_path = tfm_folder / RESULTS_FILENAME
         if not ntfm_path.exists():
             print(f"No existing container to resume from at {ntfm_path}.")
             return None
         try:
-            df, _ = ntfm.read_ntfm(ntfm_path)
-            field = ntfm.tidy_to_arrays(df).get(field_key)
+            arrays, _, _, _ = ntfm.read_series_ntfm(ntfm_path)
+            field = arrays.get(field_key)
         except Exception as e:
             print(f"Could not read {field_key} from {ntfm_path}: {str(e)}")
             return None

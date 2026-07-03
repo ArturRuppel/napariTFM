@@ -18,12 +18,17 @@ of present series *is* the per-stage truth (no all-NaN placeholders on disk).
 Off-mask NaN inside a written series is preserved. Pixels are float32 — beyond
 any TFM measurement precision; ``read_ntfm`` casts measures back to float64.
 
-The tidy long-format table (one row per ``(t, y, x)`` sample, units inline in
-the column name) remains the *in-memory* interchange: ``read_ntfm`` returns it,
-``write_ntfm`` accepts it. ``arrays -> tidy -> arrays`` is lossless (modulo the
-float32 storage step); reconstruction is trivial because ``row``/``col`` are
-explicit integer columns. Coordinate frame is image convention: ``x`` = column
-(+x right), ``y`` = row (**+y down**, no flip to physical y-up).
+The pipeline's hot path is **array-native**: dense stage arrays go straight to
+the container (:func:`write_series_ntfm`) and come straight back
+(:func:`read_series_ntfm`); the on-disk merge (:func:`merge_arrays`) is a
+per-stage dict merge. The tidy long-format table (one row per ``(t, y, x)``
+sample, units inline in the column name) is a **lazy export/import adapter** for
+callers that genuinely want a DataFrame: :func:`arrays_to_tidy` /
+:func:`tidy_to_arrays` (and the ``write_ntfm`` / ``read_ntfm`` wrappers over the
+array path). ``arrays -> tidy -> arrays`` is lossless (modulo the float32 storage
+step); reconstruction is trivial because ``row``/``col`` are explicit integer
+columns. Coordinate frame is image convention: ``x`` = column (+x right), ``y`` =
+row (**+y down**, no flip to physical y-up).
 """
 
 from __future__ import annotations
@@ -357,65 +362,95 @@ def _grid_step(values: np.ndarray, default: float = 1.0) -> float:
     return float(diffs.min()) if diffs.size else float(default)
 
 
-def _measure_series_array(df: pd.DataFrame, columns: list) -> Optional[np.ndarray]:
-    """Stack a series' tidy columns into ``(T, C, Y, X)`` float32, or None.
+# Series name -> the arrays-dict key it is built from. The OME container stores
+# dense per-stage arrays, so the write/read hot path is array-native; the tidy
+# table (arrays_to_tidy / tidy_to_arrays) is only a lazy export/import adapter.
+_SERIES_ARRAY_KEY = {
+    "displacement": "displacement_field",
+    "traction": "force_field",
+    "stress": "stress_tensor",
+}
 
-    Returns None when the stage is absent (columns missing) or never ran (every
-    value NaN), so only real stages become on-disk series.
+
+def _stage_series_channels(name: str, arr: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    """A stage array as ``(T, C, Y, X)`` float32, or None if absent/all-NaN.
+
+    displacement/traction are ``(T, Y, X, 2)`` (x, y channels); stress is
+    ``(T, Y, X, 2, 2)`` stored as the three independent channels (xx, yy, shear).
+    An all-NaN array means the stage never ran, so no series is written for it.
     """
-    if not set(columns).issubset(df.columns):
+    if arr is None:
         return None
-    arrays = ntfm_tidy_to_series_channels(df, columns)
-    if arrays is None or np.isnan(arrays).all():
+    if name == "stress":
+        stacked = np.stack([arr[..., 0, 0], arr[..., 1, 1], arr[..., 0, 1]], axis=1)
+    else:
+        stacked = np.moveaxis(arr, -1, 1)  # (T, Y, X, 2) -> (T, 2, Y, X)
+    if np.isnan(stacked).all():
         return None
-    return arrays.astype(np.float32)
+    return stacked.astype(np.float32)
 
 
-def ntfm_tidy_to_series_channels(df: pd.DataFrame, columns: list) -> Optional[np.ndarray]:
-    """Scatter the given tidy columns onto the ``(T, C, Y, X)`` grid."""
-    unique_t = np.sort(df["t[min]"].unique())
-    nt = len(unique_t)
-    ny = int(df["row"].max()) + 1
-    nx = int(df["col"].max()) + 1
-    t_pos = np.searchsorted(unique_t, df["t[min]"].to_numpy())
-    rows = df["row"].to_numpy().astype(np.int64)
-    cols = df["col"].to_numpy().astype(np.int64)
-    out = np.full((nt, len(columns), ny, nx), np.nan, dtype=float)
-    for ci, col in enumerate(columns):
-        out[t_pos, ci, rows, cols] = df[col].to_numpy()
-    return out
+def _mask_series(mask: Optional[np.ndarray], nt: int) -> Optional[np.ndarray]:
+    """A mask as ``(T, Y, X)`` uint16, or None when no real mask is present.
+
+    A 2D mask is broadcast across the ``nt`` frames; an all-zero mask means "no
+    mask supplied" and yields None (no series written).
+    """
+    if mask is None:
+        return None
+    m = np.asarray(mask)
+    if m.ndim == 2:
+        m = np.broadcast_to(m, (nt, *m.shape))
+    if not (m != 0).any():
+        return None
+    return np.nan_to_num(m).astype(np.uint16)
 
 
-def write_ntfm(path, df: pd.DataFrame, metadata: Dict) -> Path:
-    """Write the container as a single multi-series OME-TIFF.
+def write_series_ntfm(
+    path,
+    *,
+    displacement_field: Optional[np.ndarray] = None,
+    force_field: Optional[np.ndarray] = None,
+    stress_tensor: Optional[np.ndarray] = None,
+    mask: Optional[np.ndarray] = None,
+    grid_spacing: float,
+    frame_interval: float,
+    metadata: Dict,
+) -> Path:
+    """Write co-registered grid arrays to the multi-series OME-TIFF (array-native).
 
     One series per populated stage (``displacement`` / ``traction`` / ``stress``,
     each ``(T, C, Y, X)`` float32) plus a ``mask`` series (``(T, Y, X)`` uint16)
     when a real mask is present. Channel names carry units; the first series also
     carries ``PhysicalSizeX/Y`` (µm), ``TimeIncrement`` (min) and the full
     ``metadata`` dict as a JSON ``Description`` — so the file is self-describing
-    and Fiji-openable.
+    and Fiji-openable. This is the sole writer; ``write_ntfm`` is a tidy adapter.
     """
     path = Path(path)
+    arrays = {
+        "displacement": displacement_field,
+        "traction": force_field,
+        "stress": stress_tensor,
+    }
 
-    grid_spacing = _grid_step(df["x[µm]"].to_numpy())
-    frame_interval = _grid_step(df["t[min]"].to_numpy())
-    description = json.dumps(metadata, ensure_ascii=False, default=str)
-
-    # Build the ordered list of (name, channel-names, array) to write.
     series: list = []
+    nt = None
     for name, columns in _SERIES_COLUMNS.items():
-        arr = _measure_series_array(df, columns)
+        arr = _stage_series_channels(name, arrays[name])
         if arr is not None:
             series.append((name, columns, arr))
+            if nt is None:
+                nt = arr.shape[0]
 
-    if "mask" in df.columns and (df["mask"].to_numpy() != 0).any():
-        mask_arr = ntfm_tidy_to_series_channels(df, ["mask"])[:, 0, :, :]
-        series.append((_MASK_SERIES, [_MASK_SERIES], np.nan_to_num(mask_arr).astype(np.uint16)))
+    if nt is not None:
+        mask_arr = _mask_series(mask, nt)
+        if mask_arr is not None:
+            series.append((_MASK_SERIES, [_MASK_SERIES], mask_arr))
 
     if not series:
-        raise ValueError("write_ntfm: nothing to write (no populated stage or mask)")
+        raise ValueError("write_series_ntfm: nothing to write (no populated stage or mask)")
 
+    description = json.dumps(metadata, ensure_ascii=False, default=str)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tifffile.TiffWriter(path, ome=True) as tw:
         for idx, (name, channel_names, arr) in enumerate(series):
@@ -435,6 +470,27 @@ def write_ntfm(path, df: pd.DataFrame, metadata: Dict) -> Path:
                 )
             tw.write(arr, photometric="minisblack", compression="zlib", metadata=md)
     return path
+
+
+def write_ntfm(path, df: pd.DataFrame, metadata: Dict) -> Path:
+    """Tidy-table entry point to the container (adapter over ``write_series_ntfm``).
+
+    The canonical on-disk form is dense arrays, so this just converts the tidy
+    table to arrays once and delegates. Kept for the tidy-table API surface (and
+    its tests); the pipeline itself writes arrays directly via
+    :func:`write_series_ntfm`.
+    """
+    arrays = tidy_to_arrays(df)
+    return write_series_ntfm(
+        path,
+        displacement_field=arrays["displacement_field"],
+        force_field=arrays["force_field"],
+        stress_tensor=arrays["stress_tensor"],
+        mask=arrays["mask"],
+        grid_spacing=_grid_step(df["x[µm]"].to_numpy()),
+        frame_interval=_grid_step(df["t[min]"].to_numpy()),
+        metadata=metadata,
+    )
 
 
 def _parse_ome(xml: str) -> tuple:
@@ -466,12 +522,15 @@ def _parse_ome(xml: str) -> tuple:
     return metadata, grid_spacing, frame_interval
 
 
-def read_ntfm(path) -> tuple:
-    """Read an OME-TIFF container, returning ``(df, metadata)``.
+def read_series_ntfm(path) -> tuple:
+    """Read the OME-TIFF container to dense arrays (array-native; the hot path).
 
-    The full tidy schema (every ``COLUMNS`` entry) is reconstructed: stages whose
-    series is absent are refilled as all-NaN columns and measures are cast back to
-    float64, so the returned frame matches what :func:`write_ntfm` was given.
+    Returns ``(arrays, grid_spacing, frame_interval, metadata)`` where ``arrays``
+    is a dict with keys ``displacement_field`` / ``force_field`` /
+    ``stress_tensor`` / ``mask`` (each an array or ``None`` when its series is
+    absent). Measures are cast to float64; the mask to int64. This is what the
+    pipeline (stage-resume, on-demand viewer load) reads directly, without ever
+    materializing the tidy table.
     """
     path = Path(path)
     with tifffile.TiffFile(path) as tf:
@@ -516,36 +575,35 @@ def read_ntfm(path) -> tuple:
         ny, nx = mask_arr.shape[-2], mask_arr.shape[-1]
         mask = np.asarray(mask_arr).reshape(-1, ny, nx).astype(np.int64)
 
+    arrays = {
+        "displacement_field": displacement_field,
+        "force_field": force_field,
+        "stress_tensor": stress_tensor,
+        "mask": mask,
+    }
+    return arrays, grid_spacing, frame_interval, metadata
+
+
+def read_ntfm(path) -> tuple:
+    """Tidy-table view of the container, returning ``(df, metadata)``.
+
+    Adapter over :func:`read_series_ntfm`: the full tidy schema (every
+    ``COLUMNS`` entry) is reconstructed, so stages whose series is absent become
+    all-NaN columns. Kept for the tidy-table API and its tests; the pipeline
+    reads arrays directly via :func:`read_series_ntfm`.
+    """
+    arrays, grid_spacing, frame_interval, metadata = read_series_ntfm(path)
     df = arrays_to_tidy(
-        displacement_field=displacement_field,
-        force_field=force_field,
-        stress_tensor=stress_tensor,
-        mask=mask,
+        **arrays,
         grid_spacing=grid_spacing,
         frame_interval=frame_interval,
     )
     return df, metadata
 
 
-# One representative column per measured stage. The writer always emits every
-# measure column (all-NaN when the stage wasn't run), so presence is judged by
-# "the column exists and is not entirely NaN".
-_STAGE_MEASURE_COLUMN = {
-    "displacement": "u_x[µm]",
-    "force": "F_x[Pa]",
-    "stress": "sigma_xx[mN/m]",
-}
-
-# All measure columns belonging to each stage.
-# Keys match _STAGE_MEASURE_COLUMN; used by merge_tidy_preserving.
-_STAGE_COLUMNS = {
-    "displacement": ["u_x[µm]", "u_y[µm]"],
-    "force": ["F_x[Pa]", "F_y[Pa]"],
-    "stress": ["sigma_xx[mN/m]", "sigma_yy[mN/m]", "sigma_shear[mN/m]"],
-}
-
-# Key columns used when aligning rows between two tidy tables during merge.
-_MERGE_KEYS = ["t[min]", "row", "col"]
+# The stage arrays that the merge preserves (mask is handled separately — it
+# never survives from the old container).
+_STAGE_ARRAY_KEYS = ("displacement_field", "force_field", "stress_tensor")
 
 
 _populated_measures_cache: dict = {}
@@ -599,96 +657,55 @@ def populated_measures(path) -> set:
 
 
 # ---------------------------------------------------------------------------
-# Tidy-table merge (preserve prior-run stages on re-write)
+# Array merge (preserve prior-run stages on re-write)
 # ---------------------------------------------------------------------------
 
-def merge_tidy_preserving(new_df: pd.DataFrame, old_df: pd.DataFrame) -> pd.DataFrame:
-    """Merge two tidy tables, preserving prior-run stages absent from the new run.
+def merge_arrays(new: Dict, old: Dict) -> Dict:
+    """Merge two stage-array dicts, preserving prior stages absent from the new run.
 
-    When a pipeline stage is re-run with some upstream stages absent (e.g. a
-    force-only resume where ``displacement_result`` is ``None``),
-    ``arrays_to_tidy`` fills all-NaN placeholders for the missing stages.  A
-    naive overwrite would PERMANENTLY ERASE previously-saved data.
+    ``new`` / ``old`` are dicts keyed by ``displacement_field`` / ``force_field``
+    / ``stress_tensor`` / ``mask`` (each an array or ``None``), as produced by
+    :func:`read_series_ntfm`. When a stage is re-run with some upstream stages
+    absent (e.g. a force-only resume where ``displacement_result`` is ``None``),
+    a naive overwrite would PERMANENTLY ERASE previously-saved data. Each stage
+    that is absent (``None``) or all-NaN in ``new`` but present (non-all-NaN) in
+    ``old`` is filled from ``old``; stages already populated in ``new`` always
+    win. This is a per-stage dict merge — the merge granularity is the stage,
+    which is exactly what this expresses (no per-sample relational join).
 
-    This helper fills each stage column-group that is all-NaN (or absent) in
-    ``new_df`` but PRESENT and NOT all-NaN (or not all-zero for ``mask``) in
-    ``old_df`` with values from ``old_df``.  Stages already populated in
-    ``new_df`` are never touched — the new run always wins.
+    The ``mask`` is deliberately *not* preserved: unlike the measure stages
+    (where all-NaN unambiguously means "not computed this run"), an absent/
+    all-zero mask only ever means "no mask supplied", never a deliberately-empty
+    region, so the new mask always wins (CODE_REVIEW_FINDINGS.md #6).
 
-    Merge is performed via a left-join on ``(t[min], row, col)`` so
-    row-ordering differences between the two tables do not matter.
-
-    Grid compatibility: the two tables must share the same set of unique
-    ``t[min]`` values (within a small float tolerance) and the same ``row``/
-    ``col`` max extents.  On mismatch a warning is printed and ``new_df`` is
-    returned unchanged (new data wins, no crash).
-
-    Stage column groups (displacement / force / stress) use
-    ``_STAGE_MEASURE_COLUMN`` as the representative-column presence indicator
-    and ``_STAGE_COLUMNS`` for the full list of columns to copy.  The ``mask``
-    is deliberately *not* preserved — the new mask always wins (see body).
-
-    Args:
-        new_df: The tidy table produced by the current run.
-        old_df: The tidy table read from the existing on-disk container.
-
-    Returns:
-        A tidy DataFrame with ``COLUMNS`` column order, possibly enriched with
-        preserved stages from ``old_df``.
+    Grid compatibility: the present stages must share ``(T, Y, X)``. On mismatch
+    a warning is printed and ``new`` is returned unchanged (new data wins, no
+    crash).
     """
-    # --- Grid compatibility check ---
-    new_t = np.sort(new_df["t[min]"].unique())
-    old_t = np.sort(old_df["t[min]"].unique())
-    if len(new_t) != len(old_t) or not np.allclose(new_t, old_t, atol=1e-9):
+    def grid_of(arrays: Dict):
+        for key in _STAGE_ARRAY_KEYS:
+            arr = arrays.get(key)
+            if arr is not None:
+                return arr.shape[:3]  # (T, Y, X)
+        return None
+
+    new_grid, old_grid = grid_of(new), grid_of(old)
+    if new_grid is not None and old_grid is not None and new_grid != old_grid:
         print(
-            "merge_tidy_preserving: t[min] values differ between new and existing "
-            "containers — skipping merge, new data wins."
+            f"merge_arrays: grid extents differ (new {new_grid}, existing "
+            f"{old_grid}) — skipping merge, new data wins."
         )
-        return new_df
+        return new
 
-    new_row_max = int(new_df["row"].max())
-    old_row_max = int(old_df["row"].max())
-    new_col_max = int(new_df["col"].max())
-    old_col_max = int(old_df["col"].max())
-    if new_row_max != old_row_max or new_col_max != old_col_max:
-        print(
-            f"merge_tidy_preserving: grid extents differ "
-            f"(new row/col max {new_row_max}/{new_col_max}, "
-            f"existing {old_row_max}/{old_col_max}) — skipping merge, new data wins."
-        )
-        return new_df
-
-    # Align old_df rows to new_df's ordering via a left-join on the mesh keys.
-    old_aligned = new_df[_MERGE_KEYS].merge(
-        old_df, on=_MERGE_KEYS, how="left", suffixes=("", "_old")
-    )
-
-    result_df = new_df.copy()
-
-    # Fill measure stages (displacement / force / stress).
-    for stage, rep_col in _STAGE_MEASURE_COLUMN.items():
-        stage_cols = _STAGE_COLUMNS[stage]
-        # Stage absent or all-NaN in new_df?
-        new_absent = (rep_col not in new_df.columns) or new_df[rep_col].isna().all()
-        # Stage present (non-NaN) in old_df?
-        old_present = (rep_col in old_df.columns) and (not old_df[rep_col].isna().all())
+    merged = dict(new)
+    for key in _STAGE_ARRAY_KEYS:
+        new_arr = merged.get(key)
+        old_arr = old.get(key)
+        new_absent = new_arr is None or np.all(np.isnan(new_arr))
+        old_present = old_arr is not None and not np.all(np.isnan(old_arr))
         if new_absent and old_present:
-            for col in stage_cols:
-                if col in old_aligned.columns:
-                    result_df[col] = old_aligned[col].to_numpy()
-
-    # The mask is NOT preserved from the old container: unlike the measure
-    # stages (where all-NaN unambiguously means "not computed this run"), an
-    # all-zero mask has no legitimate "deliberately empty" meaning — it only
-    # ever means "no mask supplied". The real mask is re-read from the input
-    # folder on every run (batch _load_mask), so the only case this branch would
-    # ever have fired is when the mask file was removed before a re-write, in
-    # which case the stored mask should clear, not silently resurrect
-    # (CODE_REVIEW_FINDINGS.md #6). The new mask therefore always wins.
-
-    # Preserve COLUMNS ordering, include only columns present.
-    ordered_cols = [c for c in COLUMNS if c in result_df.columns]
-    return result_df[ordered_cols]
+            merged[key] = old_arr
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -710,25 +727,45 @@ def dataframe_from_results(
     carried in the results' ``physical_scale`` — every stage reports the same
     ``grid_spacing = pixel_size * downscale_factor``, so any present result fixes them.
     """
-    disp = getattr(displacement_result, "displacement_field", None)
-    force = getattr(force_result, "force_field", None)
-    stress = getattr(stress_result, "stress_tensor", None)
+    arrays, grid_spacing, frame_interval = _arrays_from_results(
+        displacement_result=displacement_result,
+        force_result=force_result,
+        stress_result=stress_result,
+        mask=mask,
+        grid_spacing=grid_spacing,
+        frame_interval=frame_interval,
+    )
+    return arrays_to_tidy(**arrays, grid_spacing=grid_spacing, frame_interval=frame_interval)
 
+
+def _arrays_from_results(
+    *,
+    displacement_result=None,
+    force_result=None,
+    stress_result=None,
+    mask: Optional[np.ndarray] = None,
+    grid_spacing: Optional[float] = None,
+    frame_interval: Optional[float] = None,
+) -> tuple:
+    """Pull stage arrays + grid_spacing/frame_interval out of the result objects.
+
+    Returns ``(arrays, grid_spacing, frame_interval)`` where ``arrays`` is the
+    ``{stage_key: array}`` dict :func:`write_series_ntfm` / :func:`merge_arrays`
+    consume. Missing spacing/interval default to the results' ``physical_scale``.
+    """
+    arrays = {
+        "displacement_field": getattr(displacement_result, "displacement_field", None),
+        "force_field": getattr(force_result, "force_field", None),
+        "stress_tensor": getattr(stress_result, "stress_tensor", None),
+        "mask": mask,
+    }
     if grid_spacing is None or frame_interval is None:
         scale = _first_physical_scale(displacement_result, force_result, stress_result)
         if grid_spacing is None:
             grid_spacing = scale["grid_spacing"]
         if frame_interval is None:
             frame_interval = scale["time_interval"]
-
-    return arrays_to_tidy(
-        displacement_field=disp,
-        force_field=force,
-        stress_tensor=stress,
-        mask=mask,
-        grid_spacing=grid_spacing,
-        frame_interval=frame_interval,
-    )
+    return arrays, grid_spacing, frame_interval
 
 
 def _first_physical_scale(*results) -> Dict:
@@ -758,13 +795,13 @@ def results_to_ntfm(
     effective ``UnifiedParameters``). ``labels`` are the per-experiment
     design tags the §5 aggregator groups by.
 
-    When ``merge_existing`` is ``True`` (the default) and ``path`` already
-    exists, the existing container is read and any stage that is absent/all-NaN
-    in the new data but present in the existing container is preserved via
-    ``merge_tidy_preserving``.  Set ``merge_existing=False`` to force a pure
-    overwrite (previously-saved stages will be erased).
+    Array-native: results become stage arrays, the merge (when ``path`` exists
+    and ``merge_existing`` is ``True``, the default) preserves any prior stage
+    absent from this write via :func:`merge_arrays`, and the arrays are written
+    straight to the OME-TIFF — no tidy table is materialized on this path. Set
+    ``merge_existing=False`` to force a pure overwrite (prior stages erased).
     """
-    df = dataframe_from_results(
+    arrays, grid_spacing, frame_interval = _arrays_from_results(
         displacement_result=displacement_result,
         force_result=force_result,
         stress_result=stress_result,
@@ -773,8 +810,8 @@ def results_to_ntfm(
 
     if merge_existing and Path(path).exists():
         try:
-            old_df, _ = read_ntfm(path)
-            df = merge_tidy_preserving(df, old_df)
+            old_arrays, _, _, _ = read_series_ntfm(path)
+            arrays = merge_arrays(arrays, old_arrays)
         except Exception as e:
             print(
                 f"results_to_ntfm: could not read existing container for merge "
@@ -784,4 +821,10 @@ def results_to_ntfm(
     metadata = build_metadata(
         config=config, inputs=inputs, labels=labels, repo_path=repo_path
     )
-    return write_ntfm(path, df, metadata)
+    return write_series_ntfm(
+        path,
+        grid_spacing=grid_spacing,
+        frame_interval=frame_interval,
+        metadata=metadata,
+        **arrays,
+    )

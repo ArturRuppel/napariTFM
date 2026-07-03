@@ -1391,8 +1391,12 @@ class napariTFMWidget(QWidget):
             if not ntfm_path.exists():
                 return None
 
-            df, metadata = _ntfm.read_ntfm(ntfm_path)
-            arrays = _ntfm.tidy_to_arrays(df)
+            # Array-native read: dense stage arrays plus the grid spacing / frame
+            # interval recovered from the OME metadata — no tidy table on this
+            # display-load path.
+            arrays, container_grid_spacing, container_frame_interval, metadata = (
+                _ntfm.read_series_ntfm(ntfm_path)
+            )
 
             # Recover physical_scale from stored config (UnifiedParameters asdict).
             config = metadata.get("config", {})
@@ -1424,23 +1428,14 @@ class napariTFMWidget(QWidget):
             downscale_factor = float(config.get("downscale_factor", 0))
             frame_interval = float(config.get("frame_interval", 0.0))
 
-            # Fallback: derive grid_spacing from the tidy table's coordinate columns.
-            if pixel_size <= 0 or downscale_factor <= 0:
-                rows_nonzero = df[df["row"] > 0]
-                if not rows_nonzero.empty:
-                    grid_spacing = float(
-                        rows_nonzero["y[µm]"].iloc[0]
-                        / rows_nonzero["row"].iloc[0]
-                    )
-                else:
-                    grid_spacing = 1.0
-            else:
+            # Prefer the config's pixel_size * downscale; fall back to the grid
+            # spacing / frame interval the container carries in its OME metadata.
+            if pixel_size > 0 and downscale_factor > 0:
                 grid_spacing = pixel_size * downscale_factor
-
-            # Fallback: derive frame_interval from the tidy table's time column.
+            else:
+                grid_spacing = float(container_grid_spacing)
             if frame_interval <= 0:
-                unique_t = np.sort(df["t[min]"].unique())
-                frame_interval = float(unique_t[1] - unique_t[0]) if len(unique_t) > 1 else 1.0
+                frame_interval = float(container_frame_interval)
 
             physical_scale = {
                 "pixel_size": pixel_size,
