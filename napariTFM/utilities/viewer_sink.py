@@ -115,6 +115,11 @@ class ViewerSink(PipelineSink):
             self._begin_preprocessing(info)
             # Start in the beads+reference phase; the first cell frame flips it.
             self._preproc_cells_isolated = False
+            # Preprocessing streams three channels (beads, reference, cells) each
+            # with their own 0-based per-channel frame_index, so frame_index can't
+            # drive a monotonic bar. Count emitted frames instead, against the
+            # announced total work (beads + reference + cells).
+            self._preproc_frames_seen = 0
             self.vis.isolate_layers(self._PREPROC_BEADS_REF)
         elif stage in ('displacement', 'force'):
             self.vis.begin_vector_field_stream(stage, num_frames, {
@@ -148,7 +153,13 @@ class ViewerSink(PipelineSink):
         elif stage == 'stress':
             self.vis.stream_stress_frame(frame_index, frame)
         if self._on_stage_progress is not None:
-            fraction = (frame_index + 1) / max(self._stage_num_frames, 1)
+            if stage == 'preprocessing':
+                # Monotonic across the three channels (see stage_started).
+                self._preproc_frames_seen += 1
+                fraction = min(1.0, self._preproc_frames_seen / max(self._stage_num_frames, 1))
+            else:
+                # In-order stages: frame_index is the authoritative position.
+                fraction = (frame_index + 1) / max(self._stage_num_frames, 1)
             self._on_stage_progress(stage, 'running', fraction)
         self._repaint()
 

@@ -971,7 +971,16 @@ class BatchAnalysis:
 
         # Tell a live sink the channel shapes up front so it can pre-allocate
         # the Preprocessed* stacks and bind their layers before frames stream in.
-        self._emit('stage_started', 'preprocessing', int(bead_stack.shape[0]), {
+        # The announced frame total is the whole preprocessing workload — beads +
+        # the single reference frame + cells — so the progress bar (which the sink
+        # now advances monotonically across the three channels) reaches 100% only
+        # when every channel is done, instead of filling on beads and snapping back.
+        total_preproc_frames = (
+            int(bead_stack.shape[0])
+            + 1
+            + (int(cell_stack.shape[0]) if cell_stack is not None else 0)
+        )
+        self._emit('stage_started', 'preprocessing', total_preproc_frames, {
             'beads_shape': tuple(bead_stack.shape),
             'reference_shape': tuple(reference.shape),
             'cells_shape': tuple(cell_stack.shape) if cell_stack is not None else None,
@@ -1272,44 +1281,44 @@ class BatchAnalysis:
             ])
             print(f"After resize - Mask pixels > 0: {np.sum(mask_data > 0)}")
 
+        # NOTE: errors propagate (like force/displacement) so _handle_stress_execution
+        # records the failure and process_folder reports 'error'. An inner
+        # `except Exception: return None` here previously swallowed even the
+        # RuntimeError below, so a real BISM failure was reported as success —
+        # a silent recurrence of CODE_REVIEW_FINDINGS.md #5 for the stress stage.
+        fr_params = getattr(force_data, 'parameters', None)
+        downscale = getattr(fr_params, 'downscale_factor', 1) if fr_params is not None else 1
+        self._emit('stage_started', 'stress',
+                   int(force_data.force_field.shape[0]), {
+                       'max_stress': params.max_stress,
+                       'downscale_factor': downscale,
+                   })
+
+        stress_generator = calculate_bism_stresses(
+            force_field=force_data.force_field,
+            masks=mask_data,
+            params=params,
+        )
+
+        final_result = None
         try:
-            fr_params = getattr(force_data, 'parameters', None)
-            downscale = getattr(fr_params, 'downscale_factor', 1) if fr_params is not None else 1
-            self._emit('stage_started', 'stress',
-                       int(force_data.force_field.shape[0]), {
-                           'max_stress': params.max_stress,
-                           'downscale_factor': downscale,
-                       })
+            while True:
+                stress_result, frame, total = next(stress_generator)
+                self._log_stress_progress(stress_result, frame, total)
+                # Cumulative stack; newest frame is its last slice. 1-based → 0.
+                self._emit('stage_frame', 'stress', frame - 1,
+                           stress_result.stress_tensor[-1])
+        except StopIteration as e:
+            final_result = e.value
 
-            stress_generator = calculate_bism_stresses(
-                force_field=force_data.force_field,
-                masks=mask_data,
-                params=params,
-            )
+        if final_result is None:
+            raise RuntimeError("Stress calculation failed")
 
-            final_result = None
-            try:
-                while True:
-                    stress_result, frame, total = next(stress_generator)
-                    self._log_stress_progress(stress_result, frame, total)
-                    # Cumulative stack; newest frame is its last slice. 1-based → 0.
-                    self._emit('stage_frame', 'stress', frame - 1,
-                               stress_result.stress_tensor[-1])
-            except StopIteration as e:
-                final_result = e.value
-
-            if final_result is None:
-                raise RuntimeError("Stress calculation failed")
-
-            # No intermediate .npy (ROADMAP §4): the .ntfm is the sole persisted
-            # result.
-            self._emit('stage_finished', 'stress', final_result)
-            print(f"Stress analysis completed in {self._format_duration(time() - start_time)}")
-            return final_result
-
-        except Exception as e:
-            print(f"Error during stress analysis: {str(e)}")
-            return None
+        # No intermediate .npy (ROADMAP §4): the .ntfm is the sole persisted
+        # result.
+        self._emit('stage_finished', 'stress', final_result)
+        print(f"Stress analysis completed in {self._format_duration(time() - start_time)}")
+        return final_result
 
     def _unified_parameters(self) -> UnifiedParameters:
         """Rebuild the unified parameter set from the config dict.

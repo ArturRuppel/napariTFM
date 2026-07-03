@@ -596,10 +596,14 @@ class FTTC:
 
     def _calculate_fourier_modes(self, i_max: int, j_max: int, forcemap_pixel_size: float):
         """Calculate Fourier modes and Lanczos filter"""
-        kx_vec = 2. * np.pi / i_max / forcemap_pixel_size * np.append(
-            np.arange(0, (i_max // 2)), np.arange(-i_max // 2, 0))
-        ky_vec = 2. * np.pi / j_max / forcemap_pixel_size * np.append(
-            np.arange(0, (j_max // 2)), np.arange(-j_max // 2, 0))
+        # Angular wavenumbers on the FFT grid. np.fft.fftfreq gives the correct
+        # frequency ordering for *both* even and odd lengths; the previous
+        # hand-rolled `arange(0, n//2), arange(-n//2, 0)` matched fftfreq only for
+        # even n and mislabelled the Nyquist-adjacent bin for odd n (e.g. n=5 →
+        # [0,1,-3,-2,-1] instead of [0,1,2,-2,-1]), silently corrupting the
+        # Green's function / Lanczos filter on odd-sized grids.
+        kx_vec = 2. * np.pi / forcemap_pixel_size * np.fft.fftfreq(int(i_max))
+        ky_vec = 2. * np.pi / forcemap_pixel_size * np.fft.fftfreq(int(j_max))
         kx, ky = np.meshgrid(kx_vec, ky_vec)
 
         lanczosx = np.sinc(kx / np.pi) ** self.lanczos_exp

@@ -120,6 +120,11 @@ class StressController(BaseAnalysisController):
             worker.yielded.connect(on_yielded)
             worker.returned.connect(on_returned)
             worker.errored.connect(on_errored)
+            # Freeze here — after every prerequisite check that can raise, and
+            # right before the worker runs — so the header's Run/Preview actions
+            # disable during a live BISM run (on_returned/on_errored unfreeze).
+            # Every other stage freezes on run; stress used to be the exception.
+            self.freeze_ui()
             worker.start()
 
         except Exception as e:
