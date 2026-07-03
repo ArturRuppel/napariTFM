@@ -1,7 +1,9 @@
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, fields
+from typing import Optional, Type, TypeVar
 
 import numpy as np
+
+_T = TypeVar("_T")
 
 
 @dataclass
@@ -135,59 +137,30 @@ class UnifiedParameters:
     bism_regularization: float = 1e-6  # stored as value, UI shows 10^x
     max_stress: float = 1.0
 
+    def _project(self, cls: Type[_T]) -> _T:
+        """Build a per-stage parameter subset by field-name projection.
+
+        Every field of each per-stage dataclass is a field of
+        ``UnifiedParameters`` with the same name (enforced by
+        ``tests/test_parameter_dataclasses.py``), so the subset is just the
+        matching fields copied across. This replaces four hand-written
+        constructors that had to be edited — and kept in lockstep with the
+        default values — every time a parameter was added.
+        """
+        return cls(**{f.name: getattr(self, f.name) for f in fields(cls)})
+
     def to_preprocessing_parameters(self) -> PreprocessingParameters:
         """Create PreprocessingParameters from unified parameters"""
-        return PreprocessingParameters(
-            min_intensity_percentile=self.min_intensity_percentile,
-            max_intensity_percentile=self.max_intensity_percentile,
-            gaussian_sigma=self.gaussian_sigma,
-            cell_min_intensity_percentile=self.cell_min_intensity_percentile,
-            cell_max_intensity_percentile=self.cell_max_intensity_percentile,
-            cell_gaussian_sigma=self.cell_gaussian_sigma,
-            registration_mode=self.registration_mode
-        )
+        return self._project(PreprocessingParameters)
 
     def to_displacement_parameters(self) -> DisplacementParameters:
         """Create DisplacementParameters from unified parameters"""
-        return DisplacementParameters(
-            nscales=self.nscales,
-            inner_iterations=self.inner_iterations,
-            median_filtering=self.median_filtering,
-            pyr_scale=self.pyr_scale,
-            poly_n=self.poly_n,
-            poly_sigma=self.poly_sigma,
-            use_gaussian_window=self.use_gaussian_window,
-            downscale_factor=self.downscale_factor,
-            pixel_size=self.pixel_size,
-            frame_interval=self.frame_interval,
-            d_max=self.d_max,
-            disp_vector_stride=self.disp_vector_stride,
-            disp_arrow_scale=self.disp_arrow_scale
-        )
+        return self._project(DisplacementParameters)
 
     def to_fttc_parameters(self) -> FTTCParameters:
         """Create FTTCParameters from unified parameters"""
-        return FTTCParameters(
-            young_modulus=self.young_modulus,
-            poisson_ratio_substrate=self.poisson_ratio_substrate,
-            gel_height=self.gel_height,
-            lanczos_exp=self.lanczos_exp,
-            regularization=self.regularization,
-            auto_gcv=self.auto_gcv,
-            downscale_factor=self.downscale_factor,
-            pixel_size=self.pixel_size,
-            frame_interval=self.frame_interval,
-            force_vector_stride=self.force_vector_stride,
-            force_arrow_scale=self.force_arrow_scale,
-            f_max=self.f_max
-        )
+        return self._project(FTTCParameters)
 
     def to_stress_parameters(self) -> StressParameters:
         """Create StressParameters from unified parameters"""
-        return StressParameters(
-            bism_regularization=self.bism_regularization,
-            pixel_size=self.pixel_size,
-            downscale_factor=self.downscale_factor,
-            frame_interval=self.frame_interval,
-            max_stress=self.max_stress
-        )
+        return self._project(StressParameters)

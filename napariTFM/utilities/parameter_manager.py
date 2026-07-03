@@ -40,14 +40,18 @@ class ParameterManager(QObject):
         return value
 
     def get_ui_parameter(self, name: str) -> Any:
-        """Get a parameter value converted for display in UI controls."""
+        """Get a parameter value converted for display in UI controls.
+
+        Young's modulus is shown in kPa (stored in Pa); the two regularizers are
+        shown as a base-10 exponent (stored as the actual value). gel_height's
+        None->0 display mapping is already applied by get_parameter, so it needs
+        no conversion here — everything else is passed through unchanged.
+        """
         value = self.get_parameter(name)
         if name == 'young_modulus':
             return value / 1000
         if name in ('regularization', 'bism_regularization'):
             return math.log10(value)
-        if name == 'gel_height':
-            return value
         return value
 
     def set_parameter(self, name: str, value: Any) -> None:
@@ -97,26 +101,16 @@ class ParameterManager(QObject):
         Returns:
             Dict[str, Any]: Dictionary of all parameters with their current values
         """
-        # Start with all parameters from the dataclass
+        # Values are stored in internal units already (Pa, actual regularizer
+        # value — not the kPa / log10 the UI shows), so serialization is a
+        # straight field copy. The sole exception is gel_height, whose None
+        # ("infinite thickness") sentinel is written as 0 for YAML/JSON portability.
         parameters = {}
-
-        # Get all fields from UnifiedParameters
         for field in fields(self._parameters):
             value = getattr(self._parameters, field.name)
-
-            # Handle special cases
-            if field.name == 'young_modulus':
-                # Store in Pa even though it's displayed in kPa
-                parameters[field.name] = value
-            elif field.name == 'gel_height' and value is None:
-                # Convert None to 0 for infinity
-                parameters[field.name] = 0
-            elif field.name == 'regularization':
-                # Store actual value, not log10
-                parameters[field.name] = value
-            else:
-                parameters[field.name] = value
-
+            if field.name == 'gel_height' and value is None:
+                value = 0
+            parameters[field.name] = value
         return parameters
 
     def reset_all_parameters(self) -> None:
