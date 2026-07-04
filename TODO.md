@@ -31,22 +31,23 @@ visualization-only params (`force_arrow_scale`, `f_max`) and enforces
 unused). Split the compute-critical checks from the viz checks; skip the reg
 check under auto-GCV. Small, removes two spurious hard-fails.
 
-### BUG: interactive upstream re-run resurrects a stale downstream stage on disk  ·  M  ·  NEEDS A DECISION (B-3)
-CONFIRMED, interactive-path only (batch is unaffected — it recomputes downstream
-in order and writes once). Run displacement → force, then change a param and
-re-run **displacement**: `set_displacement_results` invalidates force in memory,
-but the on-disk persist goes through `results_to_ntfm(merge_existing=True)`, and
-`merge_arrays`/`merge_tidy_preserving` sees force absent-in-new / present-in-old
-and **restores the old force** — which was computed from the *old* displacement.
-Disk ends up with `disp_v2` + physically inconsistent `force_v1`, and the next
-row reselect reloads that stale force.
-**Why it's deferred, not fixed:** the merge's preserve-behaviour is *wanted* for
-a force-only resume (preserve displacement). The fix has to distinguish "upstream
-changed → clear downstream" from "downstream-only write → preserve upstream".
-**Decide the rule before coding** — either the interactive persist of an upstream
-stage writes with `merge_existing=False`, or the merge learns the `_DOWNSTREAM`
-dependency chain. A-1 made the merge array-native, so this is now tractable in
-`merge_arrays` (`utilities/ntfm.py`).
+### BUG: interactive upstream re-run resurrects a stale downstream stage on disk  ·  DONE (2026-07-04, B-3)
+CONFIRMED bug, interactive-path only: re-running **displacement** after
+displacement→force were on disk left `disp_v2` paired with the old `force_v1`
+(computed from `disp_v1`), because `merge_arrays` restored the force that was
+absent-from-the-write (invalidated in memory) but present-in-old.
+**Fix (the `_DOWNSTREAM`-aware merge option, not `merge_existing=False`):**
+`merge_arrays` (`utilities/ntfm.py`) now treats a stage *present* in the write as
+proof it was recomputed, so its downstream stages (`_DOWNSTREAM_ARRAY_KEYS`) are
+**not** resurrected from disk even when absent from the write. This distinguishes
+an upstream re-run (displacement present → drop stale force) from a legitimate
+force-only resume (displacement absent → preserve it) purely from the arrays
+being merged — no call-site knowledge, so it fixes the batch path too. Chose this
+over a blunt `merge_existing=False` because the latter would erase displacement
+during a real force-only resume. Test-locked in `test_ntfm_merge.py`: the
+buggy-direction unit test was flipped to assert non-resurrection, plus symmetric
+stress-under-fresh-force, combined preserve-upstream-drop-downstream, and an
+end-to-end `results_to_ntfm` disk regression. 628 passed.
 
 ### Collapse the vector-stage Widget/Controller triplication + one blessed lifecycle  ·  L  ·  needs manual in-app Qt verification (A-2 remainder)
 The A-2 preview-layer helper landed; **this half did not.** Stages 2/3/4

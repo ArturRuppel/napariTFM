@@ -51,8 +51,10 @@ def test_merge_fills_absent_displacement_from_old():
     np.testing.assert_allclose(merged["force_field"], force)  # new force untouched
 
 
-def test_merge_fills_absent_force_from_old():
-    """A displacement-only new dict should inherit force from old."""
+def test_merge_does_not_resurrect_stale_force_under_fresh_displacement():
+    """A fresh displacement in `new` makes any old force stale (B-3): it must NOT
+    be resurrected — otherwise disk pairs a new displacement with a force computed
+    from the *prior* displacement. This is the direction that was silently wrong."""
     rng = np.random.default_rng(10)
     nt, ny, nx = 2, 3, 3
     disp = rng.standard_normal((nt, ny, nx, 2))
@@ -60,8 +62,52 @@ def test_merge_fills_absent_force_from_old():
 
     merged = ntfm.merge_arrays(_arrays(displacement_field=disp), _arrays(force_field=force))
 
+    np.testing.assert_allclose(merged["displacement_field"], disp)  # fresh displacement wins
+    stale_force = merged.get("force_field")
+    assert stale_force is None or np.all(np.isnan(stale_force)), (
+        "stale force must not be resurrected next to a freshly-written displacement"
+    )
+
+
+def test_merge_does_not_resurrect_stale_stress_under_fresh_force():
+    """Symmetric to the above one level down: a fresh force makes an old stress
+    stale, so it is not resurrected (B-3)."""
+    rng = np.random.default_rng(11)
+    nt, ny, nx = 2, 3, 3
+    force = rng.standard_normal((nt, ny, nx, 2))
+    stress = rng.standard_normal((nt, ny, nx, 4))
+
+    merged = ntfm.merge_arrays(
+        _arrays(force_field=force), _arrays(stress_tensor=stress)
+    )
+
     np.testing.assert_allclose(merged["force_field"], force)
-    np.testing.assert_allclose(merged["displacement_field"], disp)
+    stale_stress = merged.get("stress_tensor")
+    assert stale_stress is None or np.all(np.isnan(stale_stress)), (
+        "stale stress must not be resurrected next to a freshly-written force"
+    )
+
+
+def test_merge_preserves_upstream_but_drops_stale_downstream_together():
+    """Force-only resume: displacement (upstream, absent) is preserved, while an
+    old stress (downstream of the fresh force) is dropped — both in one merge."""
+    rng = np.random.default_rng(12)
+    nt, ny, nx = 2, 3, 3
+    disp = rng.standard_normal((nt, ny, nx, 2))
+    force_new = rng.standard_normal((nt, ny, nx, 2))
+    stress_old = rng.standard_normal((nt, ny, nx, 4))
+
+    merged = ntfm.merge_arrays(
+        _arrays(force_field=force_new),  # resume: only force recomputed
+        _arrays(displacement_field=disp, stress_tensor=stress_old),
+    )
+
+    np.testing.assert_allclose(merged["displacement_field"], disp)  # upstream preserved
+    np.testing.assert_allclose(merged["force_field"], force_new)
+    stale_stress = merged.get("stress_tensor")
+    assert stale_stress is None or np.all(np.isnan(stale_stress)), (
+        "stress computed from the prior force must not survive a force re-run"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +217,37 @@ def test_results_to_ntfm_force_second_write_preserves_displacement(tmp_path):
     df, _ = ntfm.read_ntfm(ntfm_path)
     arrays = ntfm.tidy_to_arrays(df)
     np.testing.assert_allclose(arrays["displacement_field"], disp_arr)
+
+
+def test_results_to_ntfm_displacement_rerun_drops_stale_force_on_disk(tmp_path):
+    """B-3 end-to-end: after displacement→force are on disk, re-running
+    displacement (force invalidated → absent from the write) must leave the
+    container with the new displacement and NO force — never the old force
+    computed from the prior displacement."""
+    rng = np.random.default_rng(3)
+    nt, ny, nx = 2, 3, 3
+    scale = {"grid_spacing": 1.0, "time_interval": 1.0}
+    disp_v1 = rng.standard_normal((nt, ny, nx, 2))
+    force_v1 = rng.standard_normal((nt, ny, nx, 2)) * 10.0
+    disp_v2 = rng.standard_normal((nt, ny, nx, 2)) + 100.0  # clearly different
+
+    ntfm_path = tmp_path / "exp.ntfm"
+
+    # Establish disp_v1 + force_v1 on disk.
+    ntfm.results_to_ntfm(ntfm_path, config={}, displacement_result=_disp_result(disp_v1, scale))
+    ntfm.results_to_ntfm(ntfm_path, config={}, force_result=_force_result(force_v1, scale))
+    assert ntfm.populated_measures(ntfm_path) == {"displacement", "force"}
+
+    # Re-run displacement only (mirrors set_displacement_results invalidating force).
+    ntfm.results_to_ntfm(ntfm_path, config={}, displacement_result=_disp_result(disp_v2, scale))
+
+    measures = ntfm.populated_measures(ntfm_path)
+    assert "force" not in measures, "stale force was resurrected next to a fresh displacement"
+    assert measures == {"displacement"}
+
+    df, _ = ntfm.read_ntfm(ntfm_path)
+    arrays = ntfm.tidy_to_arrays(df)
+    np.testing.assert_allclose(arrays["displacement_field"], disp_v2)
 
 
 # ---------------------------------------------------------------------------
