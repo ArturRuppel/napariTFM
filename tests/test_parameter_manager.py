@@ -107,6 +107,25 @@ def test_validation_helpers_return_compatible_results():
     ) == (False, "Young's modulus must be positive")
 
 
+def test_fttc_validation_ignores_visualization_only_params():
+    """force_arrow_scale / f_max / force_vector_stride never enter the traction
+    solve, so a bad value there must not block force computation."""
+    assert validate_fttc_parameters(FTTCParameters(f_max=0)) == (True, "")
+    assert validate_fttc_parameters(FTTCParameters(force_arrow_scale=0)) == (True, "")
+    assert validate_fttc_parameters(FTTCParameters(force_vector_stride=0)) == (True, "")
+
+
+def test_fttc_validation_skips_regularization_check_under_auto_gcv():
+    """Under auto-GCV the manual regularization is unused, so reg<=0 is fine; with
+    auto-GCV off it must still be rejected."""
+    assert validate_fttc_parameters(
+        FTTCParameters(auto_gcv=True, regularization=0.0)
+    ) == (True, "")
+    assert validate_fttc_parameters(
+        FTTCParameters(auto_gcv=False, regularization=0.0)
+    ) == (False, "Regularization parameter must be positive")
+
+
 def test_stress_parameters_have_no_mask_fields():
     import dataclasses
     field_names = {f.name for f in dataclasses.fields(StressParameters)}

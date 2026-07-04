@@ -129,22 +129,17 @@ class DisplacementAnalyzer:
         h, w = flow.shape[:2]
         new_h, new_w = h // factor, w // factor
 
-        # Handle each component separately to preserve vector information
-        downscaled = np.zeros((new_h, new_w, 2))
-
-        for i in range(new_h):
-            for j in range(new_w):
-                # Extract block
-                y_start = i * factor
-                y_end = min((i + 1) * factor, h)
-                x_start = j * factor
-                x_end = min((j + 1) * factor, w)
-
-                block = flow[y_start:y_end, x_start:x_end]
-                # Average the x and y components separately
-                downscaled[i, j] = np.mean(block, axis=(0, 1))
-
-        return downscaled
+        # Block-mean over non-overlapping factor x factor tiles (any remainder
+        # rows/cols beyond new_h*factor / new_w*factor are dropped, matching the
+        # old per-block loop). Reshaping to (new_h, factor, new_w, factor, 2) and
+        # averaging the two block axes is the vectorized equivalent — ~100x
+        # faster than the Python double loop on the full-resolution flow.
+        trimmed = flow[:new_h * factor, :new_w * factor]
+        return (
+            trimmed.reshape(new_h, factor, new_w, factor, 2)
+            .mean(axis=(1, 3))
+            .astype(np.float64)
+        )
 
 
 def validate_displacement_image(image: np.ndarray) -> Tuple[bool, str]:

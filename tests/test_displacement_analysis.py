@@ -168,6 +168,56 @@ def test_backend_calculates_displacement_result_with_progress():
     assert np.isfinite(result.displacement_field).all()
 
 
+def _downscale_flow_reference(flow, factor):
+    """Independent block-mean reference: the original O(H*W) double loop.
+
+    Kept as the oracle the vectorized ``downscale_flow`` must match exactly, so
+    the optimization can never silently change values.
+    """
+    if factor <= 1:
+        return flow
+    h, w = flow.shape[:2]
+    new_h, new_w = h // factor, w // factor
+    out = np.zeros((new_h, new_w, 2))
+    for i in range(new_h):
+        for j in range(new_w):
+            block = flow[i * factor:(i + 1) * factor, j * factor:(j + 1) * factor]
+            out[i, j] = np.mean(block, axis=(0, 1))
+    return out
+
+
+def test_downscale_flow_matches_block_mean_reference():
+    analyzer = DisplacementAnalyzer(DisplacementParameters())
+    rng = np.random.default_rng(0)
+    for factor in (2, 3, 4, 5):
+        flow = rng.standard_normal((37, 41, 2)).astype(np.float32)  # non-divisible dims
+        got = analyzer.downscale_flow(flow, factor)
+        expected = _downscale_flow_reference(flow, factor)
+        assert got.shape == expected.shape == (37 // factor, 41 // factor, 2)
+        np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_downscale_flow_factor_one_returns_input_unchanged():
+    analyzer = DisplacementAnalyzer(DisplacementParameters())
+    flow = np.arange(24, dtype=np.float32).reshape(3, 4, 2)
+    assert analyzer.downscale_flow(flow, 1) is flow
+
+
+def test_downscale_flow_exact_block_average():
+    analyzer = DisplacementAnalyzer(DisplacementParameters())
+    # A 2x2 grid of constant 2x2 blocks: each output cell is that block's value.
+    flow = np.zeros((4, 4, 2), dtype=np.float32)
+    flow[0:2, 0:2] = [1.0, -1.0]
+    flow[0:2, 2:4] = [2.0, 0.0]
+    flow[2:4, 0:2] = [0.0, 3.0]
+    flow[2:4, 2:4] = [-4.0, 5.0]
+    out = analyzer.downscale_flow(flow, 2)
+    np.testing.assert_allclose(out[0, 0], [1.0, -1.0])
+    np.testing.assert_allclose(out[0, 1], [2.0, 0.0])
+    np.testing.assert_allclose(out[1, 0], [0.0, 3.0])
+    np.testing.assert_allclose(out[1, 1], [-4.0, 5.0])
+
+
 def test_production_code_does_not_depend_on_displacement_service_layer():
     removed_module = ".".join(("services", "displacement_service"))
     removed_path = Path("napariTFM") / "services" / "displacement_service.py"
