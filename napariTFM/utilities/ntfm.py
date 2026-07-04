@@ -605,6 +605,14 @@ def read_ntfm(path) -> tuple:
 # never survives from the old container).
 _STAGE_ARRAY_KEYS = ("displacement_field", "force_field", "stress_tensor")
 
+# Pipeline dependency chain in array-key terms (mirrors DataManager._DOWNSTREAM):
+# a stage freshly present in a write makes every stage below it stale, so the
+# merge must not resurrect those from disk. See merge_arrays / B-3.
+_DOWNSTREAM_ARRAY_KEYS = {
+    "displacement_field": ("force_field", "stress_tensor"),
+    "force_field": ("stress_tensor",),
+}
+
 
 _populated_measures_cache: dict = {}
 
@@ -673,6 +681,16 @@ def merge_arrays(new: Dict, old: Dict) -> Dict:
     win. This is a per-stage dict merge — the merge granularity is the stage,
     which is exactly what this expresses (no per-sample relational join).
 
+    **Downstream invalidation (B-3).** A stage *present* in ``new`` was (re)computed
+    this run, which makes every stage below it in the pipeline
+    (:data:`_DOWNSTREAM_ARRAY_KEYS`) stale. Such a downstream stage, when absent
+    from ``new``, is therefore *not* resurrected from ``old`` — otherwise a fresh
+    displacement would be paired on disk with a force computed from the *prior*
+    displacement. This is what distinguishes an interactive upstream re-run
+    (displacement present, force absent → drop the stale force) from a legitimate
+    force-only resume (displacement absent → preserve it). Only stages with no
+    fresh upstream in this write are eligible for preservation.
+
     The ``mask`` is deliberately *not* preserved: unlike the measure stages
     (where all-NaN unambiguously means "not computed this run"), an absent/
     all-zero mask only ever means "no mask supplied", never a deliberately-empty
@@ -697,14 +715,22 @@ def merge_arrays(new: Dict, old: Dict) -> Dict:
         )
         return new
 
+    def present(arr):
+        return arr is not None and not np.all(np.isnan(arr))
+
     merged = dict(new)
+
+    # Stages made stale by a freshly-written upstream stage: never resurrect these.
+    stale_downstream = set()
     for key in _STAGE_ARRAY_KEYS:
-        new_arr = merged.get(key)
-        old_arr = old.get(key)
-        new_absent = new_arr is None or np.all(np.isnan(new_arr))
-        old_present = old_arr is not None and not np.all(np.isnan(old_arr))
-        if new_absent and old_present:
-            merged[key] = old_arr
+        if present(merged.get(key)):
+            stale_downstream.update(_DOWNSTREAM_ARRAY_KEYS.get(key, ()))
+
+    for key in _STAGE_ARRAY_KEYS:
+        if key in stale_downstream:
+            continue
+        if not present(merged.get(key)) and present(old.get(key)):
+            merged[key] = old[key]
     return merged
 
 
