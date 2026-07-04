@@ -298,6 +298,14 @@ class TeeLogger:
         sys.stdout = self.terminal
 
 
+class _BatchCancelled(Exception):
+    """Raised internally to unwind out of an in-flight folder when the user
+    cancels a Run-selected. Kept distinct from stage failures so it is never
+    recorded as an ``error`` — the folder loop catches it and reports
+    ``"cancelled"`` instead. See :meth:`BatchAnalysis._raise_if_cancelled`.
+    """
+
+
 class BatchAnalysis:
     """Handles batch analysis of TFM data using service layer components."""
 
@@ -349,13 +357,25 @@ class BatchAnalysis:
             print(f"Pipeline sink error in {method}: {str(e)}")
 
     def request_cancel(self) -> None:
-        """Ask the batch to stop at the next folder boundary (cooperative).
+        """Ask the batch to stop as soon as possible (cooperative).
 
-        Set by a Cancel control during a Run-selected; the folder loop checks the flag
-        before starting each folder, so an in-flight folder finishes but no
-        further folders are processed.
+        Set by a Cancel control during a Run-selected. In the sequential path the
+        flag is checked at every stage boundary and at the top of every per-frame
+        streaming loop (:meth:`_raise_if_cancelled`), so an in-flight folder stops
+        within roughly one frame rather than running to completion — the fix for
+        "a single running experiment can't be cancelled". In the parallel path it
+        still only prevents not-yet-started folders from being submitted (a
+        running subprocess is not killed).
         """
         self._cancelled = True
+
+    def _raise_if_cancelled(self) -> None:
+        """Cooperative cancellation checkpoint: raise :class:`_BatchCancelled` if a
+        cancel has been requested. Called at stage boundaries and inside the
+        per-frame loops; the folder loop catches it and reports ``"cancelled"``.
+        """
+        if getattr(self, "_cancelled", False):
+            raise _BatchCancelled()
 
     def _format_duration(self, seconds: float) -> str:
         """Format duration in appropriate units (seconds or minutes)."""
@@ -420,6 +440,10 @@ class BatchAnalysis:
             self._emit('experiment_started', folder)
             try:
                 self.process_folder(folder, plan.output_dirs[folder])
+            except _BatchCancelled:
+                print(f"Folder {folder} cancelled")
+                self._report_progress(folder, "cancelled")
+                break
             except Exception as e:
                 print(f"Folder {folder} failed: {str(e)}")
                 self._report_progress(folder, "error")
@@ -731,10 +755,13 @@ class BatchAnalysis:
         (disabled upstream, no mask, nothing to resume) is a deliberate skip and
         is left untouched.
         """
+        self._raise_if_cancelled()          # stage-boundary cancel: don't start this stage
         if not self.config['analysis_steps'][stage]:
             return None
         try:
             return body()
+        except _BatchCancelled:
+            raise                            # a cancel is not a stage failure — let it unwind
         except Exception as e:
             print(f"{stage.capitalize()} failed: {str(e)}")
             self._record_stage_failure(stage, e)
@@ -984,6 +1011,7 @@ class BatchAnalysis:
 
         bead_results = []
         for result, frame, total in preprocess_stack(bead_stack, params, reference):
+            self._raise_if_cancelled()
             bead_results.append(result)
             print(f"Progress (beads): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
             # ``preprocess_stack`` yields a 0-based frame (the stack index).
@@ -997,6 +1025,7 @@ class BatchAnalysis:
         if cell_stack is not None:
             print("Processing cell images...")
             for result, frame, total in preprocess_stack(cell_stack, params, reference_image=None, is_cell=True):
+                self._raise_if_cancelled()
                 cell_results.append(result)
                 print(f"Progress (cells): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
                 self._emit('stage_frame', 'preprocessing', frame, {'cells': result.processed_image})
@@ -1097,6 +1126,7 @@ class BatchAnalysis:
         # Initialize result container
         try:
             while True:
+                self._raise_if_cancelled()
                 # Get next intermediate result
                 displacement_field, frame, total = next(displacement_field_generator)
                 self._log_stage_progress(displacement_field, frame, total, "displacement", "µm")
@@ -1192,6 +1222,7 @@ class BatchAnalysis:
         # Initialize result container
         try:
             while True:
+                self._raise_if_cancelled()
                 # Get next intermediate result
                 force_field, frame, total = next(force_generator)
                 self._log_stage_progress(force_field, frame, total, "force", "Pa")
@@ -1299,6 +1330,7 @@ class BatchAnalysis:
         final_result = None
         try:
             while True:
+                self._raise_if_cancelled()
                 stress_result, frame, total = next(stress_generator)
                 self._log_stage_progress(stress_result.stress_tensor, frame, total, "stress", "mN/m")
                 # Cumulative stack; newest frame is its last slice. 1-based → 0.

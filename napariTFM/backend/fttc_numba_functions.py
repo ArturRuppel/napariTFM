@@ -1,8 +1,17 @@
 from numba import njit
 import numpy as np
 
+# nogil=True is load-bearing, not decoration. These kernels are the per-frame
+# hot path of the force stage's streaming worker (a napari @thread_worker on a
+# QThreadPool). Without nogil the kernel holds the GIL for the whole frame,
+# starving the GUI thread — so a Cancel click can't even be processed until the
+# frame finishes, which reads to the user as "cancel is ignored". Releasing the
+# GIL lets the GUI thread run the cooperative cancel promptly. Each kernel is
+# nopython and writes only its own local arrays (no shared mutable state), so
+# releasing the GIL is safe.
 
-@njit(cache=False)
+
+@njit(nogil=True, cache=False)
 def calculate_2x2_inv(U):
     """Calculate inverse of a 2x2 complex matrix.
 
@@ -24,7 +33,7 @@ def calculate_2x2_inv(U):
     return U_inv
 
 
-@njit(cache=False)
+@njit(nogil=True, cache=False)
 def blkmul_adj(mat: np.ndarray, v: np.ndarray) -> np.ndarray:
     """Calculate adjoint multiplication (mat.H) @ v for block matrices.
 
@@ -50,7 +59,7 @@ def blkmul_adj(mat: np.ndarray, v: np.ndarray) -> np.ndarray:
     return out
 
 
-@njit(cache=False)
+@njit(nogil=True, cache=False)
 def calculate_traction_2d(FtGmn, L):
     """Calculate Tikhonov regularized inverse of the Green's function in Fourier space.
 

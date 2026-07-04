@@ -11,8 +11,11 @@ guarantees are checked without a real Qt background thread:
   * the UI is unfrozen on EVERY terminal path — success, error, cancel, and a
     synchronous setup failure that never starts a worker;
   * the final result is committed on ``returned``;
-  * cancel() is cooperative (``quit()`` only, no wait/terminate) and defers
-    teardown + stage cleanup to ``finished``, so late frames can't race in;
+  * cancel() is cooperative (``quit()`` only, no wait/terminate), frees the UI
+    inline, and orphans the worker (disconnects yielded/returned/errored) so no
+    late frame, result, or error can race into the torn-down stage;
+  * a cancelled worker's late ``finished`` is a guarded no-op — it does not
+    unfreeze a fresh run the user has since started;
   * ``run`` and ``cancel`` cannot be overridden by a subclass.
 """
 
@@ -151,20 +154,38 @@ def test_synchronous_setup_failure_unfreezes_and_never_starts(app):
     assert ctrl.active_workers == []
 
 
-def test_cancel_is_cooperative_and_defers_teardown(app):
+def test_cancel_frees_ui_inline_and_orphans_the_worker(app):
     ctrl, frozen = _make(app)
     ctrl.run()
+    worker = ctrl.worker
     ctrl.cancel()
-    assert ctrl.worker.quit_called             # cooperative quit(), no wait/terminate
-    assert ctrl._cancelling
-    assert ctrl.worker.yielded._cbs == []       # late frames disconnected
-    assert ctrl.worker in ctrl.active_workers   # teardown deferred to finished
-    assert not ctrl.cleaned
 
-    ctrl.worker.finished.emit()                # now the worker actually stops
-    assert ctrl.cleaned                         # stage cleanup ran, after the stop
-    assert ctrl.active_workers == []
-    assert frozen[-1] is False
+    assert worker.quit_called                  # cooperative quit(), no wait/terminate
+    # Orphaned: no late frame, result, or error can reach the torn-down stage.
+    assert worker.yielded._cbs == []
+    assert worker.returned._cbs == []
+    assert worker.errored._cbs == []
+    assert ctrl.active_workers == []           # forgotten now, not deferred
+    assert ctrl.cleaned                        # stage cleanup ran inline
+    assert frozen[-1] is False                 # UI freed immediately — no waiting
+
+
+def test_cancelled_workers_late_finish_does_not_unfreeze_a_fresh_run(app):
+    ctrl, frozen = _make(app)
+    ctrl.run()
+    cancelled = ctrl.worker
+    ctrl.cancel()
+    assert frozen[-1] is False                 # freed by the cancel
+
+    # User immediately starts a new run; it freezes and owns the UI.
+    ctrl.worker = _FakeWorker()
+    ctrl.run()
+    assert frozen[-1] is True
+
+    # The cancelled worker's in-flight frame now finishes, late.
+    cancelled.finished.emit()
+    assert frozen[-1] is True                   # must NOT unfreeze the live run
+    assert ctrl.worker in ctrl.active_workers
 
 
 def test_cancel_with_no_active_worker_unfreezes_inline(app):
