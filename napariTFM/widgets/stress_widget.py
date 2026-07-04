@@ -4,7 +4,7 @@ import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
 from qtpy.QtCore import Signal
-from qtpy.QtWidgets import QApplication, QHBoxLayout, QMessageBox
+from qtpy.QtWidgets import QHBoxLayout, QMessageBox
 
 from napariTFM.backend.parameter_dataclasses import StressParameters
 from napariTFM.backend.bism import calculate_bism_stresses
@@ -16,221 +16,147 @@ from napariTFM.utilities.visualization_manager import VisualizationManager
 
 
 class StressController(BaseAnalysisController):
-    """Coordinates interactions between UI components, service, and managers."""
+    """Stress stage (BISM). Uses the base run/cancel lifecycle; its streaming and
+    finalize hooks differ from the vector stages (three stress layers, a
+    traction-reconstruction R² report), so it fills the hooks directly rather
+    than subclassing :class:`VectorStageController`.
+    """
 
-    def _validate_prerequisites(self) -> bool:
-        """Check if required data is available."""
+    # region === Run lifecycle hooks (template lives in the base) ===
+    def _validate(self):
         if self.data_manager.mask_stack is None:
-            QMessageBox.warning(None, "Warning", "No mask loaded. Please load a mask first.")
-            return False
+            raise ValueError("No mask loaded. Please load a mask first.")
         if self.data_manager.force_results is None:
-            QMessageBox.warning(None, "Warning", "No force data available. Please calculate forces first.")
-            return False
-        return True
+            raise ValueError("No force data available. Please calculate forces first.")
 
-    def start_analysis(self):
-        """Start the stress analysis for all frames."""
+    def _run_params(self) -> StressParameters:
+        return self.parameter_manager.get_stress_parameters()
+
+    def _begin_stream(self, params):
+        """Allocate the three live stress layers and reset the frame counters."""
+        force_results = self.data_manager.force_results
+        self._stream_total = force_results.force_field.shape[0]
+        self._stream_done = 0
+        self.visualization_manager.begin_stress_stream(
+            num_frames=self._stream_total,
+            max_stress=params.max_stress,
+            downscale_factor=force_results.parameters.downscale_factor,
+        )
+
+    def _build_worker(self, params):
+        return self._run_worker(
+            self.data_manager.force_results.force_field,
+            self.data_manager.mask_stack,
+            params,
+        )
+
+    @thread_worker
+    def _run_worker(self, force_field, masks, params):
+        """Process every frame, yielding each new stress-tensor frame for streaming."""
+        gen = calculate_bism_stresses(force_field=force_field, masks=masks, params=params)
         try:
-            if not self._validate_prerequisites():
-                return
+            while True:
+                result, current_frame, total = next(gen)
+                # ``stress_tensor`` is the cumulative stack; the newest frame is
+                # its last slice. Hand it off 0-based.
+                yield current_frame - 1, total, result.stress_tensor[-1]
+        except StopIteration as e:
+            return e.value
 
-            self.analysis_started.emit()
-            self._update_progress(0, "Starting analysis...")
+    def _on_frame_processed(self, payload):
+        """Stream one freshly computed stress frame into the viewer (GUI thread)."""
+        frame_index, total, stress_tensor_frame = payload
+        progress = int((frame_index + 1) / max(total, 1) * 100)
+        self.progress_updated.emit(
+            progress, f"Calculating stress: Frame {frame_index + 1}/{total}"
+        )
+        self.visualization_manager.stream_stress_frame(frame_index, stress_tensor_frame)
 
-            params = self._get_current_parameters()
+    def _finalize(self, result):
+        """Commit the streamed stress result and report the reconstruction R²."""
+        if result is None:
+            raise RuntimeError("Analysis failed to produce results")
+        # The three stress stacks were filled in place as frames arrived and are
+        # already on screen; just store the full result for downstream steps.
+        self.data_manager.set_stress_results(result, dirty=True)
 
-            # Get mask and force data
-            masks = self.data_manager.mask_stack
-            if masks is None:
-                raise ValueError("No mask data available")
+        r2 = result.r2_traction
+        r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
+        self.progress_updated.emit(
+            100,
+            f"Analysis completed successfully (BISM)\n"
+            f"Mean traction-reconstruction R²: {r2_text}",
+        )
+        self.analysis_completed.emit(result)
+    # endregion
 
-            force_results = self.data_manager.force_results
-            if force_results is None:
-                raise ValueError("No force data available")
-
-            # Bind the three stress layers up front so each frame streams in live
-            # (preserving the contrast/visibility the user set) and the slider
-            # follows it, instead of the whole stack landing only at the end.
-            total_frames = force_results.force_field.shape[0]
-            self.visualization_manager.begin_stress_stream(
-                num_frames=total_frames,
-                max_stress=params.max_stress,
-                downscale_factor=force_results.parameters.downscale_factor,
-            )
-
-            @thread_worker
-            def stress_calculation_worker():
-                try:
-                    stress_generator = calculate_bism_stresses(
-                        force_field=force_results.force_field,
-                        masks=masks,
-                        params=params,
-                    )
-
-                    while True:
-                        result, current_frame, total = next(stress_generator)
-                        # ``stress_tensor`` is the cumulative stack; the newest
-                        # frame is its last slice. Hand it off 0-based.
-                        yield current_frame - 1, total, result.stress_tensor[-1]
-
-                except StopIteration as e:
-                    return e.value
-
-            worker = stress_calculation_worker()
-            self.active_workers.append(worker)
-
-            def on_yielded(data):
-                frame_index, total, stress_tensor_frame = data
-                progress = int((frame_index + 1) / max(total, 1) * 100)
-                self._update_progress(
-                    progress, f"Calculating stress: Frame {frame_index + 1}/{total}"
-                )
-                self.visualization_manager.stream_stress_frame(frame_index, stress_tensor_frame)
-
-            def on_returned(final_result):
-                # The three stress stacks were filled in place as frames arrived
-                # and are already on screen; just store the full result for
-                # downstream steps. Other layers' visibility is left untouched.
-                self.data_manager.set_stress_results(final_result, dirty=True)
-
-                r2 = final_result.r2_traction
-                r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
-                status_msg = (
-                    f"Analysis completed successfully (BISM)\n"
-                    f"Mean traction-reconstruction R²: {r2_text}"
-                )
-                self._update_progress(100, status_msg)
-
-                self.analysis_completed.emit(final_result)
-                self.active_workers.remove(worker)
-                if not self.active_workers:
-                    self.unfreeze_ui()
-
-            def on_errored(error):
-                error_msg = f"Analysis failed: {str(error)}"
-                self._update_progress(0, error_msg)
-                self.analysis_failed.emit(error_msg)
-                QMessageBox.critical(None, "Error", error_msg)
-                self.active_workers.remove(worker)
-                if not self.active_workers:
-                    self.unfreeze_ui()
-
-            # Connect worker signals
-            worker.yielded.connect(on_yielded)
-            worker.returned.connect(on_returned)
-            worker.errored.connect(on_errored)
-            # Freeze here — after every prerequisite check that can raise, and
-            # right before the worker runs — so the header's Run/Preview actions
-            # disable during a live BISM run (on_returned/on_errored unfreeze).
-            # Every other stage freezes on run; stress used to be the exception.
-            self.freeze_ui()
-            worker.start()
-
+    # region === Preview (synchronous, GUI thread) ===
+    def preview_current_frame(self):
+        """Calculate and display the stress field for the current frame (synchronous)."""
+        try:
+            self._validate()
         except Exception as e:
-            error_msg = f"Failed to start analysis: {str(e)}"
-            self._update_progress(0, error_msg)
-            self.analysis_failed.emit(error_msg)
-            QMessageBox.critical(None, "Error", error_msg)
+            QMessageBox.warning(None, "Warning", str(e))
             return None
 
-    def preview_current_frame(self):
-        """Calculate and display stress field for current frame."""
+        self.freeze_ui()
         try:
-            if not self._validate_prerequisites():
-                return
-
-            self._update_progress(0, "Generating stress preview...")
-
-            # Get current frame index
-            if len(self.viewer.dims.current_step) == 2:
-                current_frame = 0
-                self.progress_updated.emit(0, "No image stack found, previewing frame 0")
-            else:
-                current_frame = self.viewer.dims.current_step[0]
-
+            self.progress_updated.emit(0, "Generating stress preview...")
+            current_frame = self._current_frame()
             params = self._get_current_parameters()
 
-            # Get mask and force data for current frame
             masks = self.data_manager.mask_stack
-            if masks is None:
-                raise ValueError("No mask data available")
-
             force_results = self.data_manager.force_results
-            if force_results is None:
-                raise ValueError("No force data available")
 
-            # Extract current frame data
             mask = masks[current_frame] if masks.ndim > 2 else masks
-            force_field = force_results.force_field[current_frame] if force_results.force_field.ndim > 3 else force_results.force_field
+            force_field = (
+                force_results.force_field[current_frame]
+                if force_results.force_field.ndim > 3
+                else force_results.force_field
+            )
 
-            stress_generator = calculate_bism_stresses(
+            gen = calculate_bism_stresses(
                 force_field=force_field[np.newaxis, ...],
                 masks=mask[np.newaxis, ...],
                 params=params,
             )
-
             try:
-                # Get stress results
-                result, _, _ = next(stress_generator)
-
-                # Update visualization
-                self.visualization_manager.visualize_stress_preview(
-                    result.stress_tensor,
-                    max_stress=params.max_stress,
-                    downscale_factor=force_results.parameters.downscale_factor
-                )
-
-                # Show only the average-normal-stress layer on top; keep XX/YY
-                # loaded (for scrubbing) but hidden, stacked beneath it.
-                self.visualization_manager.bring_layers_to_front([
-                    ('Normal Stress XX', False),
-                    ('Normal Stress YY', False),
-                    ('Average Normal Stress', True),
-                ])
-
-                r2 = result.r2_traction
-                r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
-                status_msg = (
-                    f"Stress preview generated for frame {current_frame} (BISM)\n"
-                    f"Traction-reconstruction R²: {r2_text}"
-                )
-
-                self._update_progress(100, status_msg)
-                return result
-
+                result, _, _ = next(gen)
             except StopIteration:
                 raise ValueError("Stress calculation failed to produce results")
 
+            self.visualization_manager.visualize_stress_preview(
+                result.stress_tensor,
+                max_stress=params.max_stress,
+                downscale_factor=force_results.parameters.downscale_factor,
+            )
+
+            # Show only the average-normal-stress layer on top; keep XX/YY loaded
+            # (for scrubbing) but hidden, stacked beneath it.
+            self.visualization_manager.bring_layers_to_front([
+                ('Normal Stress XX', False),
+                ('Normal Stress YY', False),
+                ('Average Normal Stress', True),
+            ])
+
+            r2 = result.r2_traction
+            r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
+            self.progress_updated.emit(
+                100,
+                f"Stress preview generated for frame {current_frame} (BISM)\n"
+                f"Traction-reconstruction R²: {r2_text}",
+            )
+            return result
         except Exception as e:
-            error_msg = f"Failed to preview stress field: {str(e)}"
-            self._update_progress(0, error_msg)
-            QMessageBox.critical(None, "Error", error_msg)
+            self._handle_error(str(e))
             return None
+        finally:
+            self.unfreeze_ui()
 
     def _get_current_parameters(self) -> StressParameters:
         """Get current stress (BISM) parameters from parameter manager."""
         return self.parameter_manager.get_stress_parameters()
-
-    def _update_progress(self, progress: int, status: str):
-        """Update progress and emit signal."""
-        self.progress_updated.emit(progress, status)
-
-    def cancel_all_operations(self):
-        """Cancel all running background operations"""
-        for worker in self.active_workers:
-            try:
-                worker.quit()
-                worker.wait(500)  # Wait up to 500ms
-                if worker.isRunning():
-                    worker.terminate()
-                worker.deleteLater()
-            except Exception:
-                pass
-        self.active_workers.clear()
-        # Update UI status
-        self.progress_updated.emit(0, "Operations cancelled")
-        QApplication.processEvents()
-        self.unfreeze_ui()
+    # endregion
 
 
 class StressWidget(BaseAnalysisWidget):
@@ -404,13 +330,13 @@ class StressWidget(BaseAnalysisWidget):
             self.stress_params = self.parameter_manager.get_stress_parameters()
 
     def run_action(self):
-        self.controller.start_analysis()
+        self.controller.run()
 
     def preview_action(self):
         self.controller.preview_current_frame()
 
     def cancel_action(self):
-        self.controller.cancel_all_operations()
+        self.controller.cancel()
 
     def _update_ui_state(self, event=None):
         """Update action button enablement based on available data."""

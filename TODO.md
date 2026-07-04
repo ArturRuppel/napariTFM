@@ -56,23 +56,40 @@ buggy-direction unit test was flipped to assert non-resurrection, plus symmetric
 stress-under-fresh-force, combined preserve-upstream-drop-downstream, and an
 end-to-end `results_to_ntfm` disk regression. 628 passed.
 
-### Collapse the vector-stage Widget/Controller triplication + one blessed lifecycle  ·  L  ·  needs manual in-app Qt verification (A-2 remainder)
-The A-2 preview-layer helper landed; **this half did not.** Stages 2/3/4
-(displacement/force/stress) are still ~75% copy-paste, and the drift is real
-bugs: three different `cancel()` semantics (one `terminate()`, one a write-only
-flag that cancels nothing — D-12 was the worst of these and *is* fixed), and
-preview running synchronously on the GUI thread in displacement/stress but on a
-`thread_worker` in force. Plan: (1) fix the remaining drift in place (small,
-individually revertable), then (2) hoist run→freeze→progress→complete/fail→
-unfreeze + **one** blessed cancel into the base as a *non-overridable* template
-method so the invariants can't drift again, then (3) merge the disp/force
-controllers into one `VectorStageController(StageSpec)` (mirroring
-`_VECTOR_FIELD_CONFIG`); stress stays a thin subclass for its mask input.
-Preprocessing stays bespoke. Add one parameterized drift-regression test
-(freeze-on-run / unfreeze-on-terminal / cancel-actually-cancels). **This touches
-Qt worker teardown across four controllers and the suite leans on fakes there —
-it wants its own reviewed change with manual in-app verification, not a blind
-headless refactor.**
+### Collapse the vector-stage Widget/Controller triplication + one blessed lifecycle  ·  DONE (2026-07-04, A-2) — NEEDS MANUAL IN-APP VERIFICATION BEFORE MERGE
+Landed on `claude/a2-stage-controller-unification`. What changed:
+- **One sealed run/cancel lifecycle** in `BaseAnalysisController`. `run()`/`cancel()`
+  are *non-overridable* — sealed via `__init_subclass__` **and** a name-mangled
+  `__run` (both verified to hold under this Qt binding). Subclasses fill hooks
+  (`_validate` / `_run_params` / `_begin_stream` / `_build_worker` /
+  `_on_frame_processed` / `_finalize`). The UI unfreezes on **every** terminal
+  path via the worker's `finished` signal (the single chokepoint) — a stage can
+  never again forget to freeze on run (B-6) because the base owns the sequence.
+- **One cooperative cancel.** Verified against napari 0.7.0: `@thread_worker`
+  workers expose **only** `quit()` — no `wait`/`isRunning`/`terminate`/`deleteLater`.
+  So the old `terminate()`/`wait(500)` in all three cancels was **dead code**
+  (swallowed `AttributeError`); the only thing that ever ran was `quit()`. New
+  cancel is `quit()` + disconnect `yielded` (kills the late-frame race) and
+  defers teardown/cleanup to `finished` — GUI thread never blocks. The stray
+  `QApplication.processEvents()` is gone.
+- **disp/force collapsed** into `VectorStageController` (spec = `STAGE_KIND` +
+  `RESULT_SETTER` + a few hooks); `DisplacementController`/`FTTCController` are
+  thin subclasses (names kept — tests import them). Stress fills the hooks
+  directly (its streaming/finalize differ). Preprocessing untouched (bespoke).
+- **All previews + GCV made synchronous** (were: force async, disp/stress sync).
+  Chosen deliberately given the untestable-GUI constraint — sync has zero
+  cross-thread surface, and sync→async later is a cheap additive change onto the
+  now-proven run lifecycle; async→sync after a field heisenbug is not.
+- Net −84 lines of production code; new `tests/test_stage_lifecycle.py`
+  (7 tests) pins freeze-on-run / unfreeze-on-every-terminal-path /
+  finalize-on-returned / cooperative-cancel-defers-teardown / seal. 640 passed.
+
+**⚠️ Still needs manual in-app verification before merge.** No test drives these
+controllers through a *real* Qt background worker (the suite fakes them), so a
+genuine threading regression would pass CI. Drive the real app: run each of
+displacement/force/stress (watch Run/Preview disable then re-enable), **cancel
+mid-run** (watch it stop without hanging and the UI re-enable), and preview a
+heavy frame on each. Only merge after that passes.
 
 ### Minor cleanups (low priority, do opportunistically)
 - **Mask resized twice per stress folder** and the resize logic is duplicated
