@@ -294,17 +294,17 @@ class _ControllerDataManager:
         self.preprocessed_cell_stack = None
         self.sets = []
 
-    def set_preprocessed_bead_stack(self, data, source="", dirty=False):
+    def set_preprocessed_bead_stack(self, data, path=None, dirty=False):
         self.preprocessed_bead_stack = data
-        self.sets.append(("beads", data.shape, source, dirty))
+        self.sets.append(("beads", data.shape, dirty))
 
-    def set_preprocessed_reference(self, data, source="", dirty=False):
+    def set_preprocessed_reference(self, data, path=None, dirty=False):
         self.preprocessed_reference = data
-        self.sets.append(("reference", data.shape, source, dirty))
+        self.sets.append(("reference", data.shape, dirty))
 
-    def set_preprocessed_cell_stack(self, data, source="", dirty=False):
+    def set_preprocessed_cell_stack(self, data, path=None, dirty=False):
         self.preprocessed_cell_stack = data
-        self.sets.append(("cells", data.shape, source, dirty))
+        self.sets.append(("cells", data.shape, dirty))
 
 
 class _RecordingViz:
@@ -342,12 +342,12 @@ def test_begin_stream_allocates_zero_stacks_and_counts_total(app):
     # 3 beads + 1 reference + 4 cells frames in total.
     assert controller._stream_total == 8
     assert controller._stream_done == 0
-    # Output stacks allocated as zeros, matching input shapes, marked generated+dirty.
+    # Output stacks allocated as zeros, matching input shapes, marked dirty.
     assert dm.preprocessed_bead_stack.shape == (3, 2, 2)
     assert np.count_nonzero(dm.preprocessed_bead_stack) == 0
-    assert ("beads", (3, 2, 2), "generated", True) in dm.sets
-    assert ("reference", (2, 2), "generated", True) in dm.sets
-    assert ("cells", (4, 2, 2), "generated", True) in dm.sets
+    assert ("beads", (3, 2, 2), True) in dm.sets
+    assert ("reference", (2, 2), True) in dm.sets
+    assert ("cells", (4, 2, 2), True) in dm.sets
     assert viz.began == 1
 
 

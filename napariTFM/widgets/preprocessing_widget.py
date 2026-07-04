@@ -128,15 +128,15 @@ class PreprocessingController(BaseAnalysisController):
 
         if bead is not None:
             self.data_manager.set_preprocessed_bead_stack(
-                np.zeros(bead.shape, dtype=np.float32), source="generated", dirty=True
+                np.zeros(bead.shape, dtype=np.float32), dirty=True
             )
         if ref is not None:
             self.data_manager.set_preprocessed_reference(
-                np.zeros(ref.shape, dtype=np.float32), source="generated", dirty=True
+                np.zeros(ref.shape, dtype=np.float32), dirty=True
             )
         if cell is not None:
             self.data_manager.set_preprocessed_cell_stack(
-                np.zeros(cell.shape, dtype=np.float32), source="generated", dirty=True
+                np.zeros(cell.shape, dtype=np.float32), dirty=True
             )
 
         self.visualization_manager.begin_preprocessing_stream()
