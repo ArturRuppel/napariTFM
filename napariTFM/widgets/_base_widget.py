@@ -22,7 +22,8 @@ class BaseAnalysisController(QObject):
     :meth:`_finalize`). This makes the invariants structurally unforgeable — a
     stage can never again forget to freeze the UI on run (the B-6 bug) or invent
     a divergent cancel, because the base owns the sequence and unfreezes on
-    *every* terminal path through the worker's ``finished`` signal.
+    *every* terminal path: a run's own ``finished`` signal (success/error), and
+    ``cancel()``, which frees the UI inline (see :meth:`cancel`).
 
     Preview and any one-shot actions stay per-stage and synchronous — they do not
     go through this template (only the full streaming run does).
@@ -54,7 +55,6 @@ class BaseAnalysisController(QObject):
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
         self.active_workers = []
-        self._cancelling = False
 
         # Live-streaming progress counters: a run fills the output stacks frame
         # by frame, so progress is "frames done / total".
@@ -86,14 +86,13 @@ class BaseAnalysisController(QObject):
     def __run(self):
         """The invariant sequence. Name-mangled so no subclass can redirect it.
 
-        Freeze happens synchronously; unfreeze is guaranteed on *both* a
-        synchronous setup failure (validate/build raises before the worker owns
-        the lifecycle — nothing would ever emit ``finished``) and every async
-        terminal state (success, error, cooperative cancel), all funnelled
-        through the worker's ``finished`` signal.
+        Freeze happens synchronously; unfreeze is guaranteed on a synchronous
+        setup failure (validate/build raises before the worker owns the
+        lifecycle — nothing would ever emit ``finished``), on the async terminal
+        states of a run (success, error) via the worker's ``finished`` signal,
+        and on :meth:`cancel`, which frees the UI inline.
         """
         self.freeze_ui()
-        self._cancelling = False
         worker = None
         try:
             self._validate()                       # hook — raises on bad prerequisites
@@ -124,42 +123,53 @@ class BaseAnalysisController(QObject):
         self._handle_error(str(exc))
 
     def _on_run_finished(self, worker):
-        """The single unfreeze chokepoint — reached on every terminal path."""
+        """Unfreeze once the last worker of a run has stopped.
+
+        Reached on a run's terminal path (success/error) and on the *late* finish
+        of a worker that ``cancel()`` already orphaned. Unfreeze is guarded on no
+        workers remaining, so a cancelled run's late finish can't unfreeze the UI
+        out from under a fresh run the user has since started.
+        """
         self._forget_worker(worker)
-        if self._cancelling and not self.active_workers:
-            self._on_cancel_cleanup()              # optional hook
-            self._cancelling = False
-        self.unfreeze_ui()
+        if not self.active_workers:
+            self.unfreeze_ui()
 
     def _forget_worker(self, worker):
         if worker in self.active_workers:
             self.active_workers.remove(worker)
 
     def cancel(self):
-        """Cancel a running stage. Sealed. Cooperative + async: ask the worker to
-        stop and let the existing ``finished`` teardown run — the GUI thread never
-        blocks (napari ``@thread_worker`` exposes only cooperative ``quit()``; it
-        has no ``wait``/``terminate``). Late frames are disconnected so they can't
-        race into a torn-down stage.
+        """Cancel a running stage. Sealed. Frees the UI *immediately* — it does
+        not wait for the in-flight frame to finish.
+
+        napari's ``@thread_worker`` exposes only cooperative ``quit()`` (no
+        ``wait``/``terminate``), and abort is checked between frames, so a heavy
+        frame already running cannot be interrupted mid-compute. Rather than leave
+        the UI frozen until that frame ends (which reads as "cancel is ignored"),
+        we ask the worker to stop, **orphan** it — disconnecting ``yielded`` /
+        ``returned`` / ``errored`` so no late frame, result, or error can reach a
+        stage we're tearing down — forget it, and unfreeze now. Its one remaining
+        frame runs to completion and is discarded in the background; ``finished``
+        still fires later but is a guarded no-op (see :meth:`_on_run_finished`).
         """
-        if self.active_workers:
-            self._cancelling = True
-            for worker in list(self.active_workers):
+        for worker in list(self.active_workers):
+            for signal_name, slot in (
+                ("yielded", self._on_frame_processed),
+                ("returned", self._on_run_returned),
+                ("errored", self._on_run_errored),
+            ):
                 try:
-                    worker.yielded.disconnect(self._on_frame_processed)
+                    getattr(worker, signal_name).disconnect(slot)
                 except (TypeError, RuntimeError, AttributeError):
                     pass
-                try:
-                    worker.quit()
-                except (RuntimeError, AttributeError):
-                    pass
-            self.progress_updated.emit(0, "Operation cancelled")
-            # Teardown + _on_cancel_cleanup + unfreeze run in _on_run_finished.
-        else:
-            # Nothing running: no `finished` will fire, so finish the job inline.
-            self._on_cancel_cleanup()
-            self.progress_updated.emit(0, "Operation cancelled")
-            self.unfreeze_ui()
+            try:
+                worker.quit()
+            except (RuntimeError, AttributeError):
+                pass
+            self._forget_worker(worker)
+        self._on_cancel_cleanup()
+        self.progress_updated.emit(0, "Operation cancelled")
+        self.unfreeze_ui()
 
     # ------------------------------------------------------------------
     # Hooks — subclasses that use run()/cancel() implement these.
@@ -189,7 +199,7 @@ class BaseAnalysisController(QObject):
         raise NotImplementedError
 
     def _on_cancel_cleanup(self):
-        """Optional stage-specific cleanup, run after the worker has stopped."""
+        """Optional stage-specific cleanup, run inline when the stage is cancelled."""
 
 
 class VectorStageController(BaseAnalysisController):
