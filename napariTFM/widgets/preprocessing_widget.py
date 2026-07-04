@@ -528,7 +528,7 @@ class PreprocessingController(BaseAnalysisController):
         set), and the streamed layers keep whatever contrast/visibility the run
         inherited.
 
-        Preview-only (ROADMAP §4): preprocessed stacks are held in memory and
+        Preview-only: preprocessed stacks are held in memory and
         shown in napari; nothing is written to disk. Batch is the only path to
         persisted data.
         """

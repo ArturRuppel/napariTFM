@@ -67,7 +67,7 @@ def _zeroed_off_mask(field: np.ndarray, grid_mask: np.ndarray) -> np.ndarray:
 
 
 def _apply_mask_on_save(grid_mask, displacement_result, force_result, stress_result):
-    """Off-mask results, ``apply_mask_on_save`` (ROADMAP §4 backlog).
+    """Off-mask results, ``apply_mask_on_save`` (backlog).
 
     Off-cell substrate signal is noise; zeroing ``u_x/u_y/F_x/F_y`` (and stress,
     if present) wherever the mask is background compresses the written

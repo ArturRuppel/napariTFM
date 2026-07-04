@@ -1,4 +1,4 @@
-"""Batch writes one ``.ntfm`` per experiment into the TFM_data/ bucket (ROADMAP §4)."""
+"""Batch writes one ``.ntfm`` per experiment into the TFM_data/ bucket."""
 
 import numpy as np
 
@@ -114,8 +114,7 @@ def test_write_failure_propagates(tmp_path, monkeypatch):
 
 def test_stage_exception_reports_error_but_keeps_partial(tmp_path, monkeypatch):
     """A stage that raises is caught so a successful upstream stage is still
-    written, but the folder must surface as an error rather than a silent 'done'
-    (CODE_REVIEW_FINDINGS.md #5)."""
+    written, but the folder must surface as an error rather than a silent 'done'."""
     import pytest
 
     scale = {"grid_spacing": 0.4, "time_interval": 2.0}
@@ -162,8 +161,7 @@ def test_stress_compute_failure_reports_error(tmp_path, monkeypatch):
     """A genuine BISM compute failure must surface as an error, not a silent
     'done'. `_execute_stress_analysis` used to wrap its whole body in
     `except Exception: return None`, swallowing even its own RuntimeError so the
-    stress stage was never recorded as failed (a recurrence of
-    CODE_REVIEW_FINDINGS.md #5 for the stress stage)."""
+    stress stage was never recorded as failed (a recurrence of the same swallowed-failure bug for the stress stage)."""
     import pytest
 
     from napariTFM.backend import batch_analysis as ba

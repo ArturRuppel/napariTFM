@@ -1,4 +1,4 @@
-"""Tests for the ``TFM_data/`` output-bucket resolver (ROADMAP §4)."""
+"""Tests for the ``TFM_data/`` output-bucket resolver."""
 
 from pathlib import Path
 

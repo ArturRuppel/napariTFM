@@ -1800,7 +1800,7 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
 
 
 def test_stage_status_is_done_when_results_are_in_memory(monkeypatch, app, tmp_path):
-    # Preview-only (ROADMAP §4): "done" follows in-memory results, not files on
+    # Preview-only: "done" follows in-memory results, not files on
     # disk. Uses the real DataManager (not the stub) to exercise availability.
     import importlib.util as _ilu
     import numpy as np

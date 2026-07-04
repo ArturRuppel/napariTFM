@@ -1,4 +1,4 @@
-"""Round-trip + container tests for the native ``.ntfm`` format (ROADMAP §1)."""
+"""Round-trip + container tests for the native ``.ntfm`` format."""
 
 import numpy as np
 import pandas as pd

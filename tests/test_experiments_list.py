@@ -264,8 +264,7 @@ def test_selecting_a_row_sets_single_active_and_emits(app):
 
 def test_reselecting_active_row_does_not_reemit(app):
     """Re-clicking the already-active row must not re-fire active_changed, which
-    would needlessly clear the active experiment's overlays and reload from disk
-    (CODE_REVIEW_FINDINGS.md #8)."""
+    would needlessly clear the active experiment's overlays and reload from disk."""
     widget = ExperimentsList()
     widget.set_experiments(["/data/a", "/data/b"])
     widget.set_active("/data/b")

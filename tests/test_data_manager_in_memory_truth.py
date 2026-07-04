@@ -1,4 +1,4 @@
-"""Generated-artifact availability follows the in-memory value (ROADMAP §4).
+"""Generated-artifact availability follows the in-memory value.
 
 Interactive stage runs are preview-only: results live in memory and nothing is
 written to disk. So ``artifact_available`` reflects whether the value is present

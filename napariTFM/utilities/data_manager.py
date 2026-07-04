@@ -108,7 +108,7 @@ class DataManager:
         return self._artifacts[key]
 
     def artifact_available(self, key: str) -> bool:
-        """Availability follows the in-memory value (preview-only; ROADMAP §4).
+        """Availability follows the in-memory value (preview-only).
 
         Interactive stage runs hold results in memory and write nothing to disk
         — batch is the only path to persisted data. So a generated artifact is

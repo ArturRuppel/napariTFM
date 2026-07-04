@@ -74,7 +74,7 @@ def compute_bism_stress(
                 conditions are restricted to the masked region and its actual
                 contour — the correct formulation for a monolayer that does not
                 fill the field. A mask is required (a TFM stress solve is always
-                over an externally supplied cell/monolayer mask, ROADMAP §2).
+                over an externally supplied cell/monolayer mask).
 
     Returns:
         BISMResult with sxx, syy, sxy in units of [traction]*[l] (Pa*um).

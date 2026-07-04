@@ -271,7 +271,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     def _on_analysis_completed(self, results):
         """Handle completed analysis.
 
-        Preview-only (ROADMAP §4): the result is held in memory and shown in
+        Preview-only: the result is held in memory and shown in
         napari for parameter tuning; nothing is written to disk. Batch is the
         only path to persisted data.
         """

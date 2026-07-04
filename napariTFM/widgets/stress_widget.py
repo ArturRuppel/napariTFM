@@ -222,9 +222,8 @@ class StressWidget(BaseAnalysisWidget):
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
 
     def load_result_artifact(self, key: str):
-        """Load an external input layer. Only the mask is loadable (ROADMAP §2 —
-        masks are an external input); analysis results chain in-memory and are
-        never read from disk interactively (ROADMAP §4)."""
+        """Load an external input layer. Only the mask is loadable (masks are an external input); analysis results chain in-memory and are
+        never read from disk interactively."""
         if key == "mask_stack":
             self._load_mask_stack_from_active_layer()
         self._update_ui_state()
@@ -355,7 +354,7 @@ class StressWidget(BaseAnalysisWidget):
     def _on_analysis_completed(self, results):
         """Handle analysis completion.
 
-        Preview-only (ROADMAP §4): result held in memory and shown in napari;
+        Preview-only: result held in memory and shown in napari;
         nothing written to disk. Batch is the only path to persisted data.
         """
         self.stress_calculated.emit(results)

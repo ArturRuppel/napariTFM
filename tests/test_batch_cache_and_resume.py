@@ -1,4 +1,4 @@
-"""Batch stage-resume reads from the ``.ntfm`` (ROADMAP §4).
+"""Batch stage-resume reads from the ``.ntfm``.
 
 The ``.ntfm`` is the sole persisted result for displacement/force/stress.
 Preprocessed ``.tif`` images are now always written (unconditionally) so that

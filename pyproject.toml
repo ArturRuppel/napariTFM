@@ -61,7 +61,7 @@ napariTFM = "napariTFM:napari.yaml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-norecursedirs = ["_dev", "_validation", "_documentation", "docs"]
+norecursedirs = ["_dev", "_validation"]
 
 [tool.setuptools.packages.find]
 include = ["napariTFM*"]

@@ -1,4 +1,4 @@
-"""Native TFM container and the tidy long-format table (ROADMAP §1).
+"""Native TFM container and the tidy long-format table.
 
 The canonical *on-disk* form is a single multi-series **OME-TIFF**
 (``<experiment>.ome.tif``) that Fiji/ImageJ open on a double-click via bundled
@@ -337,7 +337,7 @@ def build_metadata(
 
     ``labels`` are the free-form experiment-design tags (``{condition,
     replicate, position, …}``) the §5 aggregator groups by, supplied
-    per-experiment in the batch config (ROADMAP §4).
+    per-experiment in the batch config.
     """
     metadata = {
         "format_version": FORMAT_VERSION,
@@ -694,7 +694,7 @@ def merge_arrays(new: Dict, old: Dict) -> Dict:
     The ``mask`` is deliberately *not* preserved: unlike the measure stages
     (where all-NaN unambiguously means "not computed this run"), an absent/
     all-zero mask only ever means "no mask supplied", never a deliberately-empty
-    region, so the new mask always wins (CODE_REVIEW_FINDINGS.md #6).
+    region, so the new mask always wins.
 
     Grid compatibility: the present stages must share ``(T, Y, X)``. On mismatch
     a warning is printed and ``new`` is returned unchanged (new data wins, no

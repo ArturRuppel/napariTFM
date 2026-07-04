@@ -1005,7 +1005,7 @@ class ExperimentsList(QWidget):
         # gesture that leaves the active row unchanged) still refreshes the
         # selection styling below, but must NOT re-emit active_changed —
         # otherwise it would wipe the active experiment's in-memory overlays and
-        # reload from disk for no reason (CODE_REVIEW_FINDINGS.md #8).
+        # reload from disk for no reason.
         active_changed = path != self._active
         self._active = path
         if selection is None:

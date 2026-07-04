@@ -1,4 +1,4 @@
-"""Resolve where batch-derived output lands — the ``TFM_data/`` bucket (ROADMAP §4).
+"""Resolve where batch-derived output lands — the ``TFM_data/`` bucket.
 
 All derived output goes into a bucket named ``TFM_data``, sitting *next to* the
 raw input — never mixed with it. Two modes:

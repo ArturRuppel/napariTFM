@@ -144,7 +144,7 @@ def test_merge_does_not_overwrite_force_present_in_new():
 def test_merge_cleared_mask_does_not_resurrect():
     """A re-write with no mask must clear the stored mask, not restore the old
     one — an absent/all-zero mask only ever means 'no mask supplied', never a
-    deliberately-empty region (CODE_REVIEW_FINDINGS.md #6)."""
+    deliberately-empty region."""
     nt, ny, nx = 2, 3, 3
     force = np.ones((nt, ny, nx, 2))
     old_mask = np.ones((nt, ny, nx), dtype=np.int64)  # a real mask was saved before

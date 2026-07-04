@@ -235,7 +235,7 @@ class FTTCWidget(BaseAnalysisWidget):
     def _on_analysis_completed(self, results: FTTCResult):
         """Handle completed analysis.
 
-        Preview-only (ROADMAP §4): result held in memory and shown in napari;
+        Preview-only: result held in memory and shown in napari;
         nothing written to disk. Batch is the only path to persisted data.
         """
         self.force_calculated.emit(results)
