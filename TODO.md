@@ -17,19 +17,26 @@ error-swallow, B-4/B-5/B-6), the Tier-2 dead-code deletions, and the A-1/A-3/A-4
 refactors are all done and test-green (625 passed). What remains, ranked
 easy-wins-first:
 
-### Vectorize `downscale_flow`  ·  S  ·  perf
-`displacement_analysis.py::downscale_flow` is an O(H·W) Python double loop that
-computes a pure block-mean. Runs on **every** displacement calc (default
-downscale 4). Replace with
-`flow[:nh*f,:nw*f].reshape(nh,f,nw,f,2).mean(axis=(1,3))` — same result, ~100×
-faster. Lock a numeric-equivalence test against the loop before deleting it.
+### Vectorize `downscale_flow`  ·  DONE (2026-07-04)
+`displacement_analysis.py::downscale_flow` was an O(H·W) Python double loop
+computing a pure block-mean, on every displacement calc. Replaced with
+`flow[:nh*f,:nw*f].reshape(nh,f,nw,f,2).mean(axis=(1,3))`. Measured **~11×**
+faster on a 1000×1000 flow at factor 4 (the finding's "~100×" was optimistic),
+and the output is **bit-identical** to the loop (max|diff| = 0). Locked with an
+equivalence test against a reference reimplementation of the old loop, plus
+factor=1 passthrough and an exact-block-average test. 633 passed.
 
-### Split compute-critical from viz-only validation in `validate_fttc_parameters`  ·  S
-`parameter_validation.py:41,44-50` gates the whole **force computation** on
-visualization-only params (`force_arrow_scale`, `f_max`) and enforces
-`regularization > 0` even when `auto_gcv=True` (where `regularization` is
-unused). Split the compute-critical checks from the viz checks; skip the reg
-check under auto-GCV. Small, removes two spurious hard-fails.
+### Split compute-critical from viz-only validation in `validate_fttc_parameters`  ·  DONE (2026-07-04)
+`validate_fttc_parameters` is the pre-compute gate for `calculate_force_field` /
+`find_optimal_regularization`, but it was failing the whole force computation on
+visualization-only params (`force_arrow_scale`, `f_max`, `force_vector_stride` —
+none of which enter the traction solve) and enforcing `regularization > 0` even
+under `auto_gcv=True`, where the manual value is ignored. **Fix:** dropped the
+three viz-only checks from the compute gate (they belong at the rendering layer,
+not here — not shuffled into a new uncalled validator, which would just recreate
+dead code) and gated the regularization check on `not auto_gcv`. Test-locked:
+viz-only params no longer block, reg≤0 is fine under auto-GCV but still rejected
+with it off, and the existing compute-critical checks are unchanged.
 
 ### BUG: interactive upstream re-run resurrects a stale downstream stage on disk  ·  DONE (2026-07-04, B-3)
 CONFIRMED bug, interactive-path only: re-running **displacement** after
