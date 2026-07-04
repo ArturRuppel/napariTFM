@@ -4,61 +4,96 @@ from napari.viewer import Viewer
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QHBoxLayout, QMessageBox
 
-from napariTFM.widgets._base_widget import BaseAnalysisController, BaseAnalysisWidget
-from napariTFM.backend.displacement_analysis import (
-    DisplacementResult,
-    calculate_displacement_field,
-)
+from napariTFM.widgets._base_widget import VectorStageController, BaseAnalysisWidget
+from napariTFM.backend.displacement_analysis import calculate_displacement_field
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
 
-class DisplacementController(BaseAnalysisController):
-    """Controller coordinating displacement analysis components."""
 
-    # region === Processing Execution
-    def get_displacement_statistics(self, flow: np.ndarray) -> dict:
-        """Calculate displacement statistics."""
-        magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
+class DisplacementController(VectorStageController):
+    """Displacement stage: dense optical-flow displacement over the bead stack.
+
+    A thin :class:`VectorStageController` subclass — the run/cancel lifecycle is
+    inherited; this class only supplies the stage's spec (kind, result setter),
+    the run hooks, and the synchronous preview.
+    """
+
+    STAGE_KIND = 'displacement'
+    RESULT_SETTER = 'set_displacement_results'
+
+    # region === Run lifecycle hooks (template lives in the base) ===
+    def _validate(self):
+        if self.data_manager.preprocessed_reference is None:
+            raise ValueError("No reference image loaded")
+        if self.data_manager.preprocessed_bead_stack is None:
+            raise ValueError("No bead stack loaded")
+
+    def _run_params(self):
+        return self.parameter_manager.get_displacement_parameters()
+
+    def _stream_frame_count(self):
+        return self.data_manager.preprocessed_bead_stack.shape[0]
+
+    def _vis_params(self, params):
         return {
-            'max': magnitude.max(),
-            'mean': magnitude.mean(),
-            'std': magnitude.std(),
-            'median': np.median(magnitude)
+            'v_max': params.d_max,
+            'vector_stride': params.disp_vector_stride,
+            'arrow_scale': params.disp_arrow_scale,
+            'downscale_factor': params.downscale_factor,
         }
-    def preview_displacement(self):
-        """Preview displacement calculation on current frame."""
+
+    def _build_worker(self, params):
+        return self._run_worker(
+            self.data_manager.preprocessed_reference,
+            self.data_manager.preprocessed_bead_stack,
+            params,
+        )
+
+    @thread_worker
+    def _run_worker(self, reference, bead_stack, params):
+        """Process every frame, yielding each displacement field for live streaming."""
         try:
-            if not self._validate_prerequisites():
-                return
+            gen = calculate_displacement_field(reference, bead_stack, params)
+            try:
+                while True:
+                    displacement_field, frame, total = next(gen)
+                    # The backend yields a 1-based frame number; the stack index
+                    # (and the slider) want it 0-based.
+                    yield frame - 1, total, displacement_field
+            except StopIteration as e:
+                return e.value
+        except Exception as e:
+            raise ValueError(f"Displacement calculation failed: {str(e)}")
+    # endregion
 
-            self.freeze_ui()
+    # region === Preview (synchronous, GUI thread) ===
+    def preview_displacement(self):
+        """Preview displacement calculation on the current frame."""
+        try:
+            self._validate()
+        except Exception as e:
+            QMessageBox.warning(None, "Warning", str(e))
+            return
+
+        self.freeze_ui()
+        try:
             self.progress_updated.emit(0, "Calculating displacement preview...")
-
-            if len(self.viewer.dims.current_step) == 2:
-                current_frame = 0
-                self.progress_updated.emit(0, "No image stack found, previewing frame 0")
-            else:
-                current_frame = self.viewer.dims.current_step[0]
+            current_frame = self._current_frame()
 
             moving = self.data_manager.preprocessed_bead_stack[current_frame]
             reference = self.data_manager.preprocessed_reference
-
             params = self.parameter_manager.get_displacement_parameters()
 
-            # Calculate displacement field for single frame
-            result = calculate_displacement_field(reference, moving, params)
-
-            # Process generator to get the result
+            gen = calculate_displacement_field(reference, moving, params)
+            final_result = None
             try:
                 while True:
-                    displacement_field, frame, total = next(result)
+                    _, frame, total = next(gen)
                     self.progress_updated.emit(
-                        int((frame + 1) / total * 100),
-                        "Processing preview frame..."
+                        int((frame + 1) / total * 100), "Processing preview frame..."
                     )
             except StopIteration as e:
-                # Get final result from generator
                 final_result = e.value
 
             if final_result is None:
@@ -66,13 +101,12 @@ class DisplacementController(BaseAnalysisController):
 
             self.analysis_completed.emit(final_result)
 
-            # Update visualization with preview result
             self.visualization_manager.visualize_displacement_preview(
                 final_result.displacement_field[0],  # Single frame result
                 params.d_max,
                 params.disp_vector_stride,
                 params.disp_arrow_scale,
-                downscale_factor=params.downscale_factor
+                downscale_factor=params.downscale_factor,
             )
 
             # Show only the displacement layers (magnitude below, vectors on top).
@@ -81,126 +115,29 @@ class DisplacementController(BaseAnalysisController):
                 ('Displacement Vectors', True),
             ])
 
-            # Update status with statistics
             stats = self.get_displacement_statistics(final_result.displacement_field[0])
             self.progress_updated.emit(
                 100,
                 f"Maximum displacement: {stats['max']:.2f} µm\n"
-                f"Mean displacement: {stats['mean']:.2f} µm"
+                f"Mean displacement: {stats['mean']:.2f} µm",
             )
-
         except Exception as e:
             self._handle_error(str(e))
         finally:
             self.unfreeze_ui()
 
-    def calculate_all_frames(self):
-        """Calculate displacements for all frames."""
-        try:
-            if not self._validate_prerequisites():
-                return
-
-            self.freeze_ui()
-            self.progress_updated.emit(0, "Starting displacement analysis...")
-
-            params = self.parameter_manager.get_displacement_parameters()
-
-            # Bind the magnitude + vectors layers up front so each frame can
-            # stream in live (preserving the contrast/visibility the user set)
-            # and the slider can follow it, instead of the whole result landing
-            # only when the run finishes.
-            self._begin_stream(params)
-
-            # Create worker for processing
-            worker = self._create_displacement_worker(
-                self.data_manager.preprocessed_reference,
-                self.data_manager.preprocessed_bead_stack,
-                params
-            )
-
-            self.active_workers.append(worker)
-            self.analysis_started.emit()
-
-            worker.yielded.connect(self._on_frame_processed)
-            worker.returned.connect(self._handle_analysis_results)
-            worker.errored.connect(self._handle_error)
-            worker.start()
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.unfreeze_ui()
-
-    def _begin_stream(self, params):
-        """Allocate the live displacement layers and reset the frame counters."""
-        self._stream_total = self.data_manager.preprocessed_bead_stack.shape[0]
-        self._stream_done = 0
-        vis_params = {
-            'v_max': params.d_max,
-            'vector_stride': params.disp_vector_stride,
-            'arrow_scale': params.disp_arrow_scale,
-            'downscale_factor': params.downscale_factor,
+    def get_displacement_statistics(self, flow: np.ndarray) -> dict:
+        """Calculate displacement statistics."""
+        magnitude = np.sqrt(np.sum(flow ** 2, axis=-1))
+        return {
+            'max': magnitude.max(),
+            'mean': magnitude.mean(),
+            'std': magnitude.std(),
+            'median': np.median(magnitude),
         }
-        self.visualization_manager.begin_vector_field_stream(
-            'displacement', self._stream_total, vis_params
-        )
+    # endregion
 
-    @thread_worker
-    def _create_displacement_worker(self, reference, bead_stack, params):
-        """Process every frame, yielding each displacement field for live streaming."""
-        try:
-            displacement_generator = calculate_displacement_field(reference, bead_stack, params)
-
-            # Process all frames through the generator, streaming each one.
-            try:
-                while True:
-                    displacement_field, frame, total = next(displacement_generator)
-                    # The backend yields a 1-based frame number; the stack index
-                    # (and the slider) want it 0-based.
-                    yield frame - 1, total, displacement_field
-            except StopIteration as e:
-                # Return the final result from the generator
-                return e.value
-
-        except Exception as e:
-            raise ValueError(f"Displacement calculation failed: {str(e)}")
-
-    def _on_frame_processed(self, payload):
-        """Stream one freshly computed displacement frame into the viewer (GUI thread)."""
-        frame_index, total, flow_frame = payload
-        self._stream_done += 1
-        progress = int(self._stream_done / max(self._stream_total, 1) * 100)
-        self.progress_updated.emit(
-            progress, f"Processing frame {frame_index + 1}/{total}"
-        )
-        self.visualization_manager.stream_vector_field_frame(
-            'displacement', frame_index, flow_frame
-        )
-
-    def cancel_operation(self):
-        """Cancel all running operations."""
-        for worker in self.active_workers:
-            try:
-                worker.quit()
-                worker.wait(500)
-                if worker.isRunning():
-                    worker.terminate()
-                worker.deleteLater()
-            except Exception:
-                pass
-        self.active_workers.clear()
-
-        # Clear any partial results when canceling
-        self.data_manager.set_displacement_results(None)
-
-        # Update UI
-        self.progress_updated.emit(0, "Operations cancelled")
-        self.unfreeze_ui()
-
-        # Force UI state update to reflect cleared results
-        self.data_updated.emit('displacement')
-    # endregion === Processing Execution
-
-    # region === Data Management
+    # region === Data Management ===
     def load_active_layer(self, data_type: str):
         """Load the currently active layer as the specified data type."""
         active_layer = self.viewer.layers.selection.active
@@ -211,7 +148,6 @@ class DisplacementController(BaseAnalysisController):
         try:
             data = active_layer.data
 
-            # Handle data based on type
             if data_type == 'beads':
                 # Convert 2D data to 3D with single frame if needed
                 if data.ndim == 2:
@@ -227,47 +163,11 @@ class DisplacementController(BaseAnalysisController):
             else:
                 raise ValueError(f"Invalid data type: {data_type}")
 
-            # Update UI state and emit signal
             self.data_updated.emit(data_type)
 
         except Exception as e:
             QMessageBox.warning(None, "Error", str(e))
-
-    def _validate_prerequisites(self) -> bool:
-        """Check if required data is available."""
-        if self.data_manager.preprocessed_reference is None:
-            QMessageBox.warning(None, "Warning", "No reference image loaded")
-            return False
-        if self.data_manager.preprocessed_bead_stack is None:
-            QMessageBox.warning(None, "Warning", "No bead stack loaded")
-            return False
-        return True
-
-    def _handle_analysis_results(self, result: DisplacementResult):
-        """Finalize a streamed run.
-
-        The magnitude stack and vector cache were filled in place as frames
-        arrived and are already on screen, so there is nothing left to assemble —
-        just store the full result for downstream steps and announce completion.
-        Visibility of other layers is left untouched (the user's to set).
-        """
-        try:
-            if result is None:
-                raise RuntimeError("Analysis failed to produce results")
-
-            # Store the full result; the live layers already reflect it.
-            self.data_manager.set_displacement_results(result, dirty=True)
-
-            self.progress_updated.emit(100, "Analysis completed successfully")
-            self.analysis_completed.emit(result)
-
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self.active_workers.clear()
-            self.unfreeze_ui()
-
-    # endregion === Data Management
+    # endregion
 
 
 class DisplacementAnalysisWidget(BaseAnalysisWidget):
@@ -307,8 +207,6 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         # Initialize UI state
         self._update_ui_state()
 
-
-
     # endregion
 
     # region === UI Creation
@@ -343,13 +241,13 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     # region === State Management
     def run_action(self):
-        self.controller.calculate_all_frames()
+        self.controller.run()
 
     def preview_action(self):
         self.controller.preview_displacement()
 
     def cancel_action(self):
-        self.controller.cancel_operation()
+        self.controller.cancel()
 
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""

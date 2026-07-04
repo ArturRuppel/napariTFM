@@ -353,6 +353,10 @@ class _CtrlDataManager:
     def __init__(self):
         self.preprocessed_bead_stack = np.ones((3, 4, 4), dtype=np.float32)
         self.preprocessed_reference = np.ones((4, 4), dtype=np.float32)
+        # Force reads its frame count from the displacement result (2 frames).
+        self.displacement_results = _Params(
+            displacement_field=np.ones((2, 4, 4, 2), dtype=np.float32)
+        )
 
 
 class _RecordingViz:
@@ -404,8 +408,9 @@ def test_fttc_controller_begin_and_stream(app):
         parameter_manager=_ParameterManager(params), visualization_manager=viz,
     )
 
-    displacement_field = np.ones((2, 4, 4, 2), dtype=np.float32)
-    ctrl._begin_stream(displacement_field, params)
+    # Unified _begin_stream(params): the frame count comes from the data
+    # manager's displacement result, not a passed-in array.
+    ctrl._begin_stream(params)
     assert ctrl._stream_total == 2
     assert viz.begun == [('force', 2, {
         'v_max': 20.0, 'vector_stride': 8, 'arrow_scale': 1.0, 'downscale_factor': 1,

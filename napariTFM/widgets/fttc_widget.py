@@ -8,207 +8,88 @@ from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optim
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
-from napariTFM.widgets._base_widget import BaseAnalysisController, BaseAnalysisWidget
+from napariTFM.widgets._base_widget import VectorStageController, BaseAnalysisWidget
 
 
-class FTTCController(BaseAnalysisController):
-    """Controller coordinating FTTC analysis components."""
+class FTTCController(VectorStageController):
+    """FTTC stage: traction forces from the displacement field.
 
-    def preview_force(self):
-        """Preview force calculation for current frame."""
+    A thin :class:`VectorStageController` subclass — the run/cancel lifecycle is
+    inherited; this class supplies the stage spec, the run hooks, the synchronous
+    preview, and the (force-only) synchronous GCV auto-regularization action.
+    """
 
-        try:
-            if not self._validate_prerequisites():
-                return
+    STAGE_KIND = 'force'
+    RESULT_SETTER = 'set_force_results'
 
-            self.freeze_ui()
-            self.progress_updated.emit(0, "Calculating force preview...")
+    # region === Run lifecycle hooks (template lives in the base) ===
+    def _validate(self):
+        if self.data_manager.displacement_results is None:
+            raise ValueError("No displacement data loaded")
 
-            if len(self.viewer.dims.current_step) == 2:
-                current_frame = 0
-                self.progress_updated.emit(0, "No image stack found, previewing frame 0")
-            else:
-                current_frame = self.viewer.dims.current_step[0]
+    def _run_params(self):
+        return self.parameter_manager.get_fttc_parameters()
 
-            displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
+    def _stream_frame_count(self):
+        return self.data_manager.displacement_results.displacement_field.shape[0]
 
-            params = self.parameter_manager.get_fttc_parameters()
-
-            # Create worker for processing
-            worker = self._create_preview_worker(displacement_field, params)
-            worker.returned.connect(self._handle_preview_results)
-            worker.errored.connect(self._handle_error)
-            worker.finished.connect(lambda: self.unfreeze_ui())
-
-            self.active_workers.append(worker)
-            worker.start()
-
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.unfreeze_ui()
-
-    def calculate_forces(self):
-        """Calculate forces for all frames."""
-        try:
-            if not self._validate_prerequisites():
-                return
-
-            self.freeze_ui()
-            self.progress_updated.emit(0, "Starting force calculation...")
-
-            params = self.parameter_manager.get_fttc_parameters()
-
-            # Create worker for processing
-            displacement_field = self.data_manager.displacement_results.displacement_field
-
-            # Bind the force magnitude + vectors layers up front so each frame
-            # streams in live (preserving the contrast/visibility the user set)
-            # and the slider follows it, rather than landing all at once.
-            self._begin_stream(displacement_field, params)
-
-            worker = self._create_force_worker(displacement_field, params)
-
-            self.active_workers.append(worker)
-            self.analysis_started.emit()
-
-            worker.yielded.connect(self._on_frame_processed)
-            worker.returned.connect(self._handle_analysis_results)
-            worker.errored.connect(self._handle_error)
-            worker.start()
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.unfreeze_ui()
-
-    def _begin_stream(self, displacement_field, params):
-        """Allocate the live force layers and reset the frame counters."""
-        self._stream_total = displacement_field.shape[0]
-        self._stream_done = 0
-        vis_params = {
+    def _vis_params(self, params):
+        return {
             'v_max': params.f_max,
             'vector_stride': params.force_vector_stride,
             'arrow_scale': params.force_arrow_scale,
             'downscale_factor': params.downscale_factor,
         }
-        self.visualization_manager.begin_vector_field_stream(
-            'force', self._stream_total, vis_params
+
+    def _build_worker(self, params):
+        return self._run_worker(
+            self.data_manager.displacement_results.displacement_field, params
         )
-
-    def _on_frame_processed(self, payload):
-        """Stream one freshly computed force frame into the viewer (GUI thread)."""
-        frame_index, total, force_frame = payload
-        self._stream_done += 1
-        progress = int(self._stream_done / max(self._stream_total, 1) * 100)
-        self.progress_updated.emit(
-            progress, f"Processing frame {frame_index + 1}/{total}"
-        )
-        self.visualization_manager.stream_vector_field_frame(
-            'force', frame_index, force_frame
-        )
-
-    def calculate_optimal_regularization(self):
-        """Calculate optimal regularization parameter using GCV."""
-        try:
-            if not self._validate_prerequisites():
-                return
-
-            self.freeze_ui()
-            self.progress_updated.emit(0, "Calculating optimal regularization...")
-
-            if len(self.viewer.dims.current_step) == 2:
-                current_frame = 0
-                self.progress_updated.emit(0, "No image stack found, previewing frame 0")
-            else:
-                current_frame = self.viewer.dims.current_step[0]
-
-            displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
-
-            # Create worker for GCV calculation
-            worker = self._create_gcv_worker(displacement_field)
-
-            worker.returned.connect(self._handle_gcv_results)
-            worker.errored.connect(self._handle_error)
-            worker.finished.connect(lambda: self.unfreeze_ui())
-
-            self.active_workers.append(worker)
-            worker.start()
-
-        except Exception as e:
-            self._handle_error(str(e))
-            self.unfreeze_ui()
-
-    def cancel_operation(self):
-        """Cancel any running operations."""
-        for worker in self.active_workers:
-            try:
-                worker.quit()
-                worker.wait()
-                worker.deleteLater()
-            except Exception:
-                pass
-        self.active_workers.clear()
-        self.progress_updated.emit(0, "Operation cancelled")
-        self.unfreeze_ui()
 
     @thread_worker
-    def _create_preview_worker(self, displacement_field, params):
-        """Create worker for preview calculation."""
-        try:
-            result = calculate_force_field(displacement_field[np.newaxis, ...], params)
-            # Process generator to get result
-            try:
-                while True:
-                    next(result)
-            except StopIteration as e:
-                return e.value
-
-        except Exception as e:
-            raise ValueError(f"Preview calculation failed: {str(e)}")
-
-    @thread_worker
-    def _create_force_worker(self, displacement_field, params):
+    def _run_worker(self, displacement_field, params):
         """Process every frame, yielding each force field for live streaming."""
         try:
-            force_generator = calculate_force_field(displacement_field, params)
-
-            # Process all frames through the generator, streaming each one.
+            gen = calculate_force_field(displacement_field, params)
             try:
                 while True:
-                    force_field, frame, total = next(force_generator)
+                    force_field, frame, total = next(gen)
                     # The backend yields a 1-based frame number; the stack index
                     # (and the slider) want it 0-based.
                     yield frame - 1, total, force_field
             except StopIteration as e:
-                # Return the final result from the generator
                 return e.value
-
         except Exception as e:
             raise ValueError(f"Force calculation failed: {str(e)}")
+    # endregion
 
-    @thread_worker
-    def _create_gcv_worker(self, displacement_field):
-        """Create worker for GCV calculation."""
+    # region === Preview & GCV (synchronous, GUI thread) ===
+    def preview_force(self):
+        """Preview force calculation for the current frame (synchronous)."""
         try:
-            params = self.parameter_manager.get_fttc_parameters()
-            optimal_reg = find_optimal_regularization(displacement_field, params)
-            return optimal_reg
+            self._validate()
         except Exception as e:
-            raise ValueError(f"GCV calculation failed: {str(e)}")
+            QMessageBox.warning(None, "Warning", str(e))
+            return
 
-    def _handle_preview_results(self, result: FTTCResult):
-        """Handle preview calculation results."""
+        self.freeze_ui()
         try:
+            self.progress_updated.emit(0, "Calculating force preview...")
+            current_frame = self._current_frame()
+
+            displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
+            params = self.parameter_manager.get_fttc_parameters()
+
+            result = self._compute_preview(displacement_field, params)
             if result is None:
                 raise RuntimeError("Preview calculation failed to produce results")
 
-            # Update visualization for preview
             self.visualization_manager.visualize_force_preview(
                 result.force_field[0],
                 result.parameters.f_max,
                 result.parameters.force_vector_stride,
                 result.parameters.force_arrow_scale,
-                downscale_factor=result.parameters.downscale_factor
+                downscale_factor=result.parameters.downscale_factor,
             )
 
             # Show only the force layers (magnitude below, vectors on top).
@@ -217,60 +98,57 @@ class FTTCController(BaseAnalysisController):
                 ('Force Vectors', True),
             ])
 
-            # Calculate and show statistics
             magnitude = np.sqrt(np.sum(result.force_field[0] ** 2, axis=-1))
             self.progress_updated.emit(
                 100,
                 f"Preview statistics:\n"
                 f"Max force: {np.max(magnitude):.2f} Pa\n"
-                f"Mean force: {np.mean(magnitude):.2f} Pa"
+                f"Mean force: {np.mean(magnitude):.2f} Pa",
             )
-
-        except Exception as e:
-            self._handle_error(str(e))
-
-    def _handle_analysis_results(self, result: FTTCResult):
-        """Finalize a streamed run.
-
-        The magnitude stack and vector cache were filled in place as frames
-        arrived and are already on screen, so just store the full result for
-        downstream steps and announce completion. Visibility of other layers is
-        left untouched (the user's to set).
-        """
-        try:
-            if result is None:
-                raise RuntimeError("Analysis failed to produce results")
-
-            # Store the full result; the live layers already reflect it.
-            self.data_manager.set_force_results(result, dirty=True)
-
-            self.progress_updated.emit(100, "Analysis completed successfully")
-            self.analysis_completed.emit(result)
-
         except Exception as e:
             self._handle_error(str(e))
         finally:
-            self.active_workers.clear()
             self.unfreeze_ui()
 
-    def _handle_gcv_results(self, regularization: float):
-        """Handle GCV calculation results."""
-        if regularization is not None:
-            # Store the actual optimal value; the UI converts it to the exponent for display.
-            self.parameter_manager.set_parameter('regularization', regularization)
-            self.progress_updated.emit(
-                100,
-                f"Optimal regularization parameter: {regularization:.2e}"
-            )
-        else:
-            self._handle_error("GCV calculation failed")
+    def _compute_preview(self, displacement_field, params) -> FTTCResult:
+        """Run the single-frame force calculation to completion and return it."""
+        gen = calculate_force_field(displacement_field[np.newaxis, ...], params)
+        try:
+            while True:
+                next(gen)
+        except StopIteration as e:
+            return e.value
 
-    def _validate_prerequisites(self) -> bool:
-        """Check if required data and parameters are available."""
-        if self.data_manager.displacement_results is None:
-            QMessageBox.warning(None, "Warning", "No displacement data loaded")
-            return False
-        return True
+    def calculate_optimal_regularization(self):
+        """Compute the GCV-optimal regularization for the current frame (synchronous)."""
+        try:
+            self._validate()
+        except Exception as e:
+            QMessageBox.warning(None, "Warning", str(e))
+            return
+
+        self.freeze_ui()
+        try:
+            self.progress_updated.emit(0, "Calculating optimal regularization...")
+            current_frame = self._current_frame()
+
+            displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
+            params = self.parameter_manager.get_fttc_parameters()
+
+            optimal_reg = find_optimal_regularization(displacement_field, params)
+            if optimal_reg is None:
+                raise RuntimeError("GCV calculation failed")
+
+            # Store the actual optimal value; the UI converts it to the exponent for display.
+            self.parameter_manager.set_parameter('regularization', optimal_reg)
+            self.progress_updated.emit(
+                100, f"Optimal regularization parameter: {optimal_reg:.2e}"
+            )
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self.unfreeze_ui()
+    # endregion
 
 
 class FTTCWidget(BaseAnalysisWidget):
@@ -333,13 +211,13 @@ class FTTCWidget(BaseAnalysisWidget):
         self.viewer.layers.selection.events.active.connect(self._update_ui_state)
 
     def run_action(self):
-        self.controller.calculate_forces()
+        self.controller.run()
 
     def preview_action(self):
         self.controller.preview_force()
 
     def cancel_action(self):
-        self.controller.cancel_operation()
+        self.controller.cancel()
 
     def gcv_action(self):
         self.controller.calculate_optimal_regularization()
