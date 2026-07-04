@@ -2,8 +2,6 @@ from dataclasses import asdict, fields
 from typing import Dict, Any
 from enum import Enum, auto
 import math
-import yaml
-from pathlib import Path
 from qtpy.QtCore import QObject, Signal
 from napariTFM.backend.parameter_dataclasses import PreprocessingParameters, DisplacementParameters, FTTCParameters, StressParameters, UnifiedParameters
 
@@ -42,14 +40,18 @@ class ParameterManager(QObject):
         return value
 
     def get_ui_parameter(self, name: str) -> Any:
-        """Get a parameter value converted for display in UI controls."""
+        """Get a parameter value converted for display in UI controls.
+
+        Young's modulus is shown in kPa (stored in Pa); the two regularizers are
+        shown as a base-10 exponent (stored as the actual value). gel_height's
+        None->0 display mapping is already applied by get_parameter, so it needs
+        no conversion here — everything else is passed through unchanged.
+        """
         value = self.get_parameter(name)
         if name == 'young_modulus':
             return value / 1000
         if name in ('regularization', 'bism_regularization'):
             return math.log10(value)
-        if name == 'gel_height':
-            return value
         return value
 
     def set_parameter(self, name: str, value: Any) -> None:
@@ -99,84 +101,17 @@ class ParameterManager(QObject):
         Returns:
             Dict[str, Any]: Dictionary of all parameters with their current values
         """
-        # Start with all parameters from the dataclass
+        # Values are stored in internal units already (Pa, actual regularizer
+        # value — not the kPa / log10 the UI shows), so serialization is a
+        # straight field copy. The sole exception is gel_height, whose None
+        # ("infinite thickness") sentinel is written as 0 for YAML/JSON portability.
         parameters = {}
-
-        # Get all fields from UnifiedParameters
         for field in fields(self._parameters):
             value = getattr(self._parameters, field.name)
-
-            # Handle special cases
-            if field.name == 'young_modulus':
-                # Store in Pa even though it's displayed in kPa
-                parameters[field.name] = value
-            elif field.name == 'gel_height' and value is None:
-                # Convert None to 0 for infinity
-                parameters[field.name] = 0
-            elif field.name == 'regularization':
-                # Store actual value, not log10
-                parameters[field.name] = value
-            else:
-                parameters[field.name] = value
-
+            if field.name == 'gel_height' and value is None:
+                value = 0
+            parameters[field.name] = value
         return parameters
-
-    def get_category_parameters(self, category: ParameterCategory) -> Dict[str, Any]:
-        """
-        Get parameters for a specific category.
-
-        Args:
-            category: ParameterCategory enum value
-
-        Returns:
-            Dict[str, Any]: Dictionary of parameters for the specified category
-        """
-        category_parameters = {}
-
-        # Map categories to their parameter prefixes or names
-        category_mappings = {
-            ParameterCategory.GENERAL: ['pixel_size', 'frame_interval'],
-            ParameterCategory.PREPROCESSING: [
-                'min_intensity_percentile', 'max_intensity_percentile',
-                'gaussian_sigma', 'cell_min_intensity_percentile',
-                'cell_max_intensity_percentile', 'cell_gaussian_sigma',
-                'registration_mode'
-            ],
-            ParameterCategory.DISPLACEMENT: [
-                'nscales', 'inner_iterations',
-                'median_filtering', 'pyr_scale', 'poly_n', 'poly_sigma',
-                'use_gaussian_window', 'downscale_factor',
-                'disp_vector_stride', 'disp_arrow_scale', 'd_max'
-            ],
-            ParameterCategory.FORCE: [
-                'young_modulus', 'poisson_ratio_substrate', 'gel_height',
-                'lanczos_exp', 'regularization', 'auto_gcv',
-                'force_vector_stride', 'force_arrow_scale', 'f_max'
-            ],
-            ParameterCategory.STRESS: [
-                'bism_regularization', 'max_stress'
-            ],
-        }
-
-        # Get parameters for the requested category
-        if category in category_mappings:
-            for param_name in category_mappings[category]:
-                if hasattr(self._parameters, param_name):
-                    value = getattr(self._parameters, param_name)
-                    # Apply any necessary conversions
-                    if param_name == 'young_modulus':
-                        # Store in Pa even though it's displayed in kPa
-                        category_parameters[param_name] = value
-                    elif param_name == 'gel_height' and value is None:
-                        # Convert None to 0 for infinity
-                        category_parameters[param_name] = 0
-                    elif param_name == 'regularization':
-                        # Store actual value, not log10
-                        category_parameters[param_name] = value
-                    else:
-                        category_parameters[param_name] = value
-
-        return category_parameters
 
     def reset_all_parameters(self) -> None:
         """Reset all parameters to default values"""
@@ -184,24 +119,6 @@ class ParameterManager(QObject):
         self._update_all_parameters(new_params)
         for category in ParameterCategory:
             self.parameters_reset.emit(category)
-
-    def load_from_file(self, filepath: Path) -> None:
-        """Load parameters from file"""
-        with open(filepath, 'r') as f:
-            data = yaml.safe_load(f)
-
-        # Create new parameters instance with loaded values
-        current_params = asdict(self._parameters)
-        valid_parameter_names = {field.name for field in fields(UnifiedParameters)}
-        current_params.update({
-            name: value
-            for name, value in data.items()
-            if name in valid_parameter_names
-        })
-        new_params = UnifiedParameters(**current_params)
-
-        # Update all parameters
-        self._update_all_parameters(new_params)
 
     def _update_all_parameters(self, new_params: UnifiedParameters) -> None:
         """Update all parameters with validation"""

@@ -344,19 +344,25 @@ def test_stage_finished_reports_done_even_for_preprocessing_none_result():
     assert seen == [("preprocessing", "done", None)]
 
 
-def test_preprocessing_frame_progress_uses_frame_index_not_channel_count():
-    """A preprocessing frame can yield multiple channel calls per frame_index;
-    progress must track frames, not the extra per-channel stage_frame calls."""
+def test_preprocessing_frame_progress_is_monotonic_across_channels():
+    """Preprocessing streams beads, then the reference, then cells — each channel
+    with its own 0-based frame_index. Progress must advance monotonically across
+    those channel boundaries (never snap backward), so the bar is driven by a
+    frame count against the total workload, not the per-channel frame_index."""
     seen = []
     sink, vis, data = _sink(on_stage_progress=lambda *a: seen.append(a))
-    sink.stage_started("preprocessing", 2, {
-        "beads_shape": (2, 4, 4), "reference_shape": (4, 4), "cells_shape": None,
+    # Total workload announced = 2 beads + 1 reference + 1 cell = 4.
+    sink.stage_started("preprocessing", 4, {
+        "beads_shape": (2, 4, 4), "reference_shape": (4, 4), "cells_shape": (1, 4, 4),
     })
     sink.stage_frame("preprocessing", 0, {"beads": np.zeros((4, 4))})
-    sink.stage_frame("preprocessing", 0, {"reference": np.zeros((4, 4))})
     sink.stage_frame("preprocessing", 1, {"beads": np.zeros((4, 4))})
+    sink.stage_frame("preprocessing", 0, {"reference": np.zeros((4, 4))})
+    sink.stage_frame("preprocessing", 0, {"cells": np.zeros((4, 4))})
     fractions = [s[2] for s in seen if s[1] == "running"]
-    assert fractions == [0.0, 0.5, 0.5, 1.0]
+    assert fractions == [0.0, 0.25, 0.5, 0.75, 1.0]
+    # Strictly non-decreasing — the property the old frame_index math violated.
+    assert all(b >= a for a, b in zip(fractions, fractions[1:]))
 
 
 def test_no_progress_callback_is_noop():

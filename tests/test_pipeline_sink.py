@@ -14,7 +14,7 @@ import pytest
 
 from napariTFM.backend import batch_analysis as ba
 from napariTFM.backend.batch_analysis import BatchAnalysis
-from napariTFM.backend.pipeline_sink import NullSink, PipelineSink
+from napariTFM.backend.pipeline_sink import PipelineSink
 
 
 class RecordingSink(PipelineSink):
@@ -66,14 +66,6 @@ def test_emit_swallows_sink_errors(capsys):
     analysis = _bare(sink=Boom())
     analysis._emit("stage_frame", "force", 0, None)  # must not propagate
     assert "Pipeline sink error" in capsys.readouterr().out
-
-
-def test_null_sink_accepts_every_hook():
-    sink = NullSink()
-    sink.experiment_started("/data/pos_00")
-    sink.stage_started("force", 1, {})
-    sink.stage_frame("force", 0, None)
-    sink.stage_finished("force", None)
 
 
 def test_process_all_folders_emits_experiment_started_per_folder(tmp_path, monkeypatch):

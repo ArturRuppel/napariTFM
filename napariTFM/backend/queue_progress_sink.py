@@ -44,13 +44,24 @@ class QueueProgressSink(PipelineSink):
         self._queue = queue
         self._folder = folder
         self._stage_num_frames = 0
+        self._preproc_frames_seen = 0
 
     def stage_started(self, stage: str, num_frames: int, info: Optional[dict] = None) -> None:
         self._stage_num_frames = num_frames
+        if stage == "preprocessing":
+            self._preproc_frames_seen = 0
         self._queue.put((self._folder, stage, "running", 0.0))
 
     def stage_frame(self, stage: str, frame_index: int, frame: Any) -> None:
-        fraction = (frame_index + 1) / max(self._stage_num_frames, 1)
+        # Preprocessing streams three channels each with their own 0-based
+        # frame_index, so a monotonic count (against the announced total work)
+        # keeps the bar from jumping backward at channel boundaries. In-order
+        # stages use frame_index as the authoritative position. Mirrors ViewerSink.
+        if stage == "preprocessing":
+            self._preproc_frames_seen += 1
+            fraction = min(1.0, self._preproc_frames_seen / max(self._stage_num_frames, 1))
+        else:
+            fraction = (frame_index + 1) / max(self._stage_num_frames, 1)
         self._queue.put((self._folder, stage, "running", fraction))
 
     def stage_finished(self, stage: str, result: Any) -> None:

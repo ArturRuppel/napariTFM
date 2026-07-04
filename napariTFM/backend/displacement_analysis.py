@@ -90,7 +90,11 @@ class DisplacementAnalyzer:
     @staticmethod
     def _normalize_for_optical_flow(image: np.ndarray) -> np.ndarray:
         """Convert microscopy intensity data to the 8-bit format expected by OpenCV."""
-        image_float = image.astype(np.float32, copy=False)
+        # Replace any NaNs with 0 before scaling: a single NaN makes
+        # max()/min() NaN, which slips past the zero-span guard below and turns
+        # the whole frame to garbage uint8. validate_displacement_image only
+        # rejects *all*-NaN frames, so a partially-NaN frame reaches here.
+        image_float = np.nan_to_num(image.astype(np.float32, copy=False), nan=0.0)
         image_range = image_float.max() - image_float.min()
 
         if image_range <= 1e-8:

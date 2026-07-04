@@ -41,15 +41,6 @@ def test_set_active_theme_changes_resolved_accent():
     assert differs
 
 
-def test_status_states_trimmed_to_computed():
-    # 'stale' is never produced by compute_stage_status(); drop it.
-    assert "stale" not in _ui_style.STATUS_COLORS
-    assert "stale" not in _ui_style.STATUS_GLYPHS
-    # The states that ARE produced/used must remain.
-    for s in ("not_started", "ready", "running", "done", "error"):
-        assert s in _ui_style.STATUS_COLORS
-
-
 @pytest.fixture
 def app():
     from qtpy.QtWidgets import QApplication

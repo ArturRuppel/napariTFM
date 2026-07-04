@@ -102,6 +102,39 @@ class VisualizationManager(ErrorHandlingMixin):
             if layer.name not in keep:
                 layer.visible = False
 
+    def bring_layers_to_front(self, layers) -> None:
+        """Stack the named preview layers on top, hiding everything else.
+
+        ``layers`` is an ordered list of ``(name, visible)`` from bottom-most to
+        top-most among the front slots. Each named layer is set to its given
+        visibility and moved into the top ``len(layers)`` positions in that
+        order; the active colorbar legend stays visible; every other layer is
+        hidden. This is the shared body of the displacement / force / stress
+        preview layer-management (which differ only in the names and per-layer
+        visibility) — previously copy-pasted three times.
+        """
+        spec = list(layers)
+        visible_by_name = dict(spec)
+        found = {}
+        for layer in self.viewer.layers:
+            if layer.name in visible_by_name:
+                layer.visible = visible_by_name[layer.name]
+                found[layer.name] = layer
+            elif self.colorbar_manager.is_colorbar_layer(layer.name):
+                layer.visible = True
+            else:
+                layer.visible = False
+
+        n = len(spec)
+        for i, (name, _visible) in enumerate(spec):
+            layer = found.get(name)
+            if layer is None:
+                continue
+            current = self.viewer.layers.index(layer)
+            target = -(n - i)  # top-most slot is -1, next -2, ...
+            if current != target:
+                self.viewer.layers.move(current, target)
+
     def capture_layer_visibility(self) -> dict:
         """Snapshot ``{layer_name: visible}`` for every layer in the viewer.
 
@@ -1000,58 +1033,6 @@ class VisualizationManager(ErrorHandlingMixin):
             self._layers['stress_normal'], colormap_name='seismic',
             label='Stress (mN/m)',
         )
-
-    def update_preprocessing_visualization(self) -> None:
-        """Update visualization after preprocessing."""
-        try:
-            self.colorbar_manager.clear()
-
-            for layer_name in [
-                'Preprocessed Beads',
-                'Preprocessed Reference',
-                'Preprocessed Cells',
-                'Bead Overlay',
-            ]:
-                if layer_name in self.viewer.layers:
-                    self.viewer.layers.remove(layer_name)
-
-            if self.data_manager.preprocessed_cell_stack is not None:
-                self.viewer.add_image(
-                    self.data_manager.preprocessed_cell_stack,
-                    name='Preprocessed Cells',
-                    colormap='gray',
-                    blending='additive',
-                    visible=True
-                )
-
-            if self.data_manager.preprocessed_reference is not None:
-                self.viewer.add_image(
-                    self.data_manager.preprocessed_reference,
-                    name='Preprocessed Reference',
-                    colormap='magenta',
-                    blending='additive',
-                    visible=True
-                )
-
-            if self.data_manager.preprocessed_bead_stack is not None:
-                self.viewer.add_image(
-                    self.data_manager.preprocessed_bead_stack,
-                    name='Preprocessed Beads',
-                    colormap='green',
-                    blending='additive',
-                    visible=True
-                )
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to update preprocessing visualization",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Check data availability and consistency",
-                original_error=e,
-                source="visualization"
-            )
-            self.handle_error(error)
 
     def handle_preprocessing_preview(self, frames: Dict[str, np.ndarray], enable: bool = True) -> None:
         """Render preprocessing preview inputs as separate additive layers."""

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 @dataclass(frozen=True)
 class DataArtifactSpec:
@@ -9,8 +9,6 @@ class DataArtifactSpec:
     attr: str | None
     role: str = "input"
     required: bool = True
-    on_view: Callable[[], None] | None = None
-    on_action: Callable[[], None] | None = None
 
 
 def artifact_value(data_manager: Any, spec: DataArtifactSpec):

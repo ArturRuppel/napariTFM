@@ -158,6 +158,53 @@ def test_stage_exception_reports_error_but_keeps_partial(tmp_path, monkeypatch):
     assert not df["u_x[µm]"].isna().all()
 
 
+def test_stress_compute_failure_reports_error(tmp_path, monkeypatch):
+    """A genuine BISM compute failure must surface as an error, not a silent
+    'done'. `_execute_stress_analysis` used to wrap its whole body in
+    `except Exception: return None`, swallowing even its own RuntimeError so the
+    stress stage was never recorded as failed (a recurrence of
+    CODE_REVIEW_FINDINGS.md #5 for the stress stage)."""
+    import pytest
+
+    from napariTFM.backend import batch_analysis as ba
+
+    scale = {"grid_spacing": 0.4, "time_interval": 2.0}
+    disp = _Result(displacement_field=np.ones((1, 3, 3, 2)), physical_scale=scale)
+    force = _Result(force_field=np.ones((1, 3, 3, 2)), physical_scale=scale,
+                    parameters=_Result(downscale_factor=1))
+
+    analysis = _analysis(
+        analysis_steps={"preprocessing": False, "displacement": True,
+                        "force": True, "stress": True},
+        visualizations={},
+        input_files={},
+    )
+    analysis._sink = None
+    analysis._progress_callback = None
+    analysis._cancelled = False
+    analysis._tee_logger = None
+
+    out = tmp_path / "out"
+    monkeypatch.setattr(BatchAnalysis, "_initialize_folder",
+                        lambda self, o: (o.mkdir(parents=True, exist_ok=True), o)[1])
+    monkeypatch.setattr(BatchAnalysis, "_handle_visualization", lambda *a, **k: None)
+    monkeypatch.setattr(BatchAnalysis, "_cleanup", lambda self: None)
+    monkeypatch.setattr(BatchAnalysis, "_handle_displacement_execution",
+                        lambda self, tfm_folder, pre: disp)
+    monkeypatch.setattr(BatchAnalysis, "_execute_force_analysis",
+                        lambda self, tfm_folder, displacement_data: force)
+    monkeypatch.setattr(BatchAnalysis, "_load_mask",
+                        lambda self, folder: np.ones((1, 3, 3), dtype=np.int64))
+
+    def _boom_bism(*args, **kwargs):
+        raise RuntimeError("bism kaboom")
+
+    monkeypatch.setattr(ba, "calculate_bism_stresses", _boom_bism)
+
+    with pytest.raises(RuntimeError, match="stress"):
+        analysis.process_folder(str(tmp_path / "exp"), out)
+
+
 def test_load_mask_returns_none_when_absent(tmp_path):
     analysis = _analysis(input_files={"beads": "b.tif"})
     assert analysis._load_mask(tmp_path) is None

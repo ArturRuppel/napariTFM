@@ -42,22 +42,6 @@ STAGE_RAMP_POSITION = {
     "force": 0.75, "stress": 1.0, "batch": 1.0,
 }
 
-STATUS_COLORS = {
-    "not_started": "#8c8c8c",
-    "ready": "#2f80ed",
-    "running": "#f4a261",
-    "done": "#2a9d8f",
-    "error": "#d62828",
-}
-
-STATUS_GLYPHS = {
-    "available": "✓",
-    "missing_required": "✗",
-    "missing_optional": "○",
-    "running": "⟳",
-    "error": "⚠",
-}
-
 def theme_names() -> tuple[str, ...]:
     return tuple(THEME_RAMPS)
 
@@ -115,11 +99,6 @@ def _hex_to_rgb(hex_value: str) -> tuple[int, int, int]:
         int(hex_value[2:4], 16),
         int(hex_value[4:6], 16),
     )
-
-
-def muted_stage_accent(key: str) -> str:
-    """Return a muted variant of a stage accent."""
-    return muted_accent(stage_accent(key))
 
 
 def stage_header_style(accent: str) -> str:
@@ -297,11 +276,6 @@ def mono_font() -> QFont:
     font.setFamilies(["IBM Plex Mono", "DejaVu Sans Mono", "Menlo", "Consolas", "monospace"])
     font.setStyleHint(QFont.StyleHint.Monospace)
     return font
-
-
-def danger_text_style() -> str:
-    """Stylesheet for text on a destructive action control."""
-    return "color: red;"
 
 
 def section_grid() -> QGridLayout:

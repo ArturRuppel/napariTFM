@@ -77,7 +77,6 @@ class StressController(BaseAnalysisController):
                     return e.value
 
             worker = stress_calculation_worker()
-            worker.running = True
             self.active_workers.append(worker)
 
             def on_yielded(data):
@@ -92,7 +91,7 @@ class StressController(BaseAnalysisController):
                 # The three stress stacks were filled in place as frames arrived
                 # and are already on screen; just store the full result for
                 # downstream steps. Other layers' visibility is left untouched.
-                self.data_manager.set_stress_results(final_result, source="generated", dirty=True)
+                self.data_manager.set_stress_results(final_result, dirty=True)
 
                 r2 = final_result.r2_traction
                 r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
@@ -120,6 +119,11 @@ class StressController(BaseAnalysisController):
             worker.yielded.connect(on_yielded)
             worker.returned.connect(on_returned)
             worker.errored.connect(on_errored)
+            # Freeze here — after every prerequisite check that can raise, and
+            # right before the worker runs — so the header's Run/Preview actions
+            # disable during a live BISM run (on_returned/on_errored unfreeze).
+            # Every other stage freezes on run; stress used to be the exception.
+            self.freeze_ui()
             worker.start()
 
         except Exception as e:
@@ -176,43 +180,13 @@ class StressController(BaseAnalysisController):
                     downscale_factor=force_results.parameters.downscale_factor
                 )
 
-                # Manage layer visibility and ordering
-                xx_layer = None
-                yy_layer = None
-                avg_layer = None
-
-                # First pass: find the stress layers and disable all others
-                for layer in self.viewer.layers:
-                    if layer.name == 'Normal Stress XX':
-                        xx_layer = layer
-                        layer.visible = False
-                    elif layer.name == 'Normal Stress YY':
-                        yy_layer = layer
-                        layer.visible = False
-                    elif layer.name == 'Average Normal Stress':
-                        avg_layer = layer
-                        layer.visible = True
-                    elif self.visualization_manager.colorbar_manager.is_colorbar_layer(layer.name):
-                        # Keep the scale legend visible alongside the preview.
-                        layer.visible = True
-                    else:
-                        layer.visible = False
-
-                # Second pass: reorder layers
-                if xx_layer is not None:
-                    current_index = self.viewer.layers.index(xx_layer)
-                    if current_index != len(self.viewer.layers) - 3:  # -3 position
-                        self.viewer.layers.move(current_index, -3)
-
-                if yy_layer is not None:
-                    current_index = self.viewer.layers.index(yy_layer)
-                    if current_index != len(self.viewer.layers) - 2:  # -2 position
-                        self.viewer.layers.move(current_index, -2)
-
-                if avg_layer is not None:
-                    current_index = self.viewer.layers.index(avg_layer)
-                    if current_index != len(self.viewer.layers) - 1:  # -1 position (top)
-                        self.viewer.layers.move(current_index, -1)
+                # Show only the average-normal-stress layer on top; keep XX/YY
+                # loaded (for scrubbing) but hidden, stacked beneath it.
+                self.visualization_manager.bring_layers_to_front([
+                    ('Normal Stress XX', False),
+                    ('Normal Stress YY', False),
+                    ('Average Normal Stress', True),
+                ])
 
                 r2 = result.r2_traction
                 r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
@@ -245,7 +219,6 @@ class StressController(BaseAnalysisController):
         """Cancel all running background operations"""
         for worker in self.active_workers:
             try:
-                worker.running = False  # Set cancellation flag
                 worker.quit()
                 worker.wait(500)  # Wait up to 500ms
                 if worker.isRunning():

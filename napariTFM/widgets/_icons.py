@@ -12,8 +12,6 @@ from qtpy.QtGui import QIcon, QPainter, QPixmap
 from qtpy.QtSvg import QSvgRenderer
 
 _ICON_BODIES = {
-    # magnifier — "show this stage's data"
-    "files": '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/>',
     # sliders — "tune this stage's parameters"
     "params": (
         '<line x1="3" y1="8" x2="21" y2="8"/>'
