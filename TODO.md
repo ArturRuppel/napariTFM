@@ -9,6 +9,80 @@
 
 ---
 
+## Open after the round-2 review merge (2026-07-04)
+
+Leftovers from PR #3 (`CODE_REVIEW_FINDINGS_2026-07-03.md`, now in-repo) that
+were *not* landed with the merge. The Tier-1 bugs (B-1 odd-grid FFT, B-2 stress
+error-swallow, B-4/B-5/B-6), the Tier-2 dead-code deletions, and the A-1/A-3/A-4
+refactors are all done and test-green (625 passed). What remains, ranked
+easy-wins-first:
+
+### Vectorize `downscale_flow`  ·  S  ·  perf
+`displacement_analysis.py::downscale_flow` is an O(H·W) Python double loop that
+computes a pure block-mean. Runs on **every** displacement calc (default
+downscale 4). Replace with
+`flow[:nh*f,:nw*f].reshape(nh,f,nw,f,2).mean(axis=(1,3))` — same result, ~100×
+faster. Lock a numeric-equivalence test against the loop before deleting it.
+
+### Split compute-critical from viz-only validation in `validate_fttc_parameters`  ·  S
+`parameter_validation.py:41,44-50` gates the whole **force computation** on
+visualization-only params (`force_arrow_scale`, `f_max`) and enforces
+`regularization > 0` even when `auto_gcv=True` (where `regularization` is
+unused). Split the compute-critical checks from the viz checks; skip the reg
+check under auto-GCV. Small, removes two spurious hard-fails.
+
+### BUG: interactive upstream re-run resurrects a stale downstream stage on disk  ·  M  ·  NEEDS A DECISION (B-3)
+CONFIRMED, interactive-path only (batch is unaffected — it recomputes downstream
+in order and writes once). Run displacement → force, then change a param and
+re-run **displacement**: `set_displacement_results` invalidates force in memory,
+but the on-disk persist goes through `results_to_ntfm(merge_existing=True)`, and
+`merge_arrays`/`merge_tidy_preserving` sees force absent-in-new / present-in-old
+and **restores the old force** — which was computed from the *old* displacement.
+Disk ends up with `disp_v2` + physically inconsistent `force_v1`, and the next
+row reselect reloads that stale force.
+**Why it's deferred, not fixed:** the merge's preserve-behaviour is *wanted* for
+a force-only resume (preserve displacement). The fix has to distinguish "upstream
+changed → clear downstream" from "downstream-only write → preserve upstream".
+**Decide the rule before coding** — either the interactive persist of an upstream
+stage writes with `merge_existing=False`, or the merge learns the `_DOWNSTREAM`
+dependency chain. A-1 made the merge array-native, so this is now tractable in
+`merge_arrays` (`utilities/ntfm.py`).
+
+### Collapse the vector-stage Widget/Controller triplication + one blessed lifecycle  ·  L  ·  needs manual in-app Qt verification (A-2 remainder)
+The A-2 preview-layer helper landed; **this half did not.** Stages 2/3/4
+(displacement/force/stress) are still ~75% copy-paste, and the drift is real
+bugs: three different `cancel()` semantics (one `terminate()`, one a write-only
+flag that cancels nothing — D-12 was the worst of these and *is* fixed), and
+preview running synchronously on the GUI thread in displacement/stress but on a
+`thread_worker` in force. Plan: (1) fix the remaining drift in place (small,
+individually revertable), then (2) hoist run→freeze→progress→complete/fail→
+unfreeze + **one** blessed cancel into the base as a *non-overridable* template
+method so the invariants can't drift again, then (3) merge the disp/force
+controllers into one `VectorStageController(StageSpec)` (mirroring
+`_VECTOR_FIELD_CONFIG`); stress stays a thin subclass for its mask input.
+Preprocessing stays bespoke. Add one parameterized drift-regression test
+(freeze-on-run / unfreeze-on-terminal / cancel-actually-cancels). **This touches
+Qt worker teardown across four controllers and the suite leans on fakes there —
+it wants its own reviewed change with manual in-app verification, not a blind
+headless refactor.**
+
+### Minor cleanups (low priority, do opportunistically)
+- **Mask resized twice per stress folder** and the resize logic is duplicated
+  verbatim between `batch_analysis.py:1261-1273` and `stress.py:73-85` — resize
+  once, share one helper.
+- **Three near-identical `physical_scale` dicts** (`displacement_analysis.py:213`,
+  `fttc.py:100`, `bism.py:365`) differ only in a unit-name string — one helper.
+
+**Considered and deliberately dropped** (don't re-open without a reason): the
+dead params `tfm_folder`/`folder`/`preprocessed_data` (leftover signatures, low
+value); the fttc GCV micro-cleanups (`_interp_vec2grid` NaN branch, `np.copy`,
+`np.max([minGi,0])` — fttc is numerically sensitive, not worth the risk for
+cosmetics). The `metrics_calculator.py` polarization fix (`eigvals`→`eigvalsh`,
+centroid-not-origin moment) is real but stays parked under the existing "#9:
+wire up metrics later" decision — fix it *when* it's wired up.
+
+---
+
 ## Ranked open work (2026-06-29)
 
 ### Remove the green/red input/output-file status icons  ·  DONE (2026-07-02)
