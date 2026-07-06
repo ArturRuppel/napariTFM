@@ -97,6 +97,7 @@ class WorkflowParameterPanel(QWidget):
             ("force_method", "Force Method", "choice", None, None, None, None, ["fttc", "forward"]),
             ("fwd_mask_strength", "Mask Confinement", "float", 0.0, 100.0, 1.0, 0, None),
             ("fwd_smoothness", "Smoothness", "float", 0.0, 1.0, 0.01, 2, None),
+            ("fwd_regularization", "Tikhonov λ (10^x)", "float", -21.0, 0.0, 0.5, 1, None),
             (GROUP, "Visualization"),
             ("force_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("force_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -133,6 +134,15 @@ class WorkflowParameterPanel(QWidget):
             "lets the in-mask field overfit into artifacts; this term (γ‖∇t‖²) is what "
             "the photometric solver got for free from its coarse basis. Useful band "
             "~0.01..0.3. 0 = off. Only used by 'forward' with confinement > 0."
+        ),
+        "fwd_regularization": (
+            "Tikhonov amplitude ridge (λ‖t‖²) for the 'forward' method, as a base-10 "
+            "exponent. This is the forward path's own regularization — distinct from "
+            "the FTTC 'Regularization' above, which the forward method ignores. It "
+            "conditions the solve and is the only regularizer with no mask "
+            "(closed-form) — but it penalizes force AMPLITUDE, so cranking it biases "
+            "the traction magnitude low; for smoothing under confinement, prefer the "
+            "Smoothness dial (a gradient penalty), which preserves amplitude."
         ),
         "piv_window": (
             "Final PIV interrogation window, in pixels. Cross-correlation is run "

@@ -41,15 +41,16 @@ class ParameterManager(QObject):
     def get_ui_parameter(self, name: str) -> Any:
         """Get a parameter value converted for display in UI controls.
 
-        Young's modulus is shown in kPa (stored in Pa); the two regularizers are
-        shown as a base-10 exponent (stored as the actual value). gel_height's
+        Young's modulus is shown in kPa (stored in Pa); the regularizers
+        (FTTC, BISM, forward-Tikhonov) are shown as a base-10 exponent (stored as
+        the actual value). gel_height's
         None->0 display mapping is already applied by get_parameter, so it needs
         no conversion here — everything else is passed through unchanged.
         """
         value = self.get_parameter(name)
         if name == 'young_modulus':
             return value / 1000
-        if name in ('regularization', 'bism_regularization'):
+        if name in ('regularization', 'bism_regularization', 'fwd_regularization'):
             return math.log10(value)
         return value
 
@@ -73,7 +74,7 @@ class ParameterManager(QObject):
         """Set a parameter from a UI control value, converting to internal units."""
         if name == 'young_modulus':
             value = value * 1000
-        elif name in ('regularization', 'bism_regularization'):
+        elif name in ('regularization', 'bism_regularization', 'fwd_regularization'):
             value = 10 ** value
         self.set_parameter(name, value)
 

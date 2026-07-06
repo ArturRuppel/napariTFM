@@ -40,6 +40,7 @@ class _StubParameterManager(QObject):
             "force_method": "fttc",
             "fwd_mask_strength": 0.0,
             "fwd_smoothness": 0.05,
+            "fwd_regularization": -4.0,
             "force_vector_stride": 20,
             "force_arrow_scale": 1.0,
             "f_max": 500.0,
