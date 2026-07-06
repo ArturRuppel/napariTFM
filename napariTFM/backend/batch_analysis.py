@@ -778,7 +778,7 @@ class BatchAnalysis:
         *persisted* preprocessed tiffs, never the in-session float arrays.
         Preprocessing always writes the calibrated tiffs (see
         ``_execute_preprocessing``), so reading them back here means a fresh run
-        and a stage-resume feed Farneback byte-identical inputs — consistent with
+        and a stage-resume feed PIV byte-identical inputs — consistent with
         the project-wide "calcs always read from disk" invariant. A missing/unreadable tiff raises and is
         recorded as a displacement failure by ``_guard_stage``.
         """
@@ -1087,12 +1087,12 @@ class BatchAnalysis:
         2. Optionally loads cell images if specified in config
         3. Applies preprocessing pipeline:
             - Background subtraction
-            - Optical flow calculation (Farneback)
+            - Displacement calculation (multi-pass PIV)
             - Optional downscaling and filtering
         4. Returns the displacement field (persisted later in the .ntfm)
 
         The displacement parameters are taken from the config:
-            - nscales, inner_iterations, median_filtering (Farneback parameters)
+            - piv_window, piv_passes (PIV parameters)
             - downscale_factor, pixel_size
 
         Raises

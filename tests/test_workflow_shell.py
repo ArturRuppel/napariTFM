@@ -22,14 +22,11 @@ class _StubParameterManager(QObject):
             "cell_max_intensity_percentile": 100.0,
             "cell_gaussian_sigma": 0.0,
             "registration_mode": "translation",
-            "nscales": 3,
-            "inner_iterations": 15,
             "outer_iterations": 5,
-            "median_filtering": 9,
-            "pyr_scale": 0.5,
-            "poly_n": 5,
-            "poly_sigma": 1.2,
-            "use_gaussian_window": False,
+            "piv_window": 16,
+            "piv_overlap": 0.75,
+            "piv_passes": 8,
+            "piv_device": "auto",
             "downscale_factor": 4,
             "disp_vector_stride": 20,
             "disp_arrow_scale": 1.0,
@@ -1630,7 +1627,7 @@ def test_workflow_parameter_panel_exposes_one_control_per_managed_parameter(app)
     for name in [
         "pixel_size",
         "gaussian_sigma",
-        "nscales",
+        "piv_window",
         "young_modulus",
         "auto_gcv",
         "bism_regularization",
@@ -1654,9 +1651,9 @@ def test_workflow_parameter_panel_syncs_from_parameter_manager(app):
     manager = _StubParameterManager()
     panel = _widget.WorkflowParameterPanel(manager)
 
-    manager.set_parameter("nscales", 6)
+    manager.set_parameter("piv_window", 24)
 
-    assert panel.parameter_controls["nscales"].value() == 6
+    assert panel.parameter_controls["piv_window"].value() == 24
 
 
 def test_intensity_min_max_collapse_into_one_range_slider(app):
@@ -1755,8 +1752,8 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     assert "gaussian_sigma" in preprocessing_panel.parameter_controls
     # Calibration lives only in the Project section, not the preprocessing panel.
     assert "pixel_size" not in preprocessing_panel.parameter_controls
-    assert "nscales" not in preprocessing_panel.parameter_controls
-    assert {"nscales", "inner_iterations"}.issubset(displacement_panel.parameter_controls)
+    assert "piv_window" not in preprocessing_panel.parameter_controls
+    assert {"piv_window", "piv_passes"}.issubset(displacement_panel.parameter_controls)
     assert "young_modulus" not in displacement_panel.parameter_controls
     assert {"young_modulus", "auto_gcv"}.issubset(force_panel.parameter_controls)
     assert {"bism_regularization", "max_stress"}.issubset(stress_panel.parameter_controls)
@@ -1881,7 +1878,7 @@ def test_each_stage_has_single_inline_parameter_editor(monkeypatch, app):
     assert not hasattr(widget, "_hide_embedded_parameter_panels")
 
 
-def test_workflow_parameter_panel_labels_farneback_controls(app):
+def test_workflow_parameter_panel_labels_piv_controls(app):
     from qtpy.QtWidgets import QLabel
 
     manager = _StubParameterManager()
@@ -1889,10 +1886,11 @@ def test_workflow_parameter_panel_labels_farneback_controls(app):
 
     labels = {label.text() for label in panel.findChildren(QLabel)}
 
-    assert "Farneback Levels" in labels
-    assert "Farneback Iterations" in labels
-    assert "Window Size" in labels
-    assert "Refinement Iterations" not in labels
+    assert "Interrogation Window (px)" in labels
+    assert "Passes" in labels
+    # The Farneback controls are gone entirely.
+    assert "Farneback Levels" not in labels
+    assert "Farneback Iterations" not in labels
 
 
 def test_refresh_updates_every_stage_widget_once(monkeypatch, app):
@@ -2028,12 +2026,12 @@ def test_workflow_parameter_panel_uses_sliders_for_numeric(app):
 
     pm = _real_parameter_manager()
     panel = WorkflowParameterPanel(pm, section_titles=("Displacement",))
-    # nscales is an int param -> islider; disp_arrow_scale is float -> dslider.
-    assert type(panel.parameter_controls["nscales"]).__name__ == "QLabeledSlider"
+    # piv_window is an int param -> islider; disp_arrow_scale is float -> dslider.
+    assert type(panel.parameter_controls["piv_window"]).__name__ == "QLabeledSlider"
     assert type(panel.parameter_controls["disp_arrow_scale"]).__name__ == "QLabeledDoubleSlider"
 
 
-def test_displacement_panel_exposes_grouped_farneback_internals(app):
+def test_displacement_panel_exposes_piv_controls(app):
     from qtpy.QtWidgets import QLabel
 
     from napariTFM.widgets._widget import WorkflowParameterPanel
@@ -2041,14 +2039,15 @@ def test_displacement_panel_exposes_grouped_farneback_internals(app):
     pm = _real_parameter_manager()
     panel = WorkflowParameterPanel(pm, section_titles=("Displacement",))
 
-    # New Farneback internals are exposed as editable controls.
-    for name in ("pyr_scale", "poly_n", "poly_sigma", "use_gaussian_window"):
+    # The PIV knobs are exposed as editable controls.
+    for name in ("piv_window", "piv_passes"):
         assert name in panel.parameter_controls
 
-    # They live under an "Advanced" sub-group; visualization knobs under
-    # "Visualization". Both sub-headers render inside the single section.
+    # The Farneback "Advanced" group is gone; only "Visualization" remains as a
+    # sub-header inside the section.
     labels = {w.text() for w in panel.findChildren(QLabel)}
-    assert {"Advanced", "Visualization"}.issubset(labels)
+    assert "Visualization" in labels
+    assert "Advanced" not in labels
 
 
 def test_workflow_parameter_panel_slider_writes_through(app):
@@ -2056,8 +2055,8 @@ def test_workflow_parameter_panel_slider_writes_through(app):
 
     pm = _real_parameter_manager()
     panel = WorkflowParameterPanel(pm, section_titles=("Displacement",))
-    panel.parameter_controls["nscales"].setValue(7)
-    assert pm.get_ui_parameter("nscales") == 7
+    panel.parameter_controls["piv_window"].setValue(32)
+    assert pm.get_ui_parameter("piv_window") == 32
 
 
 def test_wheel_guard_consumes_scroll_on_unfocused_slider(app):

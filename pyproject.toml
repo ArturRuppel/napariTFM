@@ -46,6 +46,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# GPU acceleration for the PIV displacement backend. The numpy core works with
+# no extra dependency; installing this extra lets piv_device="auto"/"cuda" run
+# the ~100x-faster torch backend on a CUDA device.
+piv = [
+    "torch>=2.0",
+]
 testing = [
     "pytest",
     "pytest-qt",

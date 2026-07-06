@@ -587,5 +587,5 @@ def test_param_panel_still_registers_controls(app):
 
     panel = WorkflowParameterPanel(ParameterManager(), section_titles=("Displacement",))
 
-    assert "nscales" in panel.parameter_controls
+    assert "piv_window" in panel.parameter_controls
     assert "d_max" in panel.parameter_controls

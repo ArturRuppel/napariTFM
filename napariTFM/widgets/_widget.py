@@ -95,15 +95,9 @@ class WorkflowParameterPanel(QWidget):
              ["translation", "rigid", "no registration"]),
         ]),
         ("Displacement", [
-            ("median_filtering", "Window Size", "int", 1, 200, 2, 0, None),
+            ("piv_window", "Interrogation Window (px)", "int", 8, 128, 2, 0, None),
+            ("piv_passes", "Passes", "int", 1, 12, 1, 0, None),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
-            (GROUP, "Advanced"),
-            ("nscales", "Farneback Levels", "int", 1, 50, 1, 0, None),
-            ("inner_iterations", "Farneback Iterations", "int", 1, 50, 1, 0, None),
-            ("pyr_scale", "Pyramid Scale", "float", 0.1, 0.9, 0.05, 2, None),
-            ("poly_n", "Poly N", "int", 1, 21, 2, 0, None),
-            ("poly_sigma", "Poly Sigma", "float", 0.1, 5.0, 0.1, 1, None),
-            ("use_gaussian_window", "Gaussian Window", "bool", None, None, None, None, None),
             (GROUP, "Visualization"),
             ("disp_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("disp_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -131,42 +125,20 @@ class WorkflowParameterPanel(QWidget):
     ]
 
     # Tooltips keyed by parameter name, applied to both the label and control.
-    # The Farneback set maps onto OpenCV's calcOpticalFlowFarneback arguments
-    # (winsize, levels, iterations, pyr_scale, poly_n, poly_sigma, flags).
+    # The PIV set maps onto napariTFM.backend.piv_displacement (multi-pass FFT
+    # cross-correlation, GPU-accelerated when torch + CUDA are available).
     PARAMETER_TOOLTIPS = {
-        "median_filtering": (
-            "Farneback averaging window (winsize), in pixels. Rounded up to the "
-            "next odd value. Larger windows are more robust to noise and give a "
-            "smoother field, but blur fine detail and can miss small displacements."
+        "piv_window": (
+            "Final PIV interrogation window, in pixels. Cross-correlation is run "
+            "on windows of this size on the last (finest) pass. Smaller windows "
+            "resolve finer detail but need denser texture to stay well-posed; "
+            "larger windows are more robust to noise but blur small displacements."
         ),
-        "nscales": (
-            "Number of pyramid levels (levels). More levels resolve larger "
-            "displacements by matching on progressively downscaled images; 1 uses "
-            "the original image only."
-        ),
-        "inner_iterations": (
-            "Farneback iterations per pyramid level. More iterations refine the "
-            "flow estimate at the cost of runtime; gains taper off quickly."
-        ),
-        "pyr_scale": (
-            "Pyramid scale (pyr_scale): the size ratio between successive levels. "
-            "0.5 halves the resolution each level; values closer to 1 build a "
-            "finer pyramid with more, smaller steps."
-        ),
-        "poly_n": (
-            "Neighborhood size for the polynomial expansion (poly_n), in pixels. "
-            "Larger values yield a smoother field robust to noise; typical "
-            "choices are 5 or 7."
-        ),
-        "poly_sigma": (
-            "Gaussian standard deviation used to smooth derivatives for the "
-            "polynomial expansion (poly_sigma). Should scale with Poly N; ~1.1 "
-            "for poly_n=5, ~1.5 for poly_n=7."
-        ),
-        "use_gaussian_window": (
-            "Use a Gaussian averaging window instead of a box window "
-            "(OPTFLOW_FARNEBACK_GAUSSIAN). More accurate but slower; typically "
-            "pair with a larger Window Size."
+        "piv_passes": (
+            "Number of coarse-to-fine PIV passes. Each pass re-warps the moving "
+            "image by the running estimate and correlates with a smaller window, "
+            "so more passes capture larger displacements and refine subpixel "
+            "accuracy at the cost of runtime; gains taper off after a few."
         ),
     }
 

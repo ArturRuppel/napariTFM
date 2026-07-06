@@ -21,23 +21,13 @@ class PreprocessingParameters:
 @dataclass
 class DisplacementParameters:
     """Parameters for displacement analysis"""
-    # Farneback optical flow parameters. Names are retained for compatibility
-    # with existing saved configs: nscales=levels, inner_iterations=iterations,
-    # median_filtering=window size.
-    nscales: int = 10
-    inner_iterations: int = 10
-    median_filtering: int = 9
-
-    # Farneback internals (defaults match OpenCV's typical values; previously
-    # hardcoded as DisplacementAnalyzer constants). use_gaussian_window selects
-    # the OPTFLOW_FARNEBACK_GAUSSIAN flag (Gaussian vs. box windowing).
-    pyr_scale: float = 0.5
-    poly_n: int = 5
-    poly_sigma: float = 1.2
-    # Gaussian (not box) windowing by default: a box window makes the flow
-    # piecewise-constant over its winsize footprint, tiling sparse-bead fields
-    # into blocks. The Gaussian window weights the neighbourhood smoothly.
-    use_gaussian_window: bool = True
+    # PIV (multi-pass FFT cross-correlation) parameters. The backend has a
+    # torch-free numpy core and is GPU-accelerated automatically when torch +
+    # CUDA are available (see napariTFM/backend/piv_displacement.py).
+    piv_window: int = 16          # final interrogation window (px)
+    piv_overlap: float = 0.75     # window overlap fraction [0, 1)
+    piv_passes: int = 8           # coarse->fine window-deformation passes
+    piv_device: str = "auto"      # "auto" | "cuda" | "cpu"
 
     # Analysis parameters
     downscale_factor: int = 4
@@ -109,14 +99,11 @@ class UnifiedParameters:
     cell_gaussian_sigma: float = 0.0
     registration_mode: str = 'translation'
 
-    # Displacement parameters
-    nscales: int = 10
-    inner_iterations: int = 10
-    median_filtering: int = 9
-    pyr_scale: float = 0.5
-    poly_n: int = 5
-    poly_sigma: float = 1.2
-    use_gaussian_window: bool = True  # Gaussian window avoids box-window block tiling
+    # Displacement parameters (PIV backend)
+    piv_window: int = 16
+    piv_overlap: float = 0.75
+    piv_passes: int = 8
+    piv_device: str = "auto"  # "auto" | "cuda" | "cpu"
     downscale_factor: int = 4
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0

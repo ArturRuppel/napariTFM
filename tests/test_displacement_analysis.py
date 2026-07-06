@@ -1,125 +1,124 @@
+"""Tests for the displacement backend (multi-pass FFT cross-correlation PIV).
+
+The core tests are NOT gated behind torch: PIV has a torch-free numpy core, so
+it must work on a plain install. A separate test checks the numpy path still
+runs with torch forcibly absent, and the GPU-equivalence test is gated behind
+torch + CUDA.
+"""
+import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
+from scipy import ndimage
 
 from napariTFM.backend.displacement_analysis import (
-    DisplacementAnalyzer,
     calculate_displacement_field,
     validate_displacement_image,
 )
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
+from napariTFM.backend.piv_displacement import PIVDisplacementAnalyzer
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_displacement_analyzer_initializes_with_standard_opencv():
-    analyzer = DisplacementAnalyzer(DisplacementParameters())
+def _params(**overrides):
+    """DisplacementParameters pinned to a fast, deterministic CPU (numpy) PIV config."""
+    base = dict(piv_device="cpu", piv_window=16, piv_passes=4)
+    base.update(overrides)
+    return DisplacementParameters(**base)
 
-    assert analyzer.algorithm_name == "Farneback"
+
+def _textured_image(seed=0, size=96):
+    """A smooth, well-textured image so window correlation is well-posed."""
+    rng = np.random.default_rng(seed)
+    img = rng.standard_normal((size, size))
+    return ndimage.gaussian_filter(img, sigma=2.0).astype(np.float64)
 
 
-def test_displacement_analyzer_returns_dense_xy_flow():
-    reference = np.zeros((24, 24), dtype=np.float32)
-    moving = np.zeros((24, 24), dtype=np.float32)
-    reference[8:16, 8:16] = 1.0
-    moving[8:16, 9:17] = 1.0
+def test_analyzer_reports_piv_algorithm():
+    analyzer = PIVDisplacementAnalyzer(_params())
+    assert analyzer.algorithm_name == "PIV"
+    assert analyzer._backend == "numpy"  # piv_device="cpu" forces the numpy core
 
-    analyzer = DisplacementAnalyzer(DisplacementParameters())
-    flow = analyzer.calculate_flow(reference, moving)
 
-    assert flow.shape == (24, 24, 2)
+def test_piv_recovers_known_translation():
+    ref = _textured_image(seed=1, size=96)
+    dx, dy = 1.5, -1.0                       # columns (x), rows (y)
+    moving = ndimage.shift(ref, shift=(dy, dx), order=3, mode="reflect")
+
+    flow = PIVDisplacementAnalyzer(_params()).calculate_flow(ref, moving)
+
+    m = slice(24, -24)                       # interior, avoid border
+    ux = np.median(flow[m, m, 0])
+    uy = np.median(flow[m, m, 1])
+    assert abs(ux - dx) < 0.2, f"u_x {ux:.3f} vs {dx}"
+    assert abs(uy - dy) < 0.2, f"u_y {uy:.3f} vs {dy}"
+
+
+def test_piv_flow_contract():
+    ref = _textured_image(seed=2, size=64)
+    moving = ndimage.shift(ref, shift=(0.0, 1.0), order=3, mode="reflect")
+
+    flow = PIVDisplacementAnalyzer(_params()).calculate_flow(ref, moving)
+
+    assert flow.shape == (64, 64, 2)          # full native resolution, (H,W,2)
     assert flow.dtype == np.float32
     assert np.isfinite(flow).all()
+    # component 0 is u_x: a +1px column shift must show up positive there
+    assert np.median(flow[20:-20, 20:-20, 0]) > 0.3
 
 
-def test_displacement_analyzer_calls_standard_opencv_farneback(monkeypatch):
-    captured = {}
+def test_piv_numpy_core_is_deterministic():
+    ref = _textured_image(seed=3, size=64)
+    moving = ndimage.shift(ref, shift=(0.7, -0.4), order=3, mode="reflect")
 
-    def fake_farneback(
-        reference,
-        moving,
-        initial_flow,
-        pyr_scale,
-        levels,
-        winsize,
-        iterations,
-        poly_n,
-        poly_sigma,
-        flags,
-    ):
-        captured.update(
-            reference_dtype=reference.dtype,
-            moving_dtype=moving.dtype,
-            initial_flow=initial_flow,
-            pyr_scale=pyr_scale,
-            levels=levels,
-            winsize=winsize,
-            iterations=iterations,
-            poly_n=poly_n,
-            poly_sigma=poly_sigma,
-            flags=flags,
-        )
-        return np.zeros((*reference.shape, 2), dtype=np.float32)
-
-    monkeypatch.setattr(
-        "napariTFM.backend.displacement_analysis.cv2.calcOpticalFlowFarneback",
-        fake_farneback,
-    )
-    params = DisplacementParameters(
-        nscales=10, inner_iterations=10, median_filtering=9, use_gaussian_window=False
-    )
-    analyzer = DisplacementAnalyzer(params)
-
-    flow = analyzer.calculate_flow(np.zeros((8, 8)), np.ones((8, 8)))
-
-    assert flow.shape == (8, 8, 2)
-    assert captured == {
-        "reference_dtype": np.dtype("uint8"),
-        "moving_dtype": np.dtype("uint8"),
-        "initial_flow": None,
-        "pyr_scale": 0.5,
-        "levels": 10,
-        "winsize": 9,
-        "iterations": 10,
-        "poly_n": 5,
-        "poly_sigma": 1.2,
-        "flags": 0,
-    }
+    p = _params()
+    f1 = PIVDisplacementAnalyzer(p).calculate_flow(ref, moving)
+    f2 = PIVDisplacementAnalyzer(p).calculate_flow(ref, moving)
+    np.testing.assert_array_equal(f1, f2)
 
 
-def test_displacement_analyzer_forwards_farneback_internals(monkeypatch):
-    captured = {}
+def test_piv_numpy_core_needs_no_torch(monkeypatch):
+    """With torch import forced to fail, PIV still works on the numpy core (device
+    'cpu' and 'auto' both). This is the torch-free contract of the backend."""
+    monkeypatch.setitem(sys.modules, "torch", None)
 
-    def fake_farneback(reference, moving, initial_flow, pyr_scale, levels,
-                       winsize, iterations, poly_n, poly_sigma, flags):
-        captured.update(
-            pyr_scale=pyr_scale,
-            poly_n=poly_n,
-            poly_sigma=poly_sigma,
-            flags=flags,
-        )
-        return np.zeros((*reference.shape, 2), dtype=np.float32)
+    ref = _textured_image(seed=5, size=48)
+    moving = ndimage.shift(ref, shift=(0.0, 1.0), order=3, mode="reflect")
 
-    monkeypatch.setattr(
-        "napariTFM.backend.displacement_analysis.cv2.calcOpticalFlowFarneback",
-        fake_farneback,
-    )
-    params = DisplacementParameters(
-        pyr_scale=0.4, poly_n=7, poly_sigma=1.5, use_gaussian_window=True
-    )
-    analyzer = DisplacementAnalyzer(params)
+    for device in ("cpu", "auto"):
+        analyzer = PIVDisplacementAnalyzer(_params(piv_device=device))
+        assert analyzer._backend == "numpy"
+        flow = analyzer.calculate_flow(ref, moving)
+        assert flow.shape == (48, 48, 2)
+        assert np.isfinite(flow).all()
 
-    analyzer.calculate_flow(np.zeros((8, 8)), np.ones((8, 8)))
 
-    import cv2
+def test_piv_cuda_without_torch_raises_actionable_error(monkeypatch):
+    """piv_device='cuda' with torch absent errors clearly; 'auto'/'cpu' do not."""
+    monkeypatch.setitem(sys.modules, "torch", None)
 
-    assert captured == {
-        "pyr_scale": 0.4,
-        "poly_n": 7,
-        "poly_sigma": 1.5,
-        "flags": cv2.OPTFLOW_FARNEBACK_GAUSSIAN,
-    }
+    with pytest.raises(ImportError, match=r"napariTFM\[piv\]"):
+        PIVDisplacementAnalyzer(_params(piv_device="cuda"))
+
+
+def test_piv_gpu_matches_numpy_on_dense_data():
+    """Where PIV is well-posed (dense texture, every window populated), the GPU
+    backend is numerically equivalent to the numpy core. (Skipped without CUDA.)"""
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("no CUDA device")
+
+    ref = _textured_image(seed=7, size=128)
+    moving = ndimage.shift(ref, shift=(0.6, -0.9), order=3, mode="reflect")
+
+    f_np = PIVDisplacementAnalyzer(_params(piv_device="cpu")).calculate_flow(ref, moving)
+    f_gpu = PIVDisplacementAnalyzer(_params(piv_device="cuda")).calculate_flow(ref, moving)
+
+    m = slice(24, -24)
+    assert np.median(np.abs(f_np[m, m] - f_gpu[m, m])) < 0.05
 
 
 def test_backend_validates_displacement_images():
@@ -137,13 +136,14 @@ def test_backend_validates_displacement_images():
 
 
 def test_backend_calculates_displacement_result_with_progress():
-    reference = np.zeros((24, 24), dtype=np.float32)
-    moving = np.zeros((2, 24, 24), dtype=np.float32)
-    reference[8:16, 8:16] = 1.0
-    moving[:, 8:16, 9:17] = 1.0
-    params = DisplacementParameters(pixel_size=0.2, downscale_factor=2)
+    ref = _textured_image(seed=4, size=48)
+    moving = np.stack([
+        ndimage.shift(ref, shift=(0.0, 1.0), order=3, mode="reflect"),
+        ndimage.shift(ref, shift=(0.5, -0.5), order=3, mode="reflect"),
+    ]).astype(np.float64)
+    params = _params(pixel_size=0.2, downscale_factor=2, piv_passes=3)
 
-    generator = calculate_displacement_field(reference, moving, params)
+    generator = calculate_displacement_field(ref, moving, params)
     progress = []
     try:
         while True:
@@ -152,10 +152,10 @@ def test_backend_calculates_displacement_result_with_progress():
         result = exc.value
 
     assert [(frame, total) for _, frame, total in progress] == [(1, 2), (2, 2)]
-    assert result.displacement_field.shape == (2, 12, 12, 2)
+    assert result.displacement_field.shape == (2, 24, 24, 2)   # downscaled by 2
     assert result.displacement_field.dtype == np.float32
-    assert result.original_shape == (24, 24)
-    assert result.displacement_field_shape == (12, 12)
+    assert result.original_shape == (48, 48)
+    assert result.displacement_field_shape == (24, 24)
     assert result.parameters == params
     assert result.physical_scale == {
         "pixel_size": 0.2,
@@ -187,7 +187,7 @@ def _downscale_flow_reference(flow, factor):
 
 
 def test_downscale_flow_matches_block_mean_reference():
-    analyzer = DisplacementAnalyzer(DisplacementParameters())
+    analyzer = PIVDisplacementAnalyzer(_params())
     rng = np.random.default_rng(0)
     for factor in (2, 3, 4, 5):
         flow = rng.standard_normal((37, 41, 2)).astype(np.float32)  # non-divisible dims
@@ -198,13 +198,13 @@ def test_downscale_flow_matches_block_mean_reference():
 
 
 def test_downscale_flow_factor_one_returns_input_unchanged():
-    analyzer = DisplacementAnalyzer(DisplacementParameters())
+    analyzer = PIVDisplacementAnalyzer(_params())
     flow = np.arange(24, dtype=np.float32).reshape(3, 4, 2)
     assert analyzer.downscale_flow(flow, 1) is flow
 
 
 def test_downscale_flow_exact_block_average():
-    analyzer = DisplacementAnalyzer(DisplacementParameters())
+    analyzer = PIVDisplacementAnalyzer(_params())
     # A 2x2 grid of constant 2x2 blocks: each output cell is that block's value.
     flow = np.zeros((4, 4, 2), dtype=np.float32)
     flow[0:2, 0:2] = [1.0, -1.0]
