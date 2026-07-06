@@ -73,7 +73,7 @@ def test_force_handler_resumes_displacement_from_ntfm(tmp_path, monkeypatch):
 
     captured = {}
 
-    def _fake_execute_force(self, tfm_folder, displacement_data):
+    def _fake_execute_force(self, tfm_folder, displacement_data, folder=None):
         captured["field"] = displacement_data.displacement_field
         return _Result(force_field=np.zeros((1, 3, 3, 2)))
 

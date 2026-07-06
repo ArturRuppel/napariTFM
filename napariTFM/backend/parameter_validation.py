@@ -42,15 +42,12 @@ def validate_fttc_parameters(params: FTTCParameters) -> Tuple[bool, str]:
     if params.downscale_factor < 1:
         return False, "Downscale factor must be at least 1"
 
-    # Forward method: only gate the fields its solve consumes. fwd_mask_strength
-    # is a 0..100 dial and fwd_fit_margin_um is visualization-adjacent (it only
-    # weights the data term), so both are clamped in the solver rather than gated.
-    if str(params.force_method) not in ("fttc", "forward"):
-        return False, "force_method must be 'fttc' or 'forward'"
-
-    if str(params.force_method) == "forward":
-        if params.fwd_regularization <= 0:
-            return False, "Forward regularization (λ) must be positive"
+    # Confined forward solver (fwd_mask_strength > 0). Only gate the fields its
+    # solve consumes; fwd_mask_strength is a 0..100 dial and fwd_fit_margin_um is
+    # visualization-adjacent (it only weights the data term), so both are clamped
+    # in the solver rather than gated. λ is the shared `regularization`, already
+    # checked above.
+    if params.fwd_mask_strength > 0:
         if params.fwd_smoothness < 0:
             return False, "Forward smoothness (γ) must be non-negative"
         if params.fwd_max_iter < 1:

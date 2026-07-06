@@ -43,13 +43,13 @@ class FTTCParameters:
     pixel_size: float = 0.1  # in µm
     downscale_factor: int = 4
 
-    # Force method: "fttc" (regularized Fourier inversion + Lanczos, the default)
-    # or "forward" (displacement-input inversion with a soft mask-confinement
-    # prior; see napariTFM.backend.forward_tfm). The fwd_* fields below are only
-    # read when force_method == "forward".
-    force_method: str = "fttc"
-    fwd_regularization: float = 1e-4      # Tikhonov λ (amplitude ridge / conditioning)
-    fwd_mask_strength: float = 0.0        # 0..100 log-scaled mask confinement dial (0 = off)
+    # Traction inversion is selected by the mask-confinement dial, not a separate
+    # method flag: fwd_mask_strength == 0 runs plain FTTC (regularized Fourier
+    # inversion + Lanczos + GCV, using `regularization` above); > 0 (with a mask)
+    # kicks off the confined forward solver (napariTFM.backend.forward_tfm), which
+    # reuses that same `regularization` as its Tikhonov λ. The fwd_* fields below
+    # are only read on that confined (> 0) path.
+    fwd_mask_strength: float = 0.0        # 0..100 log-scaled mask confinement dial (0 = off → FTTC)
     fwd_smoothness: float = 0.05          # gradient-smoothness weight on the traction field.
     #                                       This is the PRIMARY regularizer of the iterative
     #                                       (confined) solve — it replaces the coarse B-spline
@@ -119,9 +119,8 @@ class UnifiedParameters:
     lanczos_exp: int = 1
     regularization: float = 1e-4
     auto_gcv: bool = False
-    # Forward method (see FTTCParameters / napariTFM.backend.forward_tfm)
-    force_method: str = "fttc"
-    fwd_regularization: float = 1e-4
+    # Confined forward solver (see FTTCParameters / napariTFM.backend.forward_tfm);
+    # gated by fwd_mask_strength, shares `regularization` as its Tikhonov λ.
     fwd_mask_strength: float = 0.0
     fwd_smoothness: float = 0.05
     fwd_fit_margin_um: float = 1e6

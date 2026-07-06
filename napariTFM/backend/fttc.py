@@ -86,11 +86,11 @@ def calculate_force_field(
 ) -> Generator[Tuple[np.ndarray, int, int], None, FTTCResult]:
     """Calculate traction forces from displacement field data.
 
-    ``params.force_method`` selects the inversion: ``"fttc"`` (default, regularized
-    Fourier inversion + Lanczos) or ``"forward"`` (displacement-input inversion with
-    an optional soft mask-confinement prior, see :mod:`napariTFM.backend.forward_tfm`).
-    ``mask`` is only used by the forward method's support prior; it is ignored by
-    FTTC and by the forward method when the confinement dial is 0.
+    The mask-confinement dial selects the inversion: ``fwd_mask_strength == 0``
+    (or no ``mask`` supplied) runs plain FTTC (regularized Fourier inversion +
+    Lanczos + GCV); ``> 0`` with a ``mask`` kicks off the confined forward solver
+    (:mod:`napariTFM.backend.forward_tfm`), which shares ``regularization`` as its
+    Tikhonov λ. ``mask`` is only consumed on that confined path.
     """
     is_valid, error_msg = validate_fttc_parameters(params)
     if not is_valid:
@@ -106,7 +106,7 @@ def calculate_force_field(
     total_frames = displacement_field.shape[0]
     force_shape = displacement_field.shape[1:4]
     force_stack = np.zeros((total_frames, *force_shape), dtype=np.float32)
-    use_forward = str(params.force_method) == "forward"
+    use_forward = params.fwd_mask_strength > 0 and mask is not None
     calculator = None if use_forward else FTTC(params)
 
     for frame in range(total_frames):

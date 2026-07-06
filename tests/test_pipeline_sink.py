@@ -137,9 +137,10 @@ def test_force_emits_zero_based_frames_and_fmax_info(monkeypatch):
     analysis._sink = sink
     monkeypatch.setattr(analysis, "_create_fttc_parameters", lambda: _params(
         f_max=100.0, force_vector_stride=6, force_arrow_scale=3.0, downscale_factor=2,
+        fwd_mask_strength=0.0,
     ))
 
-    def fake_gen(field, params):
+    def fake_gen(field, params, mask=None):
         yield np.zeros((2, 2, 2)), 1, 1
         return "force-result"
 
@@ -163,9 +164,10 @@ def test_no_sink_means_no_emission_during_force(monkeypatch):
     analysis._sink = None
     monkeypatch.setattr(analysis, "_create_fttc_parameters", lambda: _params(
         f_max=1.0, force_vector_stride=1, force_arrow_scale=1.0, downscale_factor=1,
+        fwd_mask_strength=0.0,
     ))
 
-    def fake_gen(field, params):
+    def fake_gen(field, params, mask=None):
         yield np.zeros((2, 2, 2)), 1, 1
         return "ok"
 

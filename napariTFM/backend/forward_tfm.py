@@ -121,7 +121,7 @@ def _solve_closed_form(u: np.ndarray, params: FTTCParameters) -> np.ndarray:
     """
     height, width = u.shape[1:]
     G = _greens_operator(height, width, params)
-    lam = float(params.fwd_regularization)
+    lam = float(params.regularization)
     Ginv = calculate_traction_2d(G, lam ** 2)  # (2,2,H,W): (GᵀG + λ²I)⁻¹ Gᵀ
     Ftux = np.fft.fft2(u[0])
     Ftuy = np.fft.fft2(u[1])
@@ -171,7 +171,7 @@ def _solve_iterative(u: np.ndarray, mask: np.ndarray, beta: float,
     height, width = u.shape[1:]
     E = float(params.young_modulus)
     T0 = float(params.fwd_traction_scale)
-    lam = float(params.fwd_regularization)
+    lam = float(params.regularization)
 
     G = _greens_operator(height, width, params)          # (2,2,H,W) real, ∝ 1/E
     valid = np.isfinite(u).all(axis=0)                   # (H,W)

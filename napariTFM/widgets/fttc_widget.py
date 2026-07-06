@@ -60,7 +60,7 @@ class FTTCController(VectorStageController):
         mask frame, not the whole stack (else it always uses frame 0). The run
         path passes no frame and gets the full stack, aligned frame-by-frame.
         """
-        if str(params.force_method) != "forward" or params.fwd_mask_strength <= 0:
+        if params.fwd_mask_strength <= 0:
             return None
         mask = getattr(self.data_manager, "mask_stack", None)
         if mask is None or frame is None:
