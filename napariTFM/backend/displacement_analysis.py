@@ -16,6 +16,11 @@ class DisplacementResult:
     displacement_field_shape: tuple  # Displacement field shape (y, x)
     parameters: DisplacementParameters
     physical_scale: dict  # Dictionary containing physical scaling information
+    # Per-frame bulk translation (stage drift) removed from the field, shape
+    # (t, 2) in pixels, ordered [u_x, u_y] to match displacement_field's last
+    # axis. This is the translation-correction PIV absorbed; retained so the
+    # same shift can be applied to the cell channel.
+    drift_pixels: Optional[np.ndarray] = None
 
 
 def validate_displacement_image(image: np.ndarray) -> Tuple[bool, str]:
@@ -72,9 +77,22 @@ def calculate_displacement_field(
         displacement_field_shape = (total_frames, target.shape[1], target.shape[2], 2)
 
     displacement_field_stack = np.zeros(displacement_field_shape, dtype=np.float32)
+    drift_pixels = np.zeros((total_frames, 2), dtype=np.float32)
 
     for frame in range(total_frames):
         displacement_field_pixels = analyzer.calculate_flow(reference, target[frame])
+
+        # Fold translation-correction into PIV. Bulk stage drift between the
+        # reference and this frame is a spatially-uniform offset that the
+        # multi-pass coarse pass already captures; estimate it robustly as the
+        # per-frame median vector and subtract it, so the reported field is the
+        # cell-induced deformation only — the job image-level registration used
+        # to do. FTTC nulls the DC mode, so this leaves traction unchanged; it
+        # only cleans the displacement output and hands back the shift for the
+        # cell channel.
+        frame_drift = np.median(displacement_field_pixels.reshape(-1, 2), axis=0)
+        displacement_field_pixels = displacement_field_pixels - frame_drift
+        drift_pixels[frame] = frame_drift
 
         if params.downscale_factor > 1:
             displacement_field_pixels = analyzer.downscale_flow(
@@ -101,6 +119,7 @@ def calculate_displacement_field(
         displacement_field_shape=displacement_field_stack.shape[1:3],
         parameters=params,
         physical_scale=physical_scale,
+        drift_pixels=drift_pixels,
     )
 
 

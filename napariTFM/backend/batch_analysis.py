@@ -704,7 +704,7 @@ class BatchAnalysis:
             self._handle_visualization(tfm_folder, viz_saver, 'preprocessing', preprocessed_data)
 
             # Handle displacement
-            displacement_data = self._handle_displacement_execution(tfm_folder, preprocessed_data)
+            displacement_data = self._handle_displacement_execution(folder, tfm_folder, preprocessed_data)
             self._handle_visualization(tfm_folder, viz_saver, 'displacement', displacement_data)
 
             # Handle force analysis
@@ -771,24 +771,27 @@ class BatchAnalysis:
             "preprocessing", lambda: self._execute_preprocessing(folder, tfm_folder)
         )
 
-    def _handle_displacement_execution(self, tfm_folder: Path, preprocessed_data: Optional[dict]) -> Optional[dict]:
+    def _handle_displacement_execution(self, folder: Path, tfm_folder: Path, preprocessed_data: Optional[dict]) -> Optional[dict]:
         """Handle displacement analysis execution. Always runs if enabled.
 
-        ``preprocessed_data`` is ignored: displacement always consumes the
-        *persisted* preprocessed tiffs, never the in-session float arrays.
-        Preprocessing always writes the calibrated tiffs (see
-        ``_execute_preprocessing``), so reading them back here means a fresh run
-        and a stage-resume feed PIV byte-identical inputs — consistent with
-        the project-wide "calcs always read from disk" invariant. A missing/unreadable tiff raises and is
-        recorded as a displacement failure by ``_guard_stage``.
+        PIV now consumes the *raw* bead/reference inputs straight from the input
+        folder, not the preprocessed tiffs. The multi-pass PIV coarse pass
+        absorbs bulk stage drift (which ``calculate_displacement_field`` then
+        subtracts from the reported field), so image-level pre-registration is
+        no longer needed. Preprocessing still runs and still writes its tiffs
+        (they remain the display/overlay source), but displacement no longer
+        reads them — ``preprocessed_data`` is ignored. The raw inputs always
+        exist in the input folder, so a fresh run and a stage-resume feed PIV
+        the same bytes. A missing/unreadable input raises and is recorded as a
+        displacement failure by ``_guard_stage``.
         """
         def body():
-            print("Loading preprocessed images from file...")
-            preprocessed = {
-                'beads': tifffile.imread(str(tfm_folder / "preprocessed_beads.tif")),
-                'reference': tifffile.imread(str(tfm_folder / "preprocessed_reference.tif")),
+            print("Loading raw bead/reference images from file...")
+            raw = {
+                'beads': tifffile.imread(str(folder / self.config['input_files']['beads'])),
+                'reference': tifffile.imread(str(folder / self.config['input_files']['reference'])),
             }
-            return self._execute_displacement_analysis(tfm_folder, preprocessed)
+            return self._execute_displacement_analysis(tfm_folder, raw)
 
         return self._guard_stage("displacement", body)
 
@@ -1057,21 +1060,21 @@ class BatchAnalysis:
         print(f"Preprocessing completed in {self._format_duration(time() - start_time)}")
         return preprocessed
 
-    def _execute_displacement_analysis(self, tfm_folder: Path, preprocessed_data: dict) -> Optional[DisplacementResult]:
+    def _execute_displacement_analysis(self, tfm_folder: Path, image_data: dict) -> Optional[DisplacementResult]:
         """
         Execute the displacement analysis step of the TFM analysis pipeline.
 
-        This method calculates displacement fields from preprocessed bead images
-        using optical flow techniques.
+        This method calculates displacement fields from the raw bead images
+        using the multi-pass PIV backend.
 
         Parameters
         ----------
         tfm_folder : Path
             Path to the output folder where processed files will be saved
-        preprocessed_data : dict
-            Dictionary containing preprocessed images:
-            - 'beads': Preprocessed bead image stack (np.ndarray)
-            - 'reference': Preprocessed reference image (np.ndarray)
+        image_data : dict
+            Dictionary containing the input images:
+            - 'beads': Raw bead image stack (np.ndarray)
+            - 'reference': Raw reference image (np.ndarray)
 
         Returns
         -------
@@ -1083,12 +1086,10 @@ class BatchAnalysis:
 
         Processing Steps
         ---------------
-        1. Loads raw bead images and reference image
-        2. Optionally loads cell images if specified in config
-        3. Applies preprocessing pipeline:
-            - Background subtraction
-            - Displacement calculation (multi-pass PIV)
-            - Optional downscaling and filtering
+        1. Runs multi-pass PIV of each raw bead frame against the raw reference
+        2. Subtracts the per-frame bulk drift from the field (translation
+           correction, folded into PIV)
+        3. Optional downscaling to the analysis grid
         4. Returns the displacement field (persisted later in the .ntfm)
 
         The displacement parameters are taken from the config:
@@ -1106,7 +1107,7 @@ class BatchAnalysis:
         start_time = time()
 
         disp_params = self._create_displacement_parameters()
-        beads = preprocessed_data['beads']
+        beads = image_data['beads']
         self._emit('stage_started', 'displacement', int(beads.shape[0]), {
             'v_max': disp_params.d_max,
             'vector_stride': disp_params.disp_vector_stride,
@@ -1115,7 +1116,7 @@ class BatchAnalysis:
         })
 
         displacement_field_generator = calculate_displacement_field(
-            preprocessed_data['reference'],
+            image_data['reference'],
             beads,
             disp_params,
         )

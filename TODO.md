@@ -9,6 +9,107 @@
 
 ---
 
+## EPIC: one-shot TFM backend — pipeline collapse + benchmark (2026-07-06)
+
+The big rock, and it reframes most of the UI worklist below. We prototyped a
+**one-shot (physics-as-prior) TFM solver** that recovers surface traction directly
+from a reference/deformed image pair in a **single differentiable solve**
+(unknown traction on a compact basis → `u = G·t/E` [2D Boussinesq, FFT] → warp ref →
+ZNCC photometric loss; one autograd graph, L-BFGS coarse-to-fine over an image
+pyramid; a rigid-translation DOF absorbs stage drift). On the published dipole
+benchmark, scored with our own Sabass metrics, it **matches TV-L1+FTTC on easy tiers
+and beats it on the hard (large-displacement) tier**, with better magnitude accuracy
+(DTM) and force confinement (DTMS) — and it does so without a separate displacement
+stage or preprocessing stage.
+
+**Why this is strategic, not just another backend:** the one-shot **absorbs
+preprocessing (bg-subtraction + drift) AND displacement AND traction into one step.**
+Our 3–4 stage pipeline (preprocess → displacement → traction → stress) collapses to
+**one solve, plus an optional second stress stage**. That invalidates a large fraction
+of the multi-stage UI/UX (per-stage panels, intermediate-layer plumbing, stage
+resume/merge logic) — but the tool comes out simpler and better. Read this epic before
+investing further in per-stage UI polish below.
+
+### Where the prototype lives (all in the `napariTFM2.5D` working copy, branch `ffd-displacement-backend`)
+These are **untracked** files there (`_dev` is gitignored; the two source files are `??`),
+so step one of integration is bringing them under version control **in this repo**.
+- `napariTFM/backend/oneshot.py` — `OneShotSolver`, `OneShotParameters`, `OneShotResult`.
+  Lazy-imports torch (optional `[ffd]` extra), same pattern as the FFD backend. The whole
+  fused solver. **This is the thing to port.**
+- `napariTFM/widgets/oneshot_widget.py` — magicgui playground dock widget (the trimmed
+  UX: E, ν, pixel size, **Smoothness σ**, a single **Mask-confinement** dial, preprocess
+  toggle, device). Run today via `_dev/oneshot_playground_launch.py`; not yet in
+  `napari.yaml`. This is the seed for the production panel, not the production panel.
+- `tests/test_oneshot.py` — 13 backend tests (port alongside the backend).
+- `_validation/benchmark_TFM/compare_oneshot.py` — the head-to-head harness (one-shot vs
+  TV-L1+FTTC on the published `low/mid/high` dipole tiers, scored via the tracked
+  `validate_TFM.py` metrics). Untracked; the honest comparison lives here.
+- `_dev/oneshot_bench2d/` — the 2D research harness (synthetic dipole/keratocyte cases,
+  real-singlet sample in `data/singlet20_*.tif`, method bake-offs). gitignored scratch.
+- `_dev/bench_generator/` — the **scenario-sweep generator** (SPEC.md, fields.py, beads.py,
+  psf.py, render.py, noise.py, writer.py, cli.py) with vendored analytic physics in
+  `_dev/vendor/DirectMethod/`. This is the seed for TASK 2.
+
+### Settled findings — bake these in, don't relitigate
+- **Basis:** beads-as-nodes (one Gaussian traction node per detected reference bead) +
+  soft mask. `node_sigma` is *the* smoothness knob.
+- **Mask confinement:** one log-scaled soft-β dial (0 = none → strong confinement). The
+  literal hard gate was **retired** — it clips genuine near-edge forces (|t|r 0.95 vs 0.99).
+- **Preprocess default OFF:** bg+drift *slightly degrade* the force map on every tier we
+  tried (the rigid DOF handles drift without resample blur; bead detection high-passes
+  internally regardless). Keep it as an opt-in checkbox for pathologically bright backgrounds.
+- **Pyramid depth:** the current default `iterations="50,70,150"` (3 levels, coarsest /4)
+  **under-captures large displacement** — on the high-force tier one corner adhesion locked
+  onto the wrong minimum (DTA 18°). A 4–5 level pyramid fixes it at no time cost (DTA 0.6°).
+  **Make the default ≥4 levels.**
+- **Dead ends (already refuted, don't retry):** zero-net-force projection (acts only on the
+  null-space DC mode — useless), point-matching / Chamfer data terms (ill-posed, per-bead
+  hotspots — photometric ZNCC is the robust choice), TV vs L2 reg (negligible unless noise
+  makes the regularizer binding). The backend still carries some of these as dormant params
+  — strip on port.
+
+### TASK 1 — integrate into the production pipeline
+- **Architecture:** expose the one-shot as a **traction backend that reaches back to the
+  image pair** and **emits its displacement byproduct (`u = G·t`) as the normal displacement
+  layer**, so MSM / strain-energy / BISM downstream still get a displacement field. This is
+  the FFD-backend toggle pattern applied one stage over; preferred over a parallel "one-shot
+  mode" tab (which duplicates UI).
+- **UI collapse:** most per-stage panels fold into a single solve panel with the routine
+  dials above. Preprocess and displacement panels lose their reason to exist in this path.
+  Keep the two-step (TV-L1+FTTC) selectable as the legacy/alternative backend.
+- **Data model:** keep the displacement layer as the contract between the (now fused)
+  traction step and the stress step. Stress (MSM/BISM) stays a second stage.
+- **Plumbing:** port the untracked files → tracked; torch stays an optional `[ffd]` extra
+  (lazy import, manifest scan stays torch-free); set defaults from TASK 2 (esp. pyramid
+  depth); wire into `napari.yaml`.
+- **Open decision for Artur:** confirm "traction-backend-that-emits-displacement" vs a
+  standalone mode before building the panel.
+
+### TASK 2 — a solid, fair TVL1+FTTC vs one-shot benchmark
+- **The cardinal rule (learned the hard way):** tune **each method's parameters per
+  scenario** and report each at its *own* best. A benchmark with hand-picked FTTC reg is
+  worthless — the committed `validate_TFM.py` uses `regularization=1e-6`, which
+  under-regularizes (over-estimates, DTMS ~0.97) and does **not** reproduce the paper's
+  Fig 3; ~1e-4 is the balanced operating point. FTTC gets GCV + a reg sweep; the one-shot
+  gets a small grid over σ / pyramid depth / mask. (Sidebar: the committed validation script
+  not reproducing the paper is itself worth a fix — see the standalone note if we split it out.)
+- **Scenario axes:** noise level, bead density, displacement magnitude, force geometry
+  (dipole / realistic cell / keratocyte), substrate stiffness, and **mask available vs not**
+  (the one-shot's real edge — the dipole benchmark can't show it). Build on
+  `_dev/bench_generator` sweeps.
+- **Metrics:** the Sabass four (correlation, DTM, DTMS, DTA — from `validate_TFM.py`) +
+  strain energy + wall-clock.
+- **Deliverable:** sweep curves + per-scenario best-config tables + a summary figure, plus
+  the resulting production **default parameters** (feeds TASK 1).
+
+### PHASE 3 (separate, focused) — stress benchmark incl. BISM
+Extend the benchmark to intercellular **stress** so MSM and **BISM** (already in-repo:
+`napariTFM/backend/bism.py`, `stress.py`) can be evaluated head-to-head. Needs different
+ground truth (the paper's FEM active-cell model, or the Mavi sims) and a stress front-end.
+Deliberately **not** bundled into TASK 2 — different machinery, would muddy both.
+
+---
+
 ## Open after the round-2 review merge (2026-07-04)
 
 Leftovers from PR #3 (`CODE_REVIEW_FINDINGS_2026-07-03.md`, now in-repo) that
@@ -105,6 +206,243 @@ value); the fttc GCV micro-cleanups (`_interp_vec2grid` NaN branch, `np.copy`,
 cosmetics). The `metrics_calculator.py` polarization fix (`eigvals`→`eigvalsh`,
 centroid-not-origin moment) is real but stays parked under the existing "#9:
 wire up metrics later" decision — fix it *when* it's wired up.
+
+---
+
+## New feature ideas (2026-07-04) — research phase
+
+Four ideas from the owner, ranked easy-wins-first. All are **researched but not
+yet designed** — the notes below capture intent + open questions; a design spec
+comes before any code. Research findings will be appended as they land.
+
+### 1. Auto-threshold the beads images (e.g. Otsu)  ·  S  ·  cheap win, trivial
+Add an optional automatic threshold to the preprocessing path so the background
+floor isn't set by hand. Today `preprocess_frame`
+(`backend/preprocessing.py:47`) does Gaussian blur → **percentile** intensity
+scaling (`apply_intensity_scaling`, manual `min/max_intensity_percentile`) →
+optional registration. `skimage.filters.threshold_otsu` (already available via
+napari's deps) auto-picks the background level. **Owner: trivial, no research
+needed** — just implement. (Note when building: prefer using Otsu to set the
+intensity-scaling floor rather than hard-zeroing sub-threshold pixels before
+Farneback, which would strip subpixel texture — but this is an implementation
+detail, not a blocker.)
+
+### 2. GPU-accelerated displacement  ·  ✅ DONE (2026-07-06)
+**Resolved: base method switched Farneback → multi-pass cross-correlation PIV,
+with a PyTorch GPU backend.** The Farneback optical-flow front end is gone —
+`DisplacementAnalyzer`, the `cv2.calcOpticalFlowFarneback` call, and all the
+`nscales`/`inner_iterations`/`pyr_scale`/`poly_*`/`use_gaussian_window` params/UI
+were ripped out. The displacement path is now `PIVDisplacementAnalyzer`
+(`backend/piv_displacement.py`, ported from the `napariTFM2.5D` prototype):
+FFT windowed cross-correlation, Hanning taper, 3-point Gaussian subpixel peak,
+normalized-median outlier rejection, coarse→fine window deformation. It has a
+**torch-free numpy core** (no new hard dep) and transparently uses a **PyTorch
+CUDA** backend when available (~100× faster, numerically equivalent on dense
+beads), selected by `piv_device` (`auto`/`cuda`/`cpu`). Torch is an optional
+extra: `pip install napariTFM[piv]`. This settles the base-method question below
+in favour of PIV and delivers the portable GPU path in one move. Everything from
+here down is the historical investigation that led to that decision.
+
+**Findings (2026-07-04):**
+
+⚠️ **The base-method question is bigger than the GPU question — settle it first.**
+Farneback (what we use) is *not* the TFM-standard displacement method. The
+canonical TFM pipeline (Butler 2002; Sabass/Gardel/Waterman/Schwarz 2008 — the
+FTTC paper itself; Danuser-lab TFM; PIVlab; Style 2014; Schwarz-Soiné 2015
+review) uses **cross-correlation PIV** (block-matching + Gaussian/parabolic
+subpixel peak fit), *not* Farneback. Farneback is a generic-CV convenience with
+**no TFM-specific validation**. The evidence on optical-flow-vs-PIV for beads is
+genuinely mixed: one high-res-TFM paper (PMC5292691) reports optical flow beats
+PIV on noise for deformation measured *at* beads, but a 2025 benchmark
+(bioRxiv 2025.07.04.663196) finds optical flow wins *only* in the deep-subpixel
+regime and is the least accurate over a broad displacement range, while
+cross-correlation handles larger displacements and lower image quality better.
+**For a paper in revision this is a correctness question that dwarfs speed** —
+worth deciding whether the base method should be cross-correlation PIV (CPU
+`openpiv-python`, actively maintained) before investing in a GPU path.
+
+On the GPU path itself (if we keep/optimize dense flow):
+- **`cv2.cuda.FarnebackOpticalFlow` is a portability trap.** pip `opencv-python`
+  is CPU-only; CUDA OpenCV means a source build or a single-maintainer community
+  wheel channel (`cudawarped/opencv-python-cuda-wheels`, installed by URL, not
+  PyPI) — not `pip`-able for a non-coding user, and NVIDIA-only (no Mac). At best
+  an opportunistic runtime-detect ("use cv2.cuda iff present"), never a dep.
+- **The PyTorch GPU path only exists if we move to PIV — it does NOT accelerate
+  Farneback.** There is **no torch Farneback** (searched: only NumPy ports like
+  `ericPrince/optical-flow` exist; Farneback is per-pixel polynomial expansion +
+  pyramid + iterative least-squares, not an FFT). To GPU Farneback you'd need
+  `cv2.cuda.FarnebackOpticalFlow` (install trap, above) or the CUDA packages
+  `farneback3d`/`OpticalFlow3d` — CUDA-only. **Cross-correlation PIV, by contrast,
+  maps cleanly onto torch** (FFT/`Conv2d` NCC), and working torch PIV libs already
+  exist: `TorchPIV` (PyPI), `erfanhamdi/torch_PIV`, and a peer-reviewed
+  GPU-PIV framework (Comput. Phys. Commun. 2024). PyTorch is the best *portable*
+  GPU path — CUDA on Win/Linux, **MPS on Apple Silicon**, CPU fallback, all from
+  the same `torch` (mirrors Cellpose's `cuda → mps → cpu` dispatch in
+  `cellpose/core.py`); CuPy strands Mac (CUDA-only, ROCm Linux-only/immature).
+  **But this whole path is unlocked by the PIV switch, not by torch per se** — so
+  "add a torch backend" and "switch base method to PIV" are one decision, not two.
+- **`GCpu_OpticalFlow` (chabibchabib)** is still a good *pattern* reference
+  (CuPy+cuCIM with automatic NumPy fallback in one code path) but inherits CuPy's
+  no-Mac limitation if used as-is.
+- **`OpticalFlow3d` (yongxb)** — CUDA Farneback/Lucas-Kanade for dense *3D* flow.
+  Relevant to (3): getting `u_z` from bead z-stacks is a 3D-flow problem.
+- **Ruled out:** NVIDIA hardware optical flow (NVOFA / `cv2.cuda_NvidiaOpticalFlow`)
+  — hard **0.25 px** subpixel floor (S10.5 vectors, only 2 fractional bits
+  populated per NVIDIA's own docs), scientifically invalid for TFM. torchvision
+  **RAFT** — no TFM validation, documented low-SNR/out-of-distribution failure on
+  speckle/PIV data; off-the-shelf weights inappropriate for beads.
+- **GPU-PIV Python packages are immature:** `openpiv-python-gpu` is pre-beta,
+  no pip/conda pkg, NVIDIA-only; `quickPIV` (Julia) is CPU-only anyway and stale;
+  `pyGPUreg` is any-GPU (incl. Mac) but global single-shift registration, not
+  windowed PIV. If we go PIV, the safe target is CPU `openpiv-python`.
+- **Recommendation:** (1) decide base method — seriously consider cross-correlation
+  PIV over Farneback, validate against synthetic ground truth; (2) write the
+  displacement kernel against an array namespace (`xp`) so one path runs on
+  NumPy (CPU) or a GPU backend; (3) if adding GPU, use a **PyTorch** backend
+  (CUDA→MPS→CPU), optional extra, never a hard dep.
+
+**The broader displacement-method space (2026-07-04) — it's not just Farneback vs PIV.**
+The displacement step is "dense subpixel deformation field between two bead
+images"; TFM has used ≥4 algorithm families. The right choice depends on the
+**bead regime** (density/resolvability and displacement magnitude), per the
+"Field Guide to TFM" (PMC11082129) and the retracking paper (PMC9216574):
+
+| Family | Method(s) | Python tooling | Best when | Notes |
+|---|---|---|---|---|
+| **Correlation, windowed** | PIV (FFT xcorr + Gaussian peak fit) | `openpiv-python`, `TorchPIV` | dense/speckle beads, small-moderate disp | field standard; multi-pass for larger disp |
+| **Correlation, subset+warp** | **DIC** (IC-GN, affine/quadratic subset shape fn) | `muDIC`, `DICe`, `DICLab2D`, `Pyvale`, `GCpu_OpticalFlow` (GPU DIC) | dense beads, smooth deformation | **higher subpixel accuracy than plain PIV**; DVC = its 3D form, used for 3D/2.5D |
+| **Optical flow (differential)** | Farneback (current), **DIS**, KLT/Lucas-Kanade, TV-L1 | `cv2` (all CPU, in the pip wheel) | small/subpixel disp | KLT validated for high-res TFM (PMC5292691); **`cv2.DISOpticalFlow` is a near-free, faster, more accurate drop-in for Farneback** |
+| **Particle tracking (PTV/SPT)** | detect+localize beads (radial-symmetry/Gaussian) → track → interpolate to grid | `trackpy` | **resolvable/sparse beads**; large deformation | highest *per-bead* accuracy; **cPTVR retracking handles large disp where PIV xcorr fails** (>90% vs PIV); needs scatter→grid interp before FTTC |
+| **Deformable registration** | B-spline free-form deform, Demons | `SimpleITK`/`elastix`, `bUnwarpJ` | whole-field smooth warp | a *generic* smoothness prior is physically motivated (surface displacement IS elastic-constrained) but is not *the* Boussinesq prior and correlates noise vs FTTC's GCV — see model-based note below |
+
+**Cheapest real improvement:** swap Farneback → **`cv2.DISOpticalFlow`** (already
+in the pip OpenCV, CPU, faster + more accurate, no new dep, no method-family
+commitment). **Highest-accuracy upgrades, regime-dependent:** if beads are
+resolvable/sparse → **single-particle tracking** (`trackpy` + radial-symmetry
+localization → interpolate → FTTC), best per-bead accuracy and the answer to
+large deformation via retracking; if beads are dense/speckle → **DIC (IC-GN)**
+over PIV/Farneback for subpixel accuracy. DIC also generalizes to **DVC** for the
+3D displacement that (3) 2.5D needs — one method family could serve both the 2D
+and the 2.5D displacement step.
+
+**Model-based / one-step TFM — the principled way to couple bead physics
+(owner's insight, 2026-07-04).** The beads sit in an elastic gel, so the true
+surface displacement field is *not* arbitrary — it lives in the range of the
+Boussinesq operator applied to some traction field, i.e. it is genuinely
+elastic-constrained. That makes physics-coupled regularization a **feature**, not
+the "double-counting" liability first noted. The clean realization is not
+"generic deformable registration → FTTC" (two mismatched smoothers: a generic
+bending-energy/diffusion prior is *some* smoothness but not *the* Boussinesq
+smoothness, and it correlates the displacement noise in a way FTTC's GCV λ does
+not model). It's to make the elastic Green's function itself the registration
+model — solve **one** inverse problem for the traction field whose predicted
+displacement best warps reference→deformed bead image. One prior, the true gel
+physics. Same philosophy as the direct method (idea 3+4) and the existing BISM
+engine: physics in the operator, not smoothing twice around it. Refs:
+model-based TFM (Soiné et al., PMC4352062); FEM-direct (displacements as BCs →
+tractions, no deconvolution); Bayesian/GP-TFM (Huang & Sabass, Sci Rep 2018,
+elastic prior explicit). Schwarz review (arXiv 1506.02394): this class
+"abolishes the need for regularization." **Caveat matching prior owner calls:**
+the Bayesian/GP flavor sets λ by evidence/auto-tuning — that's the same
+auto-parameter machinery deliberately removed with BISM's MAP auto-λ ("fragile
+cleverness for a knob the user can set by hand"). Model-based/FEM-direct realizes
+the physics-coupling *without* reintroducing an auto-tuned Bayesian knob — the
+better fit.
+
+**PROTOTYPE VALIDATED (2026-07-04)** — `scratchpad/proto_onestep_tfm.py`, a
+self-contained synthetic recovery test on GPU (napari conda env, torch 2.10+cu128):
+- **The whole pipeline works end-to-end and is differentiable.** Parametrize by
+  traction `t`; forward `u = G·t` reuses **the exact Boussinesq kernel from
+  `fttc.py::_calculate_greens_function`** (ported to torch); warp `I_ref` by `u`
+  with `F.grid_sample`; minimize photometric MSE to `I_def`. Autograd flows
+  through FFT → warp → loss, no hand-derived gradients; runs on CUDA (→ MPS/CPU
+  unchanged). This is the case where torch genuinely shines (unlike Farneback).
+- **It recovers traction directly — this is the "no second reconstruction".**
+  `t` is the optimization variable; `u` is only an internal quantity used to
+  predict the warped image, never a separate output that then gets inverted.
+  At convergence you already hold the traction. Result (128², 400 beads,
+  2.5 px peak displacement, 2% camera noise): **displacement 0.073 px RMSE /
+  0.98 cosine, traction 0.90 cosine** vs ground truth.
+- **Two honest corrections banked from the prototype:**
+  (a) **Non-dimensionalize** — with real `E`≈10 kPa the target traction is
+  ~hundreds and fixed-lr Adam can't travel there; solving with `E=1` (a pure
+  rescale of `t`) makes it O(1) and well-conditioned. Use L-BFGS (curvature-scaled
+  steps) + coarse-to-fine, not Adam.
+  (b) **It still needs Tikhonov regularization on `t`** — the physics
+  parametrization guarantees the displacement is *admissible* (`u ∈ range G`) but
+  NOT that the traction is *stable*: high-k tractions barely move beads (Ĝ∼1/k),
+  stay nearly unconstrained, and blow up (rel-L2 → 5.7 at λ≈0). A λ‖t‖² sweep
+  recovers t_cos 0.90 at λ=1e-4. So "abolishes regularization" (the review's
+  phrase) is really about the *model-based* variant that adds structural
+  (cytoskeleton/adhesion) priors — the bare image-registration version still
+  regularizes, same as FTTC. Correct my earlier overclaim.
+- **BENCHMARKED on `_validation/benchmark_TFM` (2026-07-04)** —
+  `scratchpad/proto_benchmark.py`, real 700² dipole pairs (low/mid/high =
+  0.33/3.3/33 px peak displacement), scored with the repo's own Sabass metrics.
+  Sanity check first: FTTC inverse on the **ground-truth** displacement round-trips
+  to **corr 1.000** (kernel + inverse verified exactly consistent). Head-to-head,
+  both from RAW IMAGES — repo TV-L1→FTTC (the shipping pipeline) vs my one-step,
+  traction correlation:
+  | scenario | repo TV-L1→FTTC | one-step (best λ) | one-step DTA |
+  |---|---|---|---|
+  | low 0.33px  | **0.931** | 0.76 | 1.0° |
+  | mid 3.3px   | **0.974** | 0.88–0.96 | 0.7–0.9° |
+  | high 33px   | **0.670** | 0.53 | 13.4° |
+  **Honest verdict: the first-draft prototype does NOT beat the tuned pipeline.**
+  Competitive at mid (0.96 vs 0.97, direction as good ~0.8°), behind at
+  deep-subpixel (too little photometric signal in 0.33px) and large-motion (33px
+  needs better multiscale). A clear reg(λ)/amplitude tradeoff is visible (small λ
+  → right amplitude, low corr; larger λ → high corr, ~20% amplitude loss) — needs
+  a principled λ selector, not a hand pick. So the value is NOT "beats FTTC on 2D
+  in-plane today"; it's (a) a from-scratch joint method already in the ballpark
+  with far simpler machinery, and (b) the strategic prize below.
+- **Next steps, by leverage:** (1) **the real reason to pursue it** — extend the
+  2×2 in-plane kernel to the 3×3 2.5D Boussinesq-Cerruti kernel (idea 3): the
+  SAME solver then does 2.5D, which in-plane FTTC *cannot*. That's the capability
+  FTTC doesn't have, vs competing where it's already good. (2) close the 2D gap:
+  NCC/robust photometric loss (bead illumination drift), better coarse-to-fine +
+  more iters for large motion, principled λ (L-curve; NOT auto-Bayesian per the
+  MAP-removal call), preprocessing parity with the repo path. (3) then decide
+  whether it graduates from scratchpad into `_validation/`.
+
+### 3 + 4. 2.5D TFM and the direct method are ONE body of work  ·  L  ·  substantial
+**Key research finding (2026-07-04): ideas 3 and 4 are the same paper and the
+same codebase.** Blumberg & Schwarz, *"Comparison of direct and inverse methods
+for 2.5D traction force microscopy,"* PLoS One 17(1):e0262773 (2022), DOI
+10.1371/journal.pone.0262773 — **same group whose FTTC method this tool already
+implements** — presents both a 2.5D *inverse* (FTTC) solver and the *direct*
+method side by side, with open Python code at
+`github.com/usschwarz/DirectMethod` (numpy/scipy/numba; owner has the 2.5D refs
+already).
+
+Both require the **same new input: a 3-component displacement field including
+out-of-plane `u_z`** (z-stack beads → 3D flow — see idea 2, `OpticalFlow3d`).
+That shared prerequisite is the real cost and the real blocker; once `u_z`
+exists, the two solvers are cheap-ish additions:
+
+- **2.5D inverse (extends today's FTTC).** Blumberg-Schwarz derive a *closed-form*
+  2.5D Fourier kernel from Boussinesq–Cerruti potentials — a 3×3 Green's function
+  `Ĝ(kx,ky,z)` (their Eq. 24) giving all three traction components (incl. normal
+  `t_z`) from the 3D surface displacement, no numerical integral inversion. This
+  is a **generalization of the existing 2×2 FTTC kernel in `backend/fttc.py`**
+  (`_calculate_fourier_modes` / `calculate_traction_2d`) — reuses the FFT
+  machinery and GCV regularization, just a bigger kernel.
+- **Direct method (new, but small).** Compute the strain tensor by
+  differentiating the measured 3D displacement (they recommend a 3×3×3 local
+  linear-polynomial patch fit, not raw finite differences), get stress via the
+  linear-elastic constitutive law, and read traction off the surface stress
+  components at z=0. **No explicit regularization** — the differentiation
+  filters noise inherently; their tested divergence correction did *not* help.
+  Trade-off vs FTTC: direct is worse at low noise, comparable/better at high
+  noise, benefits more from marker density, higher *local* SNR. Conceptually
+  adjacent to the existing BISM stress path (strain→stress→traction), so it may
+  share utilities there.
+
+**Feasibility read:** the honest sequencing is (a) get 3D displacement first
+(the hard part, ties to idea 2's GPU 3D flow), then (b) 2.5D-FTTC as a kernel
+generalization of `fttc.py`, then (c) the direct method as a real-space
+add-on — porting/adapting from `usschwarz/DirectMethod` rather than deriving
+from scratch. Check its license before vendoring any code.
 
 ---
 

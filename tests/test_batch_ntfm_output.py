@@ -142,7 +142,7 @@ def test_stage_exception_reports_error_but_keeps_partial(tmp_path, monkeypatch):
 
     # Displacement succeeds; force raises inside its real handler.
     monkeypatch.setattr(BatchAnalysis, "_handle_displacement_execution",
-                        lambda self, tfm_folder, pre: disp)
+                        lambda self, folder, tfm_folder, pre: disp)
 
     def _boom_force(self, tfm_folder, displacement_data):
         raise RuntimeError("force kaboom")
@@ -188,7 +188,7 @@ def test_stress_compute_failure_reports_error(tmp_path, monkeypatch):
     monkeypatch.setattr(BatchAnalysis, "_handle_visualization", lambda *a, **k: None)
     monkeypatch.setattr(BatchAnalysis, "_cleanup", lambda self: None)
     monkeypatch.setattr(BatchAnalysis, "_handle_displacement_execution",
-                        lambda self, tfm_folder, pre: disp)
+                        lambda self, folder, tfm_folder, pre: disp)
     monkeypatch.setattr(BatchAnalysis, "_execute_force_analysis",
                         lambda self, tfm_folder, displacement_data: force)
     monkeypatch.setattr(BatchAnalysis, "_load_mask",

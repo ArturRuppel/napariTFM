@@ -168,6 +168,67 @@ def test_backend_calculates_displacement_result_with_progress():
     assert np.isfinite(result.displacement_field).all()
 
 
+def test_calculate_field_folds_global_translation_into_drift():
+    """A spatially-uniform shift is stage drift, not deformation. PIV recovers it,
+    then calculate_displacement_field subtracts it: the reported field is ~0 and
+    drift_pixels captures the shift (pixels, ordered [u_x, u_y])."""
+    ref = _textured_image(seed=11, size=96)
+    dx, dy = 1.5, -1.0                       # columns (x), rows (y)
+    moving = ndimage.shift(ref, shift=(dy, dx), order=3, mode="reflect")
+
+    params = _params(pixel_size=1.0, downscale_factor=1)  # native grid; µm == px
+    gen = calculate_displacement_field(ref, moving, params)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as exc:
+        result = exc.value
+
+    # The bulk translation is captured as drift, ~ (dx, dy).
+    assert abs(result.drift_pixels[0, 0] - dx) < 0.2
+    assert abs(result.drift_pixels[0, 1] - dy) < 0.2
+
+    # ...and removed from the reported field, which is ~0 (pure drift, no strain).
+    m = slice(24, -24)
+    field = result.displacement_field[0]
+    assert abs(np.median(field[m, m, 0])) < 0.2
+    assert abs(np.median(field[m, m, 1])) < 0.2
+
+
+def test_calculate_field_keeps_localized_deformation_over_drift():
+    """Drift removal must not eat real signal. A localized (zero-median) bump of
+    deformation superimposed on a uniform drift: the drift is subtracted, the bump
+    survives. This is the TFM regime — at-rest background dominates the median."""
+    size = 96
+    ref = _textured_image(seed=12, size=size)
+    yy, xx = np.mgrid[0:size, 0:size].astype(float)
+    cy, cx = size / 2, size / 2
+    bump = 3.0 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 8.0 ** 2))
+    drift_x = 1.0
+    # Sample ref shifted right by (bump + drift) in x → moving frame.
+    moving = ndimage.map_coordinates(
+        ref, [yy, xx - (bump + drift_x)], order=3, mode="reflect"
+    )
+
+    params = _params(pixel_size=1.0, downscale_factor=1)
+    gen = calculate_displacement_field(ref, moving, params)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as exc:
+        result = exc.value
+
+    # Background median is pure drift → captured, no spurious y drift.
+    assert abs(result.drift_pixels[0, 0] - drift_x) < 0.4
+    assert abs(result.drift_pixels[0, 1]) < 0.4
+
+    field = result.displacement_field[0]
+    center = field[44:52, 44:52, 0]          # blob (true u_x ~3 after drift removal)
+    background = field[20:28, 20:28, 0]       # at-rest gel (true u_x ~0)
+    assert np.median(center) > 1.5
+    assert abs(np.median(background)) < 0.6
+
+
 def _downscale_flow_reference(flow, factor):
     """Independent block-mean reference: the original O(H*W) double loop.
 
