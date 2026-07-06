@@ -22,7 +22,8 @@ Downscaling and the pixel->µm conversion happen downstream in
 from typing import Optional, Tuple
 
 import numpy as np
-from scipy import ndimage
+from numpy.lib.stride_tricks import sliding_window_view
+from scipy import fft as sp_fft, ndimage
 from scipy.interpolate import RegularGridInterpolator
 
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
@@ -46,42 +47,58 @@ def _warp(img: np.ndarray, u: np.ndarray) -> np.ndarray:
     return ndimage.map_coordinates(img, [ii + u[1], jj + u[0]], order=1, mode="nearest")
 
 
-def _subpixel(c: float, cpk: float, r: float) -> float:
-    """3-point Gaussian peak offset along one axis (left, peak, right samples)."""
-    l, p, rr = max(c, 1e-6), max(cpk, 1e-6), max(r, 1e-6)
-    denom = (np.log(l) - 2 * np.log(p) + np.log(rr))
-    return 0.0 if abs(denom) < 1e-9 else 0.5 * (np.log(l) - np.log(rr)) / denom
+def _subpixel(c, cpk, r):
+    """3-point Gaussian peak offset along one axis (left, peak, right samples).
+
+    Vectorised: ``c``/``cpk``/``r`` may be scalars or arrays. Returns 0 where the
+    log-curvature is degenerate."""
+    l = np.maximum(c, 1e-6); p = np.maximum(cpk, 1e-6); rr = np.maximum(r, 1e-6)
+    denom = np.log(l) - 2 * np.log(p) + np.log(rr)
+    # np.where evaluates both branches, so the division runs where denom~0 too;
+    # its inf/nan is masked out below -- silence the spurious divide warning.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        offset = 0.5 * (np.log(l) - np.log(rr)) / denom
+    return np.where(np.abs(denom) < 1e-9, 0.0, offset)
 
 
 def _pass(ref: np.ndarray, dfm: np.ndarray, win: int, step: int):
     """One PIV pass on already-aligned images. Returns centre grid (ys, xs) and
-    residual (du, dv) per window via FFT cross-correlation + subpixel Gaussian.
+    residual (du, dv) per window via **batched** FFT cross-correlation + subpixel
+    Gaussian.
 
-    Kept as an explicit loop on purpose: a batched sliding-window vectorisation
-    is measurably *slower* on CPU (it pays hundreds of MB of window-extraction
-    copies), and the real speedup lives in the GPU backend below, not here."""
-    H, W = ref.shape
-    ys = np.arange(win // 2, H - win // 2, step)
-    xs = np.arange(win // 2, W - win // 2, step)
-    du = np.zeros((len(ys), len(xs)))
-    dv = np.zeros((len(ys), len(xs)))
-    han = np.hanning(win)[:, None] * np.hanning(win)[None, :]      # taper -> less edge leakage
-    for iy, yc in enumerate(ys):
-        for ix, xc in enumerate(xs):
-            a = ref[yc - win // 2:yc + win // 2, xc - win // 2:xc + win // 2]
-            b = dfm[yc - win // 2:yc + win // 2, xc - win // 2:xc + win // 2]
-            a = (a - a.mean()) * han
-            b = (b - b.mean()) * han
-            # circular cross-correlation; peak (vs centre) = shift of b w.r.t. a = +u
-            r = np.fft.fftshift(np.fft.ifft2(np.conj(np.fft.fft2(a)) * np.fft.fft2(b)).real)
-            py, px = np.unravel_index(np.argmax(r), r.shape)
-            cy = win // 2
-            sy = float(py - cy); sx = float(px - cy)
-            if 0 < py < win - 1:
-                sy += _subpixel(r[py - 1, px], r[py, px], r[py + 1, px])
-            if 0 < px < win - 1:
-                sx += _subpixel(r[py, px - 1], r[py, px], r[py, px + 1])
-            du[iy, ix] = sx; dv[iy, ix] = sy
+    Every interrogation window is extracted as a single strided view and
+    correlated in one batched real-FFT call (``scipy.fft``, multithreaded) — a
+    numpy mirror of the GPU backend's ``one_pass``, numerically identical to it.
+    The window stack is processed in row-bands so the materialised windows and
+    FFT temporaries stay bounded (~a few hundred MB) regardless of image size."""
+    swr = sliding_window_view(ref, (win, win))[::step, ::step]     # (Ny,Nx,win,win) view
+    swd = sliding_window_view(dfm, (win, win))[::step, ::step]
+    Ny, Nx = swr.shape[:2]
+    han = np.hanning(win)[:, None] * np.hanning(win)[None, :]       # taper -> less edge leakage
+    du = np.zeros((Ny, Nx)); dv = np.zeros((Ny, Nx))
+
+    band = max(1, (256 << 20) // max(Nx * win * win * 4, 1))       # ~256 MB float32 per band
+    for y0 in range(0, Ny, band):
+        y1 = min(y0 + band, Ny)
+        a = swr[y0:y1].astype(np.float32); b = swd[y0:y1].astype(np.float32)
+        a = (a - a.mean((-2, -1), keepdims=True)) * han
+        b = (b - b.mean((-2, -1), keepdims=True)) * han
+        # circular cross-correlation of the whole band at once; peak (vs origin)
+        # = shift of b w.r.t. a = +u. Un-shifted (no fftshift): the peak sits
+        # near index 0 and Nyquist-unwraps below, exactly as the GPU path does.
+        r = sp_fft.irfft2(np.conj(sp_fft.rfft2(a, workers=-1)) * sp_fft.rfft2(b, workers=-1),
+                          s=(win, win), workers=-1)
+        nb = y1 - y0
+        flat = r.reshape(nb, Nx, -1).argmax(-1)
+        py = flat // win; px = flat % win
+        iy = np.arange(nb)[:, None]; ix = np.arange(Nx)[None, :]
+        def g(ay, ax):
+            return r[iy, ix, ay % win, ax % win]                   # modular = circular neighbours
+        dv[y0:y1] = np.where(py >= win // 2, py - win, py) + _subpixel(g(py - 1, px), g(py, px), g(py + 1, px))
+        du[y0:y1] = np.where(px >= win // 2, px - win, px) + _subpixel(g(py, px - 1), g(py, px), g(py, px + 1))
+
+    ys = np.arange(Ny) * step + win // 2
+    xs = np.arange(Nx) * step + win // 2
     return ys, xs, du, dv
 
 
