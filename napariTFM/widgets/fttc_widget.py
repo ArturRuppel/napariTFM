@@ -47,16 +47,28 @@ class FTTCController(VectorStageController):
             self._support_mask(params),
         )
 
-    def _support_mask(self, params):
+    def _support_mask(self, params, frame=None):
         """The support mask for the forward method's confinement prior, or None.
 
         Reuses the same externally-loaded mask the Stress stage consumes
         (``data_manager.mask_stack``); only the ``forward`` method reads it, and
         even then only when the confinement dial is above 0.
+
+        ``frame`` selects a single mask slice for a single-frame solve (the
+        preview): the backend indexes the mask by the *displacement stack* frame,
+        so a preview — which passes a 1-frame stack — must hand it the matching
+        mask frame, not the whole stack (else it always uses frame 0). The run
+        path passes no frame and gets the full stack, aligned frame-by-frame.
         """
         if str(params.force_method) != "forward" or params.fwd_mask_strength <= 0:
             return None
-        return getattr(self.data_manager, "mask_stack", None)
+        mask = getattr(self.data_manager, "mask_stack", None)
+        if mask is None or frame is None:
+            return mask
+        mask = np.asarray(mask)
+        if mask.ndim > 2:
+            return mask[min(int(frame), mask.shape[0] - 1)]
+        return mask
 
     @thread_worker
     def _run_worker(self, displacement_field, params, mask=None):
@@ -92,7 +104,7 @@ class FTTCController(VectorStageController):
             displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
             params = self.parameter_manager.get_fttc_parameters()
 
-            result = self._compute_preview(displacement_field, params)
+            result = self._compute_preview(displacement_field, params, current_frame)
             if result is None:
                 raise RuntimeError("Preview calculation failed to produce results")
 
@@ -122,10 +134,14 @@ class FTTCController(VectorStageController):
         finally:
             self.unfreeze_ui()
 
-    def _compute_preview(self, displacement_field, params) -> FTTCResult:
-        """Run the single-frame force calculation to completion and return it."""
+    def _compute_preview(self, displacement_field, params, frame=None) -> FTTCResult:
+        """Run the single-frame force calculation to completion and return it.
+
+        ``frame`` is the source stack index being previewed; it selects the
+        matching mask slice for the forward method's confinement prior.
+        """
         gen = calculate_force_field(displacement_field[np.newaxis, ...], params,
-                                    mask=self._support_mask(params))
+                                    mask=self._support_mask(params, frame))
         try:
             while True:
                 next(gen)
