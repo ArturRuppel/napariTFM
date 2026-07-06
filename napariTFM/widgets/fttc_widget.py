@@ -43,14 +43,26 @@ class FTTCController(VectorStageController):
 
     def _build_worker(self, params):
         return self._run_worker(
-            self.data_manager.displacement_results.displacement_field, params
+            self.data_manager.displacement_results.displacement_field, params,
+            self._support_mask(params),
         )
 
+    def _support_mask(self, params):
+        """The support mask for the forward method's confinement prior, or None.
+
+        Reuses the same externally-loaded mask the Stress stage consumes
+        (``data_manager.mask_stack``); only the ``forward`` method reads it, and
+        even then only when the confinement dial is above 0.
+        """
+        if str(params.force_method) != "forward" or params.fwd_mask_strength <= 0:
+            return None
+        return getattr(self.data_manager, "mask_stack", None)
+
     @thread_worker
-    def _run_worker(self, displacement_field, params):
+    def _run_worker(self, displacement_field, params, mask=None):
         """Process every frame, yielding each force field for live streaming."""
         try:
-            gen = calculate_force_field(displacement_field, params)
+            gen = calculate_force_field(displacement_field, params, mask=mask)
             try:
                 while True:
                     force_field, frame, total = next(gen)
@@ -112,7 +124,8 @@ class FTTCController(VectorStageController):
 
     def _compute_preview(self, displacement_field, params) -> FTTCResult:
         """Run the single-frame force calculation to completion and return it."""
-        gen = calculate_force_field(displacement_field[np.newaxis, ...], params)
+        gen = calculate_force_field(displacement_field[np.newaxis, ...], params,
+                                    mask=self._support_mask(params))
         try:
             while True:
                 next(gen)

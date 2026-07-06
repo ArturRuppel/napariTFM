@@ -93,6 +93,10 @@ class WorkflowParameterPanel(QWidget):
             ("lanczos_exp", "Lanczos Exponent", "int", 0, 5, 1, 0, None),
             ("regularization", "Regularization (10^x)", "float", -21.0, 0.0, 0.5, 1, None),
             ("auto_gcv", "Auto-GCV per frame", "bool", None, None, None, None, None),
+            (GROUP, "Forward method"),
+            ("force_method", "Force Method", "choice", None, None, None, None, ["fttc", "forward"]),
+            ("fwd_mask_strength", "Mask Confinement", "float", 0.0, 100.0, 1.0, 0, None),
+            ("fwd_smoothness", "Smoothness", "float", 0.0, 1.0, 0.01, 2, None),
             (GROUP, "Visualization"),
             ("force_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("force_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -111,6 +115,25 @@ class WorkflowParameterPanel(QWidget):
     # The PIV set maps onto napariTFM.backend.piv_displacement (multi-pass FFT
     # cross-correlation, GPU-accelerated when torch + CUDA are available).
     PARAMETER_TOOLTIPS = {
+        "force_method": (
+            "Traction inversion method. 'fttc': the default regularized Fourier "
+            "inversion with the Lanczos low-pass. 'forward': a displacement-input "
+            "inversion that can confine forces to a support mask (soft prior). The "
+            "Mask Confinement dial and the loaded mask are only used by 'forward'."
+        ),
+        "fwd_mask_strength": (
+            "Confine traction to the loaded mask (the same external mask the Stress "
+            "stage uses). 0 = no confinement (forces anywhere). Higher = the off-mask "
+            "traction is more strongly penalized; log-scaled, so every step does "
+            "something. Only used by the 'forward' method, and needs a mask loaded."
+        ),
+        "fwd_smoothness": (
+            "Gradient-smoothness on the traction field — the primary regularizer "
+            "when confinement is on. Confining forces to the mask, with no smoothness, "
+            "lets the in-mask field overfit into artifacts; this term (γ‖∇t‖²) is what "
+            "the photometric solver got for free from its coarse basis. Useful band "
+            "~0.01..0.3. 0 = off. Only used by 'forward' with confinement > 0."
+        ),
         "piv_window": (
             "Final PIV interrogation window, in pixels. Cross-correlation is run "
             "on windows of this size on the last (finest) pass. Smaller windows "

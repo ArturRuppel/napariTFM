@@ -43,6 +43,30 @@ class FTTCParameters:
     pixel_size: float = 0.1  # in µm
     downscale_factor: int = 4
 
+    # Force method: "fttc" (regularized Fourier inversion + Lanczos, the default)
+    # or "forward" (displacement-input inversion with a soft mask-confinement
+    # prior; see napariTFM.backend.forward_tfm). The fwd_* fields below are only
+    # read when force_method == "forward".
+    force_method: str = "fttc"
+    fwd_regularization: float = 1e-4      # Tikhonov λ (amplitude ridge / conditioning)
+    fwd_mask_strength: float = 0.0        # 0..100 log-scaled mask confinement dial (0 = off)
+    fwd_smoothness: float = 0.05          # gradient-smoothness weight on the traction field.
+    #                                       This is the PRIMARY regularizer of the iterative
+    #                                       (confined) solve — it replaces the coarse B-spline
+    #                                       basis the photometric one-shot used as its smoother.
+    #                                       Without it, confining forces to the mask removes the
+    #                                       solver's off-mask escape valve and the in-mask field
+    #                                       overfits the (delocalized) displacement into garbage.
+    #                                       Non-dim data term ⇒ useful band ~0.01..0.3, roughly
+    #                                       scale-independent. 0 = off (reproduces the artifacts).
+    fwd_fit_margin_um: float = 1e6        # trust displacement only within mask+margin (µm)
+    fwd_max_iter: int = 200               # L-BFGS iterations (β>0 iterative path)
+    fwd_traction_scale: float = 1e-2      # non-dim traction scale T0 (rarely touched)
+    fwd_device: str = "auto"              # "auto" | "cuda" | "cpu" (β>0 path)
+    fwd_dtype: str = "float32"            # "float32" (default; complex128 is throttled on
+    #                                       laptop GPUs) | "float64" (the QP is convex &
+    #                                       well-conditioned, so float32 is ample)
+
     # Time parameters
     frame_interval: float = 1  # minutes
 
@@ -95,6 +119,16 @@ class UnifiedParameters:
     lanczos_exp: int = 1
     regularization: float = 1e-4
     auto_gcv: bool = False
+    # Forward method (see FTTCParameters / napariTFM.backend.forward_tfm)
+    force_method: str = "fttc"
+    fwd_regularization: float = 1e-4
+    fwd_mask_strength: float = 0.0
+    fwd_smoothness: float = 0.05
+    fwd_fit_margin_um: float = 1e6
+    fwd_max_iter: int = 200
+    fwd_traction_scale: float = 1e-2
+    fwd_device: str = "auto"
+    fwd_dtype: str = "float32"
     force_vector_stride: int = 20
     force_arrow_scale: float = 1.0
     f_max: float = 500.0  # Pa

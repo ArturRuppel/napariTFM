@@ -739,7 +739,7 @@ class BatchAnalysis:
                 if field is None:
                     return None
                 dd = SimpleNamespace(displacement_field=field)
-            return self._execute_force_analysis(tfm_folder, dd)
+            return self._execute_force_analysis(tfm_folder, dd, folder)
 
         return self._guard_stage("force", body)
 
@@ -941,7 +941,7 @@ class BatchAnalysis:
         print(f"Displacement analysis completed in {self._format_duration(time() - start_time)}")
         return displacement_result
 
-    def _execute_force_analysis(self, tfm_folder: Path, displacement_data: DisplacementResult) -> Optional[dict]:
+    def _execute_force_analysis(self, tfm_folder: Path, displacement_data: DisplacementResult, folder: Optional[Path] = None) -> Optional[dict]:
         """
         Execute the force analysis step of the TFM analysis pipeline.
 
@@ -1008,9 +1008,20 @@ class BatchAnalysis:
                        'downscale_factor': fttc_params.downscale_factor,
                    })
 
+        # The forward method's confinement prior needs the external mask (the same
+        # one the stress stage loads). Only fetched when it will actually be used.
+        force_mask = None
+        if (str(fttc_params.force_method) == "forward"
+                and fttc_params.fwd_mask_strength > 0 and folder is not None):
+            force_mask = self._load_mask(folder)
+            if force_mask is None:
+                print("Forward method with mask confinement requested but no "
+                      "external mask was found; solving unconfined for this experiment.")
+
         force_generator = calculate_force_field(
             displacement_data.displacement_field,
-            fttc_params
+            fttc_params,
+            mask=force_mask,
         )
 
         # Initialize result container

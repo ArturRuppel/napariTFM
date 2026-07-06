@@ -63,11 +63,35 @@ def validate_displacement_field(displacement_field: np.ndarray) -> Tuple[bool, s
     return True, ""
 
 
+def _mask_frame_for_grid(mask: np.ndarray, frame: int, hw: Tuple[int, int]) -> np.ndarray:
+    """Pick the frame's 2D mask and resize (nearest) it to the force grid ``hw``.
+
+    ``mask`` may be 2D (shared across frames) or 3D ``(T, H, W)``; masks are an
+    external input at bead resolution, so they are resampled to the (downscaled)
+    force grid here, matching how the stress stage fits its mask to the force field.
+    """
+    m = mask[frame] if mask.ndim > 2 else mask
+    m = np.asarray(m) > 0
+    if m.shape != tuple(hw):
+        from skimage.transform import resize
+        m = resize(m.astype(float), hw, order=0, mode="edge",
+                   anti_aliasing=False) > 0.5
+    return m
+
+
 def calculate_force_field(
         displacement_field: np.ndarray,
-        params: FTTCParameters
+        params: FTTCParameters,
+        mask: Optional[np.ndarray] = None,
 ) -> Generator[Tuple[np.ndarray, int, int], None, FTTCResult]:
-    """Calculate traction forces from displacement field data."""
+    """Calculate traction forces from displacement field data.
+
+    ``params.force_method`` selects the inversion: ``"fttc"`` (default, regularized
+    Fourier inversion + Lanczos) or ``"forward"`` (displacement-input inversion with
+    an optional soft mask-confinement prior, see :mod:`napariTFM.backend.forward_tfm`).
+    ``mask`` is only used by the forward method's support prior; it is ignored by
+    FTTC and by the forward method when the confinement dial is 0.
+    """
     is_valid, error_msg = validate_fttc_parameters(params)
     if not is_valid:
         raise ValueError(error_msg)
@@ -82,18 +106,26 @@ def calculate_force_field(
     total_frames = displacement_field.shape[0]
     force_shape = displacement_field.shape[1:4]
     force_stack = np.zeros((total_frames, *force_shape), dtype=np.float32)
-    calculator = FTTC(params)
+    use_forward = str(params.force_method) == "forward"
+    calculator = None if use_forward else FTTC(params)
 
     for frame in range(total_frames):
-        result = calculator.calculate_traction(
-            displacements=displacement_field[frame],
-            pixel_size=params.pixel_size,
-            downscale_factor=params.downscale_factor,
-            regularization=None if params.auto_gcv else params.regularization,
-        )
+        if use_forward:
+            from napariTFM.backend.forward_tfm import forward_traction_frame
+            m = None if mask is None else _mask_frame_for_grid(mask, frame, force_shape[:2])
+            traction = forward_traction_frame(displacement_field[frame], params, mask=m)
+            force_stack[frame, ..., 0] = traction[0]
+            force_stack[frame, ..., 1] = traction[1]
+        else:
+            result = calculator.calculate_traction(
+                displacements=displacement_field[frame],
+                pixel_size=params.pixel_size,
+                downscale_factor=params.downscale_factor,
+                regularization=None if params.auto_gcv else params.regularization,
+            )
 
-        force_stack[frame, ..., 0] = result[1][0]
-        force_stack[frame, ..., 1] = result[1][1]
+            force_stack[frame, ..., 0] = result[1][0]
+            force_stack[frame, ..., 1] = result[1][1]
 
         yield force_stack[frame].copy(), frame + 1, total_frames
 
