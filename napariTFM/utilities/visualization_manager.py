@@ -540,102 +540,7 @@ class VisualizationManager(ErrorHandlingMixin):
 
     # endregion
 
-    # region === Preprocessing Visualization
-    _PREPROCESSED_LAYER_NAMES = {
-        'beads': 'Preprocessed Beads',
-        'reference': 'Preprocessed Reference',
-        'cells': 'Preprocessed Cells',
-    }
-
-    def begin_preprocessing_stream(self, autoscale_contrast: bool = False) -> None:
-        """Create or reuse the Preprocessed layers so a run can stream into them.
-
-        The controller pre-allocates the output stacks (zeros) and holds them in
-        the data manager; this binds each to its napari layer. Reusing an
-        existing layer preserves the user's contrast limits, colormap, gamma and
-        visibility — only the backing array is swapped — so a re-run never resets
-        the settings the user dialled in. A first-ever run falls back to the
-        normalized [0, 1] defaults.
-
-        ``autoscale_contrast`` is for the display-only load path (a circle click
-        on the Preprocessing stage): unlike a live run — which binds zeroed
-        stacks and streams normalized [0, 1] floats into them — the load binds
-        fully-populated stacks read back from disk, where ``save_calibrated_tiff``
-        rescaled the pixels to uint16 [0, 65535]. The [0, 1] window would clip
-        every non-zero pixel to white, so each layer's contrast is snapped to the
-        data's own range instead.
-        """
-        try:
-            self.colorbar_manager.clear()
-
-            if 'Bead Overlay' in self.viewer.layers:
-                self.viewer.layers.remove('Bead Overlay')
-
-            specs = [
-                ('Preprocessed Cells', self.data_manager.preprocessed_cell_stack, 'gray'),
-                ('Preprocessed Reference', self.data_manager.preprocessed_reference, 'magenta'),
-                ('Preprocessed Beads', self.data_manager.preprocessed_bead_stack, 'green'),
-            ]
-
-            for name, data, colormap in specs:
-                if data is None:
-                    if name in self.viewer.layers:
-                        self.viewer.layers.remove(name)
-                    continue
-
-                if name in self.viewer.layers:
-                    layer = self._rebind_image_layer(self.viewer.layers[name], data)
-                else:
-                    layer = self.viewer.add_image(
-                        data,
-                        name=name,
-                        colormap=colormap,
-                        blending='additive',
-                        contrast_limits=(0, 1),
-                        visible=True,
-                    )
-                if autoscale_contrast and layer is not None:
-                    self._autoscale_contrast_to_data(layer, data)
-
-            # Take the viewer over for the preprocessing run (worklist §4): hide
-            # the raw inputs and any other stage, leaving only the preprocessed
-            # layers. The run-all sink narrows this further with its two-phase
-            # beads+reference → cells isolation immediately after.
-            self.hide_other_layers([name for name, _, _ in specs])
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to begin preprocessing stream",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Check data availability and consistency",
-                original_error=e,
-                source="visualization",
-            )
-            self.handle_error(error)
-
-    def _autoscale_contrast_to_data(self, layer, data: np.ndarray) -> None:
-        """Snap a layer's contrast window to its data's own finite min/max.
-
-        Used only by the display-only preprocessing load: the on-disk stacks are
-        uint16 [0, 65535], so the streaming default of [0, 1] would render them
-        fully saturated. Setting the range before the limits keeps napari from
-        clamping the window back into a stale [0, 1] range. A flat (or empty)
-        stack is left untouched — there's no meaningful window to set.
-        """
-        finite = data[np.isfinite(data)]
-        if finite.size == 0:
-            return
-        lo = float(finite.min())
-        hi = float(finite.max())
-        if hi <= lo:
-            return
-        try:
-            layer.contrast_limits_range = [lo, hi]
-            layer.contrast_limits = [lo, hi]
-        except Exception:
-            pass
-
+    # region === Image-layer streaming helpers (shared by all streamed stages)
     def _rebind_image_layer(self, layer, data: np.ndarray):
         """Swap an image layer's backing array without disturbing its settings.
 
@@ -714,41 +619,6 @@ class VisualizationManager(ErrorHandlingMixin):
                 except Exception:
                     pass
         return new_layer
-
-    def stream_preprocessing_frame(self, data_type: str, frame_index: int, image: np.ndarray) -> None:
-        """Write one freshly processed frame into its layer and follow it live.
-
-        The frame is written in place into the pre-allocated stack, the layer is
-        refreshed, and (for stacks) the time slider auto-advances to the frame
-        just computed so the user watches the result fill in.
-        """
-        name = self._PREPROCESSED_LAYER_NAMES.get(data_type)
-        if name is None or name not in self.viewer.layers:
-            return
-
-        try:
-            layer = self.viewer.layers[name]
-            data = layer.data
-            if data.ndim == 3:
-                if frame_index < 0 or frame_index >= data.shape[0]:
-                    return
-                data[frame_index] = image
-                layer.refresh()
-                self._advance_to_frame(frame_index)
-            else:
-                data[...] = image
-                layer.refresh()
-
-        except Exception as e:
-            error = self.create_error(
-                message="Failed to stream preprocessing frame",
-                details=str(e),
-                severity=ErrorSeverity.ERROR,
-                recovery_hint="Check layer/array consistency",
-                original_error=e,
-                source="visualization",
-            )
-            self.handle_error(error)
 
     def _advance_to_frame(self, frame_index: int) -> None:
         """Move the time slider to *frame_index* on axis 0 (best-effort)."""
@@ -1033,44 +903,6 @@ class VisualizationManager(ErrorHandlingMixin):
             self._layers['stress_normal'], colormap_name='seismic',
             label='Stress (mN/m)',
         )
-
-    def handle_preprocessing_preview(self, frames: Dict[str, np.ndarray], enable: bool = True) -> None:
-        """Render preprocessing preview inputs as separate additive layers."""
-        layer_specs = {
-            'cells': ('Preview Cells', 'gray'),
-            'reference': ('Preview Reference', 'magenta'),
-            'beads': ('Preview Beads', 'green'),
-        }
-
-        try:
-            for data_type, (layer_name, colormap) in layer_specs.items():
-                if not enable or data_type not in frames:
-                    if layer_name in self.viewer.layers:
-                        self.viewer.layers.remove(layer_name)
-                    continue
-
-                frame = frames[data_type]
-                if layer_name in self.viewer.layers:
-                    # Re-render (e.g. on parameter change) updates pixels only.
-                    # Visibility, colormap, and blending are the user's to set —
-                    # forcing them here would unhide layers hidden for isolated
-                    # inspection.
-                    self.viewer.layers[layer_name].data = frame
-                else:
-                    self.viewer.add_image(
-                        frame,
-                        name=layer_name,
-                        colormap=colormap,
-                        blending='additive',
-                        visible=True,
-                    )
-
-        except Exception as e:
-            logger.error(f"Preprocessing preview handling failed: {str(e)}")
-            for layer_name, _ in layer_specs.values():
-                if layer_name in self.viewer.layers:
-                    self.viewer.layers.remove(layer_name)
-            raise
 
     # endregion
 

@@ -7,18 +7,6 @@ _T = TypeVar("_T")
 
 
 @dataclass
-class PreprocessingParameters:
-    """Parameters for image preprocessing"""
-    min_intensity_percentile: float = 0.0
-    max_intensity_percentile: float = 100
-    gaussian_sigma: float = 0.0
-    cell_min_intensity_percentile: float = 0.0
-    cell_max_intensity_percentile: float = 100
-    cell_gaussian_sigma: float = 0.0
-    registration_mode: str = 'translation'
-
-
-@dataclass
 class DisplacementParameters:
     """Parameters for displacement analysis"""
     # PIV (multi-pass FFT cross-correlation) parameters. The backend has a
@@ -90,15 +78,6 @@ class UnifiedParameters:
     pixel_size: float = 0.1  # µm
     frame_interval: float = 1.0  # min
 
-    # Preprocessing parameters
-    min_intensity_percentile: float = 0.0
-    max_intensity_percentile: float = 100.0
-    gaussian_sigma: float = 0.0
-    cell_min_intensity_percentile: float = 0.0
-    cell_max_intensity_percentile: float = 100.0
-    cell_gaussian_sigma: float = 0.0
-    registration_mode: str = 'translation'
-
     # Displacement parameters (PIV backend)
     piv_window: int = 16
     piv_overlap: float = 0.75
@@ -135,10 +114,6 @@ class UnifiedParameters:
         default values — every time a parameter was added.
         """
         return cls(**{f.name: getattr(self, f.name) for f in fields(cls)})
-
-    def to_preprocessing_parameters(self) -> PreprocessingParameters:
-        """Create PreprocessingParameters from unified parameters"""
-        return self._project(PreprocessingParameters)
 
     def to_displacement_parameters(self) -> DisplacementParameters:
         """Create DisplacementParameters from unified parameters"""

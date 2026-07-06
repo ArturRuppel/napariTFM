@@ -19,6 +19,7 @@ from typing import Optional
 import numpy as np
 import tifffile
 import yaml
+from scipy import ndimage
 from skimage.transform import resize
 
 from napariTFM.backend.batch_visualizations import BatchVisualizationSaver
@@ -29,101 +30,45 @@ from napariTFM.backend.displacement_analysis import (
 from napariTFM.backend.fttc import FTTCResult, calculate_force_field
 from napariTFM.backend.bism import calculate_bism_stresses
 from napariTFM.backend.ntfm_writer import write_experiment_ntfm
-from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, StressParameters, PreprocessingParameters, UnifiedParameters
-from napariTFM.backend.preprocessing import preprocess_frame, preprocess_stack
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, StressParameters, UnifiedParameters
 from napariTFM.backend.queue_progress_sink import QueueProgressSink
 from napariTFM.utilities import ntfm
 from napariTFM.utilities.batch_output import RESULTS_FILENAME, resolve_output_plan
 
 
-def save_calibrated_tiff(data: np.ndarray, filepath: Path, pixel_size: float,
-                         frame_interval: float) -> None:
-    """Save *data* as a calibrated TIFF with ImageJ-compatible metadata.
+def _cells_for_overlay(cell_stack: np.ndarray,
+                       drift_pixels: Optional[np.ndarray] = None) -> np.ndarray:
+    """Prepare a raw cell stack as the force-cell overlay backdrop.
 
-    This is the shared writer used by both the batch pipeline and the
-    interactive widget so that preprocessed images are byte-identical
-    regardless of how they were produced.
+    Preprocessing used to produce the display cell image (percentile intensity
+    scaling); with preprocessing gone it is built here on the fly from the raw
+    cells:
 
-    Written as float32 with the pixels untouched. Preprocessing already
-    normalizes each stack to [0, 1] (``apply_intensity_scaling``), so the old
-    second min-max rescale to uint16 both quantized the data and silently
-    re-stretched each stack to its own range — the reloaded image no longer
-    matched what preprocessing produced, and batch resume fed rescaled uint16
-    back into a pipeline that fresh runs feed float [0, 1]. float32 keeps disk
-    byte-consistent with memory (and stays Fiji-openable via the ImageJ
-    metadata below).
+    * a stack-wide 1/99-percentile contrast stretch to [0, 1] — a fixed window
+      across the movie, so frames don't flicker the way per-frame autoscaling
+      would; and
+    * **new behaviour** — each frame shifted by its ``-drift_pixels`` so the
+      cells sit in the same drift-corrected reference frame the traction field
+      lives in (cells were never registered under the old preprocessing stage).
 
-    Args:
-        data: numpy array to save
-        filepath: path where to save the file
-        pixel_size: spatial calibration in µm/pixel
-        frame_interval: temporal calibration in minutes/frame
+    ``drift_pixels`` is ``(t, 2)`` ordered ``[u_x, u_y]`` from
+    ``DisplacementResult``; ``None`` (e.g. a stage-resume where displacement did
+    not run this session) leaves the cells un-shifted.
     """
-    if data is None:
-        return
-
-    data_out = np.asarray(data, dtype=np.float32)
-
-    # Create ImageJ-compatible metadata
-    imagej_metadata = {
-        'ImageJ': '1.53c',
-        'spacing': pixel_size,
-        'unit': 'um',
-        'frame_interval': frame_interval,
-        'frame_interval_unit': 'minute'
-    }
-
-    # For Z-stacks or time series, specify dimensions
-    if data.ndim > 2:
-        imagej_metadata.update({
-            'frames': data.shape[0],
-            'slices': 1,
-            'channels': 1
-        })
-
-    # Combine metadata for compatibility
-    metadata = {
-        'PhysicalSizeX': pixel_size,
-        'PhysicalSizeXUnit': 'um',
-        'PhysicalSizeY': pixel_size,
-        'PhysicalSizeYUnit': 'um',
-        'TimeIncrement': frame_interval,
-        'TimeIncrementUnit': 'min',
-        **imagej_metadata
-    }
-
-    # Save with metadata using tifffile
-    filepath = Path(filepath)
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    tifffile.imwrite(
-        str(filepath),
-        data_out,
-        imagej=True,
-        metadata=metadata,
-        resolution=(1 / pixel_size, 1 / pixel_size),  # resolution in pixels per unit
-        photometric='minisblack'
-    )
-
-    print(f"Saved calibrated TIFF: {filepath}")
-
-
-def save_preprocessed_tiffs(output_dir: Path, pixel_size: float, frame_interval: float, *,
-                            beads: Optional[np.ndarray] = None,
-                            reference: Optional[np.ndarray] = None,
-                            cells: Optional[np.ndarray] = None) -> None:
-    """Write a position's preprocessed bead/reference/cell TIFFs to *output_dir*.
-
-    Single place that knows the canonical filenames
-    (``preprocessed_beads.tif`` / ``preprocessed_reference.tif`` /
-    ``preprocessed_cells.tif``), used by both the batch pipeline and the
-    interactive widget so a position's saved TIFFs stay in lockstep no matter
-    which path produced them. Any array left as ``None`` is silently skipped
-    (delegated to :func:`save_calibrated_tiff`).
-    """
-    output_dir = Path(output_dir)
-    save_calibrated_tiff(beads, output_dir / "preprocessed_beads.tif", pixel_size, frame_interval)
-    save_calibrated_tiff(reference, output_dir / "preprocessed_reference.tif", pixel_size, frame_interval)
-    save_calibrated_tiff(cells, output_dir / "preprocessed_cells.tif", pixel_size, frame_interval)
+    cells = np.asarray(cell_stack, dtype=np.float32)
+    if cells.ndim == 2:
+        cells = cells[None]
+    lo, hi = np.percentile(cells, (1, 99))
+    if hi > lo:
+        cells = np.clip((cells - lo) / (hi - lo), 0.0, 1.0)
+    if drift_pixels is not None:
+        drift = np.asarray(drift_pixels, dtype=np.float32)
+        for t in range(min(cells.shape[0], drift.shape[0])):
+            u_x, u_y = float(drift[t, 0]), float(drift[t, 1])
+            # ndimage.shift is (row, col) == (y, x); move content by -drift to
+            # undo the stage motion the traction field already had removed.
+            cells[t] = ndimage.shift(cells[t], shift=(-u_y, -u_x), order=1, mode="nearest")
+    return cells
 
 
 def _run_position_headless(
@@ -394,8 +339,7 @@ class BatchAnalysis:
         :meth:`_process_all_folders_parallel`).
 
         The method handles:
-        - Preprocessing of bead and cell images
-        - Displacement field calculation
+        - Displacement field calculation (multi-pass PIV on raw beads)
         - Force analysis
         - Stress analysis (consumes externally supplied masks)
         - Visualization generation
@@ -644,18 +588,14 @@ class BatchAnalysis:
 
         Processing Steps
         ---------------
-        1. Preprocessing:
-            - Processes bead and cell images if available
-            - Applies background subtraction and filtering
-            - Optionally caches preprocessed images as calibrated TIFFs
+        1. Displacement Analysis:
+            - Multi-pass PIV of the raw bead frames against the raw reference
+              (bulk stage drift folded in and subtracted)
 
-        2. Displacement Analysis:
-            - Calculates displacement fields from bead images
-
-        3. Force Analysis:
+        2. Force Analysis:
             - Computes traction forces using FTTC
 
-        4. Stress Analysis:
+        3. Stress Analysis:
             - Calculates internal stress fields
 
         Displacement, force, and stress are persisted only in the experiment's
@@ -670,11 +610,10 @@ class BatchAnalysis:
             - <experiment>.ntfm: the sole data artifact (tidy table + metadata)
             - figures/: per-stage PNG/GIF previews (human-facing, not data)
             - batch.log: detailed processing log
-            - preprocessed_*.tif: the one stage-resume cache item not held by the
-              .ntfm (images upstream of the analysis grid), always written.
-              Displacement/force/stress are not re-cached as .npy — resume
-              reads them from the .ntfm. The external mask is an input read from
-              the input folder.
+
+        Displacement/force/stress are not cached as .npy — stage-resume reads
+        them back from the .ntfm. The external mask is an input read from the
+        input folder.
 
         Raises
         ------
@@ -699,17 +638,17 @@ class BatchAnalysis:
             print(f"Processing folder: {folder_path}")
             print("=" * 50)
 
-            # Handle preprocessing
-            preprocessed_data = self._handle_preprocessing_execution(folder, tfm_folder)
-            self._handle_visualization(tfm_folder, viz_saver, 'preprocessing', preprocessed_data)
-
             # Handle displacement
-            displacement_data = self._handle_displacement_execution(folder, tfm_folder, preprocessed_data)
+            displacement_data = self._handle_displacement_execution(folder, tfm_folder)
             self._handle_visualization(tfm_folder, viz_saver, 'displacement', displacement_data)
 
             # Handle force analysis
             force_data = self._handle_force_execution(tfm_folder, folder, displacement_data)
-            self._handle_visualization(tfm_folder, viz_saver, 'force', force_data)
+            self._handle_visualization(
+                tfm_folder, viz_saver, 'force', force_data,
+                folder=folder,
+                drift_pixels=getattr(displacement_data, 'drift_pixels', None),
+            )
 
             # Masks are supplied externally as an input layer:
             # loaded from the input folder, never generated by napariTFM.
@@ -765,25 +704,16 @@ class BatchAnalysis:
             self._record_stage_failure(stage, e)
             return None
 
-    def _handle_preprocessing_execution(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
-        """Handle preprocessing execution. Always runs if enabled."""
-        return self._guard_stage(
-            "preprocessing", lambda: self._execute_preprocessing(folder, tfm_folder)
-        )
-
-    def _handle_displacement_execution(self, folder: Path, tfm_folder: Path, preprocessed_data: Optional[dict]) -> Optional[dict]:
+    def _handle_displacement_execution(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
         """Handle displacement analysis execution. Always runs if enabled.
 
-        PIV now consumes the *raw* bead/reference inputs straight from the input
-        folder, not the preprocessed tiffs. The multi-pass PIV coarse pass
-        absorbs bulk stage drift (which ``calculate_displacement_field`` then
-        subtracts from the reported field), so image-level pre-registration is
-        no longer needed. Preprocessing still runs and still writes its tiffs
-        (they remain the display/overlay source), but displacement no longer
-        reads them — ``preprocessed_data`` is ignored. The raw inputs always
-        exist in the input folder, so a fresh run and a stage-resume feed PIV
-        the same bytes. A missing/unreadable input raises and is recorded as a
-        displacement failure by ``_guard_stage``.
+        PIV consumes the *raw* bead/reference inputs straight from the input
+        folder. The multi-pass PIV coarse pass absorbs bulk stage drift (which
+        ``calculate_displacement_field`` then subtracts from the reported
+        field), so image-level pre-registration is no longer needed — this is
+        why the old preprocessing stage could be removed entirely. A
+        missing/unreadable input raises and is recorded as a displacement
+        failure by ``_guard_stage``.
         """
         def body():
             print("Loading raw bead/reference images from file...")
@@ -925,140 +855,6 @@ class BatchAnalysis:
             print("No analysis results produced; skipping .ntfm write.")
             return
         print(f"Saved data artifact: {ntfm_path}")
-
-    def _execute_preprocessing(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
-        """
-        Execute the preprocessing step of the TFM analysis pipeline.
-
-        This method handles the initial processing of raw microscopy images,
-        including both bead and cell images if available.
-
-        Parameters
-        ----------
-        folder : Path
-            Path to the input folder containing raw data files
-        tfm_folder : Path
-            Path to the output folder where processed files will be saved
-
-        Returns
-        -------
-        Optional[dict]
-            Dictionary containing:
-            - 'beads': Preprocessed bead image stack (np.ndarray)
-            - 'reference': Preprocessed reference image (np.ndarray)
-            - 'cells': Preprocessed cell image stack (np.ndarray, optional)
-            - 'parameters': Preprocessing parameters used
-            Returns None if preprocessing fails
-
-        Processing Steps
-        ---------------
-        1. Loads raw bead images and reference image
-        2. Optionally loads cell images if specified in config
-        3. Applies preprocessing pipeline:
-            - Gaussian filtering
-            - Intensity normalization
-            - Image registration (for bead images)
-        4. Saves results as calibrated TIFF files with metadata
-
-        The preprocessing parameters are taken from the config:
-            - min_intensity_percentile
-            - max_intensity_percentile
-            - gaussian_sigma
-            - registration_mode
-            Plus additional parameters for cell image processing
-
-        Raises
-        ------
-        FileNotFoundError
-            If input files are not found
-        RuntimeError
-            If preprocessing operations fail
-        """
-
-        print("Starting Preprocessing...")
-        start_time = time()
-        params = self._create_preprocessing_parameters()
-
-        # Process bead images
-        bead_stack = tifffile.imread(str(folder / self.config['input_files']['beads']))
-        reference = tifffile.imread(str(folder / self.config['input_files']['reference']))
-
-        # Load and process cell images if available
-        cell_stack = None
-        if 'cells' in self.config['input_files'] and self.config['input_files']['cells']:
-            try:
-                cell_stack = tifffile.imread(str(folder / self.config['input_files']['cells']))
-                print("Found cell image stack, will process alongside beads")
-            except FileNotFoundError:
-                print(f"Warning: Cell image file specified but not found: {self.config['input_files']['cells']}")
-
-        # Tell a live sink the channel shapes up front so it can pre-allocate
-        # the Preprocessed* stacks and bind their layers before frames stream in.
-        # The announced frame total is the whole preprocessing workload — beads +
-        # the single reference frame + cells — so the progress bar (which the sink
-        # now advances monotonically across the three channels) reaches 100% only
-        # when every channel is done, instead of filling on beads and snapping back.
-        total_preproc_frames = (
-            int(bead_stack.shape[0])
-            + 1
-            + (int(cell_stack.shape[0]) if cell_stack is not None else 0)
-        )
-        self._emit('stage_started', 'preprocessing', total_preproc_frames, {
-            'beads_shape': tuple(bead_stack.shape),
-            'reference_shape': tuple(reference.shape),
-            'cells_shape': tuple(cell_stack.shape) if cell_stack is not None else None,
-        })
-
-        bead_results = []
-        for result, frame, total in preprocess_stack(bead_stack, params, reference):
-            self._raise_if_cancelled()
-            bead_results.append(result)
-            print(f"Progress (beads): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
-            # ``preprocess_stack`` yields a 0-based frame (the stack index).
-            self._emit('stage_frame', 'preprocessing', frame, {'beads': result.processed_image})
-
-        reference_result = preprocess_frame(reference, params)
-        self._emit('stage_frame', 'preprocessing', 0, {'reference': reference_result.processed_image})
-
-        # Process cell images if available
-        cell_results = []
-        if cell_stack is not None:
-            print("Processing cell images...")
-            for result, frame, total in preprocess_stack(cell_stack, params, reference_image=None, is_cell=True):
-                self._raise_if_cancelled()
-                cell_results.append(result)
-                print(f"Progress (cells): {(frame / total) * 100:.1f}%, Frame {frame}/{total}")
-                self._emit('stage_frame', 'preprocessing', frame, {'cells': result.processed_image})
-
-        # Save results with calibration
-        preprocessed = {
-            'beads': np.stack([r.processed_image for r in bead_results]),
-            'reference': reference_result.processed_image,
-            'parameters': params.__dict__
-        }
-
-        if cell_results:
-            preprocessed['cells'] = np.stack([r.processed_image for r in cell_results])
-
-        # Preprocessed images give preprocessing the same persistence guarantee
-        # every downstream stage has: they are always written so that the
-        # preprocessing dot reliably shows "done" on reload and stage-resume can
-        # skip straight to displacement without re-running preprocessing.
-        pixel_size = self.config['parameters']['pixel_size']
-        frame_interval = self.config['parameters']['frame_interval']
-
-        save_preprocessed_tiffs(
-            tfm_folder,
-            pixel_size,
-            frame_interval,
-            beads=preprocessed['beads'],
-            reference=preprocessed['reference'],
-            cells=preprocessed.get('cells'),
-        )
-
-        self._emit('stage_finished', 'preprocessing', preprocessed)
-        print(f"Preprocessing completed in {self._format_duration(time() - start_time)}")
-        return preprocessed
 
     def _execute_displacement_analysis(self, tfm_folder: Path, image_data: dict) -> Optional[DisplacementResult]:
         """
@@ -1357,10 +1153,6 @@ class BatchAnalysis:
         raw = self.config.get('parameters', {})
         return UnifiedParameters(**{k: v for k, v in raw.items() if k in valid})
 
-    def _create_preprocessing_parameters(self) -> PreprocessingParameters:
-        """Create preprocessing parameters from config."""
-        return self._unified_parameters().to_preprocessing_parameters()
-
     def _create_displacement_parameters(self) -> DisplacementParameters:
         """Create displacement parameters from config."""
         return self._unified_parameters().to_displacement_parameters()
@@ -1399,9 +1191,11 @@ class BatchAnalysis:
         return output_dir
 
     def _handle_visualization(self, tfm_folder: Path, viz_saver: BatchVisualizationSaver, step: str,
-                              current_data: Optional[dict] = None) -> None:
+                              current_data: Optional[dict] = None, *,
+                              folder: Optional[Path] = None,
+                              drift_pixels: Optional[np.ndarray] = None) -> None:
         """
-        Handle visualizations for each analysis step, loading data from files if needed.
+        Handle visualizations for each analysis step.
 
         Parameters
         ----------
@@ -1410,12 +1204,15 @@ class BatchAnalysis:
         viz_saver : BatchVisualizationSaver
             Visualization saver instance
         step : str
-            Current analysis step ('preprocessing', 'displacement', 'force', 'stress')
+            Current analysis step ('displacement', 'force', 'stress')
         current_data : Optional[dict]
             Data from the current analysis step, if available
+        folder : Optional[Path]
+            Input folder (raw data). Needed by the force-cell overlay, which now
+            reads the raw cell stack directly.
+        drift_pixels : Optional[np.ndarray]
+            Per-frame bulk drift from displacement, applied to the overlay cells.
         """
-        # Map analysis steps to their visualization flags. Preprocessing has no
-        # visualization (the bead overlay was removed).
         viz_map = {
             'displacement': 'displacement_map',
             'force': ['force_map', 'force_cell_overlay'],
@@ -1433,21 +1230,9 @@ class BatchAnalysis:
         try:
             data = current_data
             if data is None:
-                # Only preprocessing has an on-disk cache to fall back to (the
-                # opt-in preprocessed .tif). Displacement/force/stress results are
-                # not cached as .npy — if the stage produced nothing
-                # this run there is nothing to visualize.
-                if step == 'preprocessing':
-                    try:
-                        data = {
-                            'beads': tifffile.imread(str(tfm_folder / "preprocessed_beads.tif")),
-                            'reference': tifffile.imread(str(tfm_folder / "preprocessed_reference.tif"))
-                        }
-                    except Exception as e:
-                        print(f"Could not load preprocessed files for visualization: {str(e)}")
-                        return
-
-            if data is None:
+                # Displacement/force/stress results are not cached as .npy — if
+                # the stage produced nothing this run there is nothing to
+                # visualize.
                 print(f"No data available for {step} visualization")
                 return
 
@@ -1464,7 +1249,11 @@ class BatchAnalysis:
                 if self.config['visualizations']['force_cell_overlay']:
                     print("Generating force-cell overlay visualization...")
                     try:
-                        cell_images = tifffile.imread(str(tfm_folder / "preprocessed_cells.tif"))
+                        cells_name = self.config['input_files'].get('cells')
+                        if not cells_name:
+                            raise FileNotFoundError("no cell channel configured")
+                        raw_cells = tifffile.imread(str(Path(folder) / cells_name))
+                        cell_images = _cells_for_overlay(raw_cells, drift_pixels)
                         viz_saver.save_force_cell_overlay(data, cell_images)
                     except Exception as e:
                         print(f"Could not generate force-cell overlay: {str(e)}")

@@ -18,8 +18,8 @@ This module is deliberately free of Qt and napari imports so the backend stays
 headless-importable; the viewer-coupled implementation lives in
 ``napariTFM.utilities.viewer_sink``.
 
-Stage keys are the four pipeline stages: ``"preprocessing"``, ``"displacement"``,
-``"force"`` and ``"stress"``.
+Stage keys are the three pipeline stages: ``"displacement"``, ``"force"`` and
+``"stress"``.
 """
 
 from typing import Any, Optional
@@ -49,17 +49,14 @@ class PipelineSink:
         ``info`` carries the per-stage visualization context a live sink needs
         to allocate its layers up front (e.g. ``v_max`` / ``vector_stride`` /
         ``arrow_scale`` / ``downscale_factor`` for displacement & force,
-        ``max_stress`` / ``downscale_factor`` for stress, frame shape and channel
-        availability for preprocessing).
+        ``max_stress`` / ``downscale_factor`` for stress).
         """
 
     def stage_frame(self, stage: str, frame_index: int, frame: Any) -> None:
         """One freshly computed frame of ``stage`` (0-based ``frame_index``).
 
         ``frame`` is whatever that stage produces per frame: the field array for
-        displacement / force, the stress-tensor frame for stress, and a
-        ``{channel: image}`` mapping for preprocessing (channel in
-        ``{"beads", "reference", "cells"}``).
+        displacement / force, and the stress-tensor frame for stress.
         """
 
     def stage_finished(self, stage: str, result: Any) -> None:

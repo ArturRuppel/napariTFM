@@ -351,8 +351,8 @@ class _ParameterManager(QObject):
 
 class _CtrlDataManager:
     def __init__(self):
-        self.preprocessed_bead_stack = np.ones((3, 4, 4), dtype=np.float32)
-        self.preprocessed_reference = np.ones((4, 4), dtype=np.float32)
+        self.bead_stack = np.ones((3, 4, 4), dtype=np.float32)
+        self.reference = np.ones((4, 4), dtype=np.float32)
         # Force reads its frame count from the displacement result (2 frames).
         self.displacement_results = _Params(
             displacement_field=np.ones((2, 4, 4, 2), dtype=np.float32)

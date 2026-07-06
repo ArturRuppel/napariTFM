@@ -11,12 +11,11 @@
 2. [Installation](#installation)
 3. [Getting Started](#getting-started)
 4. [Module Overview](#module-overview)
-5. [Preprocessing](#preprocessing)
-6. [Displacement Analysis](#displacement-analysis)
-7. [Force Calculation](#force-calculation)
-8. [Stress Analysis](#stress-analysis)
-9. [Batch Processing](#batch-processing)
-10. [Tips and Troubleshooting](#tips-and-troubleshooting)
+5. [Displacement Analysis](#displacement-analysis)
+6. [Force Calculation](#force-calculation)
+7. [Stress Analysis](#stress-analysis)
+8. [Batch Processing](#batch-processing)
+9. [Tips and Troubleshooting](#tips-and-troubleshooting)
 
 ## Introduction
 
@@ -35,7 +34,7 @@ The core algorithms implemented in napariTFM are based on established methods de
 **BISM (Bayesian Inversion Stress Microscopy):** The stress field calculation implementation is a dependency-light port of the MATLAB reference (Nier et al., Biophys. J. 110(7):1625-1635, 2016; original BISM.m by Vincent Nier).
 
 ### Key Features
-- Complete TFM analysis pipeline from preprocessing to stress calculation
+- Complete TFM analysis pipeline from displacement to stress calculation
 - Bayesian Inversion Stress Microscopy (BISM) for internal stress analysis
 - Interactive visualization of results
 - Support for both single images and time series data
@@ -131,47 +130,17 @@ To perform TFM analysis, you need:
 
 ## Module Overview
 
-napariTFM consists of four main analysis modules:
+napariTFM consists of three main analysis modules:
 
-1. **Preprocessing**: Image enhancement and registration
-2. **Displacement Analysis**: Displacement field measurement
-3. **Force Calculation**: Traction force computation using FTTC
-4. **Stress Analysis**: Internal stress field calculation using BISM
+1. **Displacement Analysis**: Displacement field measurement (multi-pass PIV on the raw bead images)
+2. **Force Calculation**: Traction force computation using FTTC
+3. **Stress Analysis**: Internal stress field calculation using BISM
 
-## Preprocessing
-
-### Purpose
-Prepare raw microscopy images for analysis by:
-- Correcting background illumination
-- Enhancing contrast
-- Reducing noise
-- Aligning image sequences
-
-### Steps
-1. Load Data:
-   - Click "Load Bead Stack" to load bead images
-   - Click "Load Reference Image" to load the reference image
-   - Click "Load Cell Stack" (optional) for cell images
-
-2. Adjust Parameters:
-   - Intensity Range: Set min/max percentiles for contrast
-   - Gaussian Blur: Noise reduction (0-10 sigma)
-   - Registration Mode: Translation or Rigid alignment
-
-3. Preview Results:
-   - Toggle "Show Preview" to visualize effects
-   - Select data type (Beads/Reference/Cells) to preview
-   - Adjust parameters until satisfied
-
-4. Process Data:
-   - Click "Run Preprocessing" to process all images
-   - Save results using "Save Result Images"
-
-### Tips
-- Start with default parameters and adjust as needed
-- Use preview to fine-tune settings
-- Save preprocessed data for later use
-
+There is no separate preprocessing stage: the multi-pass PIV coarse pass
+absorbs bulk stage drift (which is subtracted from the reported field), so the
+displacement stage consumes the raw bead/reference inputs directly. The
+optional cell channel is contrast-scaled and drift-corrected on the fly for the
+force-cell overlay.
 
 ## Displacement Analysis
 
@@ -226,7 +195,7 @@ The algorithm works by:
 ### Analysis Steps
 
 1. **Preparation**
-   - Ensure preprocessed bead images are loaded
+   - Ensure the raw bead images are loaded
    - Verify reference image is set
 
 2. **Parameter Adjustment**
@@ -269,7 +238,7 @@ The algorithm works by:
 3. Common Issues and Solutions:
    - Noisy results: Decrease lambda, increase smoothing
    - Missed displacements: Increase pyramid scales
-   - Artifacts: Check preprocessing, adjust parameters
+   - Artifacts: Check input image quality, adjust parameters
    - Slow processing: Reduce scales or warps
 
 #### Validation

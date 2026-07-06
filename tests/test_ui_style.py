@@ -17,9 +17,9 @@ def app():
 
 
 def test_stage_accent_returns_hex_for_known_keys():
-    assert stage_accent("preprocessing").startswith("#")
     assert stage_accent("displacement").startswith("#")
-    assert stage_accent("preprocessing") != stage_accent("displacement")
+    assert stage_accent("force").startswith("#")
+    assert stage_accent("displacement") != stage_accent("force")
 
 
 def test_stage_accent_samples_active_ramp_in_pipeline_order():
@@ -29,21 +29,22 @@ def test_stage_accent_samples_active_ramp_in_pipeline_order():
     assert _ui_style.stage_accent("project") == _ui_style.THEME_RAMPS["Viridis"][0]
     assert _ui_style.stage_accent("batch") == _ui_style.THEME_RAMPS["Viridis"][-1]
     # adjacent pipeline stages are visibly distinct (the anti-mud guarantee).
-    order = ["preprocessing", "displacement", "force", "stress"]
+    order = ["displacement", "force", "stress"]
     accents = [_ui_style.stage_accent(k) for k in order]
     assert len(set(accents)) == len(accents)
 
 
 def test_cividis_stages_match_cellflow_ordered_stops():
     """The Cividis spine reuses CellFlow's five ordered cividis stops, mapped
-    project(yellow)→stress(dark blue) — project first, stress analysis last."""
+    project(yellow)→batch(dark blue): project/inputs, the three pipeline stages,
+    and batch each land on one ordered stop."""
     from napariTFM.widgets import _ui_style
     _ui_style.set_active_theme("Cividis")
     assert _ui_style.stage_accent("project") == "#d6c35d"
-    assert _ui_style.stage_accent("preprocessing") == "#a79d73"
-    assert _ui_style.stage_accent("displacement") == "#7d7c78"
-    assert _ui_style.stage_accent("force") == "#555c6d"
-    assert _ui_style.stage_accent("stress") == "#243c6e"
+    assert _ui_style.stage_accent("displacement") == "#a79d73"
+    assert _ui_style.stage_accent("force") == "#7d7c78"
+    assert _ui_style.stage_accent("stress") == "#555c6d"
+    assert _ui_style.stage_accent("batch") == "#243c6e"
 
 
 def test_stage_accent_falls_back_to_inputs_for_unknown_key():
@@ -66,7 +67,7 @@ def test_section_label_style_is_bold():
 
 def test_stage_header_style_is_accent_pill():
     from napariTFM.widgets._ui_style import muted_accent
-    accent = stage_accent("preprocessing")
+    accent = stage_accent("displacement")
     style = stage_header_style(accent)
     assert muted_accent(accent) in style
     assert "font-weight: bold" in style
@@ -152,7 +153,7 @@ def test_stage_header_disabled_action_color_is_hex():
 def test_stage_header_action_button_style_has_state_rules():
     from napariTFM.widgets._ui_style import stage_header_action_button_style
 
-    style = stage_header_action_button_style(stage_accent("preprocessing"))
+    style = stage_header_action_button_style(stage_accent("displacement"))
     assert "QToolButton {" in style
     assert "QToolButton:hover" in style
     assert "QToolButton:checked" in style

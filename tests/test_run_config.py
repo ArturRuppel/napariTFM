@@ -36,8 +36,9 @@ def test_input_files_come_from_the_first_record():
 def test_all_pipeline_steps_run_by_default():
     cfg = build_run_config(_RECORDS, {})
     steps = cfg["analysis_steps"]
-    assert steps["preprocessing"] and steps["displacement"]
-    assert steps["force"] and steps["stress"]
+    assert steps["displacement"] and steps["force"]
+    assert steps["stress"]
+    assert "preprocessing" not in steps
 
 
 def test_disabled_stress_is_skipped():

@@ -31,9 +31,6 @@ class DataManager:
         "bead_stack": "Raw bead stack",
         "reference": "Raw reference image",
         "cell_stack": "Raw cell stack",
-        "preprocessed_bead_stack": "Preprocessed bead stack",
-        "preprocessed_reference": "Preprocessed reference image",
-        "preprocessed_cell_stack": "Preprocessed cell stack",
         "displacement_results": "Displacement result",
         "force_results": "Force/traction result",
         "stress_results": "Stress result",
@@ -85,7 +82,7 @@ class DataManager:
         *folder* is the experiment directory; *input_files* is the discovery
         config (``{"beads": "beads.tif", "reference": ..., ...}``) naming the raw
         files inside it. With these set, a raw input reads available the moment
-        its file is on disk — so the preprocessing input dots turn green before
+        its file is on disk — so the displacement input dots turn green before
         anything is loaded into memory. Passing ``None``/``{}`` clears the check.
         """
         self._active_input_folder = Path(folder).expanduser() if folder else None
@@ -143,21 +140,6 @@ class DataManager:
         self._validate_input_stack(data, "cell stack")
         self.set_artifact("cell_stack", data, path=path)
 
-    def set_preprocessed_bead_stack(self, data: np.ndarray, path=None, dirty: bool = False) -> None:
-        """Set and validate preprocessed bead stack."""
-        self._validate_input_stack(data, "bead stack")
-        self.set_artifact("preprocessed_bead_stack", data, path=path, dirty=dirty)
-
-    def set_preprocessed_cell_stack(self, data: np.ndarray, path=None, dirty: bool = False) -> None:
-        """Set and validate preprocessed cell stack."""
-        self._validate_input_stack(data, "cell stack")
-        self.set_artifact("preprocessed_cell_stack", data, path=path, dirty=dirty)
-
-    def set_preprocessed_reference(self, data: np.ndarray, path=None, dirty: bool = False) -> None:
-        """Set and validate preprocessed reference image."""
-        self._validate_reference_image(data)
-        self.set_artifact("preprocessed_reference", data, path=path, dirty=dirty)
-
     def set_mask_stack(self, data: np.ndarray, path=None) -> None:
         """Set and validate mask stack."""
         self._validate_input_stack(data, "mask stack")
@@ -178,7 +160,7 @@ class DataManager:
                 self.set_artifact(downstream, None)
 
     def clear_generated_results(self) -> None:
-        """Drop every in-memory derived result (preprocessing, analyses, mask).
+        """Drop every in-memory derived result (analyses, mask).
 
         Called when the active experiment changes so one experiment's results can
         never bleed into the next experiment's persisted ``.ntfm``. Raw inputs are
@@ -189,9 +171,6 @@ class DataManager:
         """
         changed = False
         for key in (
-            "preprocessed_bead_stack",
-            "preprocessed_reference",
-            "preprocessed_cell_stack",
             "displacement_results",
             "force_results",
             "stress_results",
@@ -234,18 +213,6 @@ class DataManager:
         return self.get_artifact("cell_stack").value
 
     # Result properties
-    @property
-    def preprocessed_bead_stack(self) -> Optional[np.ndarray]:
-        return self.get_artifact("preprocessed_bead_stack").value
-
-    @property
-    def preprocessed_reference(self) -> Optional[np.ndarray]:
-        return self.get_artifact("preprocessed_reference").value
-
-    @property
-    def preprocessed_cell_stack(self) -> Optional[np.ndarray]:
-        return self.get_artifact("preprocessed_cell_stack").value
-
     @property
     def mask_stack(self) -> Optional[np.ndarray]:
         return self.get_artifact("mask_stack").value

@@ -11,12 +11,8 @@ sys.modules.setdefault("qtrangeslider", qtrangeslider)
 from napariTFM.backend.parameter_dataclasses import (
     FTTCParameters,
     StressParameters,
-    PreprocessingParameters,
 )
-from napariTFM.backend.parameter_validation import (
-    validate_fttc_parameters,
-    validate_preprocessing_parameters,
-)
+from napariTFM.backend.parameter_validation import validate_fttc_parameters
 from napariTFM.utilities.parameter_manager import ParameterManager
 
 
@@ -42,19 +38,6 @@ def test_ui_parameter_conversions_round_trip():
     manager.set_ui_parameter("gel_height", 12.5)
     assert manager.get_parameter("gel_height") == 12.5
     assert manager.get_ui_parameter("gel_height") == 12.5
-
-
-def test_all_parameters_use_unified_field_names():
-    manager = ParameterManager()
-
-    params = manager.get_all_parameters()
-
-    assert "min_intensity_percentile" in params
-    assert "max_intensity_percentile" in params
-    assert "cell_min_intensity_percentile" in params
-    assert "cell_max_intensity_percentile" in params
-    assert "min_intensity" not in params
-    assert "max_intensity" not in params
 
 
 def test_all_parameters_omit_tvl1_only_parameters():
@@ -97,10 +80,6 @@ def test_parameter_manager_validation_does_not_import_services(monkeypatch):
 
 
 def test_validation_helpers_return_compatible_results():
-    assert validate_preprocessing_parameters(
-        PreprocessingParameters(min_intensity_percentile=80, max_intensity_percentile=20)
-    ) == (False, "Invalid intensity percentile range")
-
     assert validate_fttc_parameters(
         FTTCParameters(young_modulus=0)
     ) == (False, "Young's modulus must be positive")

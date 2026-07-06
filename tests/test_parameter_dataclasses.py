@@ -12,13 +12,11 @@ import pytest
 from napariTFM.backend.parameter_dataclasses import (
     DisplacementParameters,
     FTTCParameters,
-    PreprocessingParameters,
     StressParameters,
     UnifiedParameters,
 )
 
 _SUBCLASSES = [
-    PreprocessingParameters,
     DisplacementParameters,
     FTTCParameters,
     StressParameters,
@@ -35,7 +33,6 @@ def test_every_stage_field_exists_on_unified(cls):
 @pytest.mark.parametrize(
     "method, cls",
     [
-        ("to_preprocessing_parameters", PreprocessingParameters),
         ("to_displacement_parameters", DisplacementParameters),
         ("to_fttc_parameters", FTTCParameters),
         ("to_stress_parameters", StressParameters),
@@ -47,7 +44,6 @@ def test_projection_copies_unified_values(method, cls):
         pixel_size=0.23,
         frame_interval=3.5,
         downscale_factor=2,
-        gaussian_sigma=1.7,
         young_modulus=12345.0,
         regularization=5e-5,
         bism_regularization=2e-6,

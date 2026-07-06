@@ -15,7 +15,6 @@ from napariTFM.utilities.parameter_manager import ParameterManager
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
 
-from napariTFM.widgets.preprocessing_widget import PreprocessingWidget
 from napariTFM.widgets.displacement_analysis_widget import DisplacementAnalysisWidget
 from napariTFM.widgets.fttc_widget import FTTCWidget
 from napariTFM.widgets.stress_widget import StressWidget
@@ -46,16 +45,10 @@ PROJECT_FORMAT_VERSION = 2
 # is selected. No on_view/on_action callbacks: the old per-artifact status-dot
 # row was removed as redundant with the colormap-spine rail.
 STAGE_DATA_ARTIFACTS = {
-    "preprocessing": [
-        DataArtifactSpec("bead_stack", "Beads", "bead_stack", "input"),
-        DataArtifactSpec("reference", "Reference", "reference", "input"),
-        DataArtifactSpec("cell_stack", "Cells", "cell_stack", "input", required=False),
-        DataArtifactSpec("preprocessed_reference", "Preprocessed reference", "preprocessed_reference", "output"),
-        DataArtifactSpec("preprocessed_bead_stack", "Preprocessed beads", "preprocessed_bead_stack", "output"),
-    ],
     "displacement": [
-        DataArtifactSpec("preprocessed_reference", "Preprocessed reference", "preprocessed_reference", "input"),
-        DataArtifactSpec("preprocessed_bead_stack", "Preprocessed beads", "preprocessed_bead_stack", "input"),
+        DataArtifactSpec("reference", "Reference", "reference", "input"),
+        DataArtifactSpec("bead_stack", "Beads", "bead_stack", "input"),
+        DataArtifactSpec("cell_stack", "Cells", "cell_stack", "input", required=False),
         DataArtifactSpec("displacement_results", "Displacement field", "displacement_results", "output"),
     ],
     "force": [
@@ -83,16 +76,6 @@ class WorkflowParameterPanel(QWidget):
         ("General", [
             ("pixel_size", "Pixel Size (um)", "float", 0.001, 100.0, 0.1, 3, None),
             ("frame_interval", "Frame Length (min)", "float", 0.001, 1000.0, 0.1, 3, None),
-        ]),
-        ("Preprocessing", [
-            (("min_intensity_percentile", "max_intensity_percentile"), "Intensity (%)",
-             "range", 0.0, 100.0, 0.1, 1, None),
-            (("cell_min_intensity_percentile", "cell_max_intensity_percentile"), "Cell Intensity (%)",
-             "range", 0.0, 100.0, 0.1, 1, None),
-            ("gaussian_sigma", "Gaussian Sigma", "float", 0.0, 10.0, 0.1, 1, None),
-            ("cell_gaussian_sigma", "Cell Gaussian Sigma", "float", 0.0, 10.0, 0.1, 1, None),
-            ("registration_mode", "Registration Mode", "choice", None, None, None, None,
-             ["translation", "rigid", "no registration"]),
         ]),
         ("Displacement", [
             ("piv_window", "Interrogation Window (px)", "int", 8, 128, 2, 0, None),
@@ -430,15 +413,6 @@ class napariTFMWidget(QWidget):
         self.save_project_btn.clicked.connect(self._save_project)
 
         # Initialize all widgets with parameter_manager
-        self.preprocessing_widget = PreprocessingWidget(
-            self.viewer,
-            self.data_manager,
-            self.parameter_manager,
-            self.visualization_manager,
-
-        )
-        self.preprocessing_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        #
         self.displacement_widget = DisplacementAnalysisWidget(
             self.viewer,
             self.data_manager,
@@ -464,7 +438,6 @@ class napariTFMWidget(QWidget):
         # label (P2). Run-selected (the retired batch widget's successor) reports via
         # its own per-folder callback, not a controller progress signal.
         for stage_widget, stage_label in (
-            (self.preprocessing_widget, "Preprocessing"),
             (self.displacement_widget, "Displacement"),
             (self.force_widget, "Force"),
             (self.stress_widget, "Stress"),
@@ -476,19 +449,6 @@ class napariTFMWidget(QWidget):
             )
 
         self._stage_sections_by_key = {
-            "preprocessing": StageSection(
-                "Preprocessing",
-                self.preprocessing_widget,
-                parameter_panel=self._stage_parameter_panels_by_key.get("preprocessing"),
-                actions={
-                    "run": self.preprocessing_widget.run_action,
-                    "preview": self.preprocessing_widget.preview_action,
-                    "cancel": self.preprocessing_widget.cancel_action,
-                },
-                action_states=self.preprocessing_widget.action_states,
-                action_states_changed=self.preprocessing_widget.action_states_changed,
-                preview_is_toggle=True,
-            ),
             "displacement": StageSection(
                 "Displacement",
                 self.displacement_widget,
@@ -552,7 +512,6 @@ class napariTFMWidget(QWidget):
         # the Cancel control (the cancel handler is always wired). On unfreeze,
         # re-read disk truth so the dots settle back to done/ready/off.
         self._freeze_widgets_by_key = {
-            "preprocessing": self.preprocessing_widget,
             "displacement": self.displacement_widget,
             "force": self.force_widget,
             "stress": self.stress_widget,
@@ -780,7 +739,6 @@ class napariTFMWidget(QWidget):
     def _create_stage_parameter_panels(self) -> dict[str, WorkflowParameterPanel]:
         """Create inline workflow parameter editors grouped by pipeline stage."""
         stage_sections = {
-            "preprocessing": ("Preprocessing",),
             "displacement": ("Displacement",),
             "force": ("Force",),
             "stress": ("Stress",),
@@ -792,7 +750,6 @@ class napariTFMWidget(QWidget):
 
     def _stage_widgets(self):
         return [
-            self.preprocessing_widget,
             self.displacement_widget,
             self.force_widget,
             self.stress_widget,
@@ -1013,12 +970,6 @@ class napariTFMWidget(QWidget):
     def _persist_active_experiment(self, stage_key: str) -> None:
         """Write the active experiment's results to disk.
 
-        For preprocessing: writes ``preprocessed_beads.tif`` /
-        ``preprocessed_reference.tif`` (and ``preprocessed_cells.tif`` when
-        available) to the canonical output dir using the same shared writer the
-        batch uses, giving the preprocessing dot the same persistence guarantee
-        every downstream stage has.
-
         For displacement / force / stress: gathers results from memory and
         writes them through the shared ``.ntfm`` writer.
 
@@ -1028,9 +979,6 @@ class napariTFMWidget(QWidget):
         if not path:
             return
 
-        if stage_key == "preprocessing":
-            self._persist_preprocessed_tiffs(path)
-            return
         try:
             labels = {}
             for record in self.experiments_list.experiment_records():
@@ -1051,38 +999,6 @@ class napariTFMWidget(QWidget):
             )
         except Exception as exc:
             logger.exception("Could not persist results for %s", path)
-            self.status_label.setText(f"Save failed: {exc}")
-
-    def _persist_preprocessed_tiffs(self, path: str) -> None:
-        """Write preprocessed TIFFs for *path* to the canonical output dir.
-
-        Delegates to the batch pipeline's
-        :func:`~napariTFM.backend.batch_analysis.save_preprocessed_tiffs`
-        orchestration so there is one place that knows how a position's
-        preprocessed TIFFs get written, and interactive/batch outputs stay
-        byte-identical. Silently skips any array that is not in memory yet;
-        logs + sets a status message on write failure without propagating the
-        exception.
-        """
-        from napariTFM.backend.batch_analysis import save_preprocessed_tiffs
-        from napariTFM.utilities.batch_output import experiment_output_dir
-
-        try:
-            out_dir = experiment_output_dir(path, self.data_manager.output_dir)
-            params = self.parameter_manager.get_all_parameters()
-            pixel_size = params.get("pixel_size", 1.0)
-            frame_interval = params.get("frame_interval", 1.0)
-
-            save_preprocessed_tiffs(
-                out_dir,
-                pixel_size,
-                frame_interval,
-                beads=self.data_manager.preprocessed_bead_stack,
-                reference=self.data_manager.preprocessed_reference,
-                cells=self.data_manager.preprocessed_cell_stack,
-            )
-        except Exception as exc:
-            logger.exception("Could not persist preprocessed TIFFs for %s", path)
             self.status_label.setText(f"Save failed: {exc}")
 
     def _cancel_run_selected(self) -> None:
@@ -1248,15 +1164,7 @@ class napariTFMWidget(QWidget):
         # Report by what actually landed in the data manager, not merely that a
         # container existed: a container can hold force but no displacement, and
         # a click on the empty stage must say so rather than claim a load.
-        # Preprocessing has no "_results" artifact (it's the preprocessed
-        # stacks themselves), so it's checked separately.
-        if stage == "preprocessing":
-            shown = (
-                self.data_manager.preprocessed_bead_stack is not None
-                or self.data_manager.preprocessed_reference is not None
-            )
-        else:
-            shown = getattr(self.data_manager, f"{stage}_results", None) is not None
+        shown = getattr(self.data_manager, f"{stage}_results", None) is not None
         self.status_label.setText(
             f"{label} loaded" if shown else f"No {label} output to show yet"
         )
@@ -1298,7 +1206,6 @@ class napariTFMWidget(QWidget):
         # Reading any other path is how the row dots silently went stale.
         out_dir = experiment_output_dir(path, self.data_manager.output_dir)
         ntfm_path = out_dir / RESULTS_FILENAME
-        tfm_folder = out_dir
         measures = _ntfm.populated_measures(ntfm_path)
         # Inputs live in the experiment folder under their discovery names.
         input_files = self.experiments_list.input_files_for(path) or {}
@@ -1307,27 +1214,18 @@ class napariTFMWidget(QWidget):
         inputs_ready = (folder / beads_name).exists() and (
             folder / reference_name
         ).exists()
-        # Preprocessing leaves no measure column of its own; a cached image or any
-        # downstream measure both prove it ran.
-        preproc_cached = (tfm_folder / "preprocessed_beads.tif").exists() and (
-            tfm_folder / "preprocessed_reference.tif"
-        ).exists()
-        preproc_done = preproc_cached or bool(measures)
 
         disabled = set(self._disabled_stages())
 
         def _status(stage: str) -> str:
             if stage in disabled:
                 return "off"
-            if stage == "preprocessing":
-                if preproc_done:
-                    return "done"
-                return "ready" if inputs_ready else "not_started"
             if stage in measures:
                 return "done"
-            # 'ready' when this stage's immediate input is available.
+            # 'ready' when this stage's immediate input is available. Displacement
+            # is the first stage now, so its input is the raw beads/reference.
             ready_when = {
-                "displacement": preproc_done,
+                "displacement": inputs_ready,
                 "force": "displacement" in measures,
                 "stress": "force" in measures,
             }
@@ -1335,10 +1233,9 @@ class napariTFMWidget(QWidget):
 
         return {stage: _status(stage) for stage in PIPELINE_STAGES}
 
-    # ntfm-backed pipeline stages, in dependency order. "preprocessing" is
-    # excluded: its persisted output is TIFFs, not a tidy-table measure, so it
-    # never needs a `.ntfm` read — see `_apply_preprocessing_result` for its
-    # own on-demand load path.
+    # ntfm-backed pipeline stages, in dependency order. Every stage's persisted
+    # output is a tidy-table measure in the `.ntfm`, so this is also the full
+    # pipeline.
     _NTFM_STAGES = ("displacement", "force", "stress")
 
     def _read_stage_arrays(self, path: str):
@@ -1520,45 +1417,6 @@ class napariTFMWidget(QWidget):
                 frame_index, stress[frame_index]
             )
 
-    def _apply_preprocessing_result(self, path: str) -> bool:
-        """Load a position's persisted preprocessed TIFFs into the viewer.
-
-        Preprocessing has no measure column in the tidy `.ntfm` table — its
-        output is the calibrated TIFFs `_persist_preprocessed_tiffs`/
-        `save_preprocessed_tiffs` write to the same canonical output dir
-        `_experiment_stage_status` already checks for the "done" dot. Unlike
-        the ntfm-backed stages there's no frame-by-frame streaming to do:
-        `begin_preprocessing_stream` binds the whole resident stack at once,
-        so setting the arrays and calling it is enough. Returns whether
-        anything was actually loaded.
-        """
-        import tifffile
-
-        from napariTFM.utilities.batch_output import experiment_output_dir
-
-        out_dir = experiment_output_dir(path, self.data_manager.output_dir)
-        beads_path = out_dir / "preprocessed_beads.tif"
-        reference_path = out_dir / "preprocessed_reference.tif"
-        cells_path = out_dir / "preprocessed_cells.tif"
-        if not (beads_path.exists() and reference_path.exists()):
-            return False
-        try:
-            beads = tifffile.imread(str(beads_path))
-            reference = tifffile.imread(str(reference_path))
-            cells = tifffile.imread(str(cells_path)) if cells_path.exists() else None
-        except Exception:
-            logger.exception("Failed to load preprocessed TIFFs for %s", path)
-            return False
-        self.data_manager.set_preprocessed_bead_stack(beads, dirty=False)
-        self.data_manager.set_preprocessed_reference(reference, dirty=False)
-        if cells is not None:
-            self.data_manager.set_preprocessed_cell_stack(cells, dirty=False)
-        # Display-only load of on-disk uint16 stacks: autoscale contrast to the
-        # data's own range so the [0, 1] streaming default doesn't render the
-        # reloaded image fully saturated (see begin_preprocessing_stream).
-        self.visualization_manager.begin_preprocessing_stream(autoscale_contrast=True)
-        return True
-
     def _load_stage_results(self, path: str, stages) -> list:
         """Decode the requested stages' persisted output into the viewer.
 
@@ -1567,14 +1425,10 @@ class napariTFMWidget(QWidget):
 
         Reads the ntfm-backed table once (see `_read_stage_arrays`) but applies
         only the requested stages, so clicking one stage's circle never also
-        streams a stage nobody asked to see. Preprocessing isn't in that table
-        (see `_apply_preprocessing_result`) so it's handled on its own before
-        the ntfm read. Display-only — calculations always re-read from disk, so
-        no prerequisite stage is pulled in.
+        streams a stage nobody asked to see. Display-only — calculations always
+        re-read from disk, so no prerequisite stage is pulled in.
         """
         loaded = []
-        if "preprocessing" in stages and self._apply_preprocessing_result(path):
-            loaded.append("preprocessing")
         ntfm_stages = [s for s in self._NTFM_STAGES if s in stages]
         if ntfm_stages:
             data = self._read_stage_arrays(path)
@@ -1609,12 +1463,13 @@ class napariTFMWidget(QWidget):
                 f"Pipeline · tuning ▸ {Path(self._active_experiment).name}"
             )
             # Point the raw-input disk check at the selected experiment so the
-            # preprocessing input dots read green from its discovery files.
+            # displacement input dots read green from its discovery files.
             input_files = self.experiments_list.input_files_for(self._active_experiment)
             self.data_manager.set_active_inputs(self._active_experiment, input_files)
             # And actually load those files from disk into memory + the viewer, so
             # Preview and Run (which need the arrays loaded) work on selection.
-            self.preprocessing_widget.load_input_files(self._active_experiment, input_files)
+            # Displacement is the first stage and now owns raw-input loading.
+            self.displacement_widget.load_input_files(self._active_experiment, input_files)
             # No output series is decoded on selection: the row/section dots
             # already show the on-disk status eagerly, and a stage's pixels
             # only stream in when its circle is clicked (calculations re-read
@@ -1628,7 +1483,7 @@ class napariTFMWidget(QWidget):
                 # image's xy size (read cheaply from disk — the bead arrays stream
                 # in asynchronously and aren't in memory yet) so the mask's
                 # visualization layer is scaled to fit the beads in the viewer.
-                beads_shape = self.preprocessing_widget.peek_input_xy_shape(
+                beads_shape = self.displacement_widget.peek_input_xy_shape(
                     self._active_experiment, input_files, "beads"
                 )
                 self.stress_widget.load_mask_from_file(
@@ -1739,11 +1594,6 @@ class napariTFMWidget(QWidget):
         """Connect signals between components"""
         # A finished stage persists to the active experiment's .ntfm (auto-save),
         # then refreshes so both dot rows reflect the new on-disk truth.
-        # Preprocessing persists its calibrated TIFFs (not the .ntfm) via the same
-        # path, giving it the same on-disk persistence guarantee as the rest.
-        self.preprocessing_widget.preprocessing_completed.connect(
-            lambda *_: self._on_stage_persisted("preprocessing")
-        )
         self.displacement_widget.displacement_calculated.connect(
             lambda *_: self._on_stage_persisted("displacement")
         )

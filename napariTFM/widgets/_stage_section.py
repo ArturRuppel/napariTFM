@@ -47,11 +47,11 @@ class StageSection(QWidget):
         self._status = status
         self._optional = optional
         self._enabled = enabled if optional else True
-        # Toggle-style preview (persistent on/off, e.g. Preprocessing's live
-        # preview) renders the header pill as a checkable toggle so its
-        # pressed/active state reflects whether preview is currently on —
-        # distinct from the momentary, non-checkable one-shot preview button
-        # the other stages use.
+        # Toggle-style preview (persistent on/off) renders the header pill as a
+        # checkable toggle so its pressed/active state reflects whether preview
+        # is currently on — distinct from the momentary, non-checkable one-shot
+        # preview button the stages use. No stage opts into this today (it was
+        # the preprocessing live preview), but the machinery stays generic.
         self._preview_is_toggle = preview_is_toggle
         self.enable_btn = None
         self.parameter_panel = parameter_panel

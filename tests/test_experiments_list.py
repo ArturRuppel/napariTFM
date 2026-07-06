@@ -45,7 +45,7 @@ def app():
 def test_minirail_has_a_dot_per_pipeline_stage(app):
     rail = MiniRail()
     assert rail.stages == PIPELINE_STAGES
-    assert len(PIPELINE_STAGES) == 4
+    assert len(PIPELINE_STAGES) == 3
 
 
 def test_minirail_done_dot_is_filled_with_stage_accent(app):
@@ -70,7 +70,7 @@ def test_minirail_off_dot_is_recessed_and_distinct_from_not_started(app):
     rail = MiniRail()
     rail.set_statuses({"stress": "off"})
     off_fill, off_ring = rail.appearance("stress")
-    none_fill, none_ring = rail.appearance("preprocessing")  # not_started default
+    none_fill, none_ring = rail.appearance("displacement")  # not_started default
     assert off_fill is None and none_fill is None
     assert off_ring != none_ring  # off uses the recessed grey, not the dim grey
 
@@ -123,8 +123,8 @@ def test_minirail_click_emits_the_stage_under_the_cursor(app):
     rail = MiniRail()
     seen = []
     rail.stage_clicked.connect(seen.append)
-    # The third dot (index 2, "force") sits at x ~= DOT_GAP*2.5.
-    x = rail.DOT_GAP * 2.5
+    # The second dot (index 1, "force") sits at x ~= DOT_GAP*1.5.
+    x = rail.DOT_GAP * 1.5
     event = QMouseEvent(
         QEvent.MouseButtonPress, QPointF(x, rail.height() / 2),
         _Qt.LeftButton, _Qt.LeftButton, _Qt.NoModifier,
@@ -142,7 +142,7 @@ def test_minirail_off_dot_is_not_clickable(app):
     rail.set_statuses({"stress": "off"})
     seen = []
     rail.stage_clicked.connect(seen.append)
-    x = rail.DOT_GAP * 3.5  # index 3, "stress"
+    x = rail.DOT_GAP * 2.5  # index 2, "stress"
     event = QMouseEvent(
         QEvent.MouseButtonPress, QPointF(x, rail.height() / 2),
         _Qt.LeftButton, _Qt.LeftButton, _Qt.NoModifier,
@@ -165,8 +165,8 @@ def test_minirail_clickable_idx_skips_off_and_out_of_range(app):
 
     rail = MiniRail()
     rail.set_statuses({"stress": "off"})
-    assert rail._clickable_idx_at(QPoint(int(rail.DOT_GAP * 1.5), 5)) == 1  # displacement
-    assert rail._clickable_idx_at(QPoint(int(rail.DOT_GAP * 3.5), 5)) == -1  # off stress
+    assert rail._clickable_idx_at(QPoint(int(rail.DOT_GAP * 0.5), 5)) == 0  # displacement
+    assert rail._clickable_idx_at(QPoint(int(rail.DOT_GAP * 2.5), 5)) == -1  # off stress
     assert rail._clickable_idx_at(QPoint(rail.DOT_GAP * 10, 5)) == -1  # past the end
 
 
@@ -174,19 +174,19 @@ from napariTFM.widgets._experiments_list import ExperimentRow, overall_status
 
 
 def test_overall_status_done_when_all_enabled_stages_done():
-    statuses = {"preprocessing": "done", "displacement": "done",
+    statuses = {"displacement": "done",
                 "force": "done", "stress": "off"}
     assert overall_status(statuses) == "done"
 
 
 def test_overall_status_running_when_any_stage_running():
-    statuses = {"preprocessing": "done", "displacement": "running",
+    statuses = {"displacement": "running",
                 "force": "not_started", "stress": "off"}
     assert overall_status(statuses) == "running"
 
 
 def test_overall_status_queued_otherwise():
-    statuses = {"preprocessing": "ready", "displacement": "not_started",
+    statuses = {"displacement": "not_started",
                 "force": "not_started", "stress": "off"}
     assert overall_status(statuses) == "queued"
 
@@ -543,7 +543,7 @@ def test_refresh_statuses_calls_status_fn_for_each_row(app):
     calls = []
     def status_fn(path):
         calls.append(path)
-        return {"preprocessing": "done", "displacement": "not_started",
+        return {"displacement": "not_started",
                 "force": "not_started", "stress": "off"}
     widget = ExperimentsList(status_fn=status_fn)
     widget.set_experiments(["/data/a", "/data/b"])
@@ -555,13 +555,13 @@ def test_refresh_statuses_calls_status_fn_for_each_row(app):
 
 def test_apply_row_statuses_paints_one_row_without_a_disk_read(app):
     widget = ExperimentsList(status_fn=lambda path: {
-        "preprocessing": "not_started", "displacement": "not_started",
+        "displacement": "not_started",
         "force": "not_started", "stress": "off",
     })
     widget.set_experiments(["/data/a", "/data/b"])
 
     widget.apply_row_statuses("/data/a", {
-        "preprocessing": "done", "displacement": "done",
+        "displacement": "done",
         "force": "done", "stress": "done",
     })
     assert widget._rows[0].mini_rail._statuses["force"] == "done"
@@ -569,7 +569,7 @@ def test_apply_row_statuses_paints_one_row_without_a_disk_read(app):
 
 def test_set_row_stage_progress_updates_one_dot_only(app):
     widget = ExperimentsList(status_fn=lambda path: {
-        "preprocessing": "not_started", "displacement": "not_started",
+        "displacement": "not_started",
         "force": "not_started", "stress": "off",
     })
     widget.set_experiments(["/data/a", "/data/b"])
@@ -586,7 +586,7 @@ def test_set_row_stage_progress_updates_one_dot_only(app):
 
 def test_set_row_stage_progress_ignores_unknown_path(app):
     widget = ExperimentsList(status_fn=lambda path: {
-        "preprocessing": "not_started", "displacement": "not_started",
+        "displacement": "not_started",
         "force": "not_started", "stress": "off",
     })
     widget.set_experiments(["/data/a"])
@@ -603,7 +603,7 @@ def test_set_row_stage_progress_ignores_unknown_path(app):
 
 def test_set_row_stage_progress_clears_on_stage_finish(app):
     widget = ExperimentsList(status_fn=lambda path: {
-        "preprocessing": "not_started", "displacement": "not_started",
+        "displacement": "not_started",
         "force": "not_started", "stress": "off",
     })
     widget.set_experiments(["/data/a"])
@@ -621,7 +621,7 @@ def test_on_row_stage_clicked_requests_that_stage_load(app):
     the owner — the dots already carry eager status, so nothing is fetched here.
     """
     widget = ExperimentsList(status_fn=lambda path: {
-        "preprocessing": "done", "displacement": "done",
+        "displacement": "done",
         "force": "done", "stress": "not_started",
     })
     widget.set_experiments(["/data/a"])
@@ -637,7 +637,7 @@ def test_eager_status_paints_real_disk_state_on_every_refresh(app):
     for every row (no per-stage 'reveal' gate holding dots back).
     """
     widget = ExperimentsList(status_fn=lambda path: {
-        "preprocessing": "done", "displacement": "done",
+        "displacement": "done",
         "force": "ready", "stress": "not_started",
     })
     widget.set_experiments(["/data/a"])
@@ -730,18 +730,17 @@ def test_active_run_selected_button_click_emits_cancel_not_run(app):
 
 def test_mark_running_sets_that_rows_enabled_dots_to_running(app):
     def status_fn(path):
-        return {"preprocessing": "ready", "displacement": "not_started",
-                "force": "not_started", "stress": "off"}
+        return {"displacement": "ready", "force": "not_started", "stress": "off"}
     widget = ExperimentsList(status_fn=status_fn)
     widget.set_experiments(["/data/a", "/data/b"])
 
     widget.mark_running("/data/a")
     row_a = widget._rows[0]
     # Enabled stages flip to running; an off stage stays off.
-    assert row_a.mini_rail._statuses["preprocessing"] == "running"
+    assert row_a.mini_rail._statuses["displacement"] == "running"
     assert row_a.mini_rail._statuses["stress"] == "off"
     # Untouched row keeps its computed statuses.
-    assert widget._rows[1].mini_rail._statuses["preprocessing"] == "ready"
+    assert widget._rows[1].mini_rail._statuses["displacement"] == "ready"
 
 
 def test_mark_running_unknown_path_is_a_noop(app):
@@ -922,12 +921,12 @@ def test_experiment_row_name_and_chip_use_the_standard_app_font(app):
 
 def test_experiment_row_chip_is_colored_by_overall_status(app):
     row = ExperimentRow("/data/Ctrl/pos_00")
-    row.set_stage_statuses({"preprocessing": "done", "displacement": "running",
+    row.set_stage_statuses({"displacement": "running",
                             "force": "not_started", "stress": "off"})
     assert row._chip.text() == "run"
     assert experiment_status_color("run") in row._chip.styleSheet()
 
-    row.set_stage_statuses({"preprocessing": "done", "displacement": "done",
+    row.set_stage_statuses({"displacement": "done",
                             "force": "done", "stress": "off"})
     assert row._chip.text() == "done"
     assert experiment_status_color("done") in row._chip.styleSheet()

@@ -18,8 +18,8 @@ def test_theme_names_nonempty_and_contains_default():
 
 def test_stage_accent_resolves_through_active_ramp():
     _ui_style.set_active_theme("Viridis")
-    assert _ui_style.stage_accent("preprocessing") == _ui_style._sample_ramp(
-        _ui_style.THEME_RAMPS["Viridis"], _ui_style.STAGE_RAMP_POSITION["preprocessing"]
+    assert _ui_style.stage_accent("displacement") == _ui_style._sample_ramp(
+        _ui_style.THEME_RAMPS["Viridis"], _ui_style.STAGE_RAMP_POSITION["displacement"]
     )
 
 
@@ -30,13 +30,13 @@ def test_stage_accent_unknown_key_falls_back_to_inputs():
 def test_set_active_theme_changes_resolved_accent():
     names = _ui_style.theme_names()
     other = next(n for n in names if n != _ui_style.active_theme_name())
-    before = _ui_style.stage_accent("preprocessing")
+    before = _ui_style.stage_accent("displacement")
     _ui_style.set_active_theme(other)
-    after = _ui_style.stage_accent("preprocessing")
+    after = _ui_style.stage_accent("displacement")
     assert _ui_style.active_theme_name() == other
     differs = any(
         _ui_style.stage_accent(k) != before
-        for k in ("preprocessing", "displacement", "force", "stress", "batch")
+        for k in ("displacement", "force", "stress", "batch")
     ) or after != before
     assert differs
 

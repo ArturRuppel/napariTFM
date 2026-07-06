@@ -48,7 +48,7 @@ from napariTFM.widgets._ui_style import (
 )
 
 # The four pipeline stages a mini-rail summarises (project/batch are not dots).
-PIPELINE_STAGES = ("preprocessing", "displacement", "force", "stress")
+PIPELINE_STAGES = ("displacement", "force", "stress")
 
 # Project-level calibration, relocated into the aggregation layer. Free-text
 # fields (soft validator, not spinbox stepping); bounds feed the validator.

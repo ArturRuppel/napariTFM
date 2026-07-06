@@ -27,9 +27,10 @@ from PIL import Image
 # Add the parent directory to path to import napariTFM modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from scipy.ndimage import gaussian_filter
+
 from napariTFM.backend.displacement_analysis import DisplacementAnalyzer
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
-from napariTFM.backend.preprocessing import ImageProcessor
 from napariTFM.backend.fttc import FTTC
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 # from napariTFM.backend.metrics_calculator import calculate_strain_energy_density, calculate_total_strain_energy
@@ -41,16 +42,17 @@ def load_tif_image(filepath):
 
 
 def preprocess_image(image):
-    """Apply preprocessing steps to the image."""
-    processor = ImageProcessor()
-    
-    # Apply intensity scaling with thresholds 85 and 99.9
-    processed, _ = processor.apply_intensity_scaling(image, 80, 99.9)
-    
-    # Apply Gaussian blur with sigma = 1
-    processed = processor.apply_gaussian_filter(processed, sigma=1)
-     
-    return processed
+    """Contrast-scale (80/99.9 percentile clip -> [0, 1]) then lightly blur.
+
+    Inlined from the old backend ``ImageProcessor``, which was removed together
+    with the preprocessing stage; this keeps the benchmark's historical
+    preprocessing behaviour self-contained.
+    """
+    img = np.asarray(image, dtype=np.float32)
+    lo, hi = np.percentile(img, (80, 99.9))
+    if hi > lo:
+        img = np.clip((img - lo) / (hi - lo), 0.0, 1.0)
+    return gaussian_filter(img, sigma=1)
 
 
 def load_ground_truth_displacement(folder_path, pixel_size_um=0.1):

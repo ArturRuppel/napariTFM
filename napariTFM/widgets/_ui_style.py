@@ -35,11 +35,12 @@ THEME_RAMPS = {
 ACTIVE_RAMP = THEME_RAMPS[ACTIVE_THEME_NAME]
 
 # Stage -> position along the ramp (0 = start, 1 = end). project/inputs anchor
-# the start; batch anchors the end; the four pipeline stages spread between.
+# the start; batch anchors the end; the three pipeline stages spread evenly
+# between, so each node lands on one of the ramp's five ordered stops.
 STAGE_RAMP_POSITION = {
     "inputs": 0.0, "project": 0.0,
-    "preprocessing": 0.25, "displacement": 0.50,
-    "force": 0.75, "stress": 1.0, "batch": 1.0,
+    "displacement": 0.25, "force": 0.5,
+    "stress": 0.75, "batch": 1.0,
 }
 
 def theme_names() -> tuple[str, ...]:

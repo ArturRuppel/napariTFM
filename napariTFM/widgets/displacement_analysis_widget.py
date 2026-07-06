@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 from napari.qt.threading import thread_worker
 from napari.viewer import Viewer
@@ -11,29 +13,55 @@ from napariTFM.utilities.parameter_manager import ParameterManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
 
 
+def _open_lazy(path):
+    """Open a TIFF lazily via memmap; fall back to imread for compressed files.
+
+    memmap returns a real np.ndarray subclass backed by the file in ~1 ms for
+    uncompressed TIFFs. imread is only reached if memmap fails (e.g. tiled or
+    compressed data), which preserves behaviour for all existing file types.
+    """
+    import tifffile
+    try:
+        return tifffile.memmap(str(path))
+    except Exception:
+        return tifffile.imread(str(path))
+
+
 class DisplacementController(VectorStageController):
-    """Displacement stage: dense optical-flow displacement over the bead stack.
+    """Displacement stage: multi-pass PIV displacement over the raw bead stack.
 
     A thin :class:`VectorStageController` subclass — the run/cancel lifecycle is
     inherited; this class only supplies the stage's spec (kind, result setter),
     the run hooks, and the synchronous preview.
+
+    As the pipeline's first stage (preprocessing having been removed), it also
+    owns loading the experiment's raw bead/reference/cell inputs from disk and
+    showing them in the viewer — the machinery the preprocessing stage used to
+    carry.
     """
 
     STAGE_KIND = 'displacement'
     RESULT_SETTER = 'set_displacement_results'
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Monotonic token guarding the async raw-input loader against stale
+        # yields from a superseded experiment-row click.
+        self._load_token = 0
+        self._load_worker = None
+
     # region === Run lifecycle hooks (template lives in the base) ===
     def _validate(self):
-        if self.data_manager.preprocessed_reference is None:
+        if self.data_manager.reference is None:
             raise ValueError("No reference image loaded")
-        if self.data_manager.preprocessed_bead_stack is None:
+        if self.data_manager.bead_stack is None:
             raise ValueError("No bead stack loaded")
 
     def _run_params(self):
         return self.parameter_manager.get_displacement_parameters()
 
     def _stream_frame_count(self):
-        return self.data_manager.preprocessed_bead_stack.shape[0]
+        return self.data_manager.bead_stack.shape[0]
 
     def _vis_params(self, params):
         return {
@@ -45,8 +73,8 @@ class DisplacementController(VectorStageController):
 
     def _build_worker(self, params):
         return self._run_worker(
-            self.data_manager.preprocessed_reference,
-            self.data_manager.preprocessed_bead_stack,
+            self.data_manager.reference,
+            self.data_manager.bead_stack,
             params,
         )
 
@@ -81,8 +109,8 @@ class DisplacementController(VectorStageController):
             self.progress_updated.emit(0, "Calculating displacement preview...")
             current_frame = self._current_frame()
 
-            moving = self.data_manager.preprocessed_bead_stack[current_frame]
-            reference = self.data_manager.preprocessed_reference
+            moving = self.data_manager.bead_stack[current_frame]
+            reference = self.data_manager.reference
             params = self.parameter_manager.get_displacement_parameters()
 
             gen = calculate_displacement_field(reference, moving, params)
@@ -146,27 +174,211 @@ class DisplacementController(VectorStageController):
             return
 
         try:
-            data = active_layer.data
-
-            if data_type == 'beads':
-                # Convert 2D data to 3D with single frame if needed
-                if data.ndim == 2:
-                    data = data[np.newaxis, ...]
-                elif data.ndim != 3:
-                    raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
-                self.data_manager.set_preprocessed_bead_stack(data)
-
-            elif data_type == 'reference':
-                if data.ndim != 2:
-                    raise ValueError("Reference image must be 2D (height, width)")
-                self.data_manager.set_preprocessed_reference(data)
-            else:
-                raise ValueError(f"Invalid data type: {data_type}")
-
-            self.data_updated.emit(data_type)
-
+            self._set_input_data(data_type, active_layer.data)
         except Exception as e:
             QMessageBox.warning(None, "Error", str(e))
+
+    def _set_input_data(self, data_type: str, data: np.ndarray, path=None):
+        """Validate, shape, and store one raw input, then announce the update.
+
+        Shared by the active-layer path and the disk-loading path so both reshape
+        and notify identically. Emitting ``data_updated`` is what re-enables the
+        Preview and Run actions (the shell listens via ``_update_ui_state``).
+        """
+        if data_type == 'beads':
+            # Convert 2D data to 3D with single frame if needed
+            if data.ndim == 2:
+                data = data[np.newaxis, ...]
+            elif data.ndim != 3:
+                raise ValueError("Bead stack must be 2D or 3D (frames, height, width)")
+            self.data_manager.set_bead_stack(data, path=path)
+
+        elif data_type == 'reference':
+            if data.ndim != 2:
+                raise ValueError("Reference image must be 2D (height, width)")
+            self.data_manager.set_reference(data, path=path)
+
+        elif data_type == 'cells':
+            # Convert 2D data to 3D with single frame if needed
+            if data.ndim == 2:
+                data = data[np.newaxis, ...]
+            elif data.ndim != 3:
+                raise ValueError("Cell stack must be 2D or 3D (frames, height, width)")
+            self.data_manager.set_cell_stack(data, path=path)
+        else:
+            raise ValueError(f"Invalid data type: {data_type}")
+
+        self.data_updated.emit(data_type)
+
+    def peek_input_xy_shape(self, folder, input_files, slot="beads"):
+        """Read one input file's ``(height, width)`` from disk without loading it.
+
+        ``_open_lazy`` memmaps the TIFF (~1 ms), so this is cheap to call on the
+        UI thread. Lets callers learn the bead image size synchronously even
+        though ``load_input_files`` streams the arrays in asynchronously. Returns
+        ``None`` when the slot is unnamed, missing, or unreadable.
+        """
+        name = (input_files or {}).get(slot)
+        if not folder or not name:
+            return None
+        path = Path(folder) / name
+        if not path.exists():
+            return None
+        try:
+            arr = _open_lazy(path)
+            return tuple(arr.shape[-2:])
+        except Exception:
+            return None
+
+    def load_input_files(self, folder, input_files):
+        """Load an experiment's raw input files lazily and off the UI thread.
+
+        Supersedes any in-flight load (stale yields are silently dropped via a
+        monotonic load-token), then reports completion. Missing or un-named
+        inputs are skipped; a file that fails to open pops a warning without
+        aborting the rest.
+        """
+        if not folder:
+            return
+
+        # Supersede any in-flight load from a previous row click. A quit
+        # generator-worker may emit neither returned nor errored, so drop it
+        # from active_workers here to keep the list from growing on rapid clicks.
+        self._load_token += 1
+        token = self._load_token
+        if self._load_worker is not None:
+            try:
+                self._load_worker.quit()
+            except Exception:
+                pass
+            try:
+                self.active_workers.remove(self._load_worker)
+            except ValueError:
+                pass
+            self._load_worker = None
+
+        folder = Path(folder)
+        input_files = input_files or {}
+
+        worker = self._create_input_load_worker(folder, input_files, token)
+        self._load_worker = worker
+        self.active_workers.append(worker)
+
+        self.progress_updated.emit(0, "Loading inputs...")
+
+        worker.yielded.connect(self._on_input_loaded)
+        worker.returned.connect(
+            lambda _=None, _token=token: self._finish_input_load(_token)
+        )
+        worker.errored.connect(
+            lambda exc, _token=token: self._handle_input_load_error(exc, _token)
+        )
+        worker.start()
+
+    def _add_input_layer(self, name: str, data: np.ndarray) -> None:
+        """Show a raw input in the viewer, replacing any prior layer of that name.
+
+        Explicit contrast_limits are computed from a single representative frame
+        so napari does not scan the full stack on add, which prevents the 3-8 s
+        freeze caused by reading a 250 MB stack just to infer the display range.
+        """
+        add_image = getattr(self.viewer, "add_image", None)
+        if add_image is None:
+            return
+        layers = getattr(self.viewer, "layers", None)
+        if layers is not None:
+            for layer in list(layers):
+                if getattr(layer, "name", None) == name:
+                    layers.remove(layer)
+
+        # Compute contrast limits from a single frame to avoid scanning the
+        # full stack. Guard against degenerate (flat) data by nudging hi up.
+        contrast_limits = None
+        try:
+            frame = data[0] if data.ndim == 3 else data
+            lo, hi = int(frame.min()), int(frame.max())
+            contrast_limits = (lo, hi) if lo < hi else (lo, lo + 1)
+        except Exception:
+            pass
+
+        if contrast_limits is not None:
+            add_image(data, name=name, contrast_limits=contrast_limits)
+        else:
+            add_image(data, name=name)
+
+    @thread_worker
+    def _create_input_load_worker(self, folder, input_files, token):
+        """Open raw input TIFFs lazily, yielding each array for GUI-thread painting.
+
+        Runs entirely off the UI thread. memmap opens large uncompressed TIFFs
+        in ~1 ms; imread is the fallback for compressed files. Each yield
+        carries ``(token, data_type, layer_name, path, array)`` so the
+        GUI-thread slot can stale-check before touching napari layers.
+        """
+        for data_type, slot, layer_name in (
+            ('beads', 'beads', 'Beads'),
+            ('reference', 'reference', 'Reference'),
+            ('cells', 'cells', 'Cells'),
+        ):
+            name = input_files.get(slot)
+            if not name:
+                continue
+            path = folder / name
+            if not path.exists():
+                continue
+            array = _open_lazy(path)
+            yield token, data_type, layer_name, path, array
+
+    def _on_input_loaded(self, payload):
+        """Paint one loaded input into the viewer (GUI thread).
+
+        Connected to ``worker.yielded``; stale-checks the token before touching
+        napari so a superseded load cannot overwrite layers for the current row.
+        A failed file pops a warning but does not abort the remaining yields.
+        """
+        token, data_type, layer_name, path, array = payload
+        if token != self._load_token:
+            return
+        try:
+            self._add_input_layer(layer_name, array)
+            self._set_input_data(data_type, array, path=path)
+        except Exception as exc:
+            QMessageBox.warning(None, "Error", f"Could not load {path.name}: {exc}")
+
+    def _finish_input_load(self, token):
+        """Finalize an input load run (GUI thread).
+
+        No-ops for stale tokens so a superseded load cannot emit a status
+        message that belongs to the current row.
+        """
+        if token != self._load_token:
+            return
+        worker = self._load_worker
+        self._load_worker = None
+        if worker is not None:
+            try:
+                self.active_workers.remove(worker)
+            except ValueError:
+                pass
+        self.progress_updated.emit(100, "Inputs loaded")
+
+    def _handle_input_load_error(self, exc, token):
+        """Handle a fatal error from the input load worker (GUI thread).
+
+        No-ops for stale tokens. Shows the error so the user knows a load failed.
+        """
+        if token != self._load_token:
+            return
+        worker = self._load_worker
+        self._load_worker = None
+        if worker is not None:
+            try:
+                self.active_workers.remove(worker)
+            except ValueError:
+                pass
+        error_msg = str(exc)
+        self.progress_updated.emit(0, f"Error loading inputs: {error_msg}")
+        QMessageBox.critical(None, "Error", error_msg)
     # endregion
 
 
@@ -251,8 +463,8 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
 
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
-        has_reference = self.data_manager.preprocessed_reference is not None
-        has_beads = self.data_manager.preprocessed_bead_stack is not None
+        has_reference = self.data_manager.reference is not None
+        has_beads = self.data_manager.bead_stack is not None
 
         can_analyze = has_reference and has_beads
         self._action_enabled["preview"] = can_analyze
@@ -263,6 +475,14 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     def load_active_layer(self, data_type: str):
         """Delegate input-layer loading to the controller (called by the shell)."""
         self.controller.load_active_layer(data_type)
+
+    def load_input_files(self, folder, input_files):
+        """Delegate raw-input loading to the controller (called by the shell)."""
+        self.controller.load_input_files(folder, input_files)
+
+    def peek_input_xy_shape(self, folder, input_files, slot="beads"):
+        """Delegate a cheap input-shape peek to the controller (called by the shell)."""
+        return self.controller.peek_input_xy_shape(folder, input_files, slot)
 
     # endregion
 

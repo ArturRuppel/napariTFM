@@ -3,13 +3,12 @@ from typing import Dict, Any
 from enum import Enum, auto
 import math
 from qtpy.QtCore import QObject, Signal
-from napariTFM.backend.parameter_dataclasses import PreprocessingParameters, DisplacementParameters, FTTCParameters, StressParameters, UnifiedParameters
+from napariTFM.backend.parameter_dataclasses import DisplacementParameters, FTTCParameters, StressParameters, UnifiedParameters
 
 
 class ParameterCategory(Enum):
     """Enum defining different categories of parameters."""
     GENERAL = auto()
-    PREPROCESSING = auto()
     DISPLACEMENT = auto()
     FORCE = auto()
     STRESS = auto()
@@ -77,10 +76,6 @@ class ParameterManager(QObject):
         elif name in ('regularization', 'bism_regularization'):
             value = 10 ** value
         self.set_parameter(name, value)
-
-    def get_preprocessing_parameters(self) -> PreprocessingParameters:
-        """Get parameters for preprocessing service"""
-        return self._parameters.to_preprocessing_parameters()
 
     def get_displacement_parameters(self) -> DisplacementParameters:
         """Get parameters for displacement service"""

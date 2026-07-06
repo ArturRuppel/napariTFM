@@ -14,7 +14,6 @@ so the viewer repaints live. That keeps the layer mutations on the GUI thread �
 where napari requires them — without any cross-thread marshalling.
 """
 
-import numpy as np
 
 from napariTFM.backend.pipeline_sink import PipelineSink
 
@@ -47,14 +46,11 @@ class ViewerSink(PipelineSink):
     # Per-stage active-layer sets (worklist §4). While a stage streams, the sink
     # takes over layer visibility and shows only its own layers, so a run-all
     # never blends the stage in flight with the previous stage's overlay.
-    # Preprocessing is two-phase: beads + reference stream first, then cells.
     _STAGE_LAYERS = {
         'displacement': ['Displacement Magnitude', 'Displacement Vectors'],
         'force': ['Force Magnitude', 'Force Vectors'],
         'stress': ['Normal Stress XX', 'Normal Stress YY', 'Average Normal Stress'],
     }
-    _PREPROC_BEADS_REF = ['Preprocessed Beads', 'Preprocessed Reference']
-    _PREPROC_CELLS = ['Preprocessed Cells']
 
     def __init__(
         self, data_manager, visualization_manager, pump=None, on_experiment=None,
@@ -65,9 +61,6 @@ class ViewerSink(PipelineSink):
         self._pump = pump
         self._on_experiment = on_experiment
         self._on_stage_progress = on_stage_progress
-        # Set once the preprocessing stage has flipped to its cell-only phase, so
-        # the flip fires on the first cell frame and never repeats mid-stage.
-        self._preproc_cells_isolated = False
         # Pre-run visibility snapshot, held between begin_run/end_run; ``None``
         # outside a run so end_run is a safe no-op (and idempotent).
         self._restore_visibility = None
@@ -111,17 +104,7 @@ class ViewerSink(PipelineSink):
         self._stage_num_frames = num_frames
         if self._on_stage_progress is not None:
             self._on_stage_progress(stage, 'running', 0.0)
-        if stage == 'preprocessing':
-            self._begin_preprocessing(info)
-            # Start in the beads+reference phase; the first cell frame flips it.
-            self._preproc_cells_isolated = False
-            # Preprocessing streams three channels (beads, reference, cells) each
-            # with their own 0-based per-channel frame_index, so frame_index can't
-            # drive a monotonic bar. Count emitted frames instead, against the
-            # announced total work (beads + reference + cells).
-            self._preproc_frames_seen = 0
-            self.vis.isolate_layers(self._PREPROC_BEADS_REF)
-        elif stage in ('displacement', 'force'):
+        if stage in ('displacement', 'force'):
             self.vis.begin_vector_field_stream(stage, num_frames, {
                 'v_max': info['v_max'],
                 'vector_stride': info['vector_stride'],
@@ -139,27 +122,13 @@ class ViewerSink(PipelineSink):
         self._repaint()
 
     def stage_frame(self, stage, frame_index, frame):
-        if stage == 'preprocessing':
-            # ``frame`` is a {channel: image} mapping (one key per yield). The
-            # first cell frame flips isolation from beads+reference to cells-only
-            # (worklist §4) — beads and reference stream before any cell frame.
-            for channel, image in frame.items():
-                self.vis.stream_preprocessing_frame(channel, frame_index, image)
-                if channel == 'cells' and not self._preproc_cells_isolated:
-                    self._preproc_cells_isolated = True
-                    self.vis.isolate_layers(self._PREPROC_CELLS)
-        elif stage in ('displacement', 'force'):
+        if stage in ('displacement', 'force'):
             self.vis.stream_vector_field_frame(stage, frame_index, frame)
         elif stage == 'stress':
             self.vis.stream_stress_frame(frame_index, frame)
         if self._on_stage_progress is not None:
-            if stage == 'preprocessing':
-                # Monotonic across the three channels (see stage_started).
-                self._preproc_frames_seen += 1
-                fraction = min(1.0, self._preproc_frames_seen / max(self._stage_num_frames, 1))
-            else:
-                # In-order stages: frame_index is the authoritative position.
-                fraction = (frame_index + 1) / max(self._stage_num_frames, 1)
+            # In-order stages: frame_index is the authoritative position.
+            fraction = (frame_index + 1) / max(self._stage_num_frames, 1)
             self._on_stage_progress(stage, 'running', fraction)
         self._repaint()
 
@@ -168,8 +137,7 @@ class ViewerSink(PipelineSink):
             self._on_stage_progress(stage, 'done', None)
         # Store the full result so interactive frame-scrubbing and any downstream
         # stage see it — mirrors what each per-stage controller does on
-        # completion. Preprocessing needs nothing here: its stacks were allocated
-        # in the data manager up front and filled in place as frames streamed.
+        # completion.
         if result is None:
             return
         if stage == 'displacement':
@@ -180,33 +148,6 @@ class ViewerSink(PipelineSink):
             self.data_manager.set_stress_results(result, dirty=True)
 
     # --- helpers ----------------------------------------------------------
-
-    def _begin_preprocessing(self, info):
-        """Pre-allocate the Preprocessed* stacks, then bind their layers.
-
-        Mirrors ``PreprocessingController._begin_stream``: the stacks are
-        registered with the data manager as zeroed float32 arrays (generated,
-        dirty) so the layers are backed by the very arrays the run fills in
-        place; ``begin_preprocessing_stream`` then creates/reuses the layers.
-        """
-        beads_shape = info.get('beads_shape')
-        reference_shape = info.get('reference_shape')
-        cells_shape = info.get('cells_shape')
-
-        if beads_shape is not None:
-            self.data_manager.set_preprocessed_bead_stack(
-                np.zeros(beads_shape, dtype=np.float32), dirty=True
-            )
-        if reference_shape is not None:
-            self.data_manager.set_preprocessed_reference(
-                np.zeros(reference_shape, dtype=np.float32), dirty=True
-            )
-        if cells_shape is not None:
-            self.data_manager.set_preprocessed_cell_stack(
-                np.zeros(cells_shape, dtype=np.float32), dirty=True
-            )
-
-        self.vis.begin_preprocessing_stream()
 
     def _repaint(self):
         if self._pump is not None:

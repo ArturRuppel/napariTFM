@@ -1,28 +1,6 @@
 from typing import Tuple
 
-from napariTFM.backend.parameter_dataclasses import (
-    FTTCParameters,
-    PreprocessingParameters,
-)
-
-
-def validate_preprocessing_parameters(params: PreprocessingParameters) -> Tuple[bool, str]:
-    if not 0 <= params.min_intensity_percentile < params.max_intensity_percentile <= 100:
-        return False, "Invalid intensity percentile range"
-
-    if not 0 <= params.cell_min_intensity_percentile < params.cell_max_intensity_percentile <= 100:
-        return False, "Invalid cell intensity percentile range"
-
-    if params.gaussian_sigma < 0:
-        return False, "Gaussian sigma must be non-negative"
-
-    if params.cell_gaussian_sigma < 0:
-        return False, "Cell gaussian sigma must be non-negative"
-
-    if params.registration_mode not in ['translation', 'rigid', 'no registration']:
-        return False, f"Invalid registration mode: {params.registration_mode}"
-
-    return True, ""
+from napariTFM.backend.parameter_dataclasses import FTTCParameters
 
 
 def validate_fttc_parameters(params: FTTCParameters) -> Tuple[bool, str]:

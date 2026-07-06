@@ -86,9 +86,6 @@ class _StubDataManager:
         self.bead_stack = None
         self.reference = None
         self.cell_stack = None
-        self.preprocessed_bead_stack = None
-        self.preprocessed_reference = None
-        self.preprocessed_cell_stack = None
         self.mask_stack = None
         self.displacement_results = None
         self.force_results = None
@@ -120,9 +117,6 @@ class _StubDataManager:
         # Mirror the real DataManager: drop derived results on experiment switch.
         changed = False
         for attr in (
-            "preprocessed_bead_stack",
-            "preprocessed_reference",
-            "preprocessed_cell_stack",
             "displacement_results",
             "force_results",
             "stress_results",
@@ -192,7 +186,6 @@ class _StubController(QObject):
 
 
 class _StubStageWidget(QWidget):
-    preprocessing_completed = Signal(object)
     displacement_calculated = Signal(object)
     force_calculated = Signal(object)
     stress_calculated = Signal(object)
@@ -302,7 +295,6 @@ _stub_module(
     "napariTFM.utilities.visualization_manager",
     VisualizationManager=_StubVisualizationManager,
 )
-_stub_module("napariTFM.widgets.preprocessing_widget", PreprocessingWidget=_StubStageWidget)
 _stub_module(
     "napariTFM.widgets.displacement_analysis_widget",
     DisplacementAnalysisWidget=_StubStageWidget,
@@ -353,7 +345,7 @@ def test_stage_section_exposes_header_actions_with_stable_names(app):
     child = _StubStageWidget()
 
     section = _widget.StageSection(
-        "Preprocessing",
+        "Displacement",
         child,
         actions={
             "run": child.run_action,
@@ -364,17 +356,17 @@ def test_stage_section_exposes_header_actions_with_stable_names(app):
         action_states_changed=child.action_states_changed,
     )
 
-    assert section.params_btn.objectName() == "stage_preprocessing_params_button"
-    assert section.run_cancel_btn.objectName() == "stage_preprocessing_run_cancel_button"
-    assert section.preview_button.objectName() == "stage_preprocessing_preview_button"
+    assert section.params_btn.objectName() == "stage_displacement_params_button"
+    assert section.run_cancel_btn.objectName() == "stage_displacement_run_cancel_button"
+    assert section.preview_button.objectName() == "stage_displacement_preview_button"
 
     assert "Run" in section.run_cancel_btn.toolTip()
-    assert section.preview_button.toolTip() == "Preview Preprocessing"
+    assert section.preview_button.toolTip() == "Preview Displacement"
     assert "Toggle" in section.params_btn.toolTip()
 
 
 def test_stage_section_tracks_status(app):
-    section = _widget.StageSection("Preprocessing", QWidget(), status="ready")
+    section = _widget.StageSection("Displacement", QWidget(), status="ready")
     assert section.status == "ready"
     section.set_status("done")
     assert section.status == "done"
@@ -486,7 +478,6 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -498,7 +489,6 @@ def test_main_widget_uses_stage_sections_instead_of_tabs(monkeypatch, app):
 
     assert widget.findChildren(QTabWidget) == []
     # Every stage body is always visible; only parameter panels collapse.
-    assert widget.preprocessing_widget.isVisible()
     assert widget.displacement_widget.isVisible()
     assert widget.force_widget.isVisible()
     assert widget.stress_widget.isVisible()
@@ -508,7 +498,6 @@ def test_stage_sections_receive_ordered_neighbour_accents(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -525,7 +514,6 @@ def _stub_main_widget(monkeypatch):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -564,9 +552,6 @@ def test_stage_progress_feeds_one_global_status_label(monkeypatch, app):
 
     widget.displacement_widget.controller.progress_updated.emit(40, "Calculating…")
     assert widget.status_label.text() == "Displacement — Calculating…"
-
-    widget.preprocessing_widget.controller.progress_updated.emit(0, "Error: boom")
-    assert widget.status_label.text() == "Preprocessing — Error: boom"
 
     widget.stress_widget.controller.progress_updated.emit(100, "Done")
     assert widget.status_label.text() == "Stress — Done"
@@ -635,8 +620,8 @@ def test_experiment_stage_status_inputs_only_is_ready_frontier(monkeypatch, app,
     (folder / "reference.tif").write_bytes(b"x")
 
     statuses = widget._experiment_stage_status(str(folder))
-    assert statuses["preprocessing"] == "ready"
-    assert statuses["displacement"] == "not_started"
+    # Inputs present -> displacement (the first stage) is the ready frontier.
+    assert statuses["displacement"] == "ready"
     assert statuses["force"] == "not_started"
     assert statuses["stress"] == "not_started"
 
@@ -653,8 +638,7 @@ def test_experiment_stage_status_displacement_only(monkeypatch, app, tmp_path):
     _write_stage_ntfm(folder, displacement_field=np.ones((1, 2, 2, 2)))
 
     statuses = widget._experiment_stage_status(str(folder))
-    # Displacement present implies preprocessing ran; force is the next frontier.
-    assert statuses["preprocessing"] == "done"
+    # Displacement done; force is the next frontier.
     assert statuses["displacement"] == "done"
     assert statuses["force"] == "ready"
     assert statuses["stress"] == "not_started"
@@ -674,7 +658,6 @@ def test_experiment_stage_status_through_force(monkeypatch, app, tmp_path):
     )
 
     statuses = widget._experiment_stage_status(str(folder))
-    assert statuses["preprocessing"] == "done"
     assert statuses["displacement"] == "done"
     assert statuses["force"] == "done"
     assert statuses["stress"] == "ready"
@@ -695,7 +678,7 @@ def test_experiment_stage_status_full_pipeline_all_done(monkeypatch, app, tmp_pa
     )
 
     statuses = widget._experiment_stage_status(str(folder))
-    assert all(statuses[s] == "done" for s in ("preprocessing", "displacement", "force", "stress"))
+    assert all(statuses[s] == "done" for s in ("displacement", "force", "stress"))
 
 
 def test_stress_stage_is_disabled_by_default(monkeypatch, app):
@@ -748,7 +731,6 @@ def test_experiment_stage_status_reads_output_eagerly(monkeypatch, app, tmp_path
     _write_stage_ntfm(folder, displacement_field=np.ones((1, 2, 2, 2)))
 
     statuses = widget._experiment_stage_status(str(folder))
-    assert statuses["preprocessing"] == "done"     # a populated measure proves it ran
     assert statuses["displacement"] == "done"      # its series is present on disk
     assert statuses["force"] == "ready"            # displacement done -> force ready
     assert statuses["stress"] == "off"             # disabled by default, takes priority
@@ -858,94 +840,6 @@ def test_interactive_run_persists_ntfm_and_syncs_both_dot_rows(monkeypatch, app,
         # the experiment's row dots (above) — true top/bottom sync.
         for key, section in widget._stage_sections_by_key.items():
             assert section._effective_status() == statuses[key], key
-    finally:
-        widget.close()
-        widget.deleteLater()
-
-
-def test_interactive_preprocessing_persists_tiffs(monkeypatch, app, tmp_path):
-    """_persist_active_experiment('preprocessing') writes the preprocessed TIFFs."""
-    import numpy as np
-
-    from napariTFM.utilities.batch_output import experiment_output_dir
-
-    written = {}
-
-    def _fake_save_tiff(data, filepath, pixel_size, frame_interval):
-        from pathlib import Path
-        if data is None:
-            return
-        written[Path(filepath).name] = data
-
-    monkeypatch.setattr(
-        "napariTFM.backend.batch_analysis.save_calibrated_tiff", _fake_save_tiff
-    )
-
-    widget = _stub_main_widget(monkeypatch)
-    folder = tmp_path / "pos_01"
-    folder.mkdir()
-    _select(widget, folder)
-    try:
-        # Place preprocessed arrays in the data manager (as the preprocessing
-        # widget would after a successful interactive run).
-        widget.data_manager.preprocessed_bead_stack = np.ones((2, 4, 4), dtype=np.float32)
-        widget.data_manager.preprocessed_reference = np.zeros((4, 4), dtype=np.float32)
-        # No cell stack — only the two mandatory TIFFs should be written.
-
-        widget._on_stage_persisted("preprocessing")
-
-        assert "preprocessed_beads.tif" in written, "bead TIFF not written"
-        assert "preprocessed_reference.tif" in written, "reference TIFF not written"
-        assert "preprocessed_cells.tif" not in written, "cell TIFF should not be written when absent"
-
-        # The preprocessing dot must now read as "done" from the on-disk TIFFs.
-        # We simulate file presence since _fake_save_tiff doesn't touch disk.
-        out_dir = experiment_output_dir(str(folder), None)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "preprocessed_beads.tif").write_bytes(b"x")
-        (out_dir / "preprocessed_reference.tif").write_bytes(b"x")
-
-        statuses = widget._experiment_stage_status(str(folder))
-        assert statuses["preprocessing"] == "done"
-    finally:
-        widget.close()
-        widget.deleteLater()
-
-
-def test_preprocessing_completed_signal_persists_tiffs(monkeypatch, app, tmp_path):
-    """Emitting ``preprocessing_completed`` must reach the TIFF-persist path.
-
-    Regression guard for the wiring gap: the persist machinery existed and was
-    test-locked by calling ``_on_stage_persisted`` directly, but the
-    ``preprocessing_completed`` signal was connected only to ``refresh()`` — so
-    an interactive run wrote nothing to disk. This drives the real signal.
-    """
-    import numpy as np
-
-    written = {}
-
-    def _fake_save_tiff(data, filepath, pixel_size, frame_interval):
-        from pathlib import Path
-        if data is None:
-            return
-        written[Path(filepath).name] = data
-
-    monkeypatch.setattr(
-        "napariTFM.backend.batch_analysis.save_calibrated_tiff", _fake_save_tiff
-    )
-
-    widget = _stub_main_widget(monkeypatch)
-    folder = tmp_path / "pos_01"
-    folder.mkdir()
-    _select(widget, folder)
-    try:
-        widget.data_manager.preprocessed_bead_stack = np.ones((2, 4, 4), dtype=np.float32)
-        widget.data_manager.preprocessed_reference = np.zeros((4, 4), dtype=np.float32)
-
-        widget.preprocessing_widget.preprocessing_completed.emit({})
-
-        assert "preprocessed_beads.tif" in written, "signal did not reach the persist path"
-        assert "preprocessed_reference.tif" in written, "signal did not reach the persist path"
     finally:
         widget.close()
         widget.deleteLater()
@@ -1476,7 +1370,7 @@ def test_run_selected_sequential_path_is_unchanged_for_default_num_workers(monke
 def test_only_stress_stage_is_optional(monkeypatch, app):
     widget = _stub_main_widget(monkeypatch)
     assert widget._stage_sections_by_key["stress"].enable_btn is not None
-    for key in ("preprocessing", "displacement", "force"):
+    for key in ("displacement", "force"):
         assert widget._stage_sections_by_key[key].enable_btn is None
 
 
@@ -1492,7 +1386,6 @@ def test_main_widget_lets_dock_determine_width(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1506,7 +1399,6 @@ def test_data_manager_change_callback_refreshes_stage_widgets(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1515,7 +1407,6 @@ def test_data_manager_change_callback_refreshes_stage_widgets(monkeypatch, app):
 
     widget.data_manager.notify_changed()
 
-    assert widget.preprocessing_widget.update_count == 1
     assert widget.displacement_widget.update_count == 1
     assert widget.force_widget.update_count == 1
     assert widget.stress_widget.update_count == 1
@@ -1525,7 +1416,6 @@ def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app)
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1548,7 +1438,6 @@ def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, 
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1561,7 +1450,7 @@ def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, 
 
     # Contract stages: header run invokes the widget's run_action handler.
     contract_cases = [
-        ("preprocessing", widget.preprocessing_widget),
+        ("displacement", widget.displacement_widget),
         ("force", widget.force_widget),
         ("stress", widget.stress_widget),
     ]
@@ -1578,7 +1467,6 @@ def test_main_widget_stress_header_preview_wires_to_frame_preview(monkeypatch, a
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1606,7 +1494,6 @@ def test_stage_sections_use_signal_action_contract(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1626,7 +1513,7 @@ def test_workflow_parameter_panel_exposes_one_control_per_managed_parameter(app)
 
     for name in [
         "pixel_size",
-        "gaussian_sigma",
+        "piv_passes",
         "piv_window",
         "young_modulus",
         "auto_gcv",
@@ -1656,45 +1543,10 @@ def test_workflow_parameter_panel_syncs_from_parameter_manager(app):
     assert panel.parameter_controls["piv_window"].value() == 24
 
 
-def test_intensity_min_max_collapse_into_one_range_slider(app):
-    from superqt import QLabeledDoubleRangeSlider
-
-    panel = _widget.WorkflowParameterPanel(_StubParameterManager())
-
-    bead = panel.parameter_controls["min_intensity_percentile"]
-    # Both bounds map to the very same range control, not two sliders.
-    assert isinstance(bead, QLabeledDoubleRangeSlider)
-    assert panel.parameter_controls["max_intensity_percentile"] is bead
-    cell = panel.parameter_controls["cell_min_intensity_percentile"]
-    assert isinstance(cell, QLabeledDoubleRangeSlider)
-    assert panel.parameter_controls["cell_max_intensity_percentile"] is cell
-
-
-def test_intensity_range_slider_writes_both_bounds(app):
-    manager = _StubParameterManager()
-    panel = _widget.WorkflowParameterPanel(manager)
-
-    panel.parameter_controls["min_intensity_percentile"].setValue((10.0, 90.0))
-
-    assert ("min_intensity_percentile", 10.0) in manager.ui_writes
-    assert ("max_intensity_percentile", 90.0) in manager.ui_writes
-
-
-def test_intensity_range_slider_syncs_from_parameter_manager(app):
-    manager = _StubParameterManager()
-    panel = _widget.WorkflowParameterPanel(manager)
-
-    manager.set_parameter("min_intensity_percentile", 5.0)
-    manager.set_parameter("max_intensity_percentile", 95.0)
-
-    assert panel.parameter_controls["min_intensity_percentile"].value() == (5.0, 95.0)
-
-
 def test_main_widget_does_not_expose_legacy_parameter_panel(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1710,7 +1562,6 @@ def test_main_widget_experiments_layer_tracks_output_directory(monkeypatch, app,
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1725,7 +1576,6 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1737,22 +1587,18 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     app.processEvents()
 
     assert set(widget._stage_parameter_panels_by_key) == {
-        "preprocessing",
         "displacement",
         "force",
         "stress",
     }
     assert "batch" not in widget._stage_parameter_panels_by_key
 
-    preprocessing_panel = widget._stage_parameter_panels_by_key["preprocessing"]
     displacement_panel = widget._stage_parameter_panels_by_key["displacement"]
     force_panel = widget._stage_parameter_panels_by_key["force"]
     stress_panel = widget._stage_parameter_panels_by_key["stress"]
 
-    assert "gaussian_sigma" in preprocessing_panel.parameter_controls
-    # Calibration lives only in the Project section, not the preprocessing panel.
-    assert "pixel_size" not in preprocessing_panel.parameter_controls
-    assert "piv_window" not in preprocessing_panel.parameter_controls
+    # Calibration lives only in the Project section, not a stage panel.
+    assert "pixel_size" not in displacement_panel.parameter_controls
     assert {"piv_window", "piv_passes"}.issubset(displacement_panel.parameter_controls)
     assert "young_modulus" not in displacement_panel.parameter_controls
     assert {"young_modulus", "auto_gcv"}.issubset(force_panel.parameter_controls)
@@ -1771,13 +1617,12 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
-    section = widget._stage_sections_by_key["preprocessing"]
+    section = widget._stage_sections_by_key["displacement"]
 
     # With no experiment selected, the spine node's status is the in-memory
     # verdict derived from the data manager (compute_stage_status).
@@ -1789,8 +1634,7 @@ def test_stage_data_status_refreshes_from_data_manager(monkeypatch, app):
 
     assert section.status == "ready"
 
-    widget.data_manager.preprocessed_reference = object()
-    widget.data_manager.preprocessed_bead_stack = object()
+    widget.data_manager.displacement_results = object()
     widget.refresh_stage_statuses()
 
     assert section.status == "done"
@@ -1813,26 +1657,27 @@ def test_stage_status_is_done_when_results_are_in_memory(monkeypatch, app, tmp_p
     monkeypatch.setattr(_widget, "DataManager", DataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     widget.data_manager.set_output_dir(tmp_path)
-    section = widget._stage_sections_by_key["preprocessing"]
+    section = widget._stage_sections_by_key["displacement"]
 
     widget.refresh_stage_statuses()
     assert section.status != "done"
 
     # Files on disk are irrelevant — only in-memory results count.
-    (tmp_path / "preprocessed_beads.tif").write_bytes(b"x")
-    (tmp_path / "preprocessed_reference.tif").write_bytes(b"x")
+    (tmp_path / "TFM_data").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "TFM_data" / "results.ome.tif").write_bytes(b"x")
     widget.refresh_stage_statuses()
     assert section.status != "done"
 
-    widget.data_manager.set_preprocessed_bead_stack(np.zeros((2, 4, 4), dtype=np.float32))
-    widget.data_manager.set_preprocessed_reference(np.zeros((4, 4), dtype=np.float32))
+    widget.data_manager.set_displacement_results(
+        _StubResult(displacement_field=np.ones((1, 2, 2, 2)),
+                    physical_scale={"grid_spacing": 1.0, "time_interval": 1.0})
+    )
     widget.refresh_stage_statuses()
     assert section.status == "done"
 
@@ -1846,14 +1691,13 @@ def test_main_widget_constructs_when_stage_widget_lacks_parameter_panel(monkeypa
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _NoPanelStage)
-    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
+    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _NoPanelStage)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())  # must not raise
 
-    assert not hasattr(widget.preprocessing_widget, "parameter_panel")
+    assert not hasattr(widget.displacement_widget, "parameter_panel")
 
 
 def test_each_stage_has_single_inline_parameter_editor(monkeypatch, app):
@@ -1861,7 +1705,7 @@ def test_each_stage_has_single_inline_parameter_editor(monkeypatch, app):
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
     for name in (
-        "PreprocessingWidget", "DisplacementAnalysisWidget",
+        "DisplacementAnalysisWidget",
         "FTTCWidget", "StressWidget",
     ):
         monkeypatch.setattr(_widget, name, _StubStageWidget)
@@ -1870,7 +1714,7 @@ def test_each_stage_has_single_inline_parameter_editor(monkeypatch, app):
 
     # Each stage with parameters mounts exactly one editor: the section's
     # first-class parameter_panel (no nested faux-stage duplication).
-    for key in ("preprocessing", "displacement", "force", "stress"):
+    for key in ("displacement", "force", "stress"):
         section = widget._stage_sections_by_key[key]
         assert section.parameter_panel is widget._stage_parameter_panels_by_key[key]
     assert "batch" not in widget._stage_parameter_panels_by_key
@@ -1898,14 +1742,14 @@ def test_refresh_updates_every_stage_widget_once(monkeypatch, app):
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
     for name in (
-        "PreprocessingWidget", "DisplacementAnalysisWidget",
+        "DisplacementAnalysisWidget",
         "FTTCWidget", "StressWidget",
     ):
         monkeypatch.setattr(_widget, name, _StubStageWidget)
 
     widget = _widget.napariTFMWidget(object())
     stage_widgets = widget._stage_widgets()
-    assert len(stage_widgets) == 4
+    assert len(stage_widgets) == 3
 
     before = [w.update_count for w in stage_widgets]
     widget.refresh()
@@ -1918,7 +1762,7 @@ def test_completion_signal_triggers_single_refresh(monkeypatch, app):
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
     for name in (
-        "PreprocessingWidget", "DisplacementAnalysisWidget",
+        "DisplacementAnalysisWidget",
         "FTTCWidget", "StressWidget",
     ):
         monkeypatch.setattr(_widget, name, _StubStageWidget)
@@ -1936,7 +1780,6 @@ def test_calibration_change_updates_all_stage_widgets(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1953,7 +1796,6 @@ def test_force_param_change_updates_only_force_widget(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1972,7 +1814,6 @@ def test_unrouted_param_change_updates_no_stage_widget(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -1991,7 +1832,6 @@ def test_shell_theme_button_switches_palette(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -2003,8 +1843,8 @@ def test_shell_theme_button_switches_palette(monkeypatch, app):
         other = next(n for n in _ui_style.theme_names() if n != original)
         widget._on_theme_selected(other)
         assert _ui_style.active_theme_name() == other
-        accent = _ui_style.stage_accent("preprocessing")
-        assert _ui_style.muted_accent(accent) in widget._stage_sections_by_key["preprocessing"].header_label.styleSheet()
+        accent = _ui_style.stage_accent("displacement")
+        assert _ui_style.muted_accent(accent) in widget._stage_sections_by_key["displacement"].header_label.styleSheet()
     finally:
         _ui_style.set_active_theme(original)
 
@@ -2081,7 +1921,6 @@ def test_shell_mounts_param_panels_as_section_parameter_panel(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
     monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
@@ -2093,31 +1932,16 @@ def test_shell_mounts_param_panels_as_section_parameter_panel(monkeypatch, app):
     assert not hasattr(section, "add_inner_section")
 
 
-def test_preprocessing_panel_excludes_general_calibration(app):
+def test_displacement_panel_excludes_general_calibration(app):
     from napariTFM.widgets._widget import WorkflowParameterPanel
 
     pm = _real_parameter_manager()
-    panel = WorkflowParameterPanel(pm, section_titles=("Preprocessing",))
+    panel = WorkflowParameterPanel(pm, section_titles=("Displacement",))
+    # Calibration lives only in the Project/General section, not a stage panel.
     assert "pixel_size" not in panel.parameter_controls
     assert "frame_interval" not in panel.parameter_controls
-    # Preprocessing-specific params still present.
-    assert "gaussian_sigma" in panel.parameter_controls
-
-
-def test_shell_preprocessing_panel_has_no_calibration_controls(monkeypatch, app):
-    from napariTFM.widgets import _widget
-    monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
-    monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
-    monkeypatch.setattr(_widget, "VisualizationManager", _StubVisualizationManager)
-    monkeypatch.setattr(_widget, "PreprocessingWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "DisplacementAnalysisWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
-    monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
-
-    widget = _widget.napariTFMWidget(object())
-    panel = widget._stage_parameter_panels_by_key["preprocessing"]
-    assert "pixel_size" not in panel.parameter_controls
-    assert "frame_interval" not in panel.parameter_controls
+    # Displacement-specific params are present.
+    assert "piv_window" in panel.parameter_controls
 
 
 def test_experiments_list_is_present_above_pipeline(monkeypatch, app):
@@ -2421,7 +2245,7 @@ def test_selecting_experiment_points_disk_check_at_its_inputs(monkeypatch, app):
 def test_selecting_experiment_loads_its_input_files(monkeypatch, app):
     # Pointing the disk check is not enough — Preview and Run need the arrays in
     # memory. Selecting an experiment must hand its folder + discovery filenames
-    # to preprocessing so it loads them from disk.
+    # to the displacement stage (the first stage) so it loads them from disk.
     widget = _stub_main_widget(monkeypatch)
     widget._project_open = True
     widget.experiments_list.add_folders(
@@ -2431,7 +2255,7 @@ def test_selecting_experiment_loads_its_input_files(monkeypatch, app):
 
     widget.experiments_list.set_active("/data/exp_a")
 
-    assert widget.preprocessing_widget.loaded_input_files == (
+    assert widget.displacement_widget.loaded_input_files == (
         "/data/exp_a",
         {"beads": "b.tif", "reference": "r.tif"},
     )

@@ -57,7 +57,6 @@ def build_run_config(
     input_files = dict(records[0]["input_files"]) if records else {}
 
     analysis_steps = {
-        "preprocessing": True,
         "displacement": True,
         "force": True,
         "stress": "stress" not in disabled,

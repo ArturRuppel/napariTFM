@@ -43,8 +43,8 @@ class _FakeViewer:
 
 
 class _FakeDataManager:
-    preprocessed_bead_stack = None
-    preprocessed_reference = None
+    bead_stack = None
+    reference = None
     displacement_results = None
 
 
