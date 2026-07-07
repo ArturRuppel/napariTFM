@@ -101,6 +101,13 @@ so step one of integration is bringing them under version control **in this repo
   strain energy + wall-clock.
 - **Deliverable:** sweep curves + per-scenario best-config tables + a summary figure, plus
   the resulting production **default parameters** (feeds TASK 1).
+- **Regularization strategy sweep (organizing plan):** *which* regularizer + λ-selector to
+  try, in what order, and why — from first principles — so the results are interpretable
+  rather than a hyperparameter fishing expedition. Separates the penalty axis from the
+  λ-selection axis via an oracle-λ sweep (only possible because the benchmark has ground
+  truth), pre-registers a (condition → expected winner) table, and phases the work
+  (support prior first → smoothness order → L1/elastic net → TV → selectors → graded prior).
+  Full plan: **[`docs/specs/regularization-benchmark-plan.md`](docs/specs/regularization-benchmark-plan.md)**.
 
 ### PHASE 3 (separate, focused) — stress benchmark incl. BISM
 Extend the benchmark to intercellular **stress** so MSM and **BISM** (already in-repo:
