@@ -108,6 +108,18 @@ Extend the benchmark to intercellular **stress** so MSM and **BISM** (already in
 ground truth (the paper's FEM active-cell model, or the Mavi sims) and a stress front-end.
 Deliberately **not** bundled into TASK 2 — different machinery, would muddy both.
 
+### TASK 4 (optimization) — swap the confined forward solver to preconditioned CG
+The β>0 confined path in `forward_tfm.py::_solve_iterative` currently uses L-BFGS +
+autograd (torch). The loss is a **convex quadratic**, so its minimizer solves the normal
+equations `A t = b` with SPD `A` — the textbook case for **preconditioned Conjugate
+Gradient**, using the existing Fourier closed-form (`_solve_closed_form`) as the
+preconditioner. Expected ~5–10× wall-clock and — because CG needs no autograd — it
+**drops the hard torch dependency** on this path (torch/cupy become an optional GPU
+accelerator, not a requirement). One caveat: hand-rolled CG needs the exact adjoint (add
+a dot-product test). Also the reusable inner-solve engine if the localization prior is
+later upgraded L2 → L1. Full rationale, math, and acceptance criteria:
+**[`docs/specs/forward-solver-pcg.md`](docs/specs/forward-solver-pcg.md)**.
+
 ---
 
 ## Open after the round-2 review merge (2026-07-04)
