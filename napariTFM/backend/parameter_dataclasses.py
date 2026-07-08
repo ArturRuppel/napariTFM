@@ -60,9 +60,10 @@ class FTTCParameters:
     #                                       Non-dim data term ⇒ useful band ~0.01..0.3, roughly
     #                                       scale-independent. 0 = off (reproduces the artifacts).
     fwd_fit_margin_um: float = 1e6        # trust displacement only within mask+margin (µm)
-    fwd_max_iter: int = 200               # L-BFGS iterations (β>0 iterative path)
+    fwd_max_iter: int = 200               # max CG iterations (β>0 iterative path)
+    fwd_cg_tol: float = 1e-8              # CG relative-residual tolerance (β>0 path)
     fwd_traction_scale: float = 1e-2      # non-dim traction scale T0 (rarely touched)
-    fwd_device: str = "auto"              # "auto" | "cuda" | "cpu" (β>0 path)
+    fwd_device: str = "auto"              # "auto" | "cuda" | "cpu" (β>0 path; cuda ⇒ cupy)
     fwd_dtype: str = "float32"            # "float32" (default; complex128 is throttled on
     #                                       laptop GPUs) | "float64" (the QP is convex &
     #                                       well-conditioned, so float32 is ample)
@@ -125,6 +126,7 @@ class UnifiedParameters:
     fwd_smoothness: float = 0.05
     fwd_fit_margin_um: float = 1e6
     fwd_max_iter: int = 200
+    fwd_cg_tol: float = 1e-8
     fwd_traction_scale: float = 1e-2
     fwd_device: str = "auto"
     fwd_dtype: str = "float32"

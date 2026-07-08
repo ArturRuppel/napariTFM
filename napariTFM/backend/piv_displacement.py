@@ -112,12 +112,12 @@ def _nmt_replace(f: np.ndarray, thresh: float = 2.0, eps: float = 0.1) -> np.nda
     return out
 
 
-def _to_dense(ys, xs, du, dv, H, W, smooth):
-    """Sparse window vectors on a regular grid -> dense (2,H,W), light smoothing."""
+def _to_dense(ys, xs, du, dv, H, W):
+    """Sparse window vectors on a regular grid -> dense (2,H,W)."""
     if len(ys) < 2 or len(xs) < 2:                  # too few windows to interpolate
         return np.zeros((2, H, W))
-    du = ndimage.gaussian_filter(_nmt_replace(du), smooth)
-    dv = ndimage.gaussian_filter(_nmt_replace(dv), smooth)
+    du = _nmt_replace(du)
+    dv = _nmt_replace(dv)
     gy, gx = np.mgrid[0:H, 0:W]
     pts = np.stack([gy.ravel(), gx.ravel()], -1)
     fu = RegularGridInterpolator((ys, xs), du, bounds_error=False, fill_value=None)
@@ -134,7 +134,7 @@ def _window_schedule(window: int, passes: int, coarse_factor: float, H: int, W: 
     return [int(round(top * (window / top) ** (p / (passes - 1)))) for p in range(passes)]
 
 
-def _piv_numpy(ref, dfm, window=16, overlap=0.75, passes=8, coarse_factor=2.0, smooth=1.0):
+def _piv_numpy(ref, dfm, window=16, overlap=0.75, passes=8, coarse_factor=2.0):
     """Multi-pass window-deformation PIV (numpy). Returns u_px (2,H,W) [0]=x/col [1]=y/row."""
     ref, dfm = _norm(ref), _norm(dfm)
     H, W = ref.shape
@@ -145,7 +145,7 @@ def _piv_numpy(ref, dfm, window=16, overlap=0.75, passes=8, coarse_factor=2.0, s
         step = max(4, int(round(win * (1.0 - overlap))))
         warped = _warp(dfm, u)                                    # align by current estimate
         ys, xs, du, dv = _pass(ref, warped, win, step)
-        u = u + _to_dense(ys, xs, du, dv, H, W, smooth)           # accumulate the residual
+        u = u + _to_dense(ys, xs, du, dv, H, W)                   # accumulate the residual
     return u
 
 
@@ -156,7 +156,7 @@ _HAN: dict = {}
 
 
 def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8,
-               coarse_factor=2.0, smooth=1.0):
+               coarse_factor=2.0):
     """Whole multipass PIV resident on ``device`` (GPU). Returns u_px (2,H,W) numpy."""
     import torch
     import torch.nn.functional as F
@@ -224,21 +224,10 @@ def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8,
         bad = res / (med3(res) + eps) > thresh
         return torch.where(bad, med, f)
 
-    def gauss(f, sigma):
-        if sigma <= 0:
-            return f
-        rad = max(1, int(round(3 * sigma)))
-        x = torch.arange(-rad, rad + 1, device=device, dtype=dt)
-        k = torch.exp(-0.5 * (x / sigma) ** 2); k = k / k.sum()
-        fp = F.pad(f[None, None], (rad, rad, rad, rad), mode="reflect")
-        fp = F.conv2d(fp, k.view(1, 1, 1, -1))
-        fp = F.conv2d(fp, k.view(1, 1, -1, 1))
-        return fp[0, 0]
-
     def to_dense(ys, xs, du, dv, H, W):
         if len(ys) < 2 or len(xs) < 2:
             return torch.zeros((2, H, W), device=device, dtype=dt)
-        du = gauss(nmt(du), smooth); dv = gauss(nmt(dv), smooth)
+        du = nmt(du); dv = nmt(dv)
         Ny, Nx = du.shape
         y0, x0 = float(ys[0]), float(xs[0]); sy = float(ys[1] - ys[0]); sx = float(xs[1] - xs[0])
         ii = torch.arange(H, device=device, dtype=dt); jj = torch.arange(W, device=device, dtype=dt)

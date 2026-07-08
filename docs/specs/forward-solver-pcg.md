@@ -1,6 +1,6 @@
 # Spec: preconditioned-CG solver for the confined forward traction solve
 
-Status: proposed · Scope: `napariTFM/backend/forward_tfm.py` (`_solve_iterative`, the β>0 path)
+Status: accepted (2026-07-08) · Scope: `napariTFM/backend/forward_tfm.py` (`_solve_iterative`, the β>0 path)
 
 > Revised after an external applied-maths review. Corrections from that review are
 > called out inline as **[review]**; a few speculative refinements are marked
@@ -117,20 +117,44 @@ and treat `mean(t)=0` as a reporting *convention*, not an inference — the data
 about it. (With β>0 the mean becomes weakly identified through the support prior; fine, but note
 it, since it changes what a magnitude metric sees downstream.)
 
-## CPU / GPU
+**As implemented (2026-07-08):** `M⁻¹` annihilates the DC (0,0) block, and `apply_A` projects DC
+out on **both** sides (`P0·A·P0`) so it stays self-adjoint and the whole Krylov iteration lives in
+the zero-mean subspace. This is required for the hand-rolled CG to be well-posed on both backends —
+projecting only `apply_A`'s output makes `A` non-symmetric and CG stalls; projecting neither lets
+GPU round-off inject a DC component the preconditioner cannot correct, and CG stalls there too.
 
-Runs on **both** — the primitives are FFTs, pointwise multiplies, and vector dot-products.
+## Backend, build order, and the xp-neutrality rule
 
-- **CPU:** pure numpy/scipy. `scipy.sparse.linalg.cg` with a `LinearOperator` wrapping a
-  hand-written `A`-apply.
-- **GPU:** the same operator on device arrays — cupy (`cupyx.scipy.sparse.linalg.cg` + cuFFT)
-  or a hand-rolled CG loop over `torch.fft`.
+**Decision (2026-07-08): CuPy + numpy via array-module dispatch; torch is removed from this
+path.** The solver primitives are FFTs, pointwise multiplies, and vector dot-products — all of
+which numpy and cupy expose under one API. So the operator is written **once**, against a
+dispatched array module `xp = cupy if gpu else numpy`, and runs on GPU (cupy + `cupyx.scipy.fft`)
+or CPU (numpy + `scipy.fft`) with no second implementation. **The CG loop itself is hand-rolled**
+over `xp` primitives (`_pcg`), *not* `scipy`/`cupyx` `cg`: those two libraries apply an `M`
+(LinearOperator) preconditioner **inconsistently** — verified 2026-07-08, the same Fourier
+preconditioner that converges in ~54 iters under scipy `cg` stalls (2000+ iters, no convergence)
+under cupyx 14.x, while *unpreconditioned* cupyx `cg` converges fine. Depending on both `cg`
+implementations would silently break the single-source guarantee; one loop over `xp.sum`/axpy plus
+the FFT operators is the identical algorithm on both backends. The earlier "hand-rolled CG loop over `torch.fft`" GPU option is
+**dropped** — we standardize the whole package (this solver and the PIV displacement backend) on
+cupy for GPU, which lets torch leave the package entirely once PIV is ported off
+`torch.nn.functional` (a separate task; its cost is re-earning PIV's numpy-equivalence property).
 
-**Bonus — drops the torch dependency on this path.** CG needs **no autograd**: for a quadratic
-the gradient *is* `A·t − b`, hand-written from the same forward+adjoint FFT operator. Lower
-memory (no autograd tape), faster per FFT (no reverse-mode overhead). Do the CG recurrence in
-**real arithmetic** (all operators are real); apply symbols on the complex spectrum but never
-let complex residuals leak into the Krylov iteration.
+**Build order: GPU (cupy) first, then the CPU (numpy) path; device-independence is deferred.**
+The GPU path serves the research and the TASK 2 sweep now; the pure-numpy path is a
+distribution/reproducibility concern that must land before publication, not before first use.
+
+**The xp-neutrality rule — non-negotiable; this is what makes GPU-first cheap.** Write the
+operator array-module-agnostic *from the first line*, even while only the cupy branch is
+exercised. No `cupyx`-only calls or `cp.`-specific idioms in the core, no `asnumpy` threaded
+through it; keep `.get()` / `asnumpy` strictly at the I/O boundary. Done right, the CPU path is a
+config flag (`xp = numpy`); done wrong, "add CPU later" silently becomes a rewrite and we lose
+the single-source property that motivated cupy in the first place.
+
+**No autograd, real arithmetic.** CG needs no autograd: for a quadratic the gradient *is*
+`A·t − b`, hand-written from the same forward+adjoint FFT operator (lower memory, no reverse-mode
+overhead). Run the CG recurrence in **real arithmetic** — apply symbols on the complex spectrum
+but never let complex residuals leak into the Krylov iteration.
 
 ## Correctness caveats on the hand-coded operator
 
@@ -186,19 +210,39 @@ because it is simultaneously:
    Bayesian evidence (`regularization-benchmark-plan.md`, Phase 2).
 Building it once is the single decision that unifies both documents.
 
-## Practical accelerator
+## Practical accelerators
 
 **[review] Warm-start across the λ/γ/β sweep** in the benchmark (initialize the solve at each
 hyperparameter from the previous one's solution). This typically cuts iteration counts 5–10×
 across a sweep — more impactful for total benchmark cost than any preconditioner micro-tuning.
 
+**Precompute the shape-invariant symbols once.** `Ĝ`, `Ĝᴴ`, the per-mode `M⁻¹` inverse, and the
+`4·sin²(k/2)` Laplacian symbol depend only on grid size and E/ν/gel_height/pixel_size — not on
+the frame. Build them once per shape and reuse across every frame and every point in the sweep.
+
+**CPU FFT: library + plan reuse, not custom kernels.** The dominant cost per PCG iteration is
+~6 FFTs, and CPU FFTs are already optimal compiled binaries (pocketfft; FFTW/MKL as drop-ins).
+Get CPU speed from `scipy.fft(workers=-1)` or pyFFTW with cached plans (array shape is constant
+across iterations and frames) — **not** from a bespoke Numba/Cython kernel. There is **no
+separate compiled CPU code block**: the one hot op is the FFT and it is already compiled;
+everything else is memory-bound vectorized array math a hand kernel would improve only marginally
+(Amdahl); and a parallel CPU implementation would re-introduce the two-backends-kept-equivalent
+maintenance tax that single-source xp-dispatch exists to eliminate. If — and only if — profiling
+a real frame shows a *non-FFT* op dominating, wrap that single op behind an optional `@njit`
+variant; never a parallel code path.
+
 ## Acceptance
 
 - `_solve_iterative` returns traction matching the current L-BFGS output within solver
   tolerance on the confined benchmark tiers (regression against saved outputs).
-- CPU path runs with torch uninstalled.
+- **GPU (cupy) path is the first deliverable**; its correctness is established by the identity
+  tests below (which need no CPU reference), not by diffing against a numpy twin.
+- **CPU (numpy) path runs with neither torch nor cupy installed** — the pure-numpy fallback,
+  landed by flipping `xp` to numpy (proof the xp-neutrality rule held). Deferred, but required
+  before publication.
 - Wall-clock improvement demonstrated on a representative *mild-confinement* frame; CG iteration
   count logged vs β and masked fraction ρ to characterize the hard regime.
-- Unit tests pass: (i) `W=I, β=0` one-step exactness with the **discrete** Laplacian symbol;
-  (ii) adjoint dot-product test on random real fields; (iii) `∇J` finite-difference check;
-  (iv) DC-mode zeroing verified (no spurious mean as λ→0).
+- Unit tests pass (on cupy first, and on numpy once that path lands): (i) `W=I, β=0` one-step
+  exactness with the **discrete** Laplacian symbol; (ii) adjoint dot-product test on random real
+  fields; (iii) `∇J` finite-difference check; (iv) DC-mode zeroing verified (no spurious mean as
+  λ→0).

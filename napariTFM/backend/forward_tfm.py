@@ -42,14 +42,17 @@ The problem is a convex quadratic in ``t``, so:
   Tikhonov solve ``t̂ = (GᴴG + λ²I)⁻¹ Gᴴ û`` reuses FTTC's exact machinery *minus*
   the Lanczos low-pass. Pure numpy/FFT; no torch required. (γ is iterative-only.)
 - **β > 0 → iterative.** The support and smoothness terms couple Fourier modes, so
-  we solve the (still convex) QP with L-BFGS on the non-dimensionalized traction
-  (torch, autograd through the same FFT operator). L-BFGS converges to the global
-  optimum; no pyramid needed (the loss is convex, unlike the photometric ZNCC).
+  we solve the (still convex) QP as its normal equations ``A t = b`` by preconditioned
+  Conjugate Gradient, with the Fourier-diagonal β=0 operator as the preconditioner
+  (see docs/specs/forward-solver-pcg.md). ``A`` is SPD, so CG is exact in exact
+  arithmetic. The operator is one array-module-agnostic (numpy | cupy) function — no
+  autograd, no torch — so the CPU path is torch-free and the GPU path is CuPy.
 
 Output contract matches FTTC: traction ``(2, H, W)`` float32 in Pa, ``[0] = t_x``.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import numpy as np
@@ -57,6 +60,8 @@ import numpy as np
 from napariTFM.backend.fttc import FTTC
 from napariTFM.backend.fttc_numba_functions import calculate_traction_2d
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
+
+logger = logging.getLogger(__name__)
 
 # The 0..100 "Mask confinement" dial is mapped LOGARITHMICALLY onto the soft
 # penalty weight β, exactly as the photometric one-shot widget does — linear β is
@@ -132,96 +137,191 @@ def _solve_closed_form(u: np.ndarray, params: FTTCParameters) -> np.ndarray:
     return np.stack([tx, ty]).astype(np.float32)
 
 
-def _resolve_torch_device(request: str):
-    """Return a torch.device for 'auto' | 'cuda' | 'cpu', mirroring the PIV/FFD backend."""
-    import torch
-    req = str(request).lower()
-    if req == "cpu":
-        return torch.device("cpu")
-    if req == "cuda":
-        if not torch.cuda.is_available():
-            raise RuntimeError("fwd_device='cuda' but no CUDA device is available; "
-                               "use 'auto' or 'cpu'.")
-        return torch.device("cuda")
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def _resolve_backend(request: str):
+    """Return ``(xp, fft, on_gpu)`` for 'auto' | 'cuda' | 'cpu'.
 
-
-def _solve_iterative(u: np.ndarray, mask: np.ndarray, beta: float,
-                     params: FTTCParameters) -> np.ndarray:
-    """β>0 path: convex-QP solve with the soft support prior, via L-BFGS (torch).
-
-    ``u`` is ``(2, H, W)`` µm, ``mask`` is ``(H, W)`` truthy on support. Returns
-    traction ``(2, H, W)`` Pa (float32). Non-dimensionalized as ``t = E·T0·w`` with
-    ``w = O(1)`` for conditioning; the data term is a *relative* residual so λ and β
-    are operator-scale-independent.
+    GPU is **CuPy** (torch is intentionally not a backend on this path — see
+    docs/specs/forward-solver-pcg.md). 'cuda' requires CuPy + a visible device;
+    'auto' uses CuPy when importable with a device, else falls back to numpy/scipy.
+    CuPy supplies only the array module + FFTs; the CG loop is hand-rolled
+    (:func:`_pcg`) so it is the same algorithm on both backends.
     """
+    req = str(request).lower()
+
+    def _numpy_backend():
+        import scipy.fft as fft
+        return np, fft, False
+
+    if req == "cpu":
+        return _numpy_backend()
     try:
-        import torch
-    except ImportError as e:  # pragma: no cover - environment dependent
-        raise ImportError(
-            "The forward method's support prior (β > 0) needs PyTorch. Install the "
-            "torch extra, or set the mask confinement to 0 to use the torch-free "
-            "closed-form path."
-        ) from e
+        import cupy as cp
+        import cupyx.scipy.fft as fft
+        if cp.cuda.runtime.getDeviceCount() > 0:
+            return cp, fft, True
+    except Exception:
+        pass
+    if req == "cuda":
+        raise RuntimeError(
+            "fwd_device='cuda' needs CuPy with a visible CUDA device (the forward "
+            "solver's GPU backend is CuPy, not torch). Install a matching cupy-cuda* "
+            "wheel, or use fwd_device='auto'/'cpu'."
+        )
+    return _numpy_backend()
 
-    device = _resolve_torch_device(params.fwd_device)
-    dtype = torch.float64 if str(params.fwd_dtype) == "float64" else torch.float32
-    cdtype = torch.complex128 if dtype == torch.float64 else torch.complex64
 
+def _asnumpy(a) -> np.ndarray:
+    """Bring an xp array back to host numpy (no-op for numpy, ``.get()`` for cupy)."""
+    return a.get() if hasattr(a, "get") else np.asarray(a)
+
+
+def _build_normal_equations(u: np.ndarray, mask: np.ndarray, beta: float,
+                            params: FTTCParameters, xp, fft):
+    """Assemble the confined-QP normal equations ``A w = b`` for one frame.
+
+    Returns ``(apply_A, apply_Minv, b, (H, W), meta)``. ``apply_A`` is the SPD system
+    operator; ``apply_Minv`` the Fourier-diagonal preconditioner (the β=0, W=I
+    operator, invertible per mode); ``b`` the right-hand side. All act on the
+    non-dimensional traction ``w`` (``t = E·T0·w``) as ``(2, H, W)`` real ``xp``
+    arrays. The objective matches the historical L-BFGS closure (data term normalized
+    by ``denom``, regularizers by ``1/N``, ``N = 2·H·W``) so λ/β/γ keep their meaning
+    and the UI calibration carries over. See docs/specs/forward-solver-pcg.md.
+    """
     height, width = u.shape[1:]
     E = float(params.young_modulus)
     T0 = float(params.fwd_traction_scale)
     lam = float(params.regularization)
+    gamma = float(params.fwd_smoothness)
+    N = 2.0 * height * width
 
-    G = _greens_operator(height, width, params)          # (2,2,H,W) real, ∝ 1/E
-    valid = np.isfinite(u).all(axis=0)                   # (H,W)
-    w_fit = _fit_weight(mask, valid, params)             # (H,W) in {0,1}
+    G = _greens_operator(height, width, params)           # (2,2,H,W) real, û=G·t̂, DC=0
+    GE = xp.asarray(E * G)                                 # non-dim forward map is O(1)
+    GEc = GE.astype(xp.complex128)
+    GtG = xp.real(xp.einsum("ikhw,kjhw->ijhw", GE, GE))   # (2,2,H,W) = GᴴG per mode
+
+    # discrete roll-Laplacian symbol = Σ_axes 4 sin²(π f) — index-space (pixel-size
+    # free), matching the roll() stencil in apply_A exactly (spec [review]: the same
+    # symbol must appear in A and M or one-step exactness silently fails).
+    fy = xp.fft.fftfreq(height)
+    fx = xp.fft.fftfreq(width)
+    lap = (4.0 * xp.sin(xp.pi * fy) ** 2)[:, None] + (4.0 * xp.sin(xp.pi * fx) ** 2)[None, :]
+
+    valid = np.isfinite(u).all(axis=0)
+    w_fit = _fit_weight(mask, valid, params)
     u_clean = np.nan_to_num(u, nan=0.0)
+    wf = xp.asarray(w_fit)                                 # (H,W) data-term weight W
+    u_t = xp.asarray(u_clean)                              # (2,H,W) µm
+    off = xp.asarray((~(np.asarray(mask) > 0)).astype(np.float64))  # (H,W) off-support
+    denom = float((wf * u_t ** 2).sum())
+    denom = denom if denom > 1e-12 else 1e-12
 
-    # E·G removes the 1/E scaling → the forward map on w is O(1) and well-conditioned.
-    GE = torch.as_tensor(E * G, device=device, dtype=cdtype)          # (2,2,H,W)
-    u_t = torch.as_tensor(u_clean, device=device, dtype=dtype)        # (2,H,W)
-    wf = torch.as_tensor(w_fit, device=device, dtype=dtype)           # (H,W)
-    off = torch.as_tensor((~(np.asarray(mask) > 0)).astype(np.float64),
-                          device=device, dtype=dtype)                 # (H,W) off-support
-    w = torch.zeros(2, height, width, device=device, dtype=dtype, requires_grad=True)
+    def _P(w):                                            # w:(2,H,W) real → u_pred (µm)
+        wk = fft.fft2(w.astype(xp.complex128), axes=(-2, -1))
+        uk = xp.einsum("ijhw,jhw->ihw", GEc, wk)
+        return T0 * fft.ifft2(uk, axes=(-2, -1)).real
 
-    denom = (wf * u_t.pow(2)).sum().clamp_min(1e-12)     # relative-residual normalizer
+    def _Pt(r):                                           # adjoint (GE Hermitian ⇒ same form)
+        rk = fft.fft2(r.astype(xp.complex128), axes=(-2, -1))
+        sk = xp.einsum("ijhw,jhw->ihw", GEc, rk)
+        return T0 * fft.ifft2(sk, axes=(-2, -1)).real
 
-    opt = torch.optim.LBFGS([w], lr=1.0, max_iter=int(params.fwd_max_iter),
-                            history_size=25, line_search_fn="strong_wolfe",
-                            tolerance_grad=1e-12, tolerance_change=1e-14)
+    def apply_A(w):
+        # Confine to the zero-mean subspace on BOTH sides (P0·A·P0): apply_Minv
+        # annihilates the DC mode, so A must map into and out of the same subspace or
+        # the DC it injects (β·(off·w) carries a mean; FFT round-off adds more) has no
+        # preconditioned correction and CG stalls. Projecting both sides also keeps A
+        # self-adjoint (P0·A·P0), which CG requires — projecting only the output does
+        # not. Iterates are already zero-mean, so the input projection is a no-op in
+        # the solve; it is there for symmetry (and the tests that check it).
+        w = w - w.mean(axis=(1, 2), keepdims=True)
+        data = _Pt(wf * _P(w)) / denom
+        lapw = (4.0 * w - xp.roll(w, -1, 2) - xp.roll(w, 1, 2)
+                - xp.roll(w, -1, 1) - xp.roll(w, 1, 1))
+        out = data + (lam / N) * w + (beta / N) * (off * w) + (gamma / N) * lapw
+        return out - out.mean(axis=(1, 2), keepdims=True)
 
-    smooth_w = float(params.fwd_smoothness)
+    # preconditioner: M̂ = (T0²/denom)·GᴴG + ((λ + γ·lap)/N)·I  (W=I, β dropped)
+    diag = (lam + gamma * lap) / N
+    s = (T0 * T0) / denom
+    M00 = s * GtG[0, 0] + diag
+    M01 = s * GtG[0, 1]
+    M10 = s * GtG[1, 0]
+    M11 = s * GtG[1, 1] + diag
+    det = M00 * M11 - M01 * M10
+    det = xp.where(det == 0, 1.0, det)
+    Mi00, Mi01, Mi10, Mi11 = M11 / det, -M01 / det, -M10 / det, M00 / det
 
-    def closure():
-        opt.zero_grad()
-        wc = w.to(cdtype)
-        wk = torch.fft.fft2(wc)                                       # (2,H,W)
-        uk = torch.einsum("ijhw,jhw->ihw", GE, wk)                    # G·(E·w) in Fourier
-        u_pred = T0 * torch.fft.ifft2(uk).real                        # (2,H,W) µm
-        resid = wf * (u_pred - u_t).pow(2)
-        data = resid.sum() / denom
-        white = lam * w.pow(2).mean()
-        soft = beta * (w * off).pow(2).mean()
-        # Gradient-smoothness prior: the PRIMARY regularizer here. Confinement
-        # removes the off-mask escape valve, so without this the free per-pixel
-        # in-mask field overfits the delocalized displacement (see forward_tfm
-        # module docstring / the _dev why-artifacts probe). Periodic ∇ via roll,
-        # matching the one-shot solver's TV term.
-        if smooth_w > 0.0:
-            gx = torch.roll(w, -1, 2) - w
-            gy = torch.roll(w, -1, 1) - w
-            smooth = smooth_w * (gx.pow(2) + gy.pow(2)).mean()
-        else:
-            smooth = 0.0
-        loss = data + white + soft + smooth
-        loss.backward()
-        return loss
+    def apply_Minv(r):
+        rk = fft.fft2(r.astype(xp.complex128), axes=(-2, -1))
+        s0 = Mi00 * rk[0] + Mi01 * rk[1]
+        s1 = Mi10 * rk[0] + Mi11 * rk[1]
+        s0[0, 0] = 0.0                                    # project the DC/nullspace out (spec)
+        s1[0, 0] = 0.0
+        sk = xp.stack([s0, s1])
+        return fft.ifft2(sk, axes=(-2, -1)).real
 
-    opt.step(closure)
-    t = (E * T0 * w).detach().cpu().numpy()
-    return t.astype(np.float32)
+    b = _Pt(wf * u_t) / denom
+    b = b - b.mean(axis=(1, 2), keepdims=True)            # zero DC of b (spec)
+    meta = {"E": E, "T0": T0, "denom": denom,
+            "rho": float((np.asarray(mask) > 0).mean())}
+    return apply_A, apply_Minv, b, (height, width), meta
+
+
+def _pcg(apply_A, apply_Minv, b, xp, tol, maxiter):
+    """Preconditioned CG on the zero-mean subspace, backend-agnostic (numpy | cupy).
+
+    Hand-rolled rather than scipy/cupyx ``cg`` on purpose: those libraries apply an
+    ``M`` (LinearOperator) preconditioner *inconsistently* — the same M that
+    converges under scipy stalls under cupyx 14.x — so depending on both would break
+    the single-source guarantee. A loop over ``xp`` primitives (dot, axpy, and the
+    ``apply_*`` operators) is the identical algorithm on both backends. Operates on
+    ``(2, H, W)`` arrays directly. Returns ``(x, iters, converged)``.
+    """
+    def dot(a, c):
+        return float(xp.sum(a * c))
+
+    x = xp.zeros_like(b)
+    r = b - apply_A(x)
+    bnorm = float(xp.sqrt(xp.sum(b * b)))
+    if bnorm == 0.0:
+        return x, 0, True
+    z = apply_Minv(r)
+    p = z
+    rz = dot(r, z)
+    for it in range(1, int(maxiter) + 1):
+        Ap = apply_A(p)
+        alpha = rz / dot(p, Ap)
+        x = x + alpha * p
+        r = r - alpha * Ap
+        if float(xp.sqrt(xp.sum(r * r))) <= tol * bnorm:
+            return x, it, True
+        z = apply_Minv(r)
+        rz_new = dot(r, z)
+        p = z + (rz_new / rz) * p
+        rz = rz_new
+    return x, int(maxiter), False
+
+
+def _solve_iterative(u: np.ndarray, mask: np.ndarray, beta: float,
+                     params: FTTCParameters) -> np.ndarray:
+    """β>0 path: preconditioned-CG solve of the confined QP's normal equations.
+
+    ``u`` is ``(2, H, W)`` µm, ``mask`` is ``(H, W)`` truthy on support. Returns
+    traction ``(2, H, W)`` Pa (float32). The SPD system ``A t = b`` (convex QP) is
+    solved by a hand-rolled preconditioned CG (:func:`_pcg`) with the Fourier-diagonal
+    β=0 operator as preconditioner — no autograd, no torch. Runs on numpy (CPU) or
+    cupy (GPU); float64 internally. See the module docstring and
+    docs/specs/forward-solver-pcg.md.
+    """
+    xp, fft, on_gpu = _resolve_backend(params.fwd_device)
+    apply_A, apply_Minv, b, (height, width), meta = _build_normal_equations(
+        u, mask, beta, params, xp, fft)
+    tol = float(getattr(params, "fwd_cg_tol", 1e-8))
+    w, iters, converged = _pcg(apply_A, apply_Minv, b, xp, tol, params.fwd_max_iter)
+    t = _asnumpy(meta["E"] * meta["T0"] * w).astype(np.float32)
+    logger.info("forward PCG: beta=%.3g masked_frac=%.3f iters=%d converged=%s backend=%s",
+                float(beta), meta["rho"], iters, converged, "cupy" if on_gpu else "numpy")
+    return t
 
 
 def forward_traction_frame(displacement_frame: np.ndarray,
