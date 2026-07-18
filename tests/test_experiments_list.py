@@ -37,6 +37,78 @@ def test_discover_ignores_blank_names_and_missing_root(tmp_path):
     assert sorted(Path(p).name for p in found) == ["pos"]
 
 
+def _make_experiment(folder: Path) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "beads.tif").write_bytes(b"x")
+    (folder / "reference.tif").write_bytes(b"x")
+
+
+def test_discover_stops_and_reports_truncation_on_a_broad_root(tmp_path):
+    # A root with more directories than the cap: the scan must stop and say so,
+    # rather than walking the whole (potentially enormous) tree.
+    for i in range(20):
+        _make_experiment(tmp_path / f"pos_{i:02d}")
+    stats: dict = {}
+    found = discover_experiment_folders(
+        tmp_path, ["beads.tif", "reference.tif"], max_dirs=5, stats=stats
+    )
+    assert stats["truncated"] is True
+    assert stats["dirs_scanned"] <= 5
+    assert len(found) < 20  # partial, not the whole set
+
+
+def test_discover_reports_completion_when_within_bounds(tmp_path):
+    _make_experiment(tmp_path / "Ctrl" / "pos_00")
+    stats: dict = {}
+    found = discover_experiment_folders(
+        tmp_path, ["beads.tif", "reference.tif"], stats=stats
+    )
+    assert stats["truncated"] is False
+    assert stats["dirs_scanned"] >= 1
+    assert [Path(p).name for p in found] == ["pos_00"]
+
+
+def test_discover_skips_hidden_directories(tmp_path):
+    _make_experiment(tmp_path / "visible" / "pos")
+    _make_experiment(tmp_path / ".cache" / "pos")  # hidden -> never entered
+    found = discover_experiment_folders(tmp_path, ["beads.tif", "reference.tif"])
+    assert [Path(p).parent.name for p in found] == ["visible"]
+
+
+def test_discover_does_not_descend_into_a_matched_folder(tmp_path):
+    # Once a folder qualifies it is an experiment; a nested sub-folder that also
+    # holds the inputs is part of it, not a second experiment.
+    _make_experiment(tmp_path / "exp")
+    _make_experiment(tmp_path / "exp" / "inner")
+    found = discover_experiment_folders(tmp_path, ["beads.tif", "reference.tif"])
+    assert sorted(Path(p).name for p in found) == ["exp"]
+
+
+def test_discover_honours_depth_cap(tmp_path):
+    _make_experiment(tmp_path / "a" / "b" / "c" / "pos")
+    shallow = discover_experiment_folders(
+        tmp_path, ["beads.tif", "reference.tif"], max_depth=2
+    )
+    assert shallow == []  # experiment sits below the depth cap
+    deep = discover_experiment_folders(
+        tmp_path, ["beads.tif", "reference.tif"], max_depth=10
+    )
+    assert [Path(p).name for p in deep] == ["pos"]
+
+
+def test_discover_does_not_follow_directory_symlinks(tmp_path):
+    _make_experiment(tmp_path / "real" / "pos")
+    try:
+        (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+    found = discover_experiment_folders(tmp_path, ["beads.tif", "reference.tif"])
+    # Only the real experiment; the symlinked copy is not traversed.
+    assert [str(Path(p).resolve()) for p in found] == [
+        str((tmp_path / "real" / "pos").resolve())
+    ]
+
+
 @pytest.fixture
 def app():
     return QApplication.instance() or QApplication([])
@@ -477,6 +549,20 @@ def test_discover_is_additive_across_roots(app, tmp_path):
     added = widget.discover(first_root)
     assert added == []
     assert len(widget.experiments()) == 2
+
+
+def test_discovery_hint_warns_when_scan_was_truncated(app, tmp_path):
+    _make_qualifying(tmp_path, "a", "b")
+    widget = ExperimentsList()
+    # Simulate a capped scan (over-broad root): partial results + truncation flag.
+    added = widget._apply_discovery(
+        tmp_path, [str(tmp_path / "a"), str(tmp_path / "b")], True
+    )
+    assert sorted(Path(p).name for p in added) == ["a", "b"]  # still added
+    assert "too broad" in widget._hint.text().lower()
+    # A normal, complete scan does not carry the warning.
+    widget.discover(tmp_path)
+    assert "too broad" not in widget._hint.text().lower()
 
 
 def test_remove_column_drops_it_table_wide(app, tmp_path):

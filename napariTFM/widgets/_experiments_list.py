@@ -11,9 +11,18 @@ the folder names). Rows are multi-selectable (Ctrl/Shift-click) and deletable.
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Callable, Iterable, Optional
+
+logger = logging.getLogger(__name__)
+
+# Bounds for folder discovery so pointing it at an over-broad root (e.g. a whole
+# data drive with millions of files) cannot hang or exhaust memory. The scan stops
+# after this many directories or this deep, and reports truncation to the caller.
+DISCOVER_MAX_DIRS = 20000
+DISCOVER_MAX_DEPTH = 12
 
 from qtpy.QtCore import QEvent, QRectF, Qt, Signal
 from qtpy.QtGui import QBrush, QColor, QDoubleValidator, QPainter, QPen
@@ -72,11 +81,6 @@ def _format_value(value) -> str:
     return f"{float(value):g}"
 
 
-def _path_ends_with(path: Path, rel: Path) -> bool:
-    """True when *path*'s trailing parts equal *rel*'s (a relative-path match)."""
-    return path.parts[-len(rel.parts):] == rel.parts
-
-
 # Innermost-anchored default names for folder-nesting levels (ITASC parity): the
 # deepest level is the position/experiment leaf, the next out its grouping, the
 # next its condition. Levels further from the leaf get generic ``level_N`` names.
@@ -123,36 +127,65 @@ def nesting_columns(folder: str | Path, root: str | Path) -> dict[str, str]:
 def discover_experiment_folders(
     root: str | Path,
     required_names: Iterable[Optional[str]],
+    *,
+    max_dirs: int = DISCOVER_MAX_DIRS,
+    max_depth: int = DISCOVER_MAX_DEPTH,
+    stats: Optional[dict] = None,
 ) -> list[str]:
     """Find folders under *root* that contain **every** file in *required_names*.
 
     Folder-presence discovery (D2): no filename parsing, no metadata read. Each
-    name is a bare file name or a path relative to the experiment folder, matched
-    recursively under *root*; a folder qualifies only when all required names
-    resolve to existing files inside it. Blank/``None`` names are dropped. A
-    missing *root* or an empty requirement set yields an empty list. Returns
-    absolute folder paths, sorted.
+    name is a bare file name or a path relative to the experiment folder; a folder
+    qualifies only when all required names resolve to existing files inside it
+    (``folder / name`` is a file). Blank/``None`` names are dropped. A missing
+    *root* or an empty requirement set yields an empty list. Returns absolute
+    folder paths, sorted.
+
+    The tree is walked **once**, bounded so an over-broad root (a whole data drive)
+    cannot hang or exhaust memory: it never follows directory symlinks, skips hidden
+    (dot) directories, does not descend into a folder once it qualifies, and stops
+    after ``max_dirs`` directories or ``max_depth`` levels below *root*. When *stats*
+    is a dict it receives ``dirs_scanned`` and ``truncated`` (True if a cap cut the
+    scan short, so the result may be partial) -- the caller can warn the user to pick
+    a narrower root instead of silently trusting an incomplete list.
     """
     root = Path(root)
-    names = [n for n in required_names if n]
+    names = [Path(n) for n in required_names if n]
+    if stats is not None:
+        stats["dirs_scanned"] = 0
+        stats["truncated"] = False
     if not root.is_dir() or not names:
         return []
 
-    found: dict[Path, set[str]] = {}
-    for name in names:
-        rel = Path(name)
-        for match in sorted(root.rglob(rel.name)):
-            if not match.is_file():
-                continue
-            if len(rel.parts) > 1 and not _path_ends_with(match, rel):
-                continue
-            folder = match
-            for _ in rel.parts:
-                folder = folder.parent
-            found.setdefault(folder.resolve(), set()).add(name)
+    root_depth = len(root.parts)
+    found: list[str] = []
+    scanned = 0
+    truncated = False
+    for dirpath, dirnames, _filenames in os.walk(root, followlinks=False):
+        scanned += 1
+        if scanned >= max_dirs:
+            truncated = True
+            break
+        # Prune hidden dirs (.git/.cache/...) in place so os.walk never enters them.
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        here = Path(dirpath)
+        if all((here / name).is_file() for name in names):
+            found.append(str(here.resolve()))
+            dirnames[:] = []  # an experiment folder -- do not descend into it
+            continue
+        if len(here.parts) - root_depth >= max_depth:
+            dirnames[:] = []  # depth cap: stop descending past max_depth
 
-    required = set(names)
-    return [str(folder) for folder in sorted(found) if found[folder] >= required]
+    if stats is not None:
+        stats["dirs_scanned"] = scanned
+        stats["truncated"] = truncated
+    if truncated:
+        logger.warning(
+            "discover_experiment_folders: stopped after %d directories under %s "
+            "(max_dirs=%d); results are partial -- pick a narrower root.",
+            scanned, root, max_dirs,
+        )
+    return sorted(found)
 
 
 class MiniRail(QWidget):
@@ -1059,33 +1092,85 @@ class ExperimentsList(QWidget):
 
     # -- one-step "Find data folders" (ITASC parity) ---------------------
     def discover(self, root: str | Path) -> list[str]:
-        """Scan *root* and add every matching folder to the list, in one step.
+        """Scan *root* (bounded) and add every matching folder in one step.
 
         Folder-presence only — required inputs are beads + reference (cells is
         optional and excluded). Each match is added straight to the committed
         list (deduped by :meth:`_add_records`), its columns derived from the
         folder nesting under *root* (:func:`nesting_columns`). The scan is
         **additive**: running it again against another root appends new folders
-        without disturbing rows already in the list. Returns the newly-added
-        paths.
+        without disturbing rows already in the list. Synchronous (used by tests
+        and programmatically); the GUI button scans on a worker thread via
+        :meth:`_begin_discover`. Returns the newly-added paths.
         """
         cfg = self.input_file_config()
         required = [cfg.get("beads"), cfg.get("reference")]
+        stats: dict = {}
+        found = discover_experiment_folders(root, required, stats=stats)
+        return self._apply_discovery(root, found, bool(stats.get("truncated")))
+
+    def _apply_discovery(
+        self, root: str | Path, found: list[str], truncated: bool
+    ) -> list[str]:
+        """Add a scan result to the list in one step (main-thread; shared path).
+
+        Shared by the synchronous :meth:`discover` and the GUI's threaded scan
+        (:meth:`_begin_discover`), so both land a result identically. ``truncated``
+        records that a cap cut the scan short (an over-broad root): the result is
+        partial, so the hint says so rather than implying completeness. Returns
+        the newly-added paths.
+        """
         self._discover_root = str(root)
-        found = discover_experiment_folders(root, required)
         before = set(self._paths)
         pairs = [(path, nesting_columns(path, root)) for path in found]
         self._add_records(pairs, self.input_file_config())
         added = [p for p in found if p not in before]
         already = len(found) - len(added)
-        self._set_hint(
-            f"Added {len(added)} data folder{'s' if len(added) != 1 else ''}."
-            + (f" ({already} already listed.)" if already else "")
-            if added
-            else f"No new data folders found under {root} — "
-            "check the input file names in Setup."
-        )
+        if truncated:
+            self._set_hint(
+                f"Added {len(added)}+ data folders — root too broad, the scan "
+                "stopped early; pick a narrower folder to find the rest."
+            )
+        elif added:
+            self._set_hint(
+                f"Added {len(added)} data folder{'s' if len(added) != 1 else ''}."
+                + (f" ({already} already listed.)" if already else "")
+            )
+        else:
+            self._set_hint(
+                f"No new data folders found under {root} — "
+                "check the input file names in Setup."
+            )
         return added
+
+    def _begin_discover(self, root: str | Path) -> None:  # pragma: no cover - GUI thread
+        """Scan *root* on a worker thread so a large tree can't freeze the UI.
+
+        A bounded walk over a big data root can still take many seconds; running
+        it synchronously would hang napari. The pure scan runs in a napari
+        ``thread_worker`` and its result is applied on the main thread via
+        :meth:`_apply_discovery`. The Find button is disabled and the hint shows
+        progress while it runs.
+        """
+        from napari.qt.threading import thread_worker
+
+        cfg = self.input_file_config()
+        required = [cfg.get("beads"), cfg.get("reference")]
+        stats: dict = {}
+        self.add_btn.setEnabled(False)
+        self._set_hint("Scanning… (large folders can take a while)")
+
+        worker = thread_worker(discover_experiment_folders)(root, required, stats=stats)
+
+        def _done(found: list[str]) -> None:
+            # Ignore a stale scan if a newer one has since been started.
+            if getattr(self, "_scan_worker", None) is worker:
+                self._apply_discovery(root, found, bool(stats.get("truncated")))
+
+        worker.returned.connect(_done)
+        worker.finished.connect(lambda: self.add_btn.setEnabled(True))
+        self._scan_worker = worker
+        worker.start()
 
     # -- queries ---------------------------------------------------------
     def experiments(self) -> list[str]:
@@ -1554,4 +1639,4 @@ class ExperimentsList(QWidget):
         if dialog.exec_():
             roots = dialog.selectedFiles()
             if roots:
-                self.discover(roots[0])
+                self._begin_discover(roots[0])  # threaded scan (won't freeze the UI)
