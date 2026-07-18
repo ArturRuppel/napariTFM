@@ -8,17 +8,62 @@ _T = TypeVar("_T")
 
 @dataclass
 class DisplacementParameters:
-    """Parameters for displacement analysis"""
-    # PIV (multi-pass FFT cross-correlation) parameters. The backend has a
-    # torch-free numpy core and is GPU-accelerated automatically when torch +
-    # CUDA are available (see napariTFM/backend/piv_displacement.py).
+    """Parameters for displacement analysis.
+
+    Three interchangeable backends selected by ``disp_method``; each has a trusted
+    CPU reference (openpiv / scikit-image) and a torch GPU port used when available
+    and selected by the shared ``disp_device``. FFD is GPU-only. See
+    napariTFM/backend/{piv,ilk,ffd}_displacement.py.
+    """
+    # Method + shared device selector.
+    disp_method: str = "PIV"      # "PIV" | "Lucas-Kanade" | "FFD"
+    disp_device: str = "auto"     # "auto" | "cuda" | "cpu" (shared by all methods)
+
+    # PIV (multi-pass FFT cross-correlation): openpiv CPU / torch GPU, same knobs.
     piv_window: int = 16          # final interrogation window (px)
     piv_overlap: float = 0.75     # window overlap fraction [0, 1)
     piv_passes: int = 8           # coarse->fine window-deformation passes
-    piv_device: str = "auto"      # "auto" | "cuda" | "cpu"
+
+    # iLK (iterative Lucas-Kanade): scikit-image CPU / torch GPU, same knobs.
+    ilk_radius: int = 7           # half-window of the local LK solve (px), the primary knob
+    ilk_num_warp: int = 10        # coarse->fine warp iterations per pyramid level
+
+    # FFD (grid-pyramid free-form deformation): GPU-only.
+    ffd_level_spacing: float = 12.0   # finest control spacing (px) -- the bias-variance dial
+    ffd_num_levels: int = 6           # DERIVED/display only: pyramid depth follows from
+                                      # ffd_downscale + ffd_min_size (see pyramid_num_levels);
+                                      # the backend ignores this field. Kept so recipes/UI can
+                                      # surface the resulting depth.
+    ffd_metric: str = "lncc"          # "lncc" | "mse" image-match objective
+    ffd_num_iters: int = 50           # LBFGS iterations per pyramid level
+    ffd_elastic: float = 0.0          # elastic (Navier strain-energy) regularization weight; 0 = off
+    ffd_downscale: float = 2.0        # image-pyramid downscale factor per level
+    ffd_min_size: int = 16            # coarsest pyramid level min dimension (px) -- with
+                                      # ffd_downscale this sets the pyramid depth / capture range
+    ffd_interp: str = "bicubic"       # warp interpolation: "bicubic" | "bilinear"
+    ffd_early_stop: float = 0.0       # per-level LBFGS convergence tolerance; 0 = run full num_iters (current behaviour)
+
+    # Confine the displacement measurement to the foreground mask + margin, when a
+    # mask is supplied and disp_mask_confine is on: each frame is measured only
+    # within the bounding box of its cell plus disp_mask_margin_um, and read as zero
+    # outside. This both speeds the method (fewer pixels) and structurally excludes
+    # the aperture-vignette border garbage, instead of relying on downstream masking.
+    # Off by default (opt-in, like the fwd_* confinement). The margin is a physical
+    # length: set it to your traction halo's decay length -- too small silently
+    # clips the real substrate-displacement halo just outside the cell, so err
+    # generous.
+    disp_mask_confine: bool = False       # gate: confine the measurement to the mask
+    disp_mask_margin_um: float = 20.0     # mask bounding-box margin (µm) when confining
 
     # Analysis parameters
     downscale_factor: int = 4
+    # Where the downscale_factor coarsening happens relative to the measurement.
+    # False (default): measure at full resolution, then block-average the vector
+    # field down to the grid (accurate -- uses all bead texture). True: block-average
+    # the *images* first and measure on 1/downscale_factor^2 the pixels (faster, and
+    # on real data within ~0.06 px of the full-res result). Registration always runs
+    # at full resolution regardless. No-op when downscale_factor == 1.
+    disp_downscale_before: bool = False
     pixel_size: float = 0.1
     frame_interval: float = 1
 
@@ -103,12 +148,27 @@ class UnifiedParameters:
     pixel_size: float = 0.1  # µm
     frame_interval: float = 1.0  # min
 
-    # Displacement parameters (PIV backend)
+    # Displacement parameters (PIV / iLK / FFD backends; see DisplacementParameters)
+    disp_method: str = "PIV"  # "PIV" | "Lucas-Kanade" | "FFD"
+    disp_device: str = "auto"  # "auto" | "cuda" | "cpu" (shared by all methods)
     piv_window: int = 16
     piv_overlap: float = 0.75
     piv_passes: int = 8
-    piv_device: str = "auto"  # "auto" | "cuda" | "cpu"
+    ilk_radius: int = 7
+    ilk_num_warp: int = 10
+    ffd_level_spacing: float = 12.0
+    ffd_num_levels: int = 6            # derived/display only (see DisplacementParameters)
+    ffd_metric: str = "lncc"
+    ffd_num_iters: int = 50
+    ffd_elastic: float = 0.0
+    ffd_downscale: float = 2.0
+    ffd_min_size: int = 16
+    ffd_interp: str = "bicubic"
+    ffd_early_stop: float = 0.0
+    disp_mask_confine: bool = False    # confine displacement measurement to the mask
+    disp_mask_margin_um: float = 20.0  # mask bounding-box margin (µm) when confining
     downscale_factor: int = 4
+    disp_downscale_before: bool = False  # bin images before measuring (fast) vs bin the field after (accurate)
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0
     d_max: float = 1.0  # µm

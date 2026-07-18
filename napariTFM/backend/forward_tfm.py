@@ -10,12 +10,14 @@ entirely.
 
 For each frame we solve for the surface traction ``t`` (Pa) by minimizing
 
-    J(t) = ‖ W · (G·t − u) ‖²  +  λ‖t‖²  +  γ‖∇t‖²  +  β‖ t·(1−mask) ‖²
+    J(t) = ‖ W · (G·t − u) ‖²  +  λ²‖t‖²  +  γ‖∇t‖²  +  β‖ t·(1−mask) ‖²
 
 - ``G`` is the *same* Boussinesq / finite-thickness Green's operator FTTC inverts
   (reused verbatim from :mod:`napariTFM.backend.fttc`; folds in E, ν, gel_height,
   pixel_size). ``û = G·t̂`` maps traction → displacement per Fourier mode.
-- ``λ`` is a Tikhonov amplitude ridge (conditioning only).
+- ``λ`` is the Tikhonov amplitude ridge — the *same* ``regularization`` dial FTTC
+  uses, entering as the identical physical ``λ²‖t‖²`` penalty on both the β=0
+  (closed-form) and β>0 (iterative) branches so the dial means one thing throughout.
 - ``γ`` (``fwd_smoothness``) is the **gradient-smoothness prior and the primary
   regularizer of the confined solve.** The photometric one-shot parametrized
   traction on a coarse cubic-B-spline / Gaussian-per-bead basis — a few hundred
@@ -183,9 +185,10 @@ def _build_normal_equations(u: np.ndarray, mask: np.ndarray, beta: float,
     operator; ``apply_Minv`` the Fourier-diagonal preconditioner (the β=0, W=I
     operator, invertible per mode); ``b`` the right-hand side. All act on the
     non-dimensional traction ``w`` (``t = E·T0·w``) as ``(2, H, W)`` real ``xp``
-    arrays. The objective matches the historical L-BFGS closure (data term normalized
-    by ``denom``, regularizers by ``1/N``, ``N = 2·H·W``) so λ/β/γ keep their meaning
-    and the UI calibration carries over. See docs/specs/forward-solver-pcg.md.
+    arrays. Data term normalized by ``denom``; the λ (Tikhonov) term is FTTC's physical
+    ``λ²‖t‖²`` (coefficient ``λ²·(E·T0)²/denom``, so it reproduces ``_solve_closed_form``
+    at β=0,γ=0); the β/γ terms keep the forward-native ``1/N`` normalization
+    (``N = 2·H·W``). See docs/specs/forward-solver-pcg.md.
     """
     height, width = u.shape[1:]
     E = float(params.young_modulus)
@@ -215,6 +218,17 @@ def _build_normal_equations(u: np.ndarray, mask: np.ndarray, beta: float,
     denom = float((wf * u_t ** 2).sum())
     denom = denom if denom > 1e-12 else 1e-12
 
+    # λ (`regularization`) is the SHARED dial with FTTC/`_solve_closed_form`, so its
+    # Tikhonov penalty must be the identical *physical* λ²‖t‖² on this path too — not a
+    # differently-scaled λ, or the same dial means different things on the two sides of
+    # the confinement switch (the β=0/β>0 branches would disagree on both the power of λ
+    # AND the normalization). In the non-dim w (t = E·T0·w) with the data term carrying
+    # the 1/denom factor, the coefficient that reproduces FTTC's absolute λ²‖t‖² is
+    # λ²·(E·T0)²/denom: the denom cancels against the data term, so at β=0,γ=0,W=I this
+    # solve == `_solve_closed_form` at the same λ, on every frame. (β/γ keep their
+    # forward-native 1/N normalization — they have no FTTC counterpart to match.)
+    lam_coef = lam ** 2 * (E * T0) ** 2 / denom
+
     def _P(w):                                            # w:(2,H,W) real → u_pred (µm)
         wk = fft.fft2(w.astype(xp.complex128), axes=(-2, -1))
         uk = xp.einsum("ijhw,jhw->ihw", GEc, wk)
@@ -237,11 +251,13 @@ def _build_normal_equations(u: np.ndarray, mask: np.ndarray, beta: float,
         data = _Pt(wf * _P(w)) / denom
         lapw = (4.0 * w - xp.roll(w, -1, 2) - xp.roll(w, 1, 2)
                 - xp.roll(w, -1, 1) - xp.roll(w, 1, 1))
-        out = data + (lam / N) * w + (beta / N) * (off * w) + (gamma / N) * lapw
+        out = data + lam_coef * w + (beta / N) * (off * w) + (gamma / N) * lapw
         return out - out.mean(axis=(1, 2), keepdims=True)
 
-    # preconditioner: M̂ = (T0²/denom)·GᴴG + ((λ + γ·lap)/N)·I  (W=I, β dropped)
-    diag = (lam + gamma * lap) / N
+    # preconditioner: M̂ = (T0²/denom)·GᴴG + (lam_coef + γ·lap/N)·I  (W=I, β dropped).
+    # lam_coef = λ²·(E·T0)²/denom is FTTC's physical Tikhonov (see above); the same
+    # coefficient must sit in A and M or one-step exactness silently fails.
+    diag = lam_coef + gamma * lap / N
     s = (T0 * T0) / denom
     M00 = s * GtG[0, 0] + diag
     M01 = s * GtG[0, 1]

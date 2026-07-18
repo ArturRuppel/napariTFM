@@ -20,7 +20,17 @@ unconditional.
 The forward solver minimizes, per frame, a spatially-weighted regularized objective
 (see the `forward_tfm.py` module docstring):
 
-    J(t) = ‖W·(G·t − u)‖²  +  λ‖t‖²  +  γ‖∇t‖²  +  β‖t·(1−mask)‖²
+    J(t) = ‖W·(G·t − u)‖²  +  λ²‖t‖²  +  γ‖∇t‖²  +  β‖t·(1−mask)‖²
+
+> **Amendment (2026-07-08).** `λ` (`regularization`) is the *shared* dial with
+> FTTC/`_solve_closed_form`, so its Tikhonov term is FTTC's **physical `λ²‖t‖²`** on
+> this path too. The as-built β>0 solver instead used a linear `λ/N` coefficient
+> (matching the retired L-BFGS closure), which made the *same* dial regularize
+> differently on the β=0 (λ²) vs β>0 (λ) branches — up to ~125× at λ=1e-2. Fixed by
+> setting the identity-term coefficient to `λ²·(E·T0)²/denom`, so the `denom` cancels
+> against the data term and β=0,γ=0 reproduces `_solve_closed_form` at the same λ. The
+> `(λ/N)` in the equations below is superseded by this; `β/γ` keep their `1/N` scaling
+> (no FTTC counterpart). Guard: `test_lambda_matches_closed_form_across_branches`.
 
 - `G` — the Boussinesq / finite-thickness Green's operator, reused verbatim from
   FTTC (folds in E, ν, gel_height, pixel_size); diagonal in Fourier (a per-mode 2×2

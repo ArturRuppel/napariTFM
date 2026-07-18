@@ -46,7 +46,9 @@ def test_all_parameters_omit_tvl1_only_parameters():
     params = manager.get_all_parameters()
 
     assert STALE_TVL1_PARAMETERS.isdisjoint(params)
-    assert {"piv_window", "piv_overlap", "piv_passes", "piv_device"}.issubset(params)
+    assert {"disp_method", "disp_device", "piv_window", "piv_overlap", "piv_passes",
+            "ilk_radius", "ilk_num_warp", "ffd_level_spacing", "ffd_num_levels",
+            "ffd_metric"}.issubset(params)
     assert "outer_iterations" not in params
 
 

@@ -1,9 +1,9 @@
-"""Tests for the displacement backend (multi-pass FFT cross-correlation PIV).
+"""Tests for the displacement backends (PIV, Lucas-Kanade, FFD).
 
-The core tests are NOT gated behind torch: PIV has a torch-free numpy core, so
-it must work on a plain install. A separate test checks the numpy path still
-runs with torch forcibly absent, and the GPU-equivalence test is gated behind
-torch + CUDA.
+The CPU tests are NOT gated behind torch: PIV (openpiv) and Lucas-Kanade
+(scikit-image) run on a plain install. GPU-parity tests are gated behind
+torch + CUDA. FFD is GPU-only, so its run test is CUDA-gated; its unavailable
+path (no GPU) is checked directly.
 """
 import sys
 from pathlib import Path
@@ -13,65 +13,91 @@ import pytest
 from scipy import ndimage
 
 from napariTFM.backend.displacement_analysis import (
+    build_analyzer,
     calculate_displacement_field,
     validate_displacement_image,
 )
+from napariTFM.backend.ffd_displacement import FFDDisplacementAnalyzer
+from napariTFM.backend.ilk_displacement import ILKDisplacementAnalyzer
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 from napariTFM.backend.piv_displacement import PIVDisplacementAnalyzer
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+_has_cuda = False
+try:  # torch is optional; CUDA-gated tests skip cleanly without it
+    import torch as _torch
+    _has_cuda = _torch.cuda.is_available()
+except Exception:
+    pass
+requires_cuda = pytest.mark.skipif(not _has_cuda, reason="no CUDA device / torch")
+
 
 def _params(**overrides):
-    """DisplacementParameters pinned to a fast, deterministic CPU (numpy) PIV config."""
-    base = dict(piv_device="cpu", piv_window=16, piv_passes=4)
+    """DisplacementParameters pinned to a fast, deterministic CPU PIV config."""
+    base = dict(disp_method="PIV", disp_device="cpu", piv_window=16, piv_passes=4)
     base.update(overrides)
     return DisplacementParameters(**base)
 
 
-def _textured_image(seed=0, size=96):
+def _textured_image(seed=0, size=128):
     """A smooth, well-textured image so window correlation is well-posed."""
     rng = np.random.default_rng(seed)
     img = rng.standard_normal((size, size))
     return ndimage.gaussian_filter(img, sigma=2.0).astype(np.float64)
 
 
-def test_analyzer_reports_piv_algorithm():
-    analyzer = PIVDisplacementAnalyzer(_params())
-    assert analyzer.algorithm_name == "PIV"
-    assert analyzer._backend == "numpy"  # piv_device="cpu" forces the numpy core
+# ------------------------------------------------------------- dispatch #
+def test_build_analyzer_dispatches_by_method():
+    assert isinstance(build_analyzer(_params(disp_method="PIV")), PIVDisplacementAnalyzer)
+    assert isinstance(build_analyzer(_params(disp_method="Lucas-Kanade")), ILKDisplacementAnalyzer)
 
 
-def test_piv_recovers_known_translation():
-    ref = _textured_image(seed=1, size=96)
+def test_build_analyzer_rejects_unknown_method():
+    with pytest.raises(ValueError, match="Unknown displacement method"):
+        build_analyzer(_params(disp_method="nope"))
+
+
+def test_analyzer_reports_backends():
+    assert PIVDisplacementAnalyzer(_params()).algorithm_name == "PIV"
+    assert PIVDisplacementAnalyzer(_params())._backend == "openpiv"  # cpu -> openpiv
+    assert ILKDisplacementAnalyzer(_params())._backend == "skimage"  # cpu -> skimage
+
+
+# ---------------------------------------------------- CPU translation #
+@pytest.mark.parametrize("method,analyzer_cls", [
+    ("PIV", PIVDisplacementAnalyzer),
+    ("Lucas-Kanade", ILKDisplacementAnalyzer),
+])
+def test_cpu_recovers_known_translation(method, analyzer_cls):
+    ref = _textured_image(seed=1, size=128)
     dx, dy = 1.5, -1.0                       # columns (x), rows (y)
     moving = ndimage.shift(ref, shift=(dy, dx), order=3, mode="reflect")
 
-    flow = PIVDisplacementAnalyzer(_params()).calculate_flow(ref, moving)
+    flow = analyzer_cls(_params(disp_method=method)).calculate_flow(ref, moving)
 
-    m = slice(24, -24)                       # interior, avoid border
-    ux = np.median(flow[m, m, 0])
-    uy = np.median(flow[m, m, 1])
-    assert abs(ux - dx) < 0.2, f"u_x {ux:.3f} vs {dx}"
-    assert abs(uy - dy) < 0.2, f"u_y {uy:.3f} vs {dy}"
+    m = slice(32, -32)                       # interior, avoid border
+    ux = np.median(flow[m, m, 0]); uy = np.median(flow[m, m, 1])
+    assert abs(ux - dx) < 0.25, f"{method} u_x {ux:.3f} vs {dx}"
+    assert abs(uy - dy) < 0.25, f"{method} u_y {uy:.3f} vs {dy}"
 
 
-def test_piv_flow_contract():
-    ref = _textured_image(seed=2, size=64)
+def test_flow_contract():
+    ref = _textured_image(seed=2, size=96)
     moving = ndimage.shift(ref, shift=(0.0, 1.0), order=3, mode="reflect")
 
     flow = PIVDisplacementAnalyzer(_params()).calculate_flow(ref, moving)
 
-    assert flow.shape == (64, 64, 2)          # full native resolution, (H,W,2)
+    assert flow.shape == (96, 96, 2)          # full native resolution, (H,W,2)
     assert flow.dtype == np.float32
     assert np.isfinite(flow).all()
     # component 0 is u_x: a +1px column shift must show up positive there
     assert np.median(flow[20:-20, 20:-20, 0]) > 0.3
 
 
-def test_piv_numpy_core_is_deterministic():
-    ref = _textured_image(seed=3, size=64)
+def test_cpu_backend_is_deterministic():
+    ref = _textured_image(seed=3, size=96)
     moving = ndimage.shift(ref, shift=(0.7, -0.4), order=3, mode="reflect")
 
     p = _params()
@@ -80,47 +106,116 @@ def test_piv_numpy_core_is_deterministic():
     np.testing.assert_array_equal(f1, f2)
 
 
-def test_piv_numpy_core_needs_no_torch(monkeypatch):
-    """With torch import forced to fail, PIV still works on the numpy core (device
-    'cpu' and 'auto' both). This is the torch-free contract of the backend."""
+def test_cpu_backends_need_no_torch(monkeypatch):
+    """With torch import forced to fail, PIV (openpiv) and iLK (skimage) still run on
+    the CPU reference for device 'cpu' and 'auto'. The torch-free default contract."""
     monkeypatch.setitem(sys.modules, "torch", None)
 
-    ref = _textured_image(seed=5, size=48)
+    ref = _textured_image(seed=5, size=96)
     moving = ndimage.shift(ref, shift=(0.0, 1.0), order=3, mode="reflect")
 
-    for device in ("cpu", "auto"):
-        analyzer = PIVDisplacementAnalyzer(_params(piv_device=device))
-        assert analyzer._backend == "numpy"
-        flow = analyzer.calculate_flow(ref, moving)
-        assert flow.shape == (48, 48, 2)
-        assert np.isfinite(flow).all()
+    for method, expect in (("PIV", "openpiv"), ("Lucas-Kanade", "skimage")):
+        for device in ("cpu", "auto"):
+            analyzer = build_analyzer(_params(disp_method=method, disp_device=device))
+            assert analyzer._backend == expect
+            flow = analyzer.calculate_flow(ref, moving)
+            assert flow.shape == (96, 96, 2)
+            assert np.isfinite(flow).all()
 
 
-def test_piv_cuda_without_torch_raises_actionable_error(monkeypatch):
-    """piv_device='cuda' with torch absent errors clearly; 'auto'/'cpu' do not."""
+def test_cuda_without_torch_raises_actionable_error(monkeypatch):
+    """device='cuda' with torch absent errors clearly (pointing at the [gpu] extra);
+    'auto'/'cpu' do not."""
     monkeypatch.setitem(sys.modules, "torch", None)
 
-    with pytest.raises(ImportError, match=r"napariTFM\[piv\]"):
-        PIVDisplacementAnalyzer(_params(piv_device="cuda"))
+    with pytest.raises(ImportError, match=r"napariTFM\[gpu\]"):
+        PIVDisplacementAnalyzer(_params(disp_device="cuda"))
 
 
-def test_piv_gpu_matches_numpy_on_dense_data():
-    """Where PIV is well-posed (dense texture, every window populated), the GPU
-    backend is numerically equivalent to the numpy core. (Skipped without CUDA.)"""
-    torch = pytest.importorskip("torch")
-    if not torch.cuda.is_available():
-        pytest.skip("no CUDA device")
+# ------------------------------------------------------------------ FFD #
+def test_ffd_is_gpu_only_without_cuda():
+    """FFD refuses to construct on the CPU path with an actionable message."""
+    with pytest.raises(RuntimeError, match="GPU-only"):
+        FFDDisplacementAnalyzer(_params(disp_method="FFD", disp_device="cpu"))
 
-    ref = _textured_image(seed=7, size=128)
+
+@requires_cuda
+def test_ffd_recovers_known_translation():
+    ref = _textured_image(seed=6, size=128)
+    dx, dy = 1.5, -1.0
+    moving = ndimage.shift(ref, shift=(dy, dx), order=3, mode="reflect")
+
+    flow = FFDDisplacementAnalyzer(
+        _params(disp_method="FFD", disp_device="cuda")
+    ).calculate_flow(ref, moving)
+
+    m = slice(32, -32)
+    assert abs(np.median(flow[m, m, 0]) - dx) < 0.3
+    assert abs(np.median(flow[m, m, 1]) - dy) < 0.3
+
+
+# --------------------------------------------------- FFD param exposure #
+@requires_cuda
+def test_ffd_threads_all_params_into_ffd_pyr(monkeypatch):
+    """Every FFD knob (existing + newly exposed) reaches ffd_pyr, defensively coerced.
+
+    Spies on ffd_pyr rather than running a fit: the point is the wiring, not the math.
+    """
+    import napariTFM.backend._ffd_torch as ffd_mod
+
+    captured = {}
+
+    def spy(ref, dfm, **kwargs):
+        captured.update(kwargs)
+        H, W = np.asarray(ref).shape
+        u = np.zeros((2, H, W), dtype=np.float32)
+        return (u, 0.0) if kwargs.get("return_loss") else u
+
+    monkeypatch.setattr(ffd_mod, "ffd_pyr", spy)
+
+    params = _params(
+        disp_method="FFD", disp_device="cuda",
+        ffd_level_spacing=10.0, ffd_metric="mse",
+        ffd_num_iters=33, ffd_elastic=0.25,
+        ffd_downscale=1.8, ffd_min_size=12, ffd_interp="bilinear",
+        ffd_early_stop=0.0015,
+    )
+    ref = _textured_image(seed=30, size=64)
+    FFDDisplacementAnalyzer(params).calculate_flow(ref, ref)
+
+    assert captured["level_spacing"] == 10.0
+    assert captured["num_iters"] == 33
+    assert captured["metric"] == "mse"
+    assert captured["elastic"] == 0.25
+    assert captured["downscale"] == 1.8
+    assert captured["min_size"] == 12
+    assert captured["interp"] == "bilinear"
+    assert captured["early_stop"] == 0.0015
+    # Pyramid depth is derived from downscale + min_size, not threaded as a count;
+    # the between-level tol and the warm-start init_field are gone entirely.
+    assert "num_levels" not in captured
+    assert "tol" not in captured
+    assert "init_field" not in captured
+
+
+# ------------------------------------------------------- GPU parity #
+@requires_cuda
+@pytest.mark.parametrize("method", ["PIV", "Lucas-Kanade"])
+def test_gpu_matches_cpu_reference_on_dense_data(method):
+    """On dense, well-posed texture the GPU port matches the CPU reference: iLK is
+    numerically identical, PIV (openpiv vs torch) is at measured parity, not bitwise."""
+    ref = _textured_image(seed=7, size=160)
     moving = ndimage.shift(ref, shift=(0.6, -0.9), order=3, mode="reflect")
 
-    f_np = PIVDisplacementAnalyzer(_params(piv_device="cpu")).calculate_flow(ref, moving)
-    f_gpu = PIVDisplacementAnalyzer(_params(piv_device="cuda")).calculate_flow(ref, moving)
+    f_cpu = build_analyzer(_params(disp_method=method, disp_device="cpu")).calculate_flow(ref, moving)
+    f_gpu = build_analyzer(_params(disp_method=method, disp_device="cuda")).calculate_flow(ref, moving)
 
-    m = slice(24, -24)
-    assert np.median(np.abs(f_np[m, m] - f_gpu[m, m])) < 0.05
+    m = slice(32, -32)
+    tol = 0.02 if method == "Lucas-Kanade" else 0.1   # iLK identical; PIV parity
+    assert np.median(np.abs(f_cpu[m, m] - f_gpu[m, m])) < tol
 
 
+# ----------------------------------------------------- validation/util #
 def test_backend_validates_displacement_images():
     assert validate_displacement_image(None) == (False, "No image data provided")
     assert validate_displacement_image([[1, 2], [3, 4]]) == (False, "Image must be a numpy array")
@@ -136,7 +231,7 @@ def test_backend_validates_displacement_images():
 
 
 def test_backend_calculates_displacement_result_with_progress():
-    ref = _textured_image(seed=4, size=48)
+    ref = _textured_image(seed=4, size=96)
     moving = np.stack([
         ndimage.shift(ref, shift=(0.0, 1.0), order=3, mode="reflect"),
         ndimage.shift(ref, shift=(0.5, -0.5), order=3, mode="reflect"),
@@ -152,10 +247,10 @@ def test_backend_calculates_displacement_result_with_progress():
         result = exc.value
 
     assert [(frame, total) for _, frame, total in progress] == [(1, 2), (2, 2)]
-    assert result.displacement_field.shape == (2, 24, 24, 2)   # downscaled by 2
+    assert result.displacement_field.shape == (2, 48, 48, 2)   # downscaled by 2
     assert result.displacement_field.dtype == np.float32
-    assert result.original_shape == (48, 48)
-    assert result.displacement_field_shape == (24, 24)
+    assert result.original_shape == (96, 96)
+    assert result.displacement_field_shape == (48, 48)
     assert result.parameters == params
     assert result.physical_scale == {
         "pixel_size": 0.2,
@@ -168,73 +263,171 @@ def test_backend_calculates_displacement_result_with_progress():
     assert np.isfinite(result.displacement_field).all()
 
 
-def test_calculate_field_folds_global_translation_into_drift():
-    """A spatially-uniform shift is stage drift, not deformation. PIV recovers it,
-    then calculate_displacement_field subtracts it: the reported field is ~0 and
-    drift_pixels captures the shift (pixels, ordered [u_x, u_y])."""
-    ref = _textured_image(seed=11, size=96)
-    dx, dy = 1.5, -1.0                       # columns (x), rows (y)
-    moving = ndimage.shift(ref, shift=(dy, dx), order=3, mode="reflect")
+def test_registration_folds_interframe_drift_into_drift_pixels():
+    """Registration removes bulk stage drift before measurement: each frame is
+    aligned to the anchor (first frame), so the reported field is ~0 for pure drift
+    and drift_pixels captures the shift (pixels, ordered [u_x, u_y])."""
+    base = _textured_image(seed=11, size=160)
+    dx, dy = 6.0, -4.0                       # columns (x), rows (y): a bulk stage drift
+    frame0 = base                            # anchor: relaxed, no deformation
+    frame1 = ndimage.shift(base, shift=(dy, dx), order=3, mode="nearest")  # pure drift
+    stack = np.stack([frame0, frame1])
 
     params = _params(pixel_size=1.0, downscale_factor=1)  # native grid; µm == px
-    gen = calculate_displacement_field(ref, moving, params)
+    gen = calculate_displacement_field(base, stack, params)
     try:
         while True:
             next(gen)
     except StopIteration as exc:
         result = exc.value
 
-    # The bulk translation is captured as drift, ~ (dx, dy).
-    assert abs(result.drift_pixels[0, 0] - dx) < 0.2
-    assert abs(result.drift_pixels[0, 1] - dy) < 0.2
+    # Frame 1's bulk drift is captured (~ (dx, dy)); frame 0 is the anchor (~0).
+    assert abs(result.drift_pixels[1, 0] - dx) < 0.3
+    assert abs(result.drift_pixels[1, 1] - dy) < 0.3
+    assert np.abs(result.drift_pixels[0]).max() < 0.3
 
-    # ...and removed from the reported field, which is ~0 (pure drift, no strain).
-    m = slice(24, -24)
-    field = result.displacement_field[0]
-    assert abs(np.median(field[m, m, 0])) < 0.2
-    assert abs(np.median(field[m, m, 1])) < 0.2
+    # ...and removed from every reported field, which is ~0 (pure drift, no strain).
+    m = slice(48, -48)
+    for f in (0, 1):
+        field = result.displacement_field[f]
+        assert abs(np.median(field[m, m, 0])) < 0.3
+        assert abs(np.median(field[m, m, 1])) < 0.3
 
 
-def test_calculate_field_keeps_localized_deformation_over_drift():
-    """Drift removal must not eat real signal. A localized (zero-median) bump of
-    deformation superimposed on a uniform drift: the drift is subtracted, the bump
-    survives. This is the TFM regime — at-rest background dominates the median."""
-    size = 96
-    ref = _textured_image(seed=12, size=size)
+def test_registration_keeps_localized_deformation_over_drift():
+    """Drift removal must not eat real signal. Frame 1 carries a localized bump plus
+    a uniform drift: registration removes the bulk drift, the bump survives."""
+    size = 160
+    base = _textured_image(seed=12, size=size)
     yy, xx = np.mgrid[0:size, 0:size].astype(float)
     cy, cx = size / 2, size / 2
-    bump = 3.0 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 8.0 ** 2))
-    drift_x = 1.0
-    # Sample ref shifted right by (bump + drift) in x → moving frame.
-    moving = ndimage.map_coordinates(
-        ref, [yy, xx - (bump + drift_x)], order=3, mode="reflect"
-    )
+    bump = 3.0 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 12.0 ** 2))
+    drift_x = 5.0
+    frame0 = base
+    frame1 = ndimage.map_coordinates(base, [yy, xx - (bump + drift_x)], order=3, mode="nearest")
+    stack = np.stack([frame0, frame1])
 
     params = _params(pixel_size=1.0, downscale_factor=1)
-    gen = calculate_displacement_field(ref, moving, params)
+    gen = calculate_displacement_field(base, stack, params)
     try:
         while True:
             next(gen)
     except StopIteration as exc:
         result = exc.value
 
-    # Background median is pure drift → captured, no spurious y drift.
-    assert abs(result.drift_pixels[0, 0] - drift_x) < 0.4
-    assert abs(result.drift_pixels[0, 1]) < 0.4
+    # Bulk drift is captured (~drift_x, ~0); the localized bump is not mistaken for it.
+    assert abs(result.drift_pixels[1, 0] - drift_x) < 0.7
+    assert abs(result.drift_pixels[1, 1]) < 0.7
 
-    field = result.displacement_field[0]
-    center = field[44:52, 44:52, 0]          # blob (true u_x ~3 after drift removal)
-    background = field[20:28, 20:28, 0]       # at-rest gel (true u_x ~0)
+    field = result.displacement_field[1]
+    c = size // 2
+    center = field[c - 4:c + 4, c - 4:c + 4, 0]   # blob (true u_x ~3 after drift removal)
+    background = field[24:32, 24:32, 0]           # at-rest gel (true u_x ~0)
     assert np.median(center) > 1.5
-    assert abs(np.median(background)) < 0.6
+    assert abs(np.median(background)) < 0.7
+
+
+def _localized_deformation_stack(size=160, bump_amp=3.0, drift_x=5.0, seed=13):
+    """A relaxed anchor + a frame with a central Gaussian bump plus a bulk drift."""
+    base = _textured_image(seed=seed, size=size)
+    yy, xx = np.mgrid[0:size, 0:size].astype(float)
+    cy, cx = size / 2, size / 2
+    bump = bump_amp * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 12.0 ** 2))
+    frame1 = ndimage.map_coordinates(base, [yy, xx - (bump + drift_x)], order=3, mode="nearest")
+    return base, np.stack([base, frame1])
+
+
+def _run(base, stack, params):
+    gen = calculate_displacement_field(base, stack, params)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as exc:
+        return exc.value
+
+
+def test_downsample_before_matches_after_grid_and_units():
+    """disp_downscale_before bins the images before measuring instead of binning the
+    field after. Both must yield the SAME output grid and physical units, and both
+    must recover the localized bump (the fast path measures real signal, not noise)."""
+    size = 160
+    base, stack = _localized_deformation_stack(size=size)
+
+    after = _run(base, stack, _params(pixel_size=1.0, downscale_factor=2,
+                                      disp_downscale_before=False))
+    before = _run(base, stack, _params(pixel_size=1.0, downscale_factor=2,
+                                       disp_downscale_before=True))
+
+    # Same coarse output grid and units either way.
+    assert after.displacement_field.shape == before.displacement_field.shape == (2, 80, 80, 2)
+    assert after.physical_scale == before.physical_scale
+
+    c = size // 2 // 2   # bump centre on the /2 grid
+    for result in (after, before):
+        field = result.displacement_field[1]
+        center = field[c - 2:c + 2, c - 2:c + 2, 0]   # true u_x ~3 (px==µm here)
+        background = field[12:16, 12:16, 0]           # at-rest gel, ~0
+        assert np.median(center) > 1.5                # real signal survives binning
+        assert abs(np.median(background)) < 0.7
+
+    # The two paths agree closely (this is the accuracy the toggle trades for speed).
+    epe = np.linalg.norm(after.displacement_field[1] - before.displacement_field[1], axis=-1)
+    assert np.median(epe) < 0.5
+
+
+def test_downsample_before_is_noop_without_factor():
+    """With downscale_factor == 1 there is nothing to bin, so the flag changes nothing."""
+    base, stack = _localized_deformation_stack(size=128)
+    off = _run(base, stack, _params(pixel_size=1.0, downscale_factor=1,
+                                    disp_downscale_before=False))
+    on = _run(base, stack, _params(pixel_size=1.0, downscale_factor=1,
+                                   disp_downscale_before=True))
+    assert off.displacement_field.shape == on.displacement_field.shape
+    np.testing.assert_allclose(off.displacement_field, on.displacement_field)
+
+
+def test_registration_estimate_and_undo_roundtrip():
+    """estimate_drift recovers a known (u_x, u_y) shift; apply_drift undoes it."""
+    from napariTFM.backend.registration import apply_drift, estimate_drift
+
+    base = _textured_image(seed=20, size=160)
+    dx, dy = 4.0, -3.0
+    moved = ndimage.shift(base, shift=(dy, dx), order=3, mode="nearest")
+
+    drift = estimate_drift(base, moved)              # (u_x, u_y)
+    assert abs(drift[0] - dx) < 0.3 and abs(drift[1] - dy) < 0.3
+
+    recov = apply_drift(moved, drift)
+    m = slice(40, -40)
+    span = float(base.max() - base.min())
+    assert np.median(np.abs(recov - base)[m, m]) < 0.05 * span
+
+
+@pytest.mark.parametrize("method", ["PIV", "Lucas-Kanade"])
+def test_registration_removes_large_drift_for_all_methods(method):
+    """A drift large enough to strain a capture-limited method is removed by
+    registration before the method runs, so every method returns a ~zero field. This
+    is what folding drift into a single backend could not do for Lucas-Kanade/FFD."""
+    base = _textured_image(seed=21, size=192)
+    frame1 = ndimage.shift(base, shift=(-6.0, 8.0), order=3, mode="nearest")  # ~10 px drift
+    stack = np.stack([base, frame1])
+
+    params = _params(disp_method=method, disp_device="cpu", pixel_size=1.0, downscale_factor=1)
+    gen = calculate_displacement_field(base, stack, params)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as exc:
+        result = exc.value
+
+    assert abs(result.drift_pixels[1, 0] - 8.0) < 0.4
+    assert abs(result.drift_pixels[1, 1] + 6.0) < 0.4
+    m = slice(56, -56)
+    assert np.abs(result.displacement_field[1][m, m]).max() < 0.6
 
 
 def _downscale_flow_reference(flow, factor):
-    """Independent block-mean reference: the original O(H*W) double loop.
-
-    Kept as the oracle the vectorized ``downscale_flow`` must match exactly, so
-    the optimization can never silently change values.
-    """
+    """Independent block-mean reference: the original O(H*W) double loop."""
     if factor <= 1:
         return flow
     h, w = flow.shape[:2]
@@ -266,7 +459,6 @@ def test_downscale_flow_factor_one_returns_input_unchanged():
 
 def test_downscale_flow_exact_block_average():
     analyzer = PIVDisplacementAnalyzer(_params())
-    # A 2x2 grid of constant 2x2 blocks: each output cell is that block's value.
     flow = np.zeros((4, 4, 2), dtype=np.float32)
     flow[0:2, 0:2] = [1.0, -1.0]
     flow[0:2, 2:4] = [2.0, 0.0]
