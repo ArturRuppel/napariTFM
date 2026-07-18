@@ -64,7 +64,8 @@ class FFDDisplacementAnalyzer(BaseDisplacementAnalyzer):
         self._prev_field: Optional[np.ndarray] = None
         self._prev_shape: Optional[tuple] = None
 
-    def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
+    def calculate_flow(self, reference: np.ndarray, moving: np.ndarray,
+                       weight: Optional[np.ndarray] = None) -> np.ndarray:
         from napariTFM.backend._ffd_torch import ffd_pyr
 
         H, W = np.asarray(reference).shape
@@ -93,6 +94,7 @@ class FFDDisplacementAnalyzer(BaseDisplacementAnalyzer):
             device=self._device,
             init_field=self._prev_field if warm else None,
             early_stop=float(self.params.ffd_early_stop),
+            weight=weight,
         )
 
         self._prev_field = u

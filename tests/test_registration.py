@@ -13,6 +13,7 @@ from napariTFM.backend.registration import (
     drift_fingerprint,
     estimate_drift,
     load_drift_csv,
+    mask_region,
     save_drift_csv,
     valid_region,
 )
@@ -71,6 +72,42 @@ def test_valid_region_crops_only_drifted_sides():
     assert c1 < 100 and c0 == 0 and r0 == 0 and r1 == 100
 
 
+def test_mask_region_falls_back_to_valid_when_off():
+    """No mask / unbounded margin / empty mask -> the full valid box (current behaviour)."""
+    valid = (10, 90, 5, 95)
+    shape = (100, 100)
+    assert mask_region(None, np.zeros(2), 50, valid, shape) == valid
+    # Margin >= frame extent is treated as unbounded.
+    fg = np.zeros((100, 100), bool); fg[40:60, 40:60] = True
+    assert mask_region(fg, np.zeros(2), 1000, valid, shape) == valid
+    # A frame with no foreground has nothing to confine to.
+    assert mask_region(np.zeros((100, 100), bool), np.zeros(2), 10, valid, shape) == valid
+
+
+def test_mask_region_boxes_foreground_plus_margin():
+    """The box hugs the foreground bbox + margin, clipped to the valid box."""
+    fg = np.zeros((200, 200), bool)
+    fg[80:120, 90:130] = True                       # bbox rows 80..120, cols 90..130
+    valid = (0, 200, 0, 200)
+    r0, r1, c0, c1 = mask_region(fg, np.zeros(2), margin_px=15, valid=valid, shape=(200, 200))
+    assert (r0, r1, c0, c1) == (80 - 15, 120 + 15, 90 - 15, 130 + 15)
+    # Clipping: a margin that runs past the valid box is capped at it.
+    r0, r1, c0, c1 = mask_region(fg, np.zeros(2), margin_px=1000 - 1, valid=(70, 130, 0, 200),
+                                 shape=(200, 200))
+    assert (r0, r1) == (70, 130)                     # capped to the valid rows
+
+
+def test_mask_region_shifts_box_by_drift():
+    """The box follows the frame into the registered frame: shifted by -drift."""
+    fg = np.zeros((200, 200), bool)
+    fg[80:120, 90:130] = True
+    valid = (0, 200, 0, 200)
+    drift = np.array([4.0, -3.0])                    # u_x=+4, u_y=-3
+    r0, r1, c0, c1 = mask_region(fg, drift, margin_px=10, valid=valid, shape=(200, 200))
+    # rows shift by -u_y = +3, cols by -u_x = -4, then +/- margin.
+    assert (r0, r1, c0, c1) == (80 + 3 - 10, 120 + 3 + 10, 90 - 4 - 10, 130 - 4 + 10)
+
+
 def test_drift_cache_roundtrips(tmp_path):
     """save_drift_csv -> load_drift_csv recovers the reference + per-frame drift."""
     path = tmp_path / "registration_drift.csv"
@@ -116,7 +153,7 @@ def test_drift_fingerprint_tracks_input_changes():
 class _StubAnalyzer:
     """Minimal analyzer so the cache path is exercised without a real method."""
 
-    def calculate_flow(self, reference, moving):
+    def calculate_flow(self, reference, moving, weight=None):
         return np.zeros((*reference.shape, 2), dtype=np.float32)
 
     def downscale_flow(self, field, factor):
@@ -159,6 +196,58 @@ def test_calculate_displacement_field_writes_then_reuses_cache(tmp_path):
 
     second = _run()
     assert np.allclose(second.drift_pixels, sentinel, atol=1e-6)
+
+
+class _OnesAnalyzer:
+    """Fills the measured crop with ones so the embedded field reveals the box."""
+
+    def calculate_flow(self, reference, moving, weight=None):
+        return np.ones((*reference.shape, 2), dtype=np.float32)
+
+    def downscale_flow(self, field, factor):
+        return field
+
+
+def test_calculate_displacement_field_confines_to_mask():
+    """A finite margin measures only within the cell bbox + margin; off = full frame."""
+    from napariTFM.backend.displacement_analysis import calculate_displacement_field
+    from napariTFM.backend.parameter_dataclasses import DisplacementParameters
+
+    H = W = 200
+    anchor = _speckle(H, W, seed=30)
+    reference = anchor.copy()                        # ref_drift == 0 -> valid == full frame
+    target = np.stack([anchor, anchor]).astype(np.float32)
+    mask = np.zeros((2, H, W), np.uint8)
+    mask[:, 80:120, 90:130] = 255
+
+    def _run(confine, margin_um=1.0):
+        params = DisplacementParameters(disp_device="cpu", downscale_factor=1,
+                                        pixel_size=0.1, disp_mask_confine=confine,
+                                        disp_mask_margin_um=margin_um)
+        gen = calculate_displacement_field(reference, target, params,
+                                           analyzer=_OnesAnalyzer(), mask=mask)
+        try:
+            while True:
+                next(gen)
+        except StopIteration as e:
+            return e.value
+
+    # margin 1.0 µm / 0.1 µm-per-px = 10 px grown around the mask (rows 80..120, cols 90..130).
+    on = _run(confine=True, margin_um=1.0)
+    mag = np.abs(on.displacement_field[0]).sum(-1)
+    ys, xs = np.where(mag > 0)
+    # The nonzero region reaches 10 px past the mask along its edges...
+    assert (ys.min(), ys.max()) == (80 - 10, 120 + 10 - 1)
+    assert (xs.min(), xs.max()) == (90 - 10, 130 + 10 - 1)
+    # ...but it is the literal dilated mask, NOT its bounding box: the box corner is
+    # >10 px (sqrt(2)*10) from any foreground pixel, so it stays zero.
+    assert mag[80 - 10, 90 - 10] == 0                 # bbox corner: outside the dilation
+    assert mag[80 - 10, 105] > 0                       # edge midpoint: within 10 px of the mask
+
+    # Gate off: the mask is ignored and the whole frame is measured, as before.
+    off = _run(confine=False)
+    mag_off = np.abs(off.displacement_field[0]).sum(-1)
+    assert (mag_off > 0).all()
 
 
 @requires_cuda

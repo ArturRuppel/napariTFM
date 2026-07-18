@@ -56,6 +56,8 @@ class _StubParameterManager(QObject):
             "ffd_interp": "bicubic",
             "ffd_warmstart": True,
             "ffd_early_stop": 0.0,
+            "disp_mask_confine": False,
+            "disp_mask_margin_um": 20.0,
             "downscale_factor": 4,
             "disp_vector_stride": 20,
             "disp_arrow_scale": 1.0,

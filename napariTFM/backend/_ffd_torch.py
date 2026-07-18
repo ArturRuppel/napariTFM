@@ -81,8 +81,10 @@ def _field_from_grid(C, My, Mx):
 
 
 # ------------------------------------------------------------------- metrics #
-def _mse(a, b):
-    return ((a - b) ** 2).mean()
+def _mse(a, b, m=None):
+    if m is None:
+        return ((a - b) ** 2).mean()
+    return ((a - b) ** 2 * m).sum() / (m.sum() + 1e-8)
 
 
 def _boxmean(x, w):
@@ -93,18 +95,32 @@ def _boxmean(x, w):
     return F.conv2d(F.pad(x[None, None], (w // 2,) * 4, mode="reflect"), k)[0, 0]
 
 
-def _lncc(a, b):
+def _lncc(a, b, m=None):
     """Local normalised cross-correlation LOSS (1 - mean squared local CC), ANTs-style. Unlike
     MSE, every w x w window contributes equally regardless of its intensity or the region's area,
     so the sharp high-motion peak is not drowned by the low-motion bulk. Differentiable through
-    the warp. Lower is better; 0 = perfect local alignment everywhere."""
+    the warp. Lower is better; 0 = perfect local alignment everywhere.
+
+    With ``m`` (a [0,1] foreground weight), the loss is confined to the mask: every local statistic
+    is a *normalised convolution* -- taken over only the in-mask fraction of its window (``boxmean(x*m)
+    / boxmean(m)``), so windows straddling the boundary use just their valid pixels -- and the final
+    average is over the mask. Same conv count as the unmasked path, so it is essentially free."""
     w = _LNCC_WIN
-    ma, mb = _boxmean(a, w), _boxmean(b, w)
-    va = _boxmean(a * a, w) - ma * ma
-    vb = _boxmean(b * b, w) - mb * mb
-    cov = _boxmean(a * b, w) - ma * mb
+    if m is None:
+        ma, mb = _boxmean(a, w), _boxmean(b, w)
+        va = _boxmean(a * a, w) - ma * ma
+        vb = _boxmean(b * b, w) - mb * mb
+        cov = _boxmean(a * b, w) - ma * mb
+        cc = cov * cov / (va * vb + 1e-5)
+        return 1.0 - cc.mean()
+    mm = _boxmean(m, w).clamp_min(1e-4)
+    ma = _boxmean(a * m, w) / mm
+    mb = _boxmean(b * m, w) / mm
+    va = _boxmean(a * a * m, w) / mm - ma * ma
+    vb = _boxmean(b * b * m, w) / mm - mb * mb
+    cov = _boxmean(a * b * m, w) / mm - ma * mb
     cc = cov * cov / (va * vb + 1e-5)
-    return 1.0 - cc.mean()
+    return 1.0 - (cc * m).sum() / (m.sum() + 1e-8)
 
 
 def _elastic_energy(C, s, nu=0.45):
@@ -143,7 +159,7 @@ def _resize_field(f, Hl, Wl):
 def ffd_pyr(ref, dfm, level_spacing=12.0, num_levels=6, downscale=2.0, min_size=16,
             num_iters=50, metric="lncc", elastic=0.0, tol=0.0, interp="bicubic",
             device=None, dtype=torch.float32, verbose=False, init_field=None,
-            return_loss=False, early_stop=0.0):
+            return_loss=False, early_stop=0.0, weight=None):
     """Coarse-to-fine GRID pyramid over an image pyramid. ``level_spacing`` = control spacing in
     LEVEL pixels (constant across levels -> coarse grid on coarse image, fine on fine); it is the
     bias-variance dial (fine = sharp peaks, coarse = noise-regularized). Each level pre-warps dfm
@@ -172,6 +188,14 @@ def ffd_pyr(ref, dfm, level_spacing=12.0, num_levels=6, downscale=2.0, min_size=
     loss_fn = _lncc if metric == "lncc" else _mse
     p0 = _pyramid(I0, downscale, nlevel=num_levels, min_size=min_size)   # coarsest first
     p1 = _pyramid(I1, downscale, nlevel=num_levels, min_size=min_size)
+    # Optional foreground weight confining the loss to the mask (see _lncc/_mse). Built
+    # into its own image pyramid so each level's weight aligns with that level's J0/J1
+    # (the Gaussian downsample just softens the 0/1 boundary, which the loss handles).
+    if weight is None:
+        pw = [None] * len(p0)
+    else:
+        Wt = torch.as_tensor(np.asarray(weight), dtype=dtype, device=dev)
+        pw = _pyramid(Wt, downscale, nlevel=num_levels, min_size=min_size)
 
     if init_field is None:
         field = torch.zeros((2, H, W), device=dev, dtype=dtype)         # accumulated, full-res px
@@ -179,7 +203,7 @@ def ffd_pyr(ref, dfm, level_spacing=12.0, num_levels=6, downscale=2.0, min_size=
         ext = torch.as_tensor(np.asarray(init_field), dtype=dtype, device=dev)  # (2,H,W) [x/col,y/row]
         field = torch.stack([ext[1], ext[0]])                          # -> internal [row/y, col/x]
     prev = None
-    for J0, J1 in zip(p0, p1):
+    for J0, J1, Wl_ in zip(p0, p1, pw):
         Hl, Wl = J0.shape
         base = _base_grid(Hl, Wl, dev, dtype)
         field_l = _resize_field(field, Hl, Wl)                         # carried field, level px
@@ -201,7 +225,7 @@ def ffd_pyr(ref, dfm, level_spacing=12.0, num_levels=6, downscale=2.0, min_size=
             opt.zero_grad()
             inc = _field_from_grid(C, My, Mx)
             warped = _warp(J1w, inc, base, mode=interp)
-            loss = loss_fn(warped, J0)
+            loss = loss_fn(warped, J0, Wl_)
             if elastic:
                 loss = loss + elastic * _elastic_energy(C, float(level_spacing))
             loss.backward()
@@ -211,7 +235,7 @@ def ffd_pyr(ref, dfm, level_spacing=12.0, num_levels=6, downscale=2.0, min_size=
         with torch.no_grad():
             inc = _field_from_grid(C, My, Mx)
             total_l = field_l + inc                                    # level px
-            dl = float(loss_fn(_warp(J1, total_l, base, mode=interp), J0))
+            dl = float(loss_fn(_warp(J1, total_l, base, mode=interp), J0, Wl_))
             field = _resize_field(total_l, H, W)                       # carry up to full res
         if verbose:
             print(f"    level {Hl:3}px spacing{level_spacing:g} (G {Gh}x{Gw}): data {dl:.4f} "

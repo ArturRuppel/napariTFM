@@ -102,6 +102,58 @@ def valid_region(ref_drift: np.ndarray, frame_drifts: np.ndarray, shape,
     return r0, r1, c0, c1
 
 
+def mask_region(mask_frame: Optional[np.ndarray], drift: np.ndarray,
+                margin_px: float, valid, shape):
+    """Interior box ``(r0, r1, c0, c1)`` = the foreground bbox + ``margin_px``,
+    intersected with the registration ``valid`` box.
+
+    Confines the displacement measurement to where a cell actually is (plus a
+    margin for its substrate-displacement halo) so the method skips the empty,
+    vignette-corrupted periphery. The foreground is ``mask_frame > 0``; its bbox
+    is shifted by ``-drift`` to follow the frame into the registered (anchor)
+    frame the measurement runs in, then grown by ``margin_px`` on every side.
+
+    Falls back to the full ``valid`` box (i.e. current full-frame behaviour) when
+    there is no mask, the margin is effectively unbounded, the frame's mask is
+    empty (no cell -> nothing to confine to), or the intersection would be empty.
+    """
+    r0v, r1v, c0v, c1v = valid
+    if mask_frame is None or margin_px >= max(shape):
+        return valid
+    fg = np.asarray(mask_frame) > 0
+    if not fg.any():
+        return valid
+    ys, xs = np.where(fg)
+    # The registered frame's content sits at (raw - drift); align the box there so
+    # a tight margin still contains the cell after drift removal.
+    u_x, u_y = float(drift[0]), float(drift[1])
+    r0 = max(r0v, int(np.floor(ys.min() - u_y - margin_px)))
+    r1 = min(r1v, int(np.ceil(ys.max() + 1 - u_y + margin_px)))
+    c0 = max(c0v, int(np.floor(xs.min() - u_x - margin_px)))
+    c1 = min(c1v, int(np.ceil(xs.max() + 1 - u_x + margin_px)))
+    if r1 - r0 < 1 or c1 - c0 < 1:
+        return valid
+    return r0, r1, c0, c1
+
+
+def mask_weight(mask_frame: np.ndarray, margin_px: float, box) -> np.ndarray:
+    """``(h, w)`` float32 foreground weight over a crop ``box`` ``(r0, r1, c0, c1)``.
+
+    The trusted region for the confined measurement: the cell footprint
+    (``mask_frame > 0``) grown by ``margin_px`` to cover its substrate-displacement
+    halo, as ``1.0`` inside / ``0.0`` outside. Used both as FFD's loss mask (so the
+    fit ignores the empty, vignette-corrupted background instead of the bounding
+    box's rectangle) and to zero the output outside the cell -- the *literal* mask,
+    not just its bounding box. Registration drift (<= a few px) is absorbed by the
+    margin, so the raw mask is cropped directly without a sub-pixel realignment.
+    All-ones when the crop holds no foreground (nothing to confine to)."""
+    r0, r1, c0, c1 = box
+    fg = np.asarray(mask_frame)[r0:r1, c0:c1] > 0
+    if not fg.any():
+        return np.ones((r1 - r0, c1 - c0), dtype=np.float32)
+    return (ndimage.distance_transform_edt(~fg) <= float(margin_px)).astype(np.float32)
+
+
 # --- drift cache -----------------------------------------------------------
 #
 # Registration drift depends only on the reference and every bead frame (the

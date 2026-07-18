@@ -240,9 +240,13 @@ class PIVDisplacementAnalyzer(BaseDisplacementAnalyzer):
         self._device = resolve_gpu_device(str(self.params.disp_device), method="PIV")
         self._backend = "torch" if self._device is not None else "openpiv"
 
-    def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
+    def calculate_flow(self, reference: np.ndarray, moving: np.ndarray,
+                       weight: np.ndarray | None = None) -> np.ndarray:
         """Cross-correlate ``moving`` against ``reference`` and return the full-res flow
-        as ``(H, W, 2)`` float32 in pixels ([...,0]=u_x, [...,1]=u_y)."""
+        as ``(H, W, 2)`` float32 in pixels ([...,0]=u_x, [...,1]=u_y).
+
+        ``weight`` is ignored (PIV's confinement is the upstream crop); it is
+        accepted only to satisfy the shared analyzer interface."""
         kw = dict(
             window=max(8, int(self.params.piv_window)),
             overlap=float(self.params.piv_overlap),

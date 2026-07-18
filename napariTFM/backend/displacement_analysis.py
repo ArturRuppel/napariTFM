@@ -14,6 +14,8 @@ from napariTFM.backend.registration import (
     drift_fingerprint,
     estimate_drift,
     load_drift_csv,
+    mask_region,
+    mask_weight,
     save_drift_csv,
     valid_region,
 )
@@ -111,6 +113,7 @@ def calculate_displacement_field(
     params: DisplacementParameters,
     analyzer: Optional[BaseDisplacementAnalyzer] = None,
     drift_cache: Optional[Union[str, Path]] = None,
+    mask: Optional[np.ndarray] = None,
 ) -> Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]:
     """Calculate the displacement field between a reference image and target image(s).
 
@@ -128,6 +131,17 @@ def calculate_displacement_field(
     fills with real, co-observed data (:func:`registration.valid_region`); the
     excluded border is returned as zero displacement. The output field keeps the
     full frame shape regardless.
+
+    ``mask`` (optional, ``(t, y, x)`` or ``(y, x)``, foreground = ``> 0``) confines
+    each frame's measurement to its cell + ``params.disp_mask_margin_um`` when
+    ``params.disp_mask_confine`` is set. Two layers: the method runs on the mask's
+    bounding box plus margin (:func:`registration.mask_region`) -- fewer pixels, so
+    faster -- and the output is zeroed outside the *cell footprint grown by the
+    margin* (:func:`registration.mask_weight`), the literal mask rather than its
+    rectangle. For FFD that same foreground weight also masks the LNCC/MSE loss, so
+    the fit ignores the empty, vignette-corrupted background instead of letting the
+    box corners pull the control grid. Off by default; when off, or when no mask is
+    given, behaviour is identical to the full-frame path.
 
     ``drift_cache`` (optional) is a CSV path the estimated drift is persisted to
     and read back from. Registration drift depends only on the reference and the
@@ -204,12 +218,37 @@ def calculate_displacement_field(
     # co-observed data, so no method measures a fabricated border. The measurement
     # runs on the crop and is re-embedded into a full-size zero field, so the excluded
     # border reads as no motion and the output shape is unchanged.
-    r0, r1, c0, c1 = valid_region(ref_drift, drift_pixels, (target.shape[1], target.shape[2]))
-    reference_registered = apply(reference, ref_drift)[r0:r1, c0:c1]
+    frame_shape = (target.shape[1], target.shape[2])
+    valid = valid_region(ref_drift, drift_pixels, frame_shape)
+    # Mask confinement (opt-in via disp_mask_confine, and only if a mask is given):
+    # margin in px from the µm knob. A mask whose frame axis matches is indexed per
+    # frame; a 2D mask is reused for every frame.
+    confine = mask is not None and getattr(params, "disp_mask_confine", False)
+    margin_px = (params.disp_mask_margin_um / params.pixel_size
+                 if params.pixel_size else float("inf"))
+    # The reference is constant across frames; register it once, then slice each
+    # frame's own box out of it (the box follows a migrating cell frame-to-frame).
+    reference_registered_full = apply(reference, ref_drift)
 
     for frame in range(total_frames):
-        frame_registered = apply(target[frame], drift_pixels[frame])[r0:r1, c0:c1]
-        field_crop = analyzer.calculate_flow(reference_registered, frame_registered)
+        frame_registered_full = apply(target[frame], drift_pixels[frame])
+        mask_frame = (mask[frame] if mask.ndim == 3 else mask) if confine else None
+        r0, r1, c0, c1 = mask_region(
+            mask_frame, drift_pixels[frame], margin_px, valid, frame_shape
+        )
+        # Foreground weight over the crop: confines FFD's loss to the cell + margin
+        # (its loss ignores the rest -- the bounding box's empty, vignette-corrupted
+        # corners no longer pull the control grid) and zeros the output outside it,
+        # so the result is the literal mask region, not just the bounding box.
+        weight = (mask_weight(mask_frame, margin_px, (r0, r1, c0, c1))
+                  if mask_frame is not None else None)
+        field_crop = analyzer.calculate_flow(
+            reference_registered_full[r0:r1, c0:c1],
+            frame_registered_full[r0:r1, c0:c1],
+            weight=weight,
+        )
+        if weight is not None:
+            field_crop = field_crop * weight[..., None]
 
         displacement_field_pixels = np.zeros(
             (target.shape[1], target.shape[2], 2), dtype=np.float32

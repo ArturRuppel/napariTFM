@@ -78,11 +78,33 @@ class DisplacementController(VectorStageController):
             params,
         )
 
+    def _confinement_mask(self, params, frame=None):
+        """Raw full-resolution mask for displacement confinement, or ``None``.
+
+        Read from the active experiment's ``masks`` file on disk -- deliberately
+        NOT ``data_manager.mask_stack``, which the Stress stage resizes onto the
+        downsampled force grid (wrong resolution for the full-res bead images the
+        measurement runs on). Only touched when Confine to Mask is on, so the
+        (large) file is never read needlessly. ``frame`` loads a single plane for
+        the single-frame preview; ``None`` loads the whole stack for a run.
+        """
+        if not getattr(params, "disp_mask_confine", False):
+            return None
+        path = self.data_manager.raw_input_path("masks")
+        if path is None:
+            return None
+        import tifffile
+        try:
+            return tifffile.imread(str(path)) if frame is None else tifffile.imread(str(path), key=frame)
+        except Exception:
+            return None
+
     @thread_worker
     def _run_worker(self, reference, bead_stack, params):
         """Process every frame, yielding each displacement field for live streaming."""
         try:
-            gen = calculate_displacement_field(reference, bead_stack, params)
+            mask = self._confinement_mask(params)
+            gen = calculate_displacement_field(reference, bead_stack, params, mask=mask)
             try:
                 while True:
                     displacement_field, frame, total = next(gen)
@@ -113,7 +135,8 @@ class DisplacementController(VectorStageController):
             reference = self.data_manager.reference
             params = self.parameter_manager.get_displacement_parameters()
 
-            gen = calculate_displacement_field(reference, moving, params)
+            mask = self._confinement_mask(params, frame=current_frame)
+            gen = calculate_displacement_field(reference, moving, params, mask=mask)
             final_result = None
             try:
                 while True:

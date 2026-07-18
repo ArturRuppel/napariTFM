@@ -48,6 +48,18 @@ class DisplacementParameters:
     ffd_warmstart: bool = False       # warm-start each frame from the previous frame's field
     ffd_early_stop: float = 0.0       # per-level LBFGS convergence tolerance; 0 = run full num_iters (current behaviour)
 
+    # Confine the displacement measurement to the foreground mask + margin, when a
+    # mask is supplied and disp_mask_confine is on: each frame is measured only
+    # within the bounding box of its cell plus disp_mask_margin_um, and read as zero
+    # outside. This both speeds the method (fewer pixels) and structurally excludes
+    # the aperture-vignette border garbage, instead of relying on downstream masking.
+    # Off by default (opt-in, like the fwd_* confinement). The margin is a physical
+    # length: set it to your traction halo's decay length -- too small silently
+    # clips the real substrate-displacement halo just outside the cell, so err
+    # generous.
+    disp_mask_confine: bool = False       # gate: confine the measurement to the mask
+    disp_mask_margin_um: float = 20.0     # mask bounding-box margin (µm) when confining
+
     # Analysis parameters
     downscale_factor: int = 4
     pixel_size: float = 0.1
@@ -153,6 +165,8 @@ class UnifiedParameters:
     ffd_interp: str = "bicubic"
     ffd_warmstart: bool = False
     ffd_early_stop: float = 0.0
+    disp_mask_confine: bool = False    # confine displacement measurement to the mask
+    disp_mask_margin_um: float = 20.0  # mask bounding-box margin (µm) when confining
     downscale_factor: int = 4
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0

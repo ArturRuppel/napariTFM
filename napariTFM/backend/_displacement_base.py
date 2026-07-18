@@ -62,7 +62,15 @@ class BaseDisplacementAnalyzer:
     def __init__(self, params: DisplacementParameters | None = None):
         self.params = params or DisplacementParameters()
 
-    def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
+    def calculate_flow(self, reference: np.ndarray, moving: np.ndarray,
+                       weight: np.ndarray | None = None) -> np.ndarray:
+        """Estimate the dense displacement field for one frame pair.
+
+        ``weight`` (optional, ``(H, W)`` in ``[0, 1]``) confines the fit to a
+        foreground region: only FFD honours it (it masks its loss); PIV and iLK,
+        being local estimators, accept and ignore it (their confinement is the
+        upstream crop). ``None`` = fit the whole input, the default for all methods.
+        """
         raise NotImplementedError
 
     @staticmethod

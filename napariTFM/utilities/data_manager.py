@@ -89,6 +89,23 @@ class DataManager:
         self._active_input_files = dict(input_files or {})
         self._notify_changed()
 
+    def raw_input_path(self, slot: str) -> Optional[Path]:
+        """Absolute path to the active experiment's raw *slot* file, or ``None``.
+
+        *slot* is a discovery key from ``_active_input_files`` (e.g. ``"beads"``,
+        ``"masks"``). Returns the path only when an active folder is set, the slot
+        is named, and the file exists on disk — so a caller can load a raw input
+        (e.g. the full-resolution mask for displacement confinement) straight from
+        the active experiment without threading the folder through itself.
+        """
+        if self._active_input_folder is None:
+            return None
+        name = self._active_input_files.get(slot)
+        if not name:
+            return None
+        path = self._active_input_folder / name
+        return path if path.exists() else None
+
     def _raw_input_on_disk(self, key: str) -> bool:
         """True when *key*'s discovery-named file exists in the active folder."""
         if self._active_input_folder is None:

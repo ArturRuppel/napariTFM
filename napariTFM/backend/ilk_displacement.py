@@ -52,7 +52,9 @@ class ILKDisplacementAnalyzer(BaseDisplacementAnalyzer):
         self._device = resolve_gpu_device(str(self.params.disp_device), method="Lucas-Kanade")
         self._backend = "torch" if self._device is not None else "skimage"
 
-    def calculate_flow(self, reference: np.ndarray, moving: np.ndarray) -> np.ndarray:
+    def calculate_flow(self, reference: np.ndarray, moving: np.ndarray,
+                       weight: np.ndarray | None = None) -> np.ndarray:
+        # weight ignored: iLK is a local estimator, confined by the upstream crop.
         radius = max(1, int(self.params.ilk_radius))
         num_warp = max(1, int(self.params.ilk_num_warp))
 

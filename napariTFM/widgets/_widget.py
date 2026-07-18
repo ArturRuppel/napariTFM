@@ -115,6 +115,9 @@ class WorkflowParameterPanel(QWidget):
             ("ffd_interp", "Warp Interpolation", "choice", None, None, None, None, ["bicubic", "bilinear"]),
             (GROUP, "General"),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
+            (GROUP, "Mask confinement"),
+            ("disp_mask_confine", "Confine to Mask", "bool", None, None, None, None, None),
+            ("disp_mask_margin_um", "Mask Margin (um)", "float", 0.0, 200.0, 1.0, 1, None),
             (GROUP, "Visualization"),
             ("disp_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("disp_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -282,6 +285,21 @@ class WorkflowParameterPanel(QWidget):
             "Interpolation used to warp the moving image. 'bicubic' (default) preserves "
             "sharp peaks better, matching a cubic-B-spline resample; 'bilinear' is "
             "cheaper and slightly smoother."
+        ),
+        "disp_mask_confine": (
+            "Measure displacement only within the external mask (+ margin), for every "
+            "method. Each frame is analysed inside its cell's bounding box plus the "
+            "Mask Margin and read as zero outside: this skips the empty, vignette-"
+            "corrupted periphery (faster) and removes that far-field artifact from the "
+            "saved field structurally, rather than relying on the downstream mask. Needs "
+            "an external mask; a no-op without one. Off = full-frame (unchanged)."
+        ),
+        "disp_mask_margin_um": (
+            "How far beyond the cell edge to keep measuring, in microns, when Confine to "
+            "Mask is on. It must cover the substrate-displacement halo around the cell — "
+            "set it to that halo's decay length. Too small silently clips real "
+            "near-cell displacement; too large re-admits the periphery. Only read when "
+            "Confine to Mask is on."
         ),
     }
 
@@ -471,19 +489,22 @@ class WorkflowParameterPanel(QWidget):
         return control
 
     def _refresh_confinement_enablement(self, name=None, value=None):
-        """Grey out the forward-only Smoothness knob unless Mask Confinement > 0.
+        """Grey out each confinement's dependent knob unless its gate is active.
 
-        With confinement at 0 the Force stage runs plain FTTC, which never reads
-        Smoothness — so it would be a dead control. Driven from parameter_changed
-        (any param → cheap no-op when it isn't the confinement dial) and once at
-        construction for the initial state.
+        Two independent gates: the Force stage's Smoothness is dead unless Mask
+        Confinement > 0 (confinement 0 runs plain FTTC, which never reads it), and
+        the Displacement stage's Mask Margin is dead unless Confine to Mask is on.
+        Driven from parameter_changed (a cheap no-op when the changed param is
+        neither gate) and once at construction for the initial state.
         """
-        if name is not None and name != "fwd_mask_strength":
+        if name is not None and name not in ("fwd_mask_strength", "disp_mask_confine"):
             return
-        control = self.parameter_controls.get("fwd_smoothness")
-        if control is None:
-            return
-        control.setEnabled(self.parameter_manager.get_parameter("fwd_mask_strength") > 0)
+        smoothness = self.parameter_controls.get("fwd_smoothness")
+        if smoothness is not None:
+            smoothness.setEnabled(self.parameter_manager.get_parameter("fwd_mask_strength") > 0)
+        margin = self.parameter_controls.get("disp_mask_margin_um")
+        if margin is not None:
+            margin.setEnabled(bool(self.parameter_manager.get_parameter("disp_mask_confine")))
 
     # Which knobs belong to which displacement method, so only the selected
     # method's group stays live (the others grey out, like the confinement dial).
