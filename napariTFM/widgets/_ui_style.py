@@ -251,6 +251,27 @@ def mono_input_style() -> str:
     )
 
 
+def action_button_style() -> str:
+    """Themed pill style for a text-only QToolButton (list/pool actions).
+
+    Matches ITASC's ``action_button_style`` — a translucent surface with a
+    hairline border, rounded, so the list actions read as buttons without
+    per-button icons.
+    """
+    return (
+        "QToolButton { "
+        "background: rgba(255, 255, 255, 10); "
+        f"border: 1px solid {HAIRLINE}; border-radius: 6px; "
+        f"padding: 4px 12px; color: {TEXT_BRIGHT}; }} "
+        "QToolButton:hover { background: rgba(255, 255, 255, 22); "
+        "border-color: rgba(255, 255, 255, 46); } "
+        "QToolButton:pressed { background: rgba(255, 255, 255, 32); } "
+        "QToolButton:disabled { "
+        f"color: {TEXT_DIM}; background: rgba(255, 255, 255, 4); "
+        "border-color: rgba(255, 255, 255, 10); }"
+    )
+
+
 def title_style() -> str:
     """Stylesheet for the top-level shell title label."""
     return "font-weight: bold; font-size: 14px;"

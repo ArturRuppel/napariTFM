@@ -84,6 +84,7 @@ ROW_ID_COLUMN = "id"
 # traction is the force stage. A container needs both to yield a usable metric.
 _MASK_SERIES = "mask"
 _FORCE_SERIES = "traction"
+_DISPLACEMENT_SERIES = "displacement"
 
 # Human-readable label per identifier column.
 _ID_LABELS = {
@@ -318,6 +319,29 @@ def partition_ready(paths: Iterable) -> Tuple[List[Path], List[Tuple[Path, str]]
     return ready, skipped
 
 
+def supported_metrics(paths: Iterable) -> set:
+    """Which metric columns at least one container can produce non-NaN.
+
+    Header-only (no pixel decode). Strain energy needs *both* displacement and
+    force in the same container; the polarization metrics need only force (which
+    every *ready* container has). Drives greying-out of the per-metric checkboxes,
+    so a checked metric is never one the pool would silently fill with NaN.
+    """
+    supported: set = set()
+    for raw in paths:
+        names = _series_names(raw)
+        if _FORCE_SERIES in names:
+            supported.update({"polarization_index", "lambda1", "lambda2"})
+            if _DISPLACEMENT_SERIES in names:
+                supported.add("total_strain_energy")
+    return supported
+
+
+def metric_label(metric: str) -> str:
+    """Human-readable display name for a metric column (for UI checkboxes)."""
+    return _METRIC_META.get(metric, (metric, ""))[0]
+
+
 # ---------------------------------------------------------------------------
 # Series reduction: stack + promote labels + stable id
 # ---------------------------------------------------------------------------
@@ -497,6 +521,7 @@ def pool_experiments(
     out_dir,
     *,
     labels: Optional[Dict[str, Dict[str, object]]] = None,
+    metrics: Optional[Iterable[str]] = None,
 ) -> AggregateResult:
     """Pool a ``.ntfm`` series into ``out_dir``: ``summary.csv`` + sidecars.
 
@@ -504,10 +529,19 @@ def pool_experiments(
     skipped and named in the result (and in ``provenance.json``). The summary is
     a materialized view — the CSV is rewritten whole, never appended.
 
+    ``metrics`` optionally restricts which scalar columns are written (a subset of
+    :data:`METRIC_COLUMNS`); ``None`` keeps all four. Grain and label columns are
+    always kept.
+
     Returns an :class:`AggregateResult`. Raises ``ValueError`` if two ready
     containers share an ``experiment_id``.
     """
     out_dir = Path(out_dir)
+    kept_metrics = (
+        list(METRIC_COLUMNS)
+        if metrics is None
+        else [m for m in METRIC_COLUMNS if m in set(metrics)]
+    )
     ready, skipped = partition_ready(paths)
 
     if not ready:
@@ -534,6 +568,11 @@ def pool_experiments(
 
     table, id_by_path, tags_by_id = _reduce_series(ready, labels=labels)
 
+    # Drop unselected metric columns (grain + labels + selected metrics remain).
+    dropped = [m for m in METRIC_COLUMNS if m not in kept_metrics and m in table.columns]
+    if dropped:
+        table = table.drop(columns=dropped)
+
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / SUMMARY_FILENAME
     schema_path = out_dir / SCHEMA_FILENAME
@@ -551,7 +590,7 @@ def pool_experiments(
         id_by_path=id_by_path,
         tags_by_id=tags_by_id,
         skipped=skipped,
-        metric_columns=METRIC_COLUMNS,
+        metric_columns=kept_metrics,
         counts=counts,
     )
 

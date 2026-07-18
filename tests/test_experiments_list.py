@@ -413,35 +413,33 @@ def _make_qualifying(tmp_path, *names):
         (d / "reference.tif").write_bytes(b"x")
 
 
-def test_discover_stages_folders_without_adding_them(app, tmp_path):
+def test_discover_adds_folders_immediately(app, tmp_path):
+    # One step: a scan adds every match straight to the committed list.
     _make_qualifying(tmp_path, "a", "b")
     widget = ExperimentsList()
-    staged = widget.discover(tmp_path)
-    assert sorted(Path(p).name for p in staged) == ["a", "b"]
-    assert widget.discovered() == staged
-    assert widget.experiments() == []  # discovery never adds on its own
+    added = widget.discover(tmp_path)
+    assert sorted(Path(p).name for p in added) == ["a", "b"]
+    assert sorted(Path(p).name for p in widget.experiments()) == ["a", "b"]
 
 
-def test_commit_adds_discovered_with_nesting_columns(app, tmp_path):
+def test_discover_adds_with_seed_nesting_columns(app, tmp_path):
     _make_qualifying(tmp_path, "Ctrl/pos_00")
     widget = ExperimentsList()
     widget.file_name_inputs["cells"].setText("")
     widget.file_name_inputs["masks"].setText("")
     widget.discover(tmp_path)
-    widget.commit_discovered()
     records = widget.experiment_records()
     assert len(records) == 1
-    # Each nesting level under the discovery root becomes a column.
-    assert records[0]["columns"] == {"Column 1": "Ctrl", "Column 2": "pos_00"}
-    assert widget.column_names() == ["Column 1", "Column 2"]
+    # Innermost-anchored seed names (ITASC parity): depth-2 → experiment_id/position_id.
+    assert records[0]["columns"] == {"experiment_id": "Ctrl", "position_id": "pos_00"}
+    assert widget.column_names() == ["experiment_id", "position_id"]
     assert records[0]["input_files"] == {
         "beads": "beads.tif",
         "reference": "reference.tif",
     }
-    assert widget.discovered() == []  # staging cleared after commit
 
 
-def test_commit_columns_pad_to_max_nesting_depth(app, tmp_path):
+def test_discover_columns_pad_to_max_nesting_depth(app, tmp_path):
     # Ragged depths: a shallow folder leaves deeper columns blank, not missing.
     _make_qualifying(tmp_path, "Ctrl/pos_00")
     _make_qualifying(tmp_path, "solo")
@@ -449,38 +447,22 @@ def test_commit_columns_pad_to_max_nesting_depth(app, tmp_path):
     widget.file_name_inputs["cells"].setText("")
     widget.file_name_inputs["masks"].setText("")
     widget.discover(tmp_path)
-    widget.commit_discovered()
-    assert widget.column_names() == ["Column 1", "Column 2"]
+    assert widget.column_names() == ["experiment_id", "position_id"]
     by_leaf = {Path(r["path"]).name: r["columns"] for r in widget.experiment_records()}
-    assert by_leaf["pos_00"] == {"Column 1": "Ctrl", "Column 2": "pos_00"}
-    assert by_leaf["solo"] == {"Column 1": "solo", "Column 2": ""}
+    assert by_leaf["pos_00"] == {"experiment_id": "Ctrl", "position_id": "pos_00"}
+    assert by_leaf["solo"] == {"experiment_id": "", "position_id": "solo"}
 
 
-def test_commit_button_enables_only_after_discovery(app, tmp_path):
-    widget = ExperimentsList()
-    assert widget.commit_btn.isEnabled() is False
-    _make_qualifying(tmp_path, "a")
-    widget.discover(tmp_path)
-    assert widget.commit_btn.isEnabled() is True
-    widget.commit_discovered()
-    assert widget.commit_btn.isEnabled() is False
-
-
-def test_discover_renders_preview_rows_in_table(app, tmp_path):
+def test_discover_renders_committed_rows_in_table(app, tmp_path):
     _make_qualifying(tmp_path, "a", "b")
     widget = ExperimentsList()
     widget.discover(tmp_path)
-    assert len(widget._preview_rows) == 2
-    assert all(row.is_preview for row in widget._preview_rows)
-    # Preview rows are not committed rows.
-    assert widget.experiments() == []
+    assert len(widget._rows) == 2
+    assert all(not row.is_preview for row in widget._rows)
 
 
-def test_discover_again_replaces_rather_than_merges_preview(app, tmp_path):
-    # Two non-overlapping roots (sibling subfolders of tmp_path) — discover()
-    # scans recursively, so nesting one root inside the other would make the
-    # first call legitimately find both folders, masking the replace behavior
-    # this test targets.
+def test_discover_is_additive_across_roots(app, tmp_path):
+    # A second scan against another root appends, deduped — never replaces.
     first_root = tmp_path / "first"
     _make_qualifying(first_root, "a")
     other_root = tmp_path / "other"
@@ -488,55 +470,25 @@ def test_discover_again_replaces_rather_than_merges_preview(app, tmp_path):
     _make_qualifying(other_root, "z")
     widget = ExperimentsList()
     widget.discover(first_root)
-    assert len(widget._preview_rows) == 1
+    assert len(widget.experiments()) == 1
     widget.discover(other_root)
-    assert len(widget._preview_rows) == 1
-    assert Path(widget._preview_rows[0].path).name == "z"
+    assert sorted(Path(p).name for p in widget.experiments()) == ["a", "z"]
+    # Re-scanning the same root adds nothing new (deduped).
+    added = widget.discover(first_root)
+    assert added == []
+    assert len(widget.experiments()) == 2
 
 
-def test_preview_row_click_toggles_selection(app, tmp_path):
-    _make_qualifying(tmp_path, "a")
-    widget = ExperimentsList()
-    widget.discover(tmp_path)
-    row = widget._preview_rows[0]
-    row.clicked.emit(row.path, 0)
-    assert row.path in widget._discovered_selected
-    assert widget.delete_btn.isEnabled() is True
-    row.clicked.emit(row.path, 0)
-    assert row.path not in widget._discovered_selected
-    assert widget.delete_btn.isEnabled() is False
-
-
-def test_delete_selected_removes_preview_rows_before_committing(app, tmp_path):
-    _make_qualifying(tmp_path, "a", "b")
-    widget = ExperimentsList()
-    widget.discover(tmp_path)
-    row_to_drop = widget._preview_rows[0]
-    row_to_drop.clicked.emit(row_to_drop.path, 0)
-    widget.delete_selected()
-    assert len(widget._preview_rows) == 1
-    assert len(widget.discovered()) == 1
-    # Committed table untouched.
-    assert widget.experiments() == []
-
-
-def test_commit_discovered_clears_preview_rows_and_hardens(app, tmp_path):
+def test_remove_column_drops_it_table_wide(app, tmp_path):
     _make_qualifying(tmp_path, "Ctrl/pos_00")
     widget = ExperimentsList()
     widget.file_name_inputs["cells"].setText("")
     widget.file_name_inputs["masks"].setText("")
     widget.discover(tmp_path)
-    assert len(widget._preview_rows) == 1
-    row = widget._preview_rows[0]
-    row.clicked.emit(row.path, 0)  # select it
-    widget.commit_discovered()
-    assert widget._preview_rows == []
-    assert len(widget._rows) == 1
-    assert widget._rows[0].is_preview is False
-    # The stale preview-row selection must not leak past commit (it would
-    # otherwise keep the delete button/keyboard shortcut wrongly armed for a
-    # row that no longer exists as a preview).
-    assert widget._discovered_selected == set()
+    assert widget.column_names() == ["experiment_id", "position_id"]
+    widget.remove_column(0)  # drop experiment_id
+    assert widget.column_names() == ["position_id"]
+    assert widget.experiment_records()[0]["columns"] == {"position_id": "pos_00"}
 
 
 def test_refresh_statuses_calls_status_fn_for_each_row(app):
@@ -685,12 +637,11 @@ def test_select_all_selects_all_committed_rows(app):
     assert widget.run_selected_btn.isEnabled() is True
 
 
-def test_select_all_excludes_preview_rows(app):
+def test_select_all_selects_every_committed_row(app):
     widget = ExperimentsList()
-    widget.set_experiments(["/data/a"])
-    widget._discovered = ["/data/preview"]  # staged, not committed
+    widget.set_experiments(["/data/a", "/data/b"])
     widget.select_all()
-    assert widget.selected_rows() == ["/data/a"]
+    assert sorted(widget.selected_rows()) == ["/data/a", "/data/b"]
 
 
 def test_run_selected_button_click_emits_run_selected_requested(app):
@@ -994,19 +945,20 @@ def test_setup_section_holds_calibration_input_files_and_output_dir(app):
     assert widget.choose_output_dir_btn is not None
 
 
-def test_setup_section_auto_collapses_after_first_commit(app, tmp_path):
+def test_setup_section_auto_collapses_after_first_scan(app, tmp_path):
     _make_qualifying(tmp_path, "a")
     widget = ExperimentsList()
     assert widget.setup_section.is_expanded is True
-    widget.discover(tmp_path)
-    widget.commit_discovered()
+    widget.discover(tmp_path)  # one step: a scan adds rows and collapses Setup
     assert widget.setup_section.is_expanded is False
 
 
-def test_setup_section_does_not_collapse_while_list_stays_empty(app, tmp_path):
-    _make_qualifying(tmp_path, "a")
+def test_setup_section_does_not_collapse_when_scan_finds_nothing(app, tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
     widget = ExperimentsList()
-    widget.discover(tmp_path)  # staged but not committed
+    widget.discover(empty)  # no qualifying folders → list stays empty
+    assert widget.experiments() == []
     assert widget.setup_section.is_expanded is True
 
 
@@ -1014,7 +966,6 @@ def test_setup_section_is_manually_reexpandable_after_auto_collapse(app, tmp_pat
     _make_qualifying(tmp_path, "a")
     widget = ExperimentsList()
     widget.discover(tmp_path)
-    widget.commit_discovered()
     assert widget.setup_section.is_expanded is False
     widget.setup_section.set_expanded(True)
     assert widget.setup_section.is_expanded is True
@@ -1031,7 +982,6 @@ def test_setup_section_reexpands_when_list_becomes_empty(app, tmp_path):
     _make_qualifying(tmp_path, "a")
     widget = ExperimentsList()
     widget.discover(tmp_path)
-    widget.commit_discovered()
     assert widget.setup_section.is_expanded is False
     widget.set_experiments([])
     assert widget.setup_section.is_expanded is True
@@ -1132,7 +1082,7 @@ def test_table_and_actions_are_always_visible_regardless_of_row_count(app):
     # scrollable rows region itself hides/shows based on row count (existing
     # _update_table_visibility behavior, unchanged by this task).
     assert widget.add_btn.isVisible() is True
-    assert widget.commit_btn.isVisible() is True
+    assert widget.delete_btn.isVisible() is True
     widget.set_experiments(["/data/a"])
     assert widget.add_btn.isVisible() is True
 

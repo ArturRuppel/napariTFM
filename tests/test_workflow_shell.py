@@ -2404,8 +2404,23 @@ def test_pool_readiness_enables_button_and_reports_counts(monkeypatch, app, tmp_
         widget.deleteLater()
 
 
+def _wait_for(predicate, timeout=8.0):
+    """Pump the Qt event loop until *predicate* is true (for thread_worker pools)."""
+    import time
+
+    from qtpy.QtWidgets import QApplication
+
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        QApplication.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 def test_pool_requested_writes_summary_csv_with_labels(monkeypatch, app, tmp_path):
-    """End-to-end: committing two ready experiments and asking to pool writes a
+    """End-to-end (async): committing two ready experiments and pooling writes a
     tidy summary.csv + provenance.json into the TFM_aggregate bucket, with each
     container's on-disk design tags promoted to columns."""
     import json
@@ -2424,6 +2439,11 @@ def test_pool_requested_writes_summary_csv_with_labels(monkeypatch, app, tmp_pat
         widget.experiments_list.set_experiments([str(a), str(b)])
         widget._on_pool_requested()
 
+        # The pool runs on a thread_worker; wait for its result to land.
+        assert _wait_for(
+            lambda: widget.experiments_list._aggregate_result.text() != ""
+        ), "pool worker did not finish"
+
         out_dir = aggregate_output_dir([str(a), str(b)], None)
         summary = out_dir / "summary.csv"
         assert summary.exists()
@@ -2435,8 +2455,12 @@ def test_pool_requested_writes_summary_csv_with_labels(monkeypatch, app, tmp_pat
 
         prov = json.loads((out_dir / "provenance.json").read_text())
         assert prov["table"]["n_rows"] == len(loaded)
-        # Result label reports where it landed.
-        assert "summary.csv" in widget.experiments_list._aggregate_result.text()
+        # The results list names the written artifacts.
+        items = [
+            widget.experiments_list._pool_results.item(i).text()
+            for i in range(widget.experiments_list._pool_results.count())
+        ]
+        assert any("summary.csv" in it for it in items)
     finally:
         widget.close()
         widget.deleteLater()
@@ -2459,10 +2483,53 @@ def test_pool_requested_skips_not_ready_and_reports(monkeypatch, app, tmp_path):
         widget.experiments_list.set_experiments([str(good), str(bad)])
         widget._on_pool_requested()
 
+        assert _wait_for(
+            lambda: widget.experiments_list._aggregate_result.text() != ""
+        ), "pool worker did not finish"
+
         out_dir = aggregate_output_dir([str(good), str(bad)], None)
         loaded = pd.read_csv(out_dir / "summary.csv")
         assert set(loaded["experiment_id"]) == {"exp_good"}
-        assert "skipped" in widget.experiments_list._aggregate_result.text()
+        assert "not ready" in widget.experiments_list._aggregate_result.text().lower()
+    finally:
+        widget.close()
+        widget.deleteLater()
+
+
+def test_pool_readiness_greys_unsupported_metric(monkeypatch, app, tmp_path):
+    """A metric no ready experiment can produce is greyed + unchecked; a
+    force-only container (no displacement) disables Strain energy."""
+    widget = _stub_main_widget(monkeypatch)
+    try:
+        from napariTFM.utilities import ntfm
+        from napariTFM.utilities.batch_output import experiment_ntfm_path
+        import numpy as np
+
+        # A force+mask container with NO displacement series.
+        folder = tmp_path / "exp_noforce_disp"
+        ny = nx = 4
+        mask = np.zeros((ny, nx), dtype=np.int64)
+        mask[1:3, 1:3] = 1
+        df = ntfm.arrays_to_tidy(
+            force_field=np.ones((1, ny, nx, 2)) * 10.0,
+            mask=mask,
+            grid_spacing=1.0,
+            frame_interval=1.0,
+        )
+        ntfm.write_ntfm(
+            experiment_ntfm_path(str(folder), None),
+            df,
+            ntfm.build_metadata(config={}, inputs={"folder": str(folder)}),
+        )
+
+        widget.experiments_list.set_experiments([str(folder)])
+        widget._refresh_aggregate_readiness()
+
+        checks = widget.experiments_list._metric_checks
+        assert not checks["total_strain_energy"].isEnabled()  # greyed (no displacement)
+        assert not checks["total_strain_energy"].isChecked()
+        assert checks["polarization_index"].isEnabled()  # force present
+        assert "total_strain_energy" not in widget.experiments_list.selected_metrics()
     finally:
         widget.close()
         widget.deleteLater()

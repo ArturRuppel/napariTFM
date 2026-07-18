@@ -1191,24 +1191,25 @@ class napariTFMWidget(QWidget):
         pairs = self._aggregate_ntfm_paths()
         paths = [ntfm_path for _folder, ntfm_path in pairs]
         ready, skipped = aggregate.partition_ready(paths)
+        supported = aggregate.supported_metrics(ready)
         # Map each container path back to its folder basename for the message.
         name_by_path = {ntfm_path: Path(folder).name for folder, ntfm_path in pairs}
         skipped_named = [
             (name_by_path.get(p, Path(p).parent.name), reason) for p, reason in skipped
         ]
         self.experiments_list.set_aggregate_readiness(
-            len(ready), len(pairs), skipped_named
+            len(ready), len(pairs), skipped_named, supported
         )
 
     def _on_pool_requested(self) -> None:
         """Pool every ready experiment's ``.ntfm`` into one tidy summary table.
 
-        Runs synchronously on the GUI thread (as the sequential batch does): the
-        aggregator only reads + reduces containers — no compute — so it finishes
-        quickly relative to a run. Writes ``summary.csv`` + ``provenance.json`` +
-        ``schema.json`` into the ``TFM_aggregate`` bucket and reports the outcome.
+        Runs on a napari ``thread_worker`` (ITASC parity) so the busy bar animates
+        and the GUI stays responsive: the aggregator reads + reduces containers
+        and writes ``summary.csv`` + ``provenance.json`` + ``schema.json`` into the
+        ``TFM_aggregate`` bucket. Only the checked, supported metrics are written.
         """
-        from pathlib import Path
+        from napari.qt.threading import thread_worker
 
         from napariTFM.backend import aggregate
         from napariTFM.utilities.batch_output import aggregate_output_dir
@@ -1220,42 +1221,58 @@ class napariTFMWidget(QWidget):
         out_dir = aggregate_output_dir(
             [folder for folder, _ in pairs], self.data_manager.output_dir
         )
+        metrics = self.experiments_list.selected_metrics()
 
         self.experiments_list.set_pool_active(True)
-        QApplication.processEvents()
-        try:
-            result = aggregate.pool_experiments(paths, out_dir)
-        except ValueError as exc:
-            # The one expected, actionable failure: colliding experiment ids.
-            self.experiments_list.set_pool_active(False)
-            self.experiments_list.set_aggregate_result(str(exc), status="error")
-            self._refresh_aggregate_readiness()
-            QMessageBox.warning(self, "Pool experiments", str(exc))
-            return
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("Pool failed")
-            self.experiments_list.set_pool_active(False)
-            self.experiments_list.set_aggregate_result(f"Pooling failed: {exc}", status="error")
-            self._refresh_aggregate_readiness()
-            QMessageBox.critical(self, "Pool experiments", f"Pooling failed: {exc}")
-            return
+
+        @thread_worker
+        def _work():
+            return aggregate.pool_experiments(paths, out_dir, metrics=metrics or None)
+
+        worker = _work()
+        worker.returned.connect(lambda result: self._on_pool_done(result, out_dir))
+        worker.errored.connect(self._on_pool_error)
+        # Keep a reference so the worker isn't garbage-collected mid-run.
+        self._pool_worker = worker
+        worker.start()
+
+    def _on_pool_done(self, result, out_dir) -> None:
+        """Pool finished: list the written artifacts and note any skipped rows."""
+        from pathlib import Path
 
         self.experiments_list.set_pool_active(False)
         if result.summary_path is None:
-            msg = "No experiments were ready to pool (need force + mask)."
-            self.experiments_list.set_aggregate_result(msg, status=None)
-        else:
-            skipped_note = (
-                f"; skipped {len(result.skipped)} "
-                f"({', '.join(Path(p).parent.name for p, _ in result.skipped)})"
-                if result.skipped
-                else ""
-            )
             self.experiments_list.set_aggregate_result(
-                f"Pooled {result.n_rows} rows → {result.summary_path}{skipped_note}",
-                status="done",
+                "No experiments were ready to pool (need force + mask).", status=None
+            )
+        else:
+            artifacts = [
+                ("summary.csv", str(result.summary_path)),
+                ("schema.json", str(result.schema_path)),
+                ("provenance.json", str(result.provenance_path)),
+            ]
+            text = f"Pooled {result.n_rows} rows into {out_dir}."
+            if result.skipped:
+                names = ", ".join(Path(p).parent.name for p, _ in result.skipped)
+                text += f" Skipped (not ready): {names}."
+            self.experiments_list.set_aggregate_result(
+                text, artifacts=artifacts, status="done"
             )
         self._refresh_aggregate_readiness()
+
+    def _on_pool_error(self, exc: Exception) -> None:
+        """Pool failed: surface the (usually actionable) error."""
+        self.experiments_list.set_pool_active(False)
+        self.experiments_list.set_aggregate_result(
+            f"Aggregate failed: {exc}", status="error"
+        )
+        self._refresh_aggregate_readiness()
+        if isinstance(exc, ValueError):
+            # Expected, actionable: colliding experiment ids.
+            QMessageBox.warning(self, "Pool experiments", str(exc))
+        else:  # pragma: no cover - defensive
+            logger.error("Pool failed: %s", exc)
+            QMessageBox.critical(self, "Pool experiments", f"Pooling failed: {exc}")
 
     def _on_stage_node_clicked(self, key: str) -> None:
         """Decode one stage's series into the viewer (display-only, on demand).

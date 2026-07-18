@@ -2,11 +2,12 @@
 
 Each discovered experiment is one row. The columns are *derived from the folder
 nesting* under the chosen discovery root: every nesting level becomes a column
-and the folder name at that level is the row's value for it (root ``/data`` and
-folder ``/data/Ctrl/pos_00`` → ``Column 1 = Ctrl``, ``Column 2 = pos_00``). The
-column *names* are an editable, table-wide header; the *values* are read-only
-(they are the folder names). Rows are multi-selectable (Ctrl/Shift-click) and
-deletable.
+and the folder name at that level is the row's value for it, named
+innermost-anchored ``condition`` / ``experiment_id`` / ``position_id`` (root
+``/data`` and folder ``/data/Ctrl/pos_00`` → ``experiment_id = Ctrl``,
+``position_id = pos_00``). The column *names* are an editable, table-wide header
+(rename in place, or drop with the ``×``); the *values* are read-only (they are
+the folder names). Rows are multi-selectable (Ctrl/Shift-click) and deletable.
 """
 from __future__ import annotations
 
@@ -17,12 +18,15 @@ from typing import Callable, Iterable, Optional
 from qtpy.QtCore import QEvent, QRectF, Qt, Signal
 from qtpy.QtGui import QBrush, QColor, QDoubleValidator, QPainter, QPen
 from qtpy.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QProgressBar,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
@@ -32,13 +36,17 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from napariTFM.backend.aggregate import METRIC_COLUMNS, metric_label
+
 from napariTFM.widgets._collapsible_section import CollapsibleSection
 from napariTFM.widgets._icons import stage_action_icon
 from napariTFM.widgets._stage_spine import _STATUS_TOOLTIP, _node_style
 from napariTFM.widgets._ui_style import (
     COMPACT_SPACING,
+    HAIRLINE,
     TEXT_DIM,
     TEXT_MID,
+    action_button_style,
     experiment_name_color,
     experiment_row_style,
     experiment_status_color,
@@ -69,14 +77,36 @@ def _path_ends_with(path: Path, rel: Path) -> bool:
     return path.parts[-len(rel.parts):] == rel.parts
 
 
+# Innermost-anchored default names for folder-nesting levels (ITASC parity): the
+# deepest level is the position/experiment leaf, the next out its grouping, the
+# next its condition. Levels further from the leaf get generic ``level_N`` names.
+_SEED_LEVEL_NAMES = ("condition", "experiment_id", "position_id")
+
+
+def _seed_level_names(depth: int) -> list[str]:
+    """Default name for each of *depth* nesting levels, anchored at the leaf.
+
+    The innermost level is always ``position_id``, next-out ``experiment_id``,
+    next ``condition``; anything deeper (further from the leaf) is ``level_1``,
+    ``level_2``, … left-to-right.
+    """
+    names = [f"level_{i + 1}" for i in range(depth)]
+    for offset, seed in enumerate(reversed(_SEED_LEVEL_NAMES), start=1):
+        if offset <= depth:
+            names[depth - offset] = seed
+    return names
+
+
 def nesting_columns(folder: str | Path, root: str | Path) -> dict[str, str]:
     """Derive a row's columns from *folder*'s nesting under *root*.
 
-    Every path component of *folder* relative to *root* becomes a column named
-    ``Column 1``, ``Column 2`` … (left to right) whose value is that component's
-    folder name. A folder that is not actually under *root* (or equals it) falls
-    back to a single ``Column 1`` column holding the leaf folder name, so a row
-    always carries at least one column.
+    Each path component of *folder* relative to *root* becomes a column whose
+    value is that component's folder name. Columns are named innermost-anchored
+    ``condition`` / ``experiment_id`` / ``position_id`` (ITASC parity — see
+    :func:`_seed_level_names`), so ``…/WT/pos01`` yields
+    ``{"experiment_id": "WT", "position_id": "pos01"}``. A folder not under *root*
+    (or equal to it) falls back to a single ``position_id`` column holding the
+    leaf name, so a row always carries at least one column.
     """
     folder = Path(folder)
     try:
@@ -85,7 +115,9 @@ def nesting_columns(folder: str | Path, root: str | Path) -> dict[str, str]:
         parts = ()
     if not parts:
         parts = (folder.name,)
-    return {f"Column {i + 1}": part for i, part in enumerate(parts)}
+    columns = dict(zip(_seed_level_names(len(parts)), parts))
+    columns.setdefault("position_id", parts[-1])
+    return columns
 
 
 def discover_experiment_folders(
@@ -433,7 +465,6 @@ class ExperimentsList(QWidget):
         # Ordered, editable column names shared by every row (the table header).
         self._column_names: list[str] = []
         self._rows: list[ExperimentRow] = []
-        self._preview_rows: list[ExperimentRow] = []
         self._active: Optional[str] = None
         # Multi-selection for delete (Ctrl/Shift-click); ``_anchor`` is the
         # range-select pivot (the last plainly-clicked row).
@@ -462,18 +493,17 @@ class ExperimentsList(QWidget):
         self.setup_section = self._build_setup_section()
         body_layout.addWidget(self.setup_section)
 
-        # Staging for the two-step Discover→Commit flow (D2). The root is kept so
-        # committed rows can derive their columns from the nesting under it.
-        self._discovered: list[str] = []
+        # The last-scanned root, kept so a discovered row can derive its columns
+        # from its nesting under it (ITASC-style one-step "Find data folders").
         self._discover_root: Optional[str] = None
-        # Preview-row selection (separate from the committed-row selection
-        # machinery — preview rows have no "active"/tuning concept).
-        self._discovered_selected: set[str] = set()
 
-        self._staging_label = QLabel("")
-        self._staging_label.setStyleSheet(f"color: {TEXT_DIM};")
-        self._staging_label.setVisible(False)
-        body_layout.addWidget(self._staging_label)
+        # A transient hint under the table (empty-state call-to-action, or a
+        # post-scan "Added N data folders" message).
+        self._hint = QLabel("")
+        self._hint.setObjectName("experiments_hint_label")
+        self._hint.setStyleSheet(f"color: {TEXT_DIM};")
+        self._hint.setWordWrap(True)
+        body_layout.addWidget(self._hint)
 
         # Rows live in a bounded scroll region: a long discovered list scrolls
         # internally instead of pushing the rest of the panel down. The editable
@@ -504,23 +534,16 @@ class ExperimentsList(QWidget):
 
         self.add_btn = QToolButton()
         self.add_btn.setObjectName("experiments_add_button")
-        self.add_btn.setText("Discover")
-        self.add_btn.setIcon(stage_action_icon("plus", muted_accent(stage_accent("displacement"))))
-        self.add_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.add_btn.setText("Find data folders…")
+        self.add_btn.setStyleSheet(action_button_style())
         self.add_btn.clicked.connect(self._on_add_clicked)
         self._update_discover_tooltip()
         list_actions.addWidget(self.add_btn)
 
-        self.commit_btn = QToolButton()
-        self.commit_btn.setObjectName("experiments_commit_button")
-        self.commit_btn.setText("Add to list")
-        self.commit_btn.setEnabled(False)
-        self.commit_btn.clicked.connect(self.commit_discovered)
-        list_actions.addWidget(self.commit_btn)
-
         self.delete_btn = QToolButton()
         self.delete_btn.setObjectName("experiments_delete_button")
         self.delete_btn.setText("Delete selected")
+        self.delete_btn.setStyleSheet(action_button_style())
         self.delete_btn.setToolTip(
             "Remove the selected rows (Ctrl/Shift-click to select several)"
         )
@@ -538,10 +561,7 @@ class ExperimentsList(QWidget):
         self.run_selected_btn = QToolButton()
         self.run_selected_btn.setObjectName("experiments_run_selected_button")
         self.run_selected_btn.setText("Run selected")
-        self.run_selected_btn.setIcon(
-            stage_action_icon("run", muted_accent(stage_accent("force")))
-        )
-        self.run_selected_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.run_selected_btn.setStyleSheet(action_button_style())
         self.run_selected_btn.setToolTip(
             "Run the selected rows (Ctrl/Shift-click to select several, "
             "Ctrl+A for all)"
@@ -573,6 +593,12 @@ class ExperimentsList(QWidget):
 
         # Aggregate: pool every committed experiment's .ntfm into one tidy table
         # (the capstone step — the owner resolves paths + runs the aggregator).
+        # A neutral scope band marks the shift from per-experiment to whole-batch.
+        self.aggregate_scope_band = self._make_scope_band(
+            "All experiments",
+            "Pooled across the whole batch, grouped by your columns.",
+        )
+        body_layout.addWidget(self.aggregate_scope_band)
         self.aggregate_section = self._build_aggregate_section()
         body_layout.addWidget(self.aggregate_section)
 
@@ -602,31 +628,76 @@ class ExperimentsList(QWidget):
         return CollapsibleSection("Setup", inner, expanded=True, title_color=TEXT_MID)
 
     # -- aggregate: pool the batch into one tidy summary table ------------
+    def _make_scope_band(self, title: str, subtitle: str) -> QWidget:
+        """A neutral divider marking the shift from per-experiment to whole-batch.
+
+        Mirrors ITASC's scope band above its Aggregate section: a top hairline,
+        an uppercase letter-spaced heading, and a muted caption — a deliberately
+        un-accented break saying "everything below pools across the whole batch."
+        """
+        band = QFrame()
+        band.setObjectName("tfm_scope_band")
+        band.setStyleSheet(
+            f"QFrame#tfm_scope_band {{ border-top: 1px solid {HAIRLINE}; "
+            "margin-top: 8px; padding-top: 8px; }"
+        )
+        layout = QVBoxLayout(band)
+        layout.setContentsMargins(2, 6, 2, 0)
+        layout.setSpacing(0)
+        heading = QLabel(title.upper())
+        heading.setStyleSheet(
+            f"font-weight: 700; font-size: 8pt; letter-spacing: 1px; color: {TEXT_DIM};"
+        )
+        caption = QLabel(subtitle)
+        caption.setWordWrap(True)
+        caption.setStyleSheet(f"color: {TEXT_DIM}; font-size: 8pt;")
+        layout.addWidget(heading)
+        layout.addWidget(caption)
+        return band
+
     def _build_aggregate_section(self) -> CollapsibleSection:
         """The capstone: reduce every ready experiment's ``.ntfm`` to one table.
 
-        The section shows how many experiments are ready to pool (mask + force
-        present), a Pool button (disabled until at least one is ready), and the
-        result of the last pool. The actual reduction is the owner's job — this
-        only surfaces state and emits :attr:`pool_requested`.
+        ITASC-style layout: a subtitle, a readiness readout, per-metric
+        checkboxes (greyed when no ready experiment can produce them), a text
+        pool button, a busy progress bar, and a results list naming the written
+        artifacts. The reduction itself is the owner's job — this surfaces state
+        and emits :attr:`pool_requested`.
         """
         inner = QWidget()
         box = QVBoxLayout()
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(COMPACT_SPACING)
 
-        self._aggregate_summary = QLabel("No experiments to pool yet.")
-        self._aggregate_summary.setStyleSheet(f"color: {TEXT_DIM};")
+        subtitle = QLabel("Pools every processed experiment into project-level tables.")
+        subtitle.setStyleSheet(f"color: {TEXT_DIM};")
+        subtitle.setWordWrap(True)
+        box.addWidget(subtitle)
+
+        self._aggregate_summary = QLabel("No data folders yet.")
+        self._aggregate_summary.setStyleSheet(f"color: {TEXT_MID};")
         self._aggregate_summary.setWordWrap(True)
         box.addWidget(self._aggregate_summary)
+
+        metrics_label = QLabel("Metrics to pool:")
+        metrics_label.setStyleSheet(f"color: {TEXT_MID};")
+        box.addWidget(metrics_label)
+
+        self._metric_checks: dict[str, QCheckBox] = {}
+        for metric in METRIC_COLUMNS:
+            cb = QCheckBox(metric_label(metric))
+            cb.setObjectName(f"aggregate_metric_{metric}")
+            cb.setChecked(True)
+            cb.setToolTip(metric)
+            self._metric_checks[metric] = cb
+            box.addWidget(cb)
 
         pool_row = QHBoxLayout()
         pool_row.setContentsMargins(0, 0, 0, 0)
         self.pool_btn = QToolButton()
         self.pool_btn.setObjectName("experiments_pool_button")
-        self.pool_btn.setText("Pool experiments")
-        self.pool_btn.setIcon(stage_action_icon("run", muted_accent(stage_accent("stress"))))
-        self.pool_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.pool_btn.setText("Pool ready experiments")
+        self.pool_btn.setStyleSheet(action_button_style())
         self.pool_btn.setToolTip(
             "Reduce every ready experiment's results into one tidy summary.csv "
             "(+ provenance.json / schema.json)"
@@ -636,6 +707,18 @@ class ExperimentsList(QWidget):
         pool_row.addWidget(self.pool_btn)
         pool_row.addStretch()
         box.addLayout(pool_row)
+
+        self._pool_progress = QProgressBar()
+        self._pool_progress.setObjectName("aggregate_progress")
+        self._pool_progress.setTextVisible(False)
+        self._pool_progress.setVisible(False)
+        box.addWidget(self._pool_progress)
+
+        self._pool_results = QListWidget()
+        self._pool_results.setObjectName("aggregate_results")
+        self._pool_results.setMaximumHeight(96)
+        self._pool_results.setVisible(False)
+        box.addWidget(self._pool_results)
 
         self._aggregate_result = QLabel("")
         self._aggregate_result.setStyleSheet(f"color: {TEXT_DIM};")
@@ -649,25 +732,36 @@ class ExperimentsList(QWidget):
     def _on_pool_clicked(self) -> None:  # pragma: no cover - GUI event
         self.pool_requested.emit()
 
-    def set_aggregate_readiness(
-        self, ready: int, total: int, skipped: Optional[list[tuple[str, str]]] = None
-    ) -> None:
-        """Show how many experiments can pool and enable/disable the Pool button.
+    def selected_metrics(self) -> list[str]:
+        """Metric keys that are both checked and enabled (supported)."""
+        return [
+            m for m, cb in self._metric_checks.items()
+            if cb.isChecked() and cb.isEnabled()
+        ]
 
-        ``ready``/``total`` are experiment counts; ``skipped`` is a list of
-        ``(name, reason)`` for the not-ready ones, surfaced in the button tooltip
-        so the user knows *why* a folder won't contribute (e.g. "no force").
+    def set_aggregate_readiness(
+        self,
+        ready: int,
+        total: int,
+        skipped: Optional[list[tuple[str, str]]] = None,
+        supported: Optional[Iterable[str]] = None,
+    ) -> None:
+        """Show how many experiments can pool, grey unsupported metrics, and set
+        the Pool button's enabled state.
+
+        ``ready``/``total`` are experiment counts; ``skipped`` is ``(name,
+        reason)`` for the not-ready ones (surfaced in the readout + tooltip);
+        ``supported`` is the set of metric keys at least one ready experiment can
+        produce (drives checkbox greying).
         """
         if total == 0:
-            self._aggregate_summary.setText("No experiments to pool yet.")
-        elif ready == 0:
-            self._aggregate_summary.setText(
-                f"0 of {total} experiments ready to pool (need force + mask)."
-            )
+            self._aggregate_summary.setText("No data folders yet.")
         else:
-            self._aggregate_summary.setText(
-                f"{ready} of {total} experiments ready to pool."
-            )
+            message = f"{ready} of {total} experiments ready to pool"
+            if skipped:
+                names = ", ".join(name for name, _ in skipped)
+                message += f" — not ready: {names}"
+            self._aggregate_summary.setText(message)
         if skipped:
             self.pool_btn.setToolTip(
                 "Not ready (skipped):\n"
@@ -678,24 +772,60 @@ class ExperimentsList(QWidget):
                 "Reduce every ready experiment's results into one tidy summary.csv "
                 "(+ provenance.json / schema.json)"
             )
+        # Grey metrics no ready experiment can produce; force-uncheck them, and
+        # re-check a metric the moment it becomes supported again (ITASC parity).
+        if supported is not None:
+            supported = set(supported)
+            for metric, cb in self._metric_checks.items():
+                was_enabled = cb.isEnabled()
+                now = metric in supported
+                cb.setEnabled(now)
+                cb.setToolTip(
+                    metric if now
+                    else f"{metric}: no ready experiment provides the required inputs"
+                )
+                if not now:
+                    cb.setChecked(False)
+                elif not was_enabled:
+                    cb.setChecked(True)
         # Never override the "busy" disabled state mid-pool.
         if not getattr(self, "_pool_active", False):
             self.pool_btn.setEnabled(ready > 0)
 
     def set_pool_active(self, active: bool) -> None:
-        """Toggle the pooling-in-progress state (disables the button, shows busy).
+        """Toggle the pooling-in-progress state (disables the button, busy bar).
 
-        While active the button is disabled and reads "Pooling…". On completion
-        the owner calls :meth:`set_aggregate_readiness` to restore the enabled
-        state from the current readiness, so this only clears the busy label.
+        While active the button is disabled/reads "Pooling…" and an indeterminate
+        progress bar shows. On completion the owner calls
+        :meth:`set_aggregate_readiness` to restore the enabled state.
         """
         self._pool_active = active
-        self.pool_btn.setText("Pooling…" if active else "Pool experiments")
+        self.pool_btn.setText("Pooling…" if active else "Pool ready experiments")
+        self._pool_progress.setVisible(active)
         if active:
+            self._pool_progress.setRange(0, 0)  # indeterminate/busy
             self.pool_btn.setEnabled(False)
 
-    def set_aggregate_result(self, text: str, *, status: Optional[str] = None) -> None:
-        """Show the outcome of the last pool (path written, positions skipped)."""
+    def set_aggregate_result(
+        self,
+        text: str,
+        *,
+        artifacts: Optional[list[tuple[str, str]]] = None,
+        status: Optional[str] = None,
+    ) -> None:
+        """Show the outcome of the last pool.
+
+        ``artifacts`` is ``(name, path)`` for each written file (listed one per
+        row, ITASC-style); ``text`` is the summary/skip line; ``status`` sets the
+        section's stored status.
+        """
+        self._pool_results.clear()
+        if artifacts:
+            for name, path in artifacts:
+                self._pool_results.addItem(f"{name}: {path}")
+            self._pool_results.setVisible(True)
+        else:
+            self._pool_results.setVisible(False)
         self._aggregate_result.setText(text)
         self._aggregate_result.setVisible(bool(text))
         if status is not None:
@@ -906,57 +1036,56 @@ class ExperimentsList(QWidget):
             if old in cols:
                 cols[new] = cols.pop(old)
 
+    def remove_column(self, index: int) -> None:
+        """Drop column *index* table-wide, discarding each row's value for it.
+
+        The `×` beside each header field removes that grouping column from every
+        row (ITASC parity). Rebuilds the table so the value cells realign, and
+        notifies the owner so the saved state / aggregate readiness refresh.
+        """
+        if not 0 <= index < len(self._column_names):
+            return
+        name = self._column_names.pop(index)
+        for path in self._paths:
+            self._records[path]["columns"].pop(name, None)
+        self._rebuild_table()
+        self.experiments_changed.emit()
+
     def _ensure_columns(self, names: Iterable[str]) -> None:
         """Append any column names not already present, preserving order."""
         for name in names:
             if name not in self._column_names:
                 self._column_names.append(name)
 
-    # -- two-step Discover -> Commit (D2) --------------------------------
+    # -- one-step "Find data folders" (ITASC parity) ---------------------
     def discover(self, root: str | Path) -> list[str]:
-        """Step 1: stage the folders under *root* that hold the required inputs.
+        """Scan *root* and add every matching folder to the list, in one step.
 
         Folder-presence only — required inputs are beads + reference (cells is
-        optional and excluded from the requirement). The root is remembered so
-        committed rows can derive their columns from the nesting under it.
-        Staging never mutates the committed list; the second Commit step does.
-        The staged set renders immediately as dimmed preview rows in the table;
-        a second call to ``discover`` *replaces* the current preview set rather
-        than merging into it.
+        optional and excluded). Each match is added straight to the committed
+        list (deduped by :meth:`_add_records`), its columns derived from the
+        folder nesting under *root* (:func:`nesting_columns`). The scan is
+        **additive**: running it again against another root appends new folders
+        without disturbing rows already in the list. Returns the newly-added
+        paths.
         """
         cfg = self.input_file_config()
         required = [cfg.get("beads"), cfg.get("reference")]
         self._discover_root = str(root)
-        self._discovered = discover_experiment_folders(root, required)
-        self._discovered_selected = set()
-        self._update_staging()
-        self._rebuild_table()
-        return list(self._discovered)
-
-    def discovered(self) -> list[str]:
-        return list(self._discovered)
-
-    def commit_discovered(self) -> None:
-        """Step 2: add the staged folders with columns from the folder nesting."""
-        if not self._discovered:
-            return
-        root = self._discover_root
-        pairs = [(path, nesting_columns(path, root)) for path in self._discovered]
-        self._discovered = []
-        self._discovered_selected = set()
+        found = discover_experiment_folders(root, required)
+        before = set(self._paths)
+        pairs = [(path, nesting_columns(path, root)) for path in found]
         self._add_records(pairs, self.input_file_config())
-        self._update_staging()
-
-    def _update_staging(self) -> None:
-        n = len(self._discovered)
-        self.commit_btn.setEnabled(n > 0)
-        self._staging_label.setText(
-            f"{n} folder{'s' if n != 1 else ''} discovered — Add to list"
-            if n
-            else ""
+        added = [p for p in found if p not in before]
+        already = len(found) - len(added)
+        self._set_hint(
+            f"Added {len(added)} data folder{'s' if len(added) != 1 else ''}."
+            + (f" ({already} already listed.)" if already else "")
+            if added
+            else f"No new data folders found under {root} — "
+            "check the input file names in Setup."
         )
-        # Don't reserve a blank line when nothing is staged.
-        self._staging_label.setVisible(n > 0)
+        return added
 
     # -- queries ---------------------------------------------------------
     def experiments(self) -> list[str]:
@@ -1056,10 +1185,9 @@ class ExperimentsList(QWidget):
     ) -> None:
         """Append new folders, copying the given column config onto each new row.
 
-        The *commit* half of the Discover→Commit flow uses :meth:`commit_discovered`
-        (which derives columns from nesting). This entry point applies one shared
-        ``columns`` dict to every added row and is used by the saved-state/load
-        paths and tests.
+        :meth:`discover` derives per-row columns from folder nesting; this entry
+        point instead applies one shared ``columns`` dict to every added row and
+        is used by the saved-state/load paths and tests.
         """
         pairs = [(path, dict(columns or {})) for path in dict.fromkeys(paths)]
         self._add_records(pairs, input_files)
@@ -1126,16 +1254,7 @@ class ExperimentsList(QWidget):
             self.active_changed.emit(path or "")
 
     def delete_selected(self) -> None:
-        """Remove selected rows: preview-staged first, else committed rows."""
-        if self._discovered_selected:
-            self._discovered = [
-                p for p in self._discovered if p not in self._discovered_selected
-            ]
-            self._discovered_selected = set()
-            self._update_staging()
-            self._rebuild_table()
-            self._update_delete_btn()
-            return
+        """Remove the selected committed rows."""
         if not self._selected_paths:
             return
         remaining = [p for p in self._paths if p not in self._selected_paths]
@@ -1287,15 +1406,10 @@ class ExperimentsList(QWidget):
             self._anchor = path
             self.set_active(path)
 
-    def _on_preview_row_clicked(self, path: str, _flag: int) -> None:
-        """Toggle one not-yet-committed row in/out of the delete selection."""
-        if path in self._discovered_selected:
-            self._discovered_selected.discard(path)
-        else:
-            self._discovered_selected.add(path)
-        for row in self._preview_rows:
-            row.set_selected(row.path in self._discovered_selected)
-        self._update_delete_btn()
+    def _set_hint(self, text: str) -> None:
+        """Set the transient hint line under the table (empty when *text* is ""."""
+        self._hint.setText(text)
+        self._hint.setVisible(bool(text))
 
     def _apply_selection_styles(self) -> None:
         for row in self._rows:
@@ -1303,9 +1417,7 @@ class ExperimentsList(QWidget):
 
     def _update_delete_btn(self) -> None:
         if hasattr(self, "delete_btn"):
-            self.delete_btn.setEnabled(
-                bool(self._selected_paths) or bool(self._discovered_selected)
-            )
+            self.delete_btn.setEnabled(bool(self._selected_paths))
         self._update_run_btn()
 
     def _update_run_btn(self) -> None:
@@ -1320,9 +1432,7 @@ class ExperimentsList(QWidget):
             )
 
     def keyPressEvent(self, event) -> None:  # pragma: no cover - GUI event
-        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and (
-            self._selected_paths or self._discovered_selected
-        ):
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and self._selected_paths:
             self.delete_selected()
             event.accept()
             return
@@ -1359,13 +1469,27 @@ class ExperimentsList(QWidget):
         self._header_fields: list[QLineEdit] = []
         if self._column_names:
             for index, name in enumerate(self._column_names):
+                cell = QWidget()
+                cell_row = QHBoxLayout(cell)
+                cell_row.setContentsMargins(0, 0, 0, 0)
+                cell_row.setSpacing(2)
                 field = QLineEdit(name)
                 field.setObjectName(f"experiments_column_header_{index}")
                 field.setStyleSheet(mono_input_style())
                 field.editingFinished.connect(
                     lambda i=index, f=field: self.rename_column(i, f.text())
                 )
-                row.addWidget(field, 1)
+                cell_row.addWidget(field, 1)
+                remove = QToolButton()
+                remove.setObjectName(f"experiments_remove_column_{index}")
+                remove.setText("×")
+                remove.setToolTip(f"Remove the '{name}' column")
+                remove.setAutoRaise(True)
+                remove.setFixedWidth(16)
+                remove.setStyleSheet(f"color: {TEXT_DIM}; border: none;")
+                remove.clicked.connect(lambda _=False, i=index: self.remove_column(i))
+                cell_row.addWidget(remove)
+                row.addWidget(cell, 1)
                 self._header_fields.append(field)
         else:
             placeholder = QLineEdit("Folder")
@@ -1387,7 +1511,6 @@ class ExperimentsList(QWidget):
             if item.widget() is not None:
                 item.widget().deleteLater()
         self._rows = []
-        self._preview_rows = []
         self._rows_box.addWidget(self._build_header_widget())
         for path in self._paths:
             values = [
@@ -1400,20 +1523,21 @@ class ExperimentsList(QWidget):
             row.set_selected(path in self._selected_paths)
             self._rows_box.addWidget(row)
             self._rows.append(row)
-        for path in self._discovered:
-            row = ExperimentRow(path, preview=True)
-            row.clicked.connect(self._on_preview_row_clicked)
-            row.set_selected(path in self._discovered_selected)
-            self._rows_box.addWidget(row)
-            self._preview_rows.append(row)
         self._update_table_visibility()
 
     def _update_table_visibility(self) -> None:
         """Collapse the empty table so the action bar sits flush under the
         input-file form. The bounded scroll region (and its "Folder" header
-        placeholder) only earns its 300px once there are committed or
-        preview rows to show."""
-        self._rows_scroll.setVisible(bool(self._paths) or bool(self._discovered))
+        placeholder) only earns its height once there are rows to show. While
+        empty, show the call-to-action hint (a scan replaces it with its own
+        message, since that runs with rows already present)."""
+        has_rows = bool(self._paths)
+        self._rows_scroll.setVisible(has_rows)
+        if not has_rows:
+            self._set_hint(
+                "Click “Find data folders…” and pick a parent folder — every "
+                "subfolder holding the Setup input files is added to the list."
+            )
 
     def _update_meta(self) -> None:
         n = len(self._paths)
@@ -1424,7 +1548,7 @@ class ExperimentsList(QWidget):
         self._update_run_btn()
 
     def _on_add_clicked(self) -> None:  # pragma: no cover - GUI dialog
-        dialog = QFileDialog(self, "Discover experiments under a root folder")
+        dialog = QFileDialog(self, "Select a parent folder to scan for data folders")
         dialog.setFileMode(QFileDialog.Directory)
         dialog.setOption(QFileDialog.ShowDirsOnly, True)
         if dialog.exec_():

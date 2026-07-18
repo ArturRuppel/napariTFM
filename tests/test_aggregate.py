@@ -23,7 +23,7 @@ GRID_SPACING_UM = 0.5
 FRAME_INTERVAL_MIN = 2.0
 
 
-def _make_ntfm(folder, *, with_force=True, with_mask=True, labels=None):
+def _make_ntfm(folder, *, with_force=True, with_mask=True, with_displacement=True, labels=None):
     """Write a deterministic 2-frame, 6x6 container into its own experiment folder.
 
     Mirrors a real batch output: ``<folder>/TFM_results.ome.tif`` with the source
@@ -41,7 +41,7 @@ def _make_ntfm(folder, *, with_force=True, with_mask=True, labels=None):
     mask[3:5, 3:6] = 2  # region 2 (a 2x3 block)
 
     df = ntfm.arrays_to_tidy(
-        displacement_field=displacement,
+        displacement_field=displacement if with_displacement else None,
         force_field=force if with_force else None,
         mask=mask if with_mask else None,
         grid_spacing=GRID_SPACING_UM,
@@ -307,6 +307,39 @@ def test_schema_order_matches_table_columns(tmp_path):
     table = aggregate.build_summary_table([a])
     schema = aggregate.build_schema(table)
     assert [e["name"] for e in schema] == list(table.columns)
+
+
+# ---------------------------------------------------------------------------
+# Metric selection + support
+# ---------------------------------------------------------------------------
+
+def test_supported_metrics_full_container(tmp_path):
+    a, *_ = _make_ntfm(tmp_path / "exp_a")  # displacement + force + mask
+    assert aggregate.supported_metrics([a]) == set(aggregate.METRIC_COLUMNS)
+
+
+def test_supported_metrics_force_only_drops_strain_energy(tmp_path):
+    a, *_ = _make_ntfm(tmp_path / "exp_a", with_displacement=False)  # force + mask
+    supported = aggregate.supported_metrics([a])
+    assert "total_strain_energy" not in supported
+    assert {"polarization_index", "lambda1", "lambda2"} <= supported
+
+
+def test_supported_metrics_no_force_is_empty(tmp_path):
+    a, *_ = _make_ntfm(tmp_path / "exp_a", with_force=False)
+    assert aggregate.supported_metrics([a]) == set()
+
+
+def test_pool_metrics_selection_filters_columns(tmp_path):
+    a, *_ = _make_ntfm(tmp_path / "exp_a")
+    out = tmp_path / "pool"
+    aggregate.pool_experiments([a], out, metrics=["polarization_index"])
+    loaded = pd.read_csv(out / aggregate.SUMMARY_FILENAME)
+    assert "polarization_index" in loaded.columns
+    for dropped in ("total_strain_energy", "lambda1", "lambda2"):
+        assert dropped not in loaded.columns
+    # Grain + id columns are always kept.
+    assert {"id", "experiment_id", "region_id", "frame"} <= set(loaded.columns)
 
 
 # ---------------------------------------------------------------------------
