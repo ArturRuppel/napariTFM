@@ -175,8 +175,8 @@ def test_ffd_threads_all_params_into_ffd_pyr(monkeypatch):
 
     params = _params(
         disp_method="FFD", disp_device="cuda",
-        ffd_level_spacing=10.0, ffd_num_levels=5, ffd_metric="mse",
-        ffd_num_iters=33, ffd_elastic=0.25, ffd_tol=0.002,
+        ffd_level_spacing=10.0, ffd_metric="mse",
+        ffd_num_iters=33, ffd_elastic=0.25,
         ffd_downscale=1.8, ffd_min_size=12, ffd_interp="bilinear",
         ffd_early_stop=0.0015,
         ffd_warmstart=False,          # single cold fit, init_field must be None
@@ -185,16 +185,17 @@ def test_ffd_threads_all_params_into_ffd_pyr(monkeypatch):
     FFDDisplacementAnalyzer(params).calculate_flow(ref, ref)
 
     assert captured["level_spacing"] == 10.0
-    assert captured["num_levels"] == 5
     assert captured["num_iters"] == 33
     assert captured["metric"] == "mse"
     assert captured["elastic"] == 0.25
-    assert captured["tol"] == 0.002
     assert captured["downscale"] == 1.8
     assert captured["min_size"] == 12
     assert captured["interp"] == "bilinear"
     assert captured["early_stop"] == 0.0015
     assert captured["init_field"] is None
+    # Pyramid depth is derived from downscale + min_size, not threaded as a count.
+    assert "num_levels" not in captured
+    assert "tol" not in captured
 
 
 # ---------------------------------------------------- FFD warm-start #

@@ -30,13 +30,16 @@ class DisplacementParameters:
 
     # FFD (grid-pyramid free-form deformation): GPU-only.
     ffd_level_spacing: float = 12.0   # finest control spacing (px) -- the bias-variance dial
-    ffd_num_levels: int = 6           # image-pyramid depth (capture range)
+    ffd_num_levels: int = 6           # DERIVED/display only: pyramid depth follows from
+                                      # ffd_downscale + ffd_min_size (see pyramid_num_levels);
+                                      # the backend ignores this field. Kept so recipes/UI can
+                                      # surface the resulting depth.
     ffd_metric: str = "lncc"          # "lncc" | "mse" image-match objective
     ffd_num_iters: int = 50           # LBFGS iterations per pyramid level
     ffd_elastic: float = 0.0          # elastic (Navier strain-energy) regularization weight; 0 = off
-    ffd_tol: float = 0.0              # per-level early-stop: stop when a level's data-loss gain < tol
     ffd_downscale: float = 2.0        # image-pyramid downscale factor per level
-    ffd_min_size: int = 16            # coarsest pyramid level min dimension (px)
+    ffd_min_size: int = 16            # coarsest pyramid level min dimension (px) -- with
+                                      # ffd_downscale this sets the pyramid depth / capture range
     ffd_interp: str = "bicubic"       # warp interpolation: "bicubic" | "bilinear"
     # FFD warm-start (temporal coherence): consecutive time-lapse frames' fields are
     # nearly identical, so seed frame t's fit with frame t-1's result. The full
@@ -155,11 +158,10 @@ class UnifiedParameters:
     ilk_radius: int = 7
     ilk_num_warp: int = 10
     ffd_level_spacing: float = 12.0
-    ffd_num_levels: int = 6
+    ffd_num_levels: int = 6            # derived/display only (see DisplacementParameters)
     ffd_metric: str = "lncc"
     ffd_num_iters: int = 50
     ffd_elastic: float = 0.0
-    ffd_tol: float = 0.0
     ffd_downscale: float = 2.0
     ffd_min_size: int = 16
     ffd_interp: str = "bicubic"

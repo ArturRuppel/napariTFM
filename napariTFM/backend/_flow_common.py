@@ -97,6 +97,22 @@ def _pyramid(img, downscale=2.0, nlevel=10, min_size=16):
     return pyr[::-1]
 
 
+def pyramid_num_levels(shape, downscale=2.0, min_size=16):
+    """Number of levels ``_pyramid`` builds for an image of ``shape`` (h, w) when the
+    only stop is the size floor: keep shrinking by ``downscale`` until the short side
+    would fall to ``downscale * min_size`` or below. Mirrors ``_pyramid``'s size gate
+    exactly (same ``ceil`` per axis), so a caller can report/size the pyramid depth
+    without building it. Depends only on the shape and these two knobs -- there is no
+    separate level-count cap."""
+    h, w = int(shape[0]), int(shape[1])
+    n = 1
+    while min(h, w) > downscale * min_size:
+        h = math.ceil(h / downscale)
+        w = math.ceil(w / downscale)
+        n += 1
+    return n
+
+
 def _resize_flow(flow, shape):
     """Rescale a (2,H,W) flow field to `shape`, scaling the vector values by the same
     factor. Mirrors skimage's ``_resize_flow``, i.e.

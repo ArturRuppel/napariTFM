@@ -8,9 +8,9 @@ its coarse control grid keeps off-cell noise low).
 
 The primary knob is ``ffd_level_spacing``, the finest control spacing: it is the
 bias-variance dial (fine ~8 px recovers sharp peaks on clean data, coarse ~24 px
-is the noise regularizer). ``ffd_num_levels`` sets the pyramid depth (capture
-range); ``ffd_metric`` chooses the image-match objective (``lncc`` preserves the
-peak better than ``mse``).
+is the noise regularizer). The pyramid depth (capture range) is derived from
+``ffd_downscale`` and ``ffd_min_size`` rather than a separate count; ``ffd_metric``
+chooses the image-match objective (``lncc`` preserves the peak better than ``mse``).
 
 FFD has **no CPU implementation** by design: the control-grid optimisation is
 impractical without a GPU. It requires the ``[gpu]`` extra (torch) and a CUDA
@@ -83,13 +83,11 @@ class FFDDisplacementAnalyzer(BaseDisplacementAnalyzer):
         u = ffd_pyr(
             reference, moving,
             level_spacing=float(self.params.ffd_level_spacing),
-            num_levels=max(1, int(self.params.ffd_num_levels)),
             num_iters=max(1, int(self.params.ffd_num_iters)),
             downscale=float(self.params.ffd_downscale),
             min_size=max(1, int(self.params.ffd_min_size)),
             metric=str(self.params.ffd_metric),
             elastic=float(self.params.ffd_elastic),
-            tol=float(self.params.ffd_tol),
             interp=str(self.params.ffd_interp),
             device=self._device,
             init_field=self._prev_field if warm else None,

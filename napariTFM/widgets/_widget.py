@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 from datetime import datetime
 from typing import Any
 
@@ -64,6 +65,22 @@ STAGE_DATA_ARTIFACTS = {
 }
 
 
+def _derived_pyramid_levels(shape, downscale, min_size):
+    """Pyramid depth FFD builds for ``shape`` (h, w) at ``downscale``/``min_size``.
+
+    A torch-free duplicate of ``backend._flow_common.pyramid_num_levels`` (which lives
+    in a module that imports torch at load); the panel needs this to show the derived
+    level count without dragging torch onto the widget import path. Keep the two in
+    sync -- both mirror ``_pyramid``'s size gate."""
+    h, w = int(shape[0]), int(shape[1])
+    n = 1
+    while min(h, w) > downscale * min_size:
+        h = math.ceil(h / downscale)
+        w = math.ceil(w / downscale)
+        n += 1
+    return n
+
+
 # Sentinel marking a sub-group heading inside a section's spec list. A spec of
 # the form (GROUP, "Advanced") renders a muted sub-header and starts a fresh
 # two-per-row run; it is not a parameter control.
@@ -101,17 +118,17 @@ class WorkflowParameterPanel(QWidget):
             ("ilk_radius", "Window Radius (px)", "int", 1, 64, 1, 0, None),
             ("ilk_num_warp", "Warp Iterations", "int", 1, 64, 1, 0, None),
             (GROUP, "FFD (GPU only)"),
-            ("ffd_level_spacing", "Control Spacing (px)", "float", 4.0, 64.0, 1.0, 1, None),
-            ("ffd_num_levels", "Pyramid Levels", "int", 1, 10, 1, 0, None),
-            ("ffd_elastic", "Elastic Regularization", "float", 0.0, 10.0, 0.01, 3, None),
             ("ffd_num_iters", "Iterations / Level", "int", 1, 200, 1, 0, None),
             ("ffd_metric", "Image Metric", "choice", None, None, None, None, ["lncc", "mse"]),
+            ("ffd_elastic", "Elastic Regularization", "float", 0.0, 10.0, 0.01, 3, None),
             ("ffd_warmstart", "Warm-Start (time-lapse)", "bool", None, None, None, None, None),
             ("ffd_early_stop", "Early-Exit Tolerance", "float", 0.0, 0.01, 0.00001, 6, None),
-            (ADVANCED, "Advanced", "FFD"),
-            ("ffd_tol", "Early-Stop Tolerance", "float", 0.0, 0.1, 0.001, 4, None),
+            (GROUP, "FFD image pyramid"),
+            ("ffd_level_spacing", "Control Spacing (px)", "float", 4.0, 64.0, 1.0, 1, None),
             ("ffd_downscale", "Pyramid Downscale", "float", 1.1, 4.0, 0.1, 1, None),
-            ("ffd_min_size", "Min Pyramid Size (px)", "int", 4, 128, 4, 0, None),
+            ("ffd_min_size", "Coarsest Size (px)", "int", 4, 128, 4, 0, None),
+            ("ffd_num_levels", "Pyramid Levels", "int_display", None, None, None, None, None),
+            (ADVANCED, "Advanced", "FFD"),
             ("ffd_interp", "Warp Interpolation", "choice", None, None, None, None, ["bicubic", "bilinear"]),
             (GROUP, "General"),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
@@ -226,10 +243,10 @@ class WorkflowParameterPanel(QWidget):
             "best value grows with image noise."
         ),
         "ffd_num_levels": (
-            "Image-pyramid depth for FFD. Deeper pyramids capture larger "
-            "displacements (each level halves the image, shrinking motion in pixels). "
-            "Raise it if big displacements are missed; the default handles the range "
-            "we tested."
+            "Read-only: how many pyramid levels FFD will build for the loaded input, "
+            "derived from Pyramid Downscale and Coarsest Size — not a knob. Deeper "
+            "pyramids capture larger displacements. To change it, adjust Coarsest Size "
+            "(smaller = deeper) or Pyramid Downscale. Shows '—' until an input loads."
         ),
         "ffd_metric": (
             "Image-match objective FFD minimises. 'lncc' (local normalised "
@@ -266,11 +283,6 @@ class WorkflowParameterPanel(QWidget):
             "time-lapses — a well-seeded level converges early and exits; a cold or "
             "poorly-seeded one keeps iterating."
         ),
-        "ffd_tol": (
-            "Per-level early-stop tolerance: stop refining once a level's data-loss "
-            "gain falls below this. 0 = run every level's full iteration budget. Small "
-            "positive values trim wasted iterations on already-converged levels."
-        ),
         "ffd_downscale": (
             "Image-pyramid downscale factor per level. 2.0 halves each axis per level "
             "(the default); smaller factors build a finer pyramid (more levels, gentler "
@@ -279,7 +291,8 @@ class WorkflowParameterPanel(QWidget):
         "ffd_min_size": (
             "Smallest dimension (px) the coarsest pyramid level is allowed to reach: "
             "the pyramid stops adding coarser levels once a level would fall below it. "
-            "Bounds capture range together with Pyramid Levels."
+            "With Pyramid Downscale this sets the pyramid depth (shown as Pyramid "
+            "Levels) and hence FFD's capture range — smaller = deeper = larger motions."
         ),
         "ffd_interp": (
             "Interpolation used to warp the moving image. 'bicubic' (default) preserves "
@@ -308,6 +321,9 @@ class WorkflowParameterPanel(QWidget):
         self.parameter_manager = parameter_manager
         self._section_titles = set(section_titles) if section_titles is not None else None
         self.parameter_controls = {}
+        # (h, w) of the current input frame, pushed in by the shell (set_input_shape),
+        # so the read-only FFD Pyramid Levels display can show the real derived depth.
+        self._input_shape = None
         # Populated by _setup_ui: one (toggle, container, owner_method) per collapsible
         # Advanced disclosure, for method-scoped show/hide (see _refresh_advanced_visibility).
         self._advanced_blocks = []
@@ -317,10 +333,12 @@ class WorkflowParameterPanel(QWidget):
         self._apply_method_availability()
         self._refresh_method_enablement()
         self._refresh_advanced_visibility()
+        self._refresh_pyramid_levels()
         self.parameter_manager.parameter_changed.connect(self._sync_parameter)
         self.parameter_manager.parameter_changed.connect(self._refresh_confinement_enablement)
         self.parameter_manager.parameter_changed.connect(self._refresh_method_enablement)
         self.parameter_manager.parameter_changed.connect(self._refresh_advanced_visibility)
+        self.parameter_manager.parameter_changed.connect(self._refresh_pyramid_levels)
 
     def _setup_ui(self):
         layout = QVBoxLayout()
@@ -463,6 +481,13 @@ class WorkflowParameterPanel(QWidget):
             self.parameter_controls[lo_name] = control
             self.parameter_controls[hi_name] = control
             return control
+        if kind == "int_display":
+            # Read-only derived value (e.g. Pyramid Levels): a plain label, not wired to
+            # the parameter manager. Its text is set by the owner's refresh hook.
+            control = QLabel("—")
+            control.setObjectName(f"workflow_parameter_{name}")
+            self.parameter_controls[name] = control
+            return control
         if kind == "int":
             control = islider(min_val, max_val, self.parameter_manager.get_ui_parameter(name), step=step)
             control.valueChanged.connect(lambda value, n=name: self.parameter_manager.set_ui_parameter(n, value))
@@ -488,6 +513,33 @@ class WorkflowParameterPanel(QWidget):
         self.parameter_controls[name] = control
         return control
 
+    def set_input_shape(self, shape):
+        """Tell the panel the current input frame's ``(h, w)`` (the shell calls this
+        when an experiment/input loads) so the read-only FFD Pyramid Levels display
+        reflects the real pyramid depth. Panels without that control ignore it."""
+        new = None if shape is None else (int(shape[0]), int(shape[1]))
+        if new == self._input_shape:
+            return
+        self._input_shape = new
+        self._refresh_pyramid_levels()
+
+    def _refresh_pyramid_levels(self, name=None, value=None):
+        """Update the read-only Pyramid Levels label: the depth FFD derives from
+        Pyramid Downscale + Coarsest Size for the loaded input frame. A cheap no-op
+        when the changed parameter is neither of those two knobs, or the panel has
+        no such display (e.g. the Force/Stress panels)."""
+        if name is not None and name not in ("ffd_downscale", "ffd_min_size"):
+            return
+        label = self.parameter_controls.get("ffd_num_levels")
+        if label is None:
+            return
+        if self._input_shape is None:
+            label.setText("—")
+            return
+        downscale = float(self.parameter_manager.get_parameter("ffd_downscale"))
+        min_size = int(self.parameter_manager.get_parameter("ffd_min_size"))
+        label.setText(str(_derived_pyramid_levels(self._input_shape, downscale, min_size)))
+
     def _refresh_confinement_enablement(self, name=None, value=None):
         """Grey out each confinement's dependent knob unless its gate is active.
 
@@ -512,7 +564,7 @@ class WorkflowParameterPanel(QWidget):
         "PIV": ("piv_window", "piv_overlap", "piv_passes"),
         "Lucas-Kanade": ("ilk_radius", "ilk_num_warp"),
         "FFD": ("ffd_level_spacing", "ffd_num_levels", "ffd_elastic", "ffd_num_iters",
-                "ffd_metric", "ffd_warmstart", "ffd_early_stop", "ffd_tol", "ffd_downscale",
+                "ffd_metric", "ffd_warmstart", "ffd_early_stop", "ffd_downscale",
                 "ffd_min_size", "ffd_interp"),
     }
 
@@ -595,6 +647,10 @@ class WorkflowParameterPanel(QWidget):
     def _sync_parameter(self, param_name: str, value: Any):
         control = self.parameter_controls.get(param_name)
         if control is None:
+            return
+        if isinstance(control, QLabel):
+            # A read-only derived display (e.g. Pyramid Levels): not editable and not
+            # bound to the parameter; its text is maintained by its own refresh hook.
             return
 
         display_value = self.parameter_manager.get_ui_parameter(param_name)
@@ -1111,7 +1167,21 @@ class napariTFMWidget(QWidget):
             update = getattr(widget, "_update_ui_state", None)
             if callable(update):
                 update()
+        self._refresh_pyramid_levels_display()
         self.refresh_stage_statuses()
+
+    def _refresh_pyramid_levels_display(self):
+        """Feed the displacement panel the loaded input frame's (h, w) so its read-only
+        FFD Pyramid Levels shows the depth downscale + coarsest-size will actually build.
+        Uses the bead stack (else the reference); (h, w) is the last two axes of either."""
+        panel = self._stage_parameter_panels_by_key.get("displacement")
+        if panel is None:
+            return
+        src = self.data_manager.bead_stack
+        if src is None:
+            src = self.data_manager.reference
+        shape = tuple(src.shape[-2:]) if src is not None and getattr(src, "ndim", 0) >= 2 else None
+        panel.set_input_shape(shape)
 
     def _update_disclosure(self) -> None:
         """Reveal only what the current state earns (G0/G1/G2 gated reveal).

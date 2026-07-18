@@ -50,7 +50,6 @@ class _StubParameterManager(QObject):
             "ffd_metric": "lncc",
             "ffd_num_iters": 50,
             "ffd_elastic": 0.0,
-            "ffd_tol": 0.0,
             "ffd_downscale": 2.0,
             "ffd_min_size": 16,
             "ffd_interp": "bicubic",

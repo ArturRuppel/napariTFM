@@ -12,7 +12,9 @@ image (residual composition).
 The knob that earns the method its keep is ``level_spacing`` -- where refinement
 stops getting finer -- which IS the bias-variance dial: fine (~8 px) recovers sharp
 peaks on clean data, coarse (~24 px) is the noise regularizer. Its optimum scales
-with noise. ``num_levels`` sets the pyramid depth (capture range for large motion).
+with noise. The pyramid depth (capture range for large motion) is not a separate
+count knob: it follows from ``downscale`` and ``min_size`` -- keep halving until the
+coarsest level would fall to ``min_size`` (see ``pyramid_num_levels``).
 
 This module imports :mod:`torch` at top level and is imported **lazily** by
 :class:`napariTFM.backend.ffd_displacement.FFDDisplacementAnalyzer`. FFD has no
@@ -26,7 +28,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from napariTFM.backend._flow_common import _base_grid, _device, _norm01, _pyramid, _warp
+from napariTFM.backend._flow_common import (
+    _base_grid, _device, _norm01, _pyramid, _warp, pyramid_num_levels,
+)
 
 _LNCC_WIN = 9          # local-CC window (px); the scale over which structure is correlated
 
@@ -156,15 +160,17 @@ def _resize_field(f, Hl, Wl):
     return r
 
 
-def ffd_pyr(ref, dfm, level_spacing=12.0, num_levels=6, downscale=2.0, min_size=16,
-            num_iters=50, metric="lncc", elastic=0.0, tol=0.0, interp="bicubic",
+def ffd_pyr(ref, dfm, level_spacing=12.0, downscale=2.0, min_size=16,
+            num_iters=50, metric="lncc", elastic=0.0, interp="bicubic",
             device=None, dtype=torch.float32, verbose=False, init_field=None,
             return_loss=False, early_stop=0.0, weight=None):
     """Coarse-to-fine GRID pyramid over an image pyramid. ``level_spacing`` = control spacing in
     LEVEL pixels (constant across levels -> coarse grid on coarse image, fine on fine); it is the
     bias-variance dial (fine = sharp peaks, coarse = noise-regularized). Each level pre-warps dfm
-    by the carried field and fits a fresh grid to the residual. ``tol>0`` stops early when a
-    level's data-loss gain < tol.
+    by the carried field and fits a fresh grid to the residual. The pyramid DEPTH is derived from
+    ``downscale`` and ``min_size`` (``pyramid_num_levels``): the pyramid keeps coarsening until a
+    level would fall to ``min_size``, so those two knobs set capture range -- there is no separate
+    level-count knob.
 
     ``init_field`` warm-starts the fit: pass the previous frame's result (same ``u_px (2,H,W)``
     ``[0]=x/col,[1]=y/row`` layout) and the pyramid starts from it instead of zero, so each level
@@ -186,8 +192,12 @@ def ffd_pyr(ref, dfm, level_spacing=12.0, num_levels=6, downscale=2.0, min_size=
     I1 = _norm01(torch.as_tensor(np.asarray(dfm), dtype=dtype, device=dev))
     H, W = I0.shape
     loss_fn = _lncc if metric == "lncc" else _mse
-    p0 = _pyramid(I0, downscale, nlevel=num_levels, min_size=min_size)   # coarsest first
-    p1 = _pyramid(I1, downscale, nlevel=num_levels, min_size=min_size)
+    # Pyramid depth is not a knob: it is whatever downscale + min_size yield for this
+    # image (keep coarsening until a level would drop to min_size). A large nlevel cap
+    # keeps _pyramid's count gate from ever biting before the size floor does.
+    nlevel = pyramid_num_levels((H, W), downscale, min_size)
+    p0 = _pyramid(I0, downscale, nlevel=nlevel, min_size=min_size)       # coarsest first
+    p1 = _pyramid(I1, downscale, nlevel=nlevel, min_size=min_size)
     # Optional foreground weight confining the loss to the mask (see _lncc/_mse). Built
     # into its own image pyramid so each level's weight aligns with that level's J0/J1
     # (the Gaussian downsample just softens the 0/1 boundary, which the loss handles).
@@ -195,14 +205,13 @@ def ffd_pyr(ref, dfm, level_spacing=12.0, num_levels=6, downscale=2.0, min_size=
         pw = [None] * len(p0)
     else:
         Wt = torch.as_tensor(np.asarray(weight), dtype=dtype, device=dev)
-        pw = _pyramid(Wt, downscale, nlevel=num_levels, min_size=min_size)
+        pw = _pyramid(Wt, downscale, nlevel=nlevel, min_size=min_size)
 
     if init_field is None:
         field = torch.zeros((2, H, W), device=dev, dtype=dtype)         # accumulated, full-res px
     else:
         ext = torch.as_tensor(np.asarray(init_field), dtype=dtype, device=dev)  # (2,H,W) [x/col,y/row]
         field = torch.stack([ext[1], ext[0]])                          # -> internal [row/y, col/x]
-    prev = None
     for J0, J1, Wl_ in zip(p0, p1, pw):
         Hl, Wl = J0.shape
         base = _base_grid(Hl, Wl, dev, dtype)
@@ -240,9 +249,6 @@ def ffd_pyr(ref, dfm, level_spacing=12.0, num_levels=6, downscale=2.0, min_size=
         if verbose:
             print(f"    level {Hl:3}px spacing{level_spacing:g} (G {Gh}x{Gw}): data {dl:.4f} "
                   f"|field|max {float(field.abs().max()):.1f}")
-        if tol > 0 and prev is not None and prev - dl < tol:
-            break
-        prev = dl
 
     v, u = field[0], field[1]
     # float32, not float64: the analyzer packs this straight into a float32 field, so the
