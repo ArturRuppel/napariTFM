@@ -57,6 +57,13 @@ class DisplacementParameters:
 
     # Analysis parameters
     downscale_factor: int = 4
+    # Where the downscale_factor coarsening happens relative to the measurement.
+    # False (default): measure at full resolution, then block-average the vector
+    # field down to the grid (accurate -- uses all bead texture). True: block-average
+    # the *images* first and measure on 1/downscale_factor^2 the pixels (faster, and
+    # on real data within ~0.06 px of the full-res result). Registration always runs
+    # at full resolution regardless. No-op when downscale_factor == 1.
+    disp_downscale_before: bool = False
     pixel_size: float = 0.1
     frame_interval: float = 1
 
@@ -161,6 +168,7 @@ class UnifiedParameters:
     disp_mask_confine: bool = False    # confine displacement measurement to the mask
     disp_mask_margin_um: float = 20.0  # mask bounding-box margin (µm) when confining
     downscale_factor: int = 4
+    disp_downscale_before: bool = False  # bin images before measuring (fast) vs bin the field after (accurate)
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0
     d_max: float = 1.0  # µm

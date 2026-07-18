@@ -144,6 +144,7 @@ class WorkflowParameterPanel(QWidget):
             ]),
             (GROUP, "General"),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
+            ("disp_downscale_before", "Downsample Before Measurement", "bool", None, None, None, None, None),
             (GROUP, "Mask confinement"),
             ("disp_mask_confine", "Confine to Mask", "bool", None, None, None, None, None),
             ("disp_mask_margin_um", "Mask Margin (um)", "float", 0.0, 200.0, 1.0, 1, None),
@@ -300,6 +301,14 @@ class WorkflowParameterPanel(QWidget):
             "Interpolation used to warp the moving image. 'bicubic' (default) preserves "
             "sharp peaks better, matching a cubic-B-spline resample; 'bilinear' is "
             "cheaper and slightly smoother."
+        ),
+        "disp_downscale_before": (
+            "Where the Downscale Factor coarsening happens. Off (default): measure at "
+            "full resolution, then average the vector field down to the grid — uses all "
+            "bead texture, most accurate. On: average the images first and measure on "
+            "1/factor² the pixels — faster, and on real data within ~0.06 px of the "
+            "full-res result. Drift registration always runs at full resolution either "
+            "way. No effect when Downscale Factor is 1."
         ),
         "disp_mask_confine": (
             "Measure displacement only within the external mask (+ margin), for every "

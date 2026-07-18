@@ -327,6 +327,65 @@ def test_registration_keeps_localized_deformation_over_drift():
     assert abs(np.median(background)) < 0.7
 
 
+def _localized_deformation_stack(size=160, bump_amp=3.0, drift_x=5.0, seed=13):
+    """A relaxed anchor + a frame with a central Gaussian bump plus a bulk drift."""
+    base = _textured_image(seed=seed, size=size)
+    yy, xx = np.mgrid[0:size, 0:size].astype(float)
+    cy, cx = size / 2, size / 2
+    bump = bump_amp * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 12.0 ** 2))
+    frame1 = ndimage.map_coordinates(base, [yy, xx - (bump + drift_x)], order=3, mode="nearest")
+    return base, np.stack([base, frame1])
+
+
+def _run(base, stack, params):
+    gen = calculate_displacement_field(base, stack, params)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as exc:
+        return exc.value
+
+
+def test_downsample_before_matches_after_grid_and_units():
+    """disp_downscale_before bins the images before measuring instead of binning the
+    field after. Both must yield the SAME output grid and physical units, and both
+    must recover the localized bump (the fast path measures real signal, not noise)."""
+    size = 160
+    base, stack = _localized_deformation_stack(size=size)
+
+    after = _run(base, stack, _params(pixel_size=1.0, downscale_factor=2,
+                                      disp_downscale_before=False))
+    before = _run(base, stack, _params(pixel_size=1.0, downscale_factor=2,
+                                       disp_downscale_before=True))
+
+    # Same coarse output grid and units either way.
+    assert after.displacement_field.shape == before.displacement_field.shape == (2, 80, 80, 2)
+    assert after.physical_scale == before.physical_scale
+
+    c = size // 2 // 2   # bump centre on the /2 grid
+    for result in (after, before):
+        field = result.displacement_field[1]
+        center = field[c - 2:c + 2, c - 2:c + 2, 0]   # true u_x ~3 (px==µm here)
+        background = field[12:16, 12:16, 0]           # at-rest gel, ~0
+        assert np.median(center) > 1.5                # real signal survives binning
+        assert abs(np.median(background)) < 0.7
+
+    # The two paths agree closely (this is the accuracy the toggle trades for speed).
+    epe = np.linalg.norm(after.displacement_field[1] - before.displacement_field[1], axis=-1)
+    assert np.median(epe) < 0.5
+
+
+def test_downsample_before_is_noop_without_factor():
+    """With downscale_factor == 1 there is nothing to bin, so the flag changes nothing."""
+    base, stack = _localized_deformation_stack(size=128)
+    off = _run(base, stack, _params(pixel_size=1.0, downscale_factor=1,
+                                    disp_downscale_before=False))
+    on = _run(base, stack, _params(pixel_size=1.0, downscale_factor=1,
+                                   disp_downscale_before=True))
+    assert off.displacement_field.shape == on.displacement_field.shape
+    np.testing.assert_allclose(off.displacement_field, on.displacement_field)
+
+
 def test_registration_estimate_and_undo_roundtrip():
     """estimate_drift recovers a known (u_x, u_y) shift; apply_drift undoes it."""
     from napariTFM.backend.registration import apply_drift, estimate_drift

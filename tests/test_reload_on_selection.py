@@ -57,6 +57,7 @@ class _StubParameterManager(QObject):
             "disp_mask_confine": False,
             "disp_mask_margin_um": 20.0,
             "downscale_factor": 4,
+            "disp_downscale_before": False,
             "disp_vector_stride": 20,
             "disp_arrow_scale": 1.0,
             "d_max": 1.0,

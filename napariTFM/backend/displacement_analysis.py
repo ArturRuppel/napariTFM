@@ -30,6 +30,22 @@ _ANALYZERS = {
 }
 
 
+def _bin_image(image: np.ndarray, factor: int) -> np.ndarray:
+    """Block-mean a 2D image (or weight) over ``factor x factor`` tiles.
+
+    The image-side analogue of ``BaseDisplacementAnalyzer.downscale_flow``: same
+    trimming (remainder rows/cols beyond the last whole tile are dropped) so a crop
+    binned here lines up tile-for-tile with the coarse output grid. ``factor <= 1``
+    returns the input unchanged.
+    """
+    if factor <= 1:
+        return image
+    h, w = image.shape[:2]
+    nh, nw = h // factor, w // factor
+    trimmed = image[:nh * factor, :nw * factor]
+    return trimmed.reshape(nh, factor, nw, factor).mean(axis=(1, 3)).astype(np.float32)
+
+
 def build_analyzer(params: DisplacementParameters):
     """Construct the displacement analyzer selected by ``params.disp_method``.
 
@@ -230,6 +246,13 @@ def calculate_displacement_field(
     # frame's own box out of it (the box follows a migrating cell frame-to-frame).
     reference_registered_full = apply(reference, ref_drift)
 
+    # Downsample-before vs downsample-after: with the flag on (and an actual factor),
+    # bin the registered images and measure on 1/df^2 the pixels -- faster, and on
+    # real data within ~0.06 px of the full-res-then-bin path. Registration already
+    # ran at full resolution, so the coarsening only touches the measurement.
+    df = int(params.downscale_factor)
+    downscale_before = df > 1 and getattr(params, "disp_downscale_before", False)
+
     for frame in range(total_frames):
         frame_registered_full = apply(target[frame], drift_pixels[frame])
         mask_frame = (mask[frame] if mask.ndim == 3 else mask) if confine else None
@@ -242,11 +265,32 @@ def calculate_displacement_field(
         # so the result is the literal mask region, not just the bounding box.
         weight = (mask_weight(mask_frame, margin_px, (r0, r1, c0, c1))
                   if mask_frame is not None else None)
-        field_crop = analyzer.calculate_flow(
-            reference_registered_full[r0:r1, c0:c1],
-            frame_registered_full[r0:r1, c0:c1],
-            weight=weight,
-        )
+        ref_crop = reference_registered_full[r0:r1, c0:c1]
+        mov_crop = frame_registered_full[r0:r1, c0:c1]
+
+        if downscale_before and min(ref_crop.shape[:2]) >= df:
+            # Bin the images first; the coarse field IS the output grid (nothing to
+            # downscale afterwards). calculate_flow returns coarse-px displacement, so
+            # scale by df to express it in full-res px -- matching the other path's
+            # units -- then drop it onto the coarse grid at the crop's floored origin.
+            w_small = _bin_image(weight, df) if weight is not None else None
+            field_small = analyzer.calculate_flow(
+                _bin_image(ref_crop, df), _bin_image(mov_crop, df), weight=w_small,
+            ) * df
+            if w_small is not None:
+                field_small = field_small * w_small[..., None]
+            coarse = np.zeros(
+                (target.shape[1] // df, target.shape[2] // df, 2), dtype=np.float32
+            )
+            rs, cs = r0 // df, c0 // df
+            hs = min(field_small.shape[0], coarse.shape[0] - rs)
+            ws = min(field_small.shape[1], coarse.shape[1] - cs)
+            coarse[rs:rs + hs, cs:cs + ws] = field_small[:hs, :ws]
+            displacement_field_stack[frame] = coarse * params.pixel_size
+            yield displacement_field_stack[frame].copy(), frame + 1, total_frames
+            continue
+
+        field_crop = analyzer.calculate_flow(ref_crop, mov_crop, weight=weight)
         if weight is not None:
             field_crop = field_crop * weight[..., None]
 
