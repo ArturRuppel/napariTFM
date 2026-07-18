@@ -113,6 +113,15 @@ class FTTCParameters:
     #                                       laptop GPUs) | "float64" (the QP is convex &
     #                                       well-conditioned, so float32 is ample)
 
+    # Sparse (group-L1) inversion (napariTFM.backend.forward_l1). Selected when
+    # l1_sparsity > 0, ahead of the confined and plain-FTTC paths. Regularizes with an
+    # L1 sparsity prior instead of L2: it thresholds rather than spreads, so it wins
+    # in-cell accuracy and peak recovery over FTTC/confinement and needs NO mask. A
+    # mask, if supplied, is used as a hard support. Shares fwd_device/fwd_dtype/
+    # fwd_fit_margin_um with the confined solver.
+    l1_sparsity: float = 0.0   # 0..1 fraction of λ₁_max (0 = off); useful band ~0.05..0.2, ↑ with noise
+    l1_max_iter: int = 400     # FISTA iteration budget
+
     # Time parameters
     frame_interval: float = 1  # minutes
 
@@ -190,6 +199,10 @@ class UnifiedParameters:
     fwd_traction_scale: float = 1e-2
     fwd_device: str = "auto"
     fwd_dtype: str = "float32"
+    # Sparse (group-L1) inversion (napariTFM.backend.forward_l1); selected when
+    # l1_sparsity > 0, ahead of the confined/FTTC paths. See FTTCParameters.
+    l1_sparsity: float = 0.0
+    l1_max_iter: int = 400
     force_vector_stride: int = 20
     force_arrow_scale: float = 1.0
     f_max: float = 500.0  # Pa

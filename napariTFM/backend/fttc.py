@@ -86,11 +86,19 @@ def calculate_force_field(
 ) -> Generator[Tuple[np.ndarray, int, int], None, FTTCResult]:
     """Calculate traction forces from displacement field data.
 
-    The mask-confinement dial selects the inversion: ``fwd_mask_strength == 0``
-    (or no ``mask`` supplied) runs plain FTTC (regularized Fourier inversion +
-    Lanczos + GCV); ``> 0`` with a ``mask`` kicks off the confined forward solver
-    (:mod:`napariTFM.backend.forward_tfm`), which shares ``regularization`` as its
-    Tikhonov λ. ``mask`` is only consumed on that confined path.
+    Three inversions, selected by dial in priority order:
+
+    * ``l1_sparsity > 0`` → the sparse group-L1 solver
+      (:mod:`napariTFM.backend.forward_l1`). Regularizes with an L1 sparsity prior
+      (thresholds rather than spreads); needs no mask, and a ``mask`` if supplied is
+      used as a hard support. The recommended default (best in-cell accuracy + peak
+      recovery on the force benchmark).
+    * else ``fwd_mask_strength > 0`` with a ``mask`` → the confined forward solver
+      (:mod:`napariTFM.backend.forward_tfm`), L2 + smoothness confined to the mask,
+      sharing ``regularization`` as its Tikhonov λ.
+    * else → plain FTTC (regularized Fourier inversion + Lanczos + GCV).
+
+    ``mask`` is consumed only on the L1 and confined paths.
     """
     is_valid, error_msg = validate_fttc_parameters(params)
     if not is_valid:
@@ -106,11 +114,18 @@ def calculate_force_field(
     total_frames = displacement_field.shape[0]
     force_shape = displacement_field.shape[1:4]
     force_stack = np.zeros((total_frames, *force_shape), dtype=np.float32)
-    use_forward = params.fwd_mask_strength > 0 and mask is not None
-    calculator = None if use_forward else FTTC(params)
+    use_l1 = params.l1_sparsity > 0
+    use_forward = (not use_l1) and params.fwd_mask_strength > 0 and mask is not None
+    calculator = None if (use_l1 or use_forward) else FTTC(params)
 
     for frame in range(total_frames):
-        if use_forward:
+        if use_l1:
+            from napariTFM.backend.forward_l1 import l1_traction_frame
+            m = None if mask is None else _mask_frame_for_grid(mask, frame, force_shape[:2])
+            traction = l1_traction_frame(displacement_field[frame], params, mask=m)
+            force_stack[frame, ..., 0] = traction[0]
+            force_stack[frame, ..., 1] = traction[1]
+        elif use_forward:
             from napariTFM.backend.forward_tfm import forward_traction_frame
             m = None if mask is None else _mask_frame_for_grid(mask, frame, force_shape[:2])
             traction = forward_traction_frame(displacement_field[frame], params, mask=m)

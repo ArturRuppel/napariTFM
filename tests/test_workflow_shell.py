@@ -52,6 +52,7 @@ class _StubParameterManager(QObject):
             "lanczos_exp": 1,
             "regularization": -4.0,
             "auto_gcv": False,
+            "l1_sparsity": 0.0,
             "fwd_mask_strength": 0.0,
             "fwd_smoothness": 0.05,
             "force_vector_stride": 20,

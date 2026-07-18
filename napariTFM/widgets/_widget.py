@@ -160,6 +160,8 @@ class WorkflowParameterPanel(QWidget):
             ("lanczos_exp", "Lanczos Exponent", "int", 0, 5, 1, 0, None),
             ("regularization", "Regularization (10^x)", "float", -21.0, 0.0, 0.5, 1, None),
             ("auto_gcv", "Auto-GCV per frame", "bool", None, None, None, None, None),
+            (GROUP, "Sparse inversion (L1)"),
+            ("l1_sparsity", "L1 Sparsity", "float", 0.0, 1.0, 0.01, 2, None),
             (GROUP, "Mask confinement"),
             ("fwd_mask_strength", "Mask Confinement", "float", 0.0, 100.0, 1.0, 0, None),
             ("fwd_smoothness", "Smoothness", "float", 0.0, 1.0, 0.01, 2, None),
@@ -181,6 +183,17 @@ class WorkflowParameterPanel(QWidget):
     # The PIV set maps onto napariTFM.backend.piv_displacement (multi-pass FFT
     # cross-correlation, GPU-accelerated when torch + CUDA are available).
     PARAMETER_TOOLTIPS = {
+        "l1_sparsity": (
+            "Sparse traction inversion (group-L1), the recommended default. Above 0 it "
+            "overrides Mask Confinement and plain FTTC. It regularizes by sparsity "
+            "instead of smoothing: it thresholds small forces to exactly zero rather "
+            "than spreading them, so it recovers the adhesion forces more accurately "
+            "and keeps the peak better than FTTC or confinement, with NO mask needed. "
+            "The value is a fraction (0..1) of the level that zeros the whole field: "
+            "~0.1 is a good start, raise it for noisier data (more sparsity), lower it "
+            "if real forces are being erased. A loaded mask, if present, is used as a "
+            "hard support (traction forced to zero outside it). 0 = off."
+        ),
         "fwd_mask_strength": (
             "The master switch for the Force stage. 0 = plain FTTC (regularized "
             "Fourier inversion + Lanczos + GCV). Above 0 = confine traction to the "

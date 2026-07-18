@@ -57,4 +57,16 @@ def validate_fttc_parameters(params: FTTCParameters) -> Tuple[bool, str]:
         if str(params.fwd_dtype) not in ("float64", "float32"):
             return False, "fwd_dtype must be 'float64' or 'float32'"
 
+    # Sparse group-L1 solver (l1_sparsity > 0). The dial is a fraction of λ₁_max, so it
+    # must lie in (0, 1]; it shares fwd_device/fwd_dtype with the confined solver.
+    if getattr(params, "l1_sparsity", 0.0) > 0:
+        if not 0.0 < params.l1_sparsity <= 1.0:
+            return False, "l1_sparsity must be in (0, 1]"
+        if params.l1_max_iter < 1:
+            return False, "l1_max_iter must be at least 1"
+        if str(params.fwd_device) not in ("auto", "cuda", "cpu"):
+            return False, "fwd_device must be 'auto', 'cuda', or 'cpu'"
+        if str(params.fwd_dtype) not in ("float64", "float32"):
+            return False, "fwd_dtype must be 'float64' or 'float32'"
+
     return True, ""
