@@ -126,7 +126,7 @@ def test_real_displacement_executor_stops_mid_stream(monkeypatch):
         d_max=5.0, disp_vector_stride=8, disp_arrow_scale=2.0, downscale_factor=4,
     ))
 
-    def fake_gen(reference, beads, params):
+    def fake_gen(reference, beads, params, **kwargs):
         for frame in range(1, 6):          # five frames available (1-based)
             yield np.zeros((2, 2, 2)), frame, 5
         return object()                    # never reached

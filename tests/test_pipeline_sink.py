@@ -102,7 +102,7 @@ def test_displacement_emits_start_frames_finish(monkeypatch):
 
     sentinel = object()
 
-    def fake_gen(reference, beads, params):
+    def fake_gen(reference, beads, params, **kwargs):
         # 1-based frame numbers, two frames, then a final result.
         yield np.zeros((2, 2, 2)), 1, 2
         yield np.zeros((2, 2, 2)), 2, 2
