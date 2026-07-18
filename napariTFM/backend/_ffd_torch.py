@@ -162,7 +162,7 @@ def _resize_field(f, Hl, Wl):
 
 def ffd_pyr(ref, dfm, level_spacing=12.0, downscale=2.0, min_size=16,
             num_iters=50, metric="lncc", elastic=0.0, interp="bicubic",
-            device=None, dtype=torch.float32, verbose=False, init_field=None,
+            device=None, dtype=torch.float32, verbose=False,
             return_loss=False, early_stop=0.0, weight=None):
     """Coarse-to-fine GRID pyramid over an image pyramid. ``level_spacing`` = control spacing in
     LEVEL pixels (constant across levels -> coarse grid on coarse image, fine on fine); it is the
@@ -170,19 +170,13 @@ def ffd_pyr(ref, dfm, level_spacing=12.0, downscale=2.0, min_size=16,
     by the carried field and fits a fresh grid to the residual. The pyramid DEPTH is derived from
     ``downscale`` and ``min_size`` (``pyramid_num_levels``): the pyramid keeps coarsening until a
     level would fall to ``min_size``, so those two knobs set capture range -- there is no separate
-    level-count knob.
-
-    ``init_field`` warm-starts the fit: pass the previous frame's result (same ``u_px (2,H,W)``
-    ``[0]=x/col,[1]=y/row`` layout) and the pyramid starts from it instead of zero, so each level
-    only fits the small frame-to-frame delta. Valid because every frame is registered to the same
-    fixed reference; the full pyramid is kept, so a bad guess (discontinuity) just costs iterations,
-    never divergence. Returns u_px (2,H,W) float32, [0]=x/col [1]=y/row.
+    level-count knob. Every fit starts from a zero field (each frame is registered to the same
+    fixed reference, so there is no cross-frame state). Returns u_px (2,H,W) float32,
+    [0]=x/col [1]=y/row.
 
     ``early_stop`` is the per-level LBFGS convergence tolerance (``tolerance_change``): >0 lets a
-    level's LBFGS quit before ``num_iters`` once its loss stops improving by that much, which is
-    where warm-started frames recoup most of their speed-up (a converged level burns no further
-    iterations chasing a near-zero delta). ``0`` (default) uses LBFGS's own default tolerance,
-    i.e. the pre-existing behaviour, bit-for-bit.
+    level's LBFGS quit before ``num_iters`` once its loss stops improving by that much. ``0``
+    (default) uses LBFGS's own default tolerance, i.e. the pre-existing behaviour, bit-for-bit.
 
     ``return_loss=True`` additionally returns the finest reached level's data-loss (the fit's
     alignment quality, lower = better) as ``(u_px, data_loss)``. The default ``False`` keeps the
@@ -207,11 +201,7 @@ def ffd_pyr(ref, dfm, level_spacing=12.0, downscale=2.0, min_size=16,
         Wt = torch.as_tensor(np.asarray(weight), dtype=dtype, device=dev)
         pw = _pyramid(Wt, downscale, nlevel=nlevel, min_size=min_size)
 
-    if init_field is None:
-        field = torch.zeros((2, H, W), device=dev, dtype=dtype)         # accumulated, full-res px
-    else:
-        ext = torch.as_tensor(np.asarray(init_field), dtype=dtype, device=dev)  # (2,H,W) [x/col,y/row]
-        field = torch.stack([ext[1], ext[0]])                          # -> internal [row/y, col/x]
+    field = torch.zeros((2, H, W), device=dev, dtype=dtype)            # accumulated, full-res px
     for J0, J1, Wl_ in zip(p0, p1, pw):
         Hl, Wl = J0.shape
         base = _base_grid(Hl, Wl, dev, dtype)

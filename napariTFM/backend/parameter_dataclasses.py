@@ -41,14 +41,6 @@ class DisplacementParameters:
     ffd_min_size: int = 16            # coarsest pyramid level min dimension (px) -- with
                                       # ffd_downscale this sets the pyramid depth / capture range
     ffd_interp: str = "bicubic"       # warp interpolation: "bicubic" | "bilinear"
-    # FFD warm-start (temporal coherence): consecutive time-lapse frames' fields are
-    # nearly identical, so seed frame t's fit with frame t-1's result. The full
-    # pyramid is always kept -- a bad seed just costs iterations, never diverges --
-    # so there is no fallback and no level-dropping to configure. Off by default:
-    # warm-start only pays off WITH early exit (ffd_early_stop > 0) enabled -- on its
-    # own it just adds the seeding cost while still running full num_iters, i.e. it is
-    # slower than cold for no gain. Turn both on together for the speed-up.
-    ffd_warmstart: bool = False       # warm-start each frame from the previous frame's field
     ffd_early_stop: float = 0.0       # per-level LBFGS convergence tolerance; 0 = run full num_iters (current behaviour)
 
     # Confine the displacement measurement to the foreground mask + margin, when a
@@ -165,7 +157,6 @@ class UnifiedParameters:
     ffd_downscale: float = 2.0
     ffd_min_size: int = 16
     ffd_interp: str = "bicubic"
-    ffd_warmstart: bool = False
     ffd_early_stop: float = 0.0
     disp_mask_confine: bool = False    # confine displacement measurement to the mask
     disp_mask_margin_um: float = 20.0  # mask bounding-box margin (µm) when confining

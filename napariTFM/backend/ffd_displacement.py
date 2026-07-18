@@ -57,29 +57,12 @@ class FFDDisplacementAnalyzer(BaseDisplacementAnalyzer):
         self._device = resolve_gpu_device(str(self.params.disp_device), method="FFD")
         if self._device is None:
             raise RuntimeError(_UNAVAILABLE_MSG)
-        # Warm-start chain state (temporal coherence). ``_prev_field`` is the last
-        # accepted fit's u_px (2,H,W); ``_prev_shape`` the (H,W) it was measured at.
-        # A shape change means a new movie/position, so the stale field is dropped
-        # rather than warm-starting the next run off it.
-        self._prev_field: Optional[np.ndarray] = None
-        self._prev_shape: Optional[tuple] = None
 
     def calculate_flow(self, reference: np.ndarray, moving: np.ndarray,
                        weight: Optional[np.ndarray] = None) -> np.ndarray:
         from napariTFM.backend._ffd_torch import ffd_pyr
 
         H, W = np.asarray(reference).shape
-        # New movie/position (or first frame): drop any stale warm-start field so the
-        # next fit does not seed off a field measured on different-sized data.
-        if self._prev_shape != (H, W):
-            self._prev_field = None
-            self._prev_shape = (H, W)
-
-        warm = (
-            bool(self.params.ffd_warmstart)
-            and self._prev_field is not None
-            and self._prev_field.shape == (2, H, W)
-        )
         u = ffd_pyr(
             reference, moving,
             level_spacing=float(self.params.ffd_level_spacing),
@@ -90,11 +73,7 @@ class FFDDisplacementAnalyzer(BaseDisplacementAnalyzer):
             elastic=float(self.params.ffd_elastic),
             interp=str(self.params.ffd_interp),
             device=self._device,
-            init_field=self._prev_field if warm else None,
             early_stop=float(self.params.ffd_early_stop),
             weight=weight,
         )
-
-        self._prev_field = u
-        self._prev_shape = (H, W)
         return self._pack(u, H, W)

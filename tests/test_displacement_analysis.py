@@ -179,7 +179,6 @@ def test_ffd_threads_all_params_into_ffd_pyr(monkeypatch):
         ffd_num_iters=33, ffd_elastic=0.25,
         ffd_downscale=1.8, ffd_min_size=12, ffd_interp="bilinear",
         ffd_early_stop=0.0015,
-        ffd_warmstart=False,          # single cold fit, init_field must be None
     )
     ref = _textured_image(seed=30, size=64)
     FFDDisplacementAnalyzer(params).calculate_flow(ref, ref)
@@ -192,85 +191,11 @@ def test_ffd_threads_all_params_into_ffd_pyr(monkeypatch):
     assert captured["min_size"] == 12
     assert captured["interp"] == "bilinear"
     assert captured["early_stop"] == 0.0015
-    assert captured["init_field"] is None
-    # Pyramid depth is derived from downscale + min_size, not threaded as a count.
+    # Pyramid depth is derived from downscale + min_size, not threaded as a count;
+    # the between-level tol and the warm-start init_field are gone entirely.
     assert "num_levels" not in captured
     assert "tol" not in captured
-
-
-# ---------------------------------------------------- FFD warm-start #
-def _ffd_analyzer(**overrides):
-    base = dict(disp_method="FFD", disp_device="cuda")
-    base.update(overrides)
-    return FFDDisplacementAnalyzer(_params(**base))
-
-
-def _shifted_sequence(ref, shifts):
-    """Frames of ``ref`` translated by successive column shifts (fixed reference)."""
-    return [ndimage.shift(ref, shift=(0.0, s), order=3, mode="reflect") for s in shifts]
-
-
-@requires_cuda
-def test_ffd_warmstart_off_is_independent_cold_fits():
-    """Warm-start off reproduces the cold result: the analyzer carries no state, so
-    every frame is the same cold fit a fresh analyzer would produce."""
-    ref = _textured_image(seed=31, size=128)
-    frames = _shifted_sequence(ref, (1.0, 1.4, 1.8))
-
-    warm_off = _ffd_analyzer(ffd_warmstart=False)
-    for f in frames:
-        got = warm_off.calculate_flow(ref, f)
-        fresh = _ffd_analyzer(ffd_warmstart=False).calculate_flow(ref, f)
-        # Agreement is at GPU-parity, not bitwise: LBFGS line search is not bit-repeatable
-        # on the GPU, so compare in the robust (median / high-percentile) sense the field
-        # is actually used in, well below any real warm-start effect.
-        diff = np.abs(got - fresh)
-        assert np.median(diff) < 0.02
-        assert np.percentile(diff, 99.5) < 0.1
-
-
-@requires_cuda
-def test_ffd_warmstart_tracks_per_frame_cold_fits():
-    """A short consecutive-frame sequence, warm-started frame-to-frame, lands close to
-    the per-frame fully-converged cold fits. The full pyramid is always run (no
-    level-dropping), so this is a GPU-parity-style tolerance, not an exact match: LBFGS
-    starting from a different point takes a different (but locally optimal) path."""
-    ref = _textured_image(seed=32, size=160)
-    frames = _shifted_sequence(ref, (0.8, 1.1, 1.4))
-
-    cold = [_ffd_analyzer(ffd_warmstart=False).calculate_flow(ref, f) for f in frames]
-
-    warm_an = _ffd_analyzer(ffd_warmstart=True)
-    warm = [warm_an.calculate_flow(ref, f) for f in frames]
-
-    m = slice(40, -40)
-    for c, w in zip(cold, warm):
-        diff = np.abs(c[m, m] - w[m, m])
-        assert np.median(diff) < 0.15
-        assert np.percentile(diff, 99.5) < 0.6
-
-
-@requires_cuda
-def test_ffd_warmstart_resets_on_shape_change():
-    """Feeding a different frame size through the same analyzer must not warm-start off
-    the stale (wrong-shape) field: no crash, and the result equals a fresh cold fit."""
-    an = _ffd_analyzer(ffd_warmstart=True)
-
-    ref1 = _textured_image(seed=35, size=128)
-    mov1 = ndimage.shift(ref1, shift=(0.0, 1.0), order=3, mode="reflect")
-    f1 = an.calculate_flow(ref1, mov1)
-    assert f1.shape == (128, 128, 2)
-
-    ref2 = _textured_image(seed=36, size=96)
-    mov2 = ndimage.shift(ref2, shift=(0.0, 1.0), order=3, mode="reflect")
-    f2 = an.calculate_flow(ref2, mov2)          # different size, same analyzer
-    assert f2.shape == (96, 96, 2)
-    assert np.isfinite(f2).all()
-
-    fresh = _ffd_analyzer(ffd_warmstart=True).calculate_flow(ref2, mov2)
-    diff = np.abs(f2 - fresh)          # a stale 128-px warm-start would blow this up
-    assert np.median(diff) < 0.02
-    assert np.percentile(diff, 99.5) < 0.1
+    assert "init_field" not in captured
 
 
 # ------------------------------------------------------- GPU parity #

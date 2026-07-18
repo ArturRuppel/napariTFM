@@ -86,6 +86,13 @@ def _derived_pyramid_levels(shape, downscale, min_size):
 # two-per-row run; it is not a parameter control.
 GROUP = object()
 
+# Sentinel marking a displacement-method block. A spec of the form
+# (METHOD, "FFD", [sub-specs]) gathers that method's whole knob group -- its GROUP
+# sub-headers, controls, and any ADVANCED disclosure -- into a container that is
+# shown only while that method is the selected one, so an unselected method's
+# parameters are hidden entirely (not merely greyed). It is not a parameter control.
+METHOD = object()
+
 # Sentinel marking a collapsible "Advanced" disclosure inside a section. A spec of
 # the form (ADVANCED, "Advanced", method) renders a collapsed-by-default toggle and
 # gathers the specs that follow (up to the next GROUP/ADVANCED marker, or the section
@@ -104,32 +111,37 @@ class WorkflowParameterPanel(QWidget):
             ("frame_interval", "Frame Length (min)", "float", 0.001, 1000.0, 0.1, 3, None),
         ]),
         ("Displacement", [
-            # Method + shared device at the top: they decide which knob group below
-            # is live. Each method's primary knob is listed first in its group.
+            # Method + shared device at the top. The method dropdown decides which block
+            # below is shown; each method's knobs stay hidden until it is selected.
             ("disp_method", "Method", "choice", None, None, None, None,
              ["PIV", "Lucas-Kanade", "FFD"]),
             ("disp_device", "Device", "choice", None, None, None, None,
              ["auto", "cuda", "cpu"]),
-            (GROUP, "PIV (cross-correlation)"),
-            ("piv_window", "Interrogation Window (px)", "int", 8, 128, 2, 0, None),
-            ("piv_overlap", "Window Overlap", "float", 0.0, 0.95, 0.025, 3, None),
-            ("piv_passes", "Passes", "int", 1, 12, 1, 0, None),
-            (GROUP, "Lucas-Kanade (optical flow)"),
-            ("ilk_radius", "Window Radius (px)", "int", 1, 64, 1, 0, None),
-            ("ilk_num_warp", "Warp Iterations", "int", 1, 64, 1, 0, None),
-            (GROUP, "FFD (GPU only)"),
-            ("ffd_num_iters", "Iterations / Level", "int", 1, 200, 1, 0, None),
-            ("ffd_metric", "Image Metric", "choice", None, None, None, None, ["lncc", "mse"]),
-            ("ffd_elastic", "Elastic Regularization", "float", 0.0, 10.0, 0.01, 3, None),
-            ("ffd_warmstart", "Warm-Start (time-lapse)", "bool", None, None, None, None, None),
-            ("ffd_early_stop", "Early-Exit Tolerance", "float", 0.0, 0.01, 0.00001, 6, None),
-            (GROUP, "FFD image pyramid"),
-            ("ffd_level_spacing", "Control Spacing (px)", "float", 4.0, 64.0, 1.0, 1, None),
-            ("ffd_downscale", "Pyramid Downscale", "float", 1.1, 4.0, 0.1, 1, None),
-            ("ffd_min_size", "Coarsest Size (px)", "int", 4, 128, 4, 0, None),
-            ("ffd_num_levels", "Pyramid Levels", "int_display", None, None, None, None, None),
-            (ADVANCED, "Advanced", "FFD"),
-            ("ffd_interp", "Warp Interpolation", "choice", None, None, None, None, ["bicubic", "bilinear"]),
+            (METHOD, "PIV", [
+                (GROUP, "PIV (cross-correlation)"),
+                ("piv_window", "Interrogation Window (px)", "int", 8, 128, 2, 0, None),
+                ("piv_overlap", "Window Overlap", "float", 0.0, 0.95, 0.025, 3, None),
+                ("piv_passes", "Passes", "int", 1, 12, 1, 0, None),
+            ]),
+            (METHOD, "Lucas-Kanade", [
+                (GROUP, "Lucas-Kanade (optical flow)"),
+                ("ilk_radius", "Window Radius (px)", "int", 1, 64, 1, 0, None),
+                ("ilk_num_warp", "Warp Iterations", "int", 1, 64, 1, 0, None),
+            ]),
+            (METHOD, "FFD", [
+                (GROUP, "FFD (GPU only)"),
+                ("ffd_num_iters", "Iterations / Level", "int", 1, 200, 1, 0, None),
+                ("ffd_metric", "Image Metric", "choice", None, None, None, None, ["lncc", "mse"]),
+                ("ffd_elastic", "Elastic Regularization", "float", 0.0, 10.0, 0.01, 3, None),
+                ("ffd_early_stop", "Early-Exit Tolerance", "float", 0.0, 0.01, 0.00001, 6, None),
+                (GROUP, "FFD image pyramid"),
+                ("ffd_level_spacing", "Control Spacing (px)", "float", 4.0, 64.0, 1.0, 1, None),
+                ("ffd_downscale", "Pyramid Downscale", "float", 1.1, 4.0, 0.1, 1, None),
+                ("ffd_min_size", "Coarsest Size (px)", "int", 4, 128, 4, 0, None),
+                ("ffd_num_levels", "Pyramid Levels", "int_display", None, None, None, None, None),
+                (ADVANCED, "Advanced", "FFD"),
+                ("ffd_interp", "Warp Interpolation", "choice", None, None, None, None, ["bicubic", "bilinear"]),
+            ]),
             (GROUP, "General"),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
             (GROUP, "Mask confinement"),
@@ -266,22 +278,12 @@ class WorkflowParameterPanel(QWidget):
             "control-grid fit with diminishing returns; the default is ample for the "
             "range we tested."
         ),
-        "ffd_warmstart": (
-            "Seed each frame's fit with the previous frame's field (temporal "
-            "coherence): in a time-lapse consecutive frames are near-identical, so the "
-            "fit starts close to the answer and converges in fewer iterations — a "
-            "speed-up. The full pyramid is always kept, so a bad seed (a discontinuity, "
-            "detachment, or dropped frame) just costs iterations, never accuracy. Leave "
-            "on for time-lapses; it is inert on a single frame pair. Pair it with "
-            "Early-Exit Tolerance to actually cash in the speed-up."
-        ),
         "ffd_early_stop": (
             "Per-level LBFGS convergence tolerance: a level stops as soon as its loss "
             "improves by less than this between steps, instead of always running the "
             "full Iterations / Level budget. 0 (default) runs every level to the full "
-            "budget, unchanged. This is the real speed lever for warm-started "
-            "time-lapses — a well-seeded level converges early and exits; a cold or "
-            "poorly-seeded one keeps iterating."
+            "budget, unchanged. Raise it to trade a little accuracy for speed once a "
+            "level has essentially converged."
         ),
         "ffd_downscale": (
             "Image-pyramid downscale factor per level. 2.0 halves each axis per level "
@@ -327,16 +329,19 @@ class WorkflowParameterPanel(QWidget):
         # Populated by _setup_ui: one (toggle, container, owner_method) per collapsible
         # Advanced disclosure, for method-scoped show/hide (see _refresh_advanced_visibility).
         self._advanced_blocks = []
+        # Populated by _setup_ui: one (container, method_name) per displacement-method
+        # block, for show/hide by the selected method (see _refresh_method_visibility).
+        self._method_blocks = []
         self._setup_ui()
         self._sync_all_controls()
         self._refresh_confinement_enablement()
         self._apply_method_availability()
-        self._refresh_method_enablement()
+        self._refresh_method_visibility()
         self._refresh_advanced_visibility()
         self._refresh_pyramid_levels()
         self.parameter_manager.parameter_changed.connect(self._sync_parameter)
         self.parameter_manager.parameter_changed.connect(self._refresh_confinement_enablement)
-        self.parameter_manager.parameter_changed.connect(self._refresh_method_enablement)
+        self.parameter_manager.parameter_changed.connect(self._refresh_method_visibility)
         self.parameter_manager.parameter_changed.connect(self._refresh_advanced_visibility)
         self.parameter_manager.parameter_changed.connect(self._refresh_pyramid_levels)
 
@@ -353,27 +358,49 @@ class WorkflowParameterPanel(QWidget):
         self.setLayout(layout)
 
     def _build_section(self, layout, title, specs):
-        """Build one titled parameter section, splitting out any ADVANCED disclosure.
-
-        Specs are laid two-per-row into a grid until an ADVANCED marker, which closes
-        the current grid, emits a collapsible block for the specs up to the next
-        GROUP/ADVANCED marker, then resumes a fresh grid for whatever follows (so the
-        groups after the disclosure, e.g. General/Visualization, stay outside it)."""
-        grid = section_grid()
+        """Build one titled parameter section: a header row, then its specs laid out by
+        :meth:`_lay_specs` (which peels off METHOD blocks and ADVANCED disclosures)."""
         header = QLabel(title)
         header.setStyleSheet(section_label_style())
-        add_section_header(grid, 0, header)
+        self._lay_specs(layout, specs, header=header)
 
-        row, pending = 1, None
+    def _lay_specs(self, layout, specs, header=None):
+        """Lay a run of specs into ``layout`` as two-per-row grids, peeling off the two
+        kinds of sub-block into their own show/hide-able widgets:
+
+        * a METHOD marker closes the current grid and emits a per-method container (the
+          method's whole group -- sub-headers, controls, its own ADVANCED disclosure --
+          shown only while that method is selected), then a fresh grid resumes;
+        * an ADVANCED marker likewise emits a collapsible block for the specs up to the
+          next GROUP/ADVANCED/METHOD marker.
+
+        Shared by the top-level section and each method container, so a method block may
+        itself carry GROUP sub-headers and an ADVANCED disclosure. ``header`` (a section
+        title) opens the first grid at row 0 when given."""
+        grid = section_grid()
+        if header is not None:
+            add_section_header(grid, 0, header)
+            row = 1
+        else:
+            row = 0
+        pending = None
         i, n = 0, len(specs)
         while i < n:
             spec = specs[i]
+            if spec[0] is METHOD:
+                row, pending = self._flush_pending(grid, row, pending)
+                layout.addLayout(grid)
+                self._build_method_block(layout, spec[1], spec[2])
+                grid = section_grid()          # fresh grid for the specs after the block
+                row, pending = 0, None
+                i += 1
+                continue
             if spec[0] is ADVANCED:
                 row, pending = self._flush_pending(grid, row, pending)
                 layout.addLayout(grid)
                 j = i + 1
                 block = []
-                while j < n and specs[j][0] not in (GROUP, ADVANCED):
+                while j < n and specs[j][0] not in (GROUP, ADVANCED, METHOD):
                     block.append(specs[j])
                     j += 1
                 self._build_advanced_block(layout, spec[1], spec[2], block)
@@ -385,6 +412,20 @@ class WorkflowParameterPanel(QWidget):
             i += 1
         row, pending = self._flush_pending(grid, row, pending)
         layout.addLayout(grid)
+
+    def _build_method_block(self, layout, method_name, specs):
+        """Emit a container holding one displacement method's whole knob group, shown only
+        while that method is selected (so an unselected method's parameters are hidden, not
+        merely greyed). Registered in ``_method_blocks`` for _refresh_method_visibility."""
+        container = QWidget()
+        clayout = QVBoxLayout()
+        clayout.setContentsMargins(0, 0, 0, 0)
+        clayout.setSpacing(TIGHT_SPACING)
+        self._lay_specs(clayout, specs)
+        container.setLayout(clayout)
+        container.setVisible(False)     # _refresh_method_visibility reveals the active one
+        self._method_blocks.append((container, method_name))
+        layout.addWidget(container)
 
     def _build_advanced_block(self, layout, title, owner_method, specs):
         """Emit a collapsed-by-default disclosure toggle + its (own-grid) container.
@@ -558,18 +599,9 @@ class WorkflowParameterPanel(QWidget):
         if margin is not None:
             margin.setEnabled(bool(self.parameter_manager.get_parameter("disp_mask_confine")))
 
-    # Which knobs belong to which displacement method, so only the selected
-    # method's group stays live (the others grey out, like the confinement dial).
-    _METHOD_PARAMS = {
-        "PIV": ("piv_window", "piv_overlap", "piv_passes"),
-        "Lucas-Kanade": ("ilk_radius", "ilk_num_warp"),
-        "FFD": ("ffd_level_spacing", "ffd_num_levels", "ffd_elastic", "ffd_num_iters",
-                "ffd_metric", "ffd_warmstart", "ffd_early_stop", "ffd_downscale",
-                "ffd_min_size", "ffd_interp"),
-    }
-
-    def _refresh_method_enablement(self, name=None, value=None):
-        """Enable only the selected displacement method's knob group; grey the rest.
+    def _refresh_method_visibility(self, name=None, value=None):
+        """Show only the selected displacement method's parameter block; hide the rest,
+        so an unselected method's knobs are invisible (not merely greyed).
 
         Driven from parameter_changed (cheap no-op unless the method dropdown moved)
         and once at construction. No-ops when the Displacement section is not built
@@ -580,19 +612,16 @@ class WorkflowParameterPanel(QWidget):
         if self.parameter_controls.get("disp_method") is None:
             return
         active = self.parameter_manager.get_parameter("disp_method")
-        for method, names in self._METHOD_PARAMS.items():
-            for n in names:
-                control = self.parameter_controls.get(n)
-                if control is not None:
-                    control.setEnabled(method == active)
+        for container, method in self._method_blocks:
+            container.setVisible(method == active)
 
     def _refresh_advanced_visibility(self, name=None, value=None):
         """Show each Advanced disclosure only for its owning method, expanded on demand.
 
-        An Advanced block's toggle is revealed only when its owner method is the
-        selected one (unlike the primary knobs, which merely grey out for the inactive
-        methods — the advanced rows hide entirely); its container shows only when that
-        toggle is also expanded. Driven from parameter_changed (a cheap no-op unless the
+        An Advanced block lives inside its method's block, so it is already hidden when
+        another method is selected; its toggle is revealed only for the owner method and
+        its container only when that toggle is also expanded. Driven from parameter_changed
+        (a cheap no-op unless the
         method dropdown moved), from the toggles themselves (name is None), and once at
         construction. No-ops when no Advanced block was built for this panel.
         """
