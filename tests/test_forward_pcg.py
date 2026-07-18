@@ -3,7 +3,8 @@
 The identity tests (one-step exactness, adjoint symmetry, gradient-is-A, DC zeroing)
 validate the operator against math, needing no CPU/GPU reference — per
 docs/specs/forward-solver-pcg.md they replace what autograd used to buy. The golden
-test regresses the CG output against the retired L-BFGS solver's output.
+test regresses the CG output on a synthetic frame with known ground truth (``t_true``),
+and `test_lambda_matches_closed_form_across_branches` locks λ's cross-branch meaning.
 """
 import os
 
@@ -51,6 +52,25 @@ def test_one_step_exactness_Minv_is_A_inverse():
     # round-trip rounding in apply_A vs M's direct symbol apply. A *wrong* Laplacian
     # symbol (|k|² vs 4·sin², the spec's [review] hazard) breaks this by ~100×.
     np.testing.assert_allclose(y, x, atol=1e-6, rtol=1e-4)
+
+
+def test_lambda_matches_closed_form_across_branches():
+    """`regularization` (λ) is the SHARED dial with FTTC/`_solve_closed_form`, so it
+    must produce the identical physical λ²‖t‖² penalty on the β>0 (iterative) branch.
+    With confinement inert (full mask ⇒ off≡0) and γ=0, the iterative solve must
+    reproduce `_solve_closed_form` at the SAME λ — at a λ large enough to bite. The
+    pre-fix linear-λ/denom-normalized scaling diverged ~125× here (β=0 used λ², β>0
+    used λ), which is exactly the cross-branch bug this guards."""
+    h = w = 32
+    u = _random_field(h, w, 7) * 0.2
+    mask = np.ones((h, w), np.uint8)                    # full support ⇒ β term inert
+    params = _params(regularization=1e-2, fwd_smoothness=0.0)
+    t_closed = F._solve_closed_form(u.astype(np.float64), params)
+    beta = F.confinement_to_beta(50.0)                  # >0 so the iterative path runs
+    t_iter = F._solve_iterative(u.astype(np.float64), mask, beta, params)
+    corr = float(np.corrcoef(t_iter.ravel(), t_closed.ravel())[0, 1])
+    rel = float(np.sqrt(np.mean((t_iter - t_closed) ** 2)) / np.abs(t_closed).max())
+    assert corr > 0.999 and rel < 1e-2, f"corr={corr:.5f} rel={rel:.4f}"
 
 
 def test_operator_is_symmetric():
@@ -113,9 +133,11 @@ def test_confined_solve_converges():
     assert converged and iters < 1000
 
 
-def test_golden_regression_matches_lbfgs():
-    """PCG output matches the retired L-BFGS reference on the golden frame (both
-    minimize the same convex J, so they must agree)."""
+def test_golden_regression_recovers_ground_truth():
+    """PCG output on the golden synthetic frame matches the stored reference and
+    recovers the known ground-truth traction ``t_true`` (corr > 0.99). The fixture's
+    λ is the operating point under the corrected λ² scaling (see
+    `test_lambda_matches_closed_form_across_branches`)."""
     d = np.load(GOLDEN)
     u = d["u"]
     mask = d["mask"]
@@ -135,6 +157,10 @@ def test_golden_regression_matches_lbfgs():
     rel_rms = np.sqrt(np.mean((t - t_ref) ** 2)) / np.abs(t_ref).max()
     assert corr > 0.99, f"corr={corr:.4f}"
     assert rel_rms < 5e-2, f"rel_rms={rel_rms:.4f}"
+    # and it actually recovers the known ground-truth traction (not just the stored ref)
+    t_true = d["t_true"]
+    corr_true = np.corrcoef(t.ravel(), t_true.ravel())[0, 1]
+    assert corr_true > 0.99, f"corr_true={corr_true:.4f}"
 
 
 def _cupy_ready():

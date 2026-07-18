@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 from datetime import datetime
 from typing import Any
 
@@ -31,6 +32,7 @@ from napariTFM.widgets._run_config import (
     series_records,
 )
 from napariTFM.backend.batch_analysis import BatchAnalysis
+from napariTFM.backend._torch_warmup import warm_up_torch
 from napariTFM.backend.ntfm_writer import write_experiment_ntfm
 from napariTFM.utilities.batch_output import experiment_ntfm_path, resolve_output_plan
 from napariTFM.utilities.viewer_sink import ViewerSink
@@ -63,10 +65,41 @@ STAGE_DATA_ARTIFACTS = {
 }
 
 
+def _derived_pyramid_levels(shape, downscale, min_size):
+    """Pyramid depth FFD builds for ``shape`` (h, w) at ``downscale``/``min_size``.
+
+    A torch-free duplicate of ``backend._flow_common.pyramid_num_levels`` (which lives
+    in a module that imports torch at load); the panel needs this to show the derived
+    level count without dragging torch onto the widget import path. Keep the two in
+    sync -- both mirror ``_pyramid``'s size gate."""
+    h, w = int(shape[0]), int(shape[1])
+    n = 1
+    while min(h, w) > downscale * min_size:
+        h = math.ceil(h / downscale)
+        w = math.ceil(w / downscale)
+        n += 1
+    return n
+
+
 # Sentinel marking a sub-group heading inside a section's spec list. A spec of
 # the form (GROUP, "Advanced") renders a muted sub-header and starts a fresh
 # two-per-row run; it is not a parameter control.
 GROUP = object()
+
+# Sentinel marking a displacement-method block. A spec of the form
+# (METHOD, "FFD", [sub-specs]) gathers that method's whole knob group -- its GROUP
+# sub-headers, controls, and any ADVANCED disclosure -- into a container that is
+# shown only while that method is the selected one, so an unselected method's
+# parameters are hidden entirely (not merely greyed). It is not a parameter control.
+METHOD = object()
+
+# Sentinel marking a collapsible "Advanced" disclosure inside a section. A spec of
+# the form (ADVANCED, "Advanced", method) renders a collapsed-by-default toggle and
+# gathers the specs that follow (up to the next GROUP/ADVANCED marker, or the section
+# end) into a container the toggle shows/hides. The block is owned by ``method``: its
+# rows exist/show only while that displacement method is selected AND the disclosure
+# is expanded. It is not a parameter control.
+ADVANCED = object()
 
 
 class WorkflowParameterPanel(QWidget):
@@ -78,9 +111,43 @@ class WorkflowParameterPanel(QWidget):
             ("frame_interval", "Frame Length (min)", "float", 0.001, 1000.0, 0.1, 3, None),
         ]),
         ("Displacement", [
-            ("piv_window", "Interrogation Window (px)", "int", 8, 128, 2, 0, None),
-            ("piv_passes", "Passes", "int", 1, 12, 1, 0, None),
+            # Method + shared device at the top. The method dropdown decides which block
+            # below is shown; each method's knobs stay hidden until it is selected.
+            ("disp_method", "Method", "choice", None, None, None, None,
+             ["PIV", "Lucas-Kanade", "FFD"]),
+            ("disp_device", "Device", "choice", None, None, None, None,
+             ["auto", "cuda", "cpu"]),
+            (METHOD, "PIV", [
+                (GROUP, "PIV (cross-correlation)"),
+                ("piv_window", "Interrogation Window (px)", "int", 8, 128, 2, 0, None),
+                ("piv_overlap", "Window Overlap", "float", 0.0, 0.95, 0.025, 3, None),
+                ("piv_passes", "Passes", "int", 1, 12, 1, 0, None),
+            ]),
+            (METHOD, "Lucas-Kanade", [
+                (GROUP, "Lucas-Kanade (optical flow)"),
+                ("ilk_radius", "Window Radius (px)", "int", 1, 64, 1, 0, None),
+                ("ilk_num_warp", "Warp Iterations", "int", 1, 64, 1, 0, None),
+            ]),
+            (METHOD, "FFD", [
+                (GROUP, "FFD (GPU only)"),
+                ("ffd_num_iters", "Iterations / Level", "int", 1, 200, 1, 0, None),
+                ("ffd_metric", "Image Metric", "choice", None, None, None, None, ["lncc", "mse"]),
+                ("ffd_elastic", "Elastic Regularization", "float", 0.0, 10.0, 0.01, 3, None),
+                ("ffd_early_stop", "Early-Exit Tolerance", "float", 0.0, 0.01, 0.00001, 6, None),
+                (GROUP, "FFD image pyramid"),
+                ("ffd_level_spacing", "Control Spacing (px)", "float", 4.0, 64.0, 1.0, 1, None),
+                ("ffd_downscale", "Pyramid Downscale", "float", 1.1, 4.0, 0.1, 1, None),
+                ("ffd_min_size", "Coarsest Size (px)", "int", 4, 128, 4, 0, None),
+                ("ffd_num_levels", "Pyramid Levels", "int_display", None, None, None, None, None),
+                (ADVANCED, "Advanced", "FFD"),
+                ("ffd_interp", "Warp Interpolation", "choice", None, None, None, None, ["bicubic", "bilinear"]),
+            ]),
+            (GROUP, "General"),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
+            ("disp_downscale_before", "Downsample Before Measurement", "bool", None, None, None, None, None),
+            (GROUP, "Mask confinement"),
+            ("disp_mask_confine", "Confine to Mask", "bool", None, None, None, None, None),
+            ("disp_mask_margin_um", "Mask Margin (um)", "float", 0.0, 200.0, 1.0, 1, None),
             (GROUP, "Visualization"),
             ("disp_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("disp_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -130,17 +197,133 @@ class WorkflowParameterPanel(QWidget):
             "the photometric solver got for free from its coarse basis. Useful band "
             "~0.01..0.3. 0 = off. Inert (greyed) until Mask Confinement > 0."
         ),
+        "disp_method": (
+            "Displacement algorithm. PIV (FFT cross-correlation) is a forgiving "
+            "default, quietest off-cell in our benchmark and graceful up to large "
+            "motion. Lucas-Kanade (iterative optical flow) tracks it closely at "
+            "small motion and is fast and light. FFD (free-form deformation) leads "
+            "under large deformation but is GPU-only. Accuracy was a near-tie in the "
+            "one regime we tested; they separate on off-cell noise and capture "
+            "range. See the 'Choosing a displacement method' doc, and preview a "
+            "couple on your own data before committing."
+        ),
+        "disp_device": (
+            "Compute backend, shared by every method. 'auto' uses the GPU when "
+            "PyTorch and a CUDA device are present (the [gpu] extra), else the CPU "
+            "reference (openpiv for PIV, scikit-image for Lucas-Kanade). 'cuda' "
+            "requires a GPU; 'cpu' forces the reference implementation. For "
+            "Lucas-Kanade the GPU port is numerically identical to the CPU one; for "
+            "PIV it is at measured parity on dense beads, not bit-identical. FFD is "
+            "GPU-only."
+        ),
         "piv_window": (
-            "Final PIV interrogation window, in pixels. Cross-correlation is run "
-            "on windows of this size on the last (finest) pass. Smaller windows "
-            "resolve finer detail but need denser texture to stay well-posed; "
-            "larger windows are more robust to noise but blur small displacements."
+            "Final PIV interrogation window, in pixels: the primary PIV knob and the "
+            "peak-vs-noise trade-off. Cross-correlation runs on windows of this size "
+            "on the last (finest) pass. Smaller windows sharpen the near-adhesion "
+            "peak but need denser texture and raise off-cell noise; larger windows "
+            "are more robust to noise but blur small displacements. ~24 is a "
+            "reasonable start."
+        ),
+        "piv_overlap": (
+            "Fractional overlap between neighbouring PIV windows (0-0.95). Higher "
+            "overlap samples the field more finely and recovers sharp peaks better, "
+            "at more compute and memory (high overlap on large frames can exhaust "
+            "GPU memory). A first-order knob, not a default to ignore: tune it with "
+            "the window."
         ),
         "piv_passes": (
             "Number of coarse-to-fine PIV passes. Each pass re-warps the moving "
-            "image by the running estimate and correlates with a smaller window, "
-            "so more passes capture larger displacements and refine subpixel "
-            "accuracy at the cost of runtime; gains taper off after a few."
+            "image by the running estimate and correlates with a smaller window, so "
+            "more passes capture larger displacements and drive convergence at the "
+            "cost of runtime; gains taper off after a few. Raise it if large motion "
+            "is missed."
+        ),
+        "ilk_radius": (
+            "Half-window of the local Lucas-Kanade solve, in pixels: the primary iLK "
+            "knob. It acts as a noise aperture, not a capture knob (the image "
+            "pyramid handles capture). Start near 7-10; larger for noisier images, "
+            "which trades peak sharpness for a quieter field."
+        ),
+        "ilk_num_warp": (
+            "Coarse-to-fine warp iterations per pyramid level. More iterations refine "
+            "the flow and help it converge, with diminishing returns past ~16. Raise "
+            "it if the field looks under-converged; it does not extend capture range."
+        ),
+        "ffd_level_spacing": (
+            "Finest control-grid spacing, in pixels: FFD's primary knob and its "
+            "bias-variance dial. Fine (~8) recovers sharp peaks on clean data; coarse "
+            "(~16-24) regularizes noise and keeps the off-cell background quiet. Its "
+            "best value grows with image noise."
+        ),
+        "ffd_num_levels": (
+            "Read-only: how many pyramid levels FFD will build for the loaded input, "
+            "derived from Pyramid Downscale and Coarsest Size — not a knob. Deeper "
+            "pyramids capture larger displacements. To change it, adjust Coarsest Size "
+            "(smaller = deeper) or Pyramid Downscale. Shows '—' until an input loads."
+        ),
+        "ffd_metric": (
+            "Image-match objective FFD minimises. 'lncc' (local normalised "
+            "cross-correlation) weights every window equally, so the sharp "
+            "high-motion peak is not drowned by the low-motion bulk: it preserves "
+            "peaks better and is the default. 'mse' is simpler but softens the peak."
+        ),
+        "ffd_elastic": (
+            "Weight of the elastic (Navier strain-energy) prior on the deformation — "
+            "the physically correct regularizer for a TFM gel, penalising first "
+            "derivatives (strain) so it permits concentrated strain at force points "
+            "but forbids implausible roughness. 0 = off. Raise it to quieten a noisy "
+            "field; too high over-smooths real peaks."
+        ),
+        "ffd_num_iters": (
+            "LBFGS iterations per pyramid level. More iterations refine each level's "
+            "control-grid fit with diminishing returns; the default is ample for the "
+            "range we tested."
+        ),
+        "ffd_early_stop": (
+            "Per-level LBFGS convergence tolerance: a level stops as soon as its loss "
+            "improves by less than this between steps, instead of always running the "
+            "full Iterations / Level budget. 0 (default) runs every level to the full "
+            "budget, unchanged. Raise it to trade a little accuracy for speed once a "
+            "level has essentially converged."
+        ),
+        "ffd_downscale": (
+            "Image-pyramid downscale factor per level. 2.0 halves each axis per level "
+            "(the default); smaller factors build a finer pyramid (more levels, gentler "
+            "capture steps) at more compute. Rarely needs changing."
+        ),
+        "ffd_min_size": (
+            "Smallest dimension (px) the coarsest pyramid level is allowed to reach: "
+            "the pyramid stops adding coarser levels once a level would fall below it. "
+            "With Pyramid Downscale this sets the pyramid depth (shown as Pyramid "
+            "Levels) and hence FFD's capture range — smaller = deeper = larger motions."
+        ),
+        "ffd_interp": (
+            "Interpolation used to warp the moving image. 'bicubic' (default) preserves "
+            "sharp peaks better, matching a cubic-B-spline resample; 'bilinear' is "
+            "cheaper and slightly smoother."
+        ),
+        "disp_downscale_before": (
+            "Where the Downscale Factor coarsening happens. Off (default): measure at "
+            "full resolution, then average the vector field down to the grid — uses all "
+            "bead texture, most accurate. On: average the images first and measure on "
+            "1/factor² the pixels — faster, and on real data within ~0.06 px of the "
+            "full-res result. Drift registration always runs at full resolution either "
+            "way. No effect when Downscale Factor is 1."
+        ),
+        "disp_mask_confine": (
+            "Measure displacement only within the external mask (+ margin), for every "
+            "method. Each frame is analysed inside its cell's bounding box plus the "
+            "Mask Margin and read as zero outside: this skips the empty, vignette-"
+            "corrupted periphery (faster) and removes that far-field artifact from the "
+            "saved field structurally, rather than relying on the downstream mask. Needs "
+            "an external mask; a no-op without one. Off = full-frame (unchanged)."
+        ),
+        "disp_mask_margin_um": (
+            "How far beyond the cell edge to keep measuring, in microns, when Confine to "
+            "Mask is on. It must cover the substrate-displacement halo around the cell — "
+            "set it to that halo's decay length. Too small silently clips real "
+            "near-cell displacement; too large re-admits the periphery. Only read when "
+            "Confine to Mask is on."
         ),
     }
 
@@ -149,11 +332,27 @@ class WorkflowParameterPanel(QWidget):
         self.parameter_manager = parameter_manager
         self._section_titles = set(section_titles) if section_titles is not None else None
         self.parameter_controls = {}
+        # (h, w) of the current input frame, pushed in by the shell (set_input_shape),
+        # so the read-only FFD Pyramid Levels display can show the real derived depth.
+        self._input_shape = None
+        # Populated by _setup_ui: one (toggle, container, owner_method) per collapsible
+        # Advanced disclosure, for method-scoped show/hide (see _refresh_advanced_visibility).
+        self._advanced_blocks = []
+        # Populated by _setup_ui: one (container, method_name) per displacement-method
+        # block, for show/hide by the selected method (see _refresh_method_visibility).
+        self._method_blocks = []
         self._setup_ui()
         self._sync_all_controls()
         self._refresh_confinement_enablement()
+        self._apply_method_availability()
+        self._refresh_method_visibility()
+        self._refresh_advanced_visibility()
+        self._refresh_pyramid_levels()
         self.parameter_manager.parameter_changed.connect(self._sync_parameter)
         self.parameter_manager.parameter_changed.connect(self._refresh_confinement_enablement)
+        self.parameter_manager.parameter_changed.connect(self._refresh_method_visibility)
+        self.parameter_manager.parameter_changed.connect(self._refresh_advanced_visibility)
+        self.parameter_manager.parameter_changed.connect(self._refresh_pyramid_levels)
 
     def _setup_ui(self):
         layout = QVBoxLayout()
@@ -163,50 +362,144 @@ class WorkflowParameterPanel(QWidget):
         for title, specs in self.PARAMETER_SECTIONS:
             if self._section_titles is not None and title not in self._section_titles:
                 continue
-
-            grid = section_grid()
-            header = QLabel(title)
-            header.setStyleSheet(section_label_style())
-            add_section_header(grid, 0, header)
-
-            # Lay out specs two-per-row, but a range slider (or a GROUP marker)
-            # takes a full row and flushes any scalar still waiting for a partner.
-            row = 1
-            pending = None  # (label, control, tooltip)
-
-            def flush_pending():
-                nonlocal pending, row
-                if pending is not None:
-                    add_section_pair_row(grid, row, pending[0], pending[1],
-                                         left_tooltip=pending[2])
-                    row += 1
-                    pending = None
-
-            for spec in specs:
-                if spec[0] is GROUP:
-                    flush_pending()
-                    subheader = QLabel(spec[1])
-                    subheader.setStyleSheet(section_subheader_style())
-                    add_section_header(grid, row, subheader)
-                    row += 1
-                elif spec[2] == "range":
-                    flush_pending()
-                    label, control, tooltip = self._control_for_spec(spec)
-                    add_section_labeled_full_row(grid, row, label, control, tooltip=tooltip)
-                    row += 1
-                elif pending is None:
-                    pending = self._control_for_spec(spec)
-                else:
-                    label, control, tooltip = self._control_for_spec(spec)
-                    add_section_pair_row(grid, row, pending[0], pending[1], label, control,
-                                         left_tooltip=pending[2], right_tooltip=tooltip)
-                    row += 1
-                    pending = None
-            flush_pending()
-
-            layout.addLayout(grid)
+            self._build_section(layout, title, specs)
 
         self.setLayout(layout)
+
+    def _build_section(self, layout, title, specs):
+        """Build one titled parameter section: a header row, then its specs laid out by
+        :meth:`_lay_specs` (which peels off METHOD blocks and ADVANCED disclosures)."""
+        header = QLabel(title)
+        header.setStyleSheet(section_label_style())
+        self._lay_specs(layout, specs, header=header)
+
+    def _lay_specs(self, layout, specs, header=None):
+        """Lay a run of specs into ``layout`` as two-per-row grids, peeling off the two
+        kinds of sub-block into their own show/hide-able widgets:
+
+        * a METHOD marker closes the current grid and emits a per-method container (the
+          method's whole group -- sub-headers, controls, its own ADVANCED disclosure --
+          shown only while that method is selected), then a fresh grid resumes;
+        * an ADVANCED marker likewise emits a collapsible block for the specs up to the
+          next GROUP/ADVANCED/METHOD marker.
+
+        Shared by the top-level section and each method container, so a method block may
+        itself carry GROUP sub-headers and an ADVANCED disclosure. ``header`` (a section
+        title) opens the first grid at row 0 when given."""
+        grid = section_grid()
+        if header is not None:
+            add_section_header(grid, 0, header)
+            row = 1
+        else:
+            row = 0
+        pending = None
+        i, n = 0, len(specs)
+        while i < n:
+            spec = specs[i]
+            if spec[0] is METHOD:
+                row, pending = self._flush_pending(grid, row, pending)
+                layout.addLayout(grid)
+                self._build_method_block(layout, spec[1], spec[2])
+                grid = section_grid()          # fresh grid for the specs after the block
+                row, pending = 0, None
+                i += 1
+                continue
+            if spec[0] is ADVANCED:
+                row, pending = self._flush_pending(grid, row, pending)
+                layout.addLayout(grid)
+                j = i + 1
+                block = []
+                while j < n and specs[j][0] not in (GROUP, ADVANCED, METHOD):
+                    block.append(specs[j])
+                    j += 1
+                self._build_advanced_block(layout, spec[1], spec[2], block)
+                grid = section_grid()          # fresh grid for the specs after the block
+                row, pending = 0, None
+                i = j
+                continue
+            row, pending = self._place_spec(grid, row, pending, spec)
+            i += 1
+        row, pending = self._flush_pending(grid, row, pending)
+        layout.addLayout(grid)
+
+    def _build_method_block(self, layout, method_name, specs):
+        """Emit a container holding one displacement method's whole knob group, shown only
+        while that method is selected (so an unselected method's parameters are hidden, not
+        merely greyed). Registered in ``_method_blocks`` for _refresh_method_visibility."""
+        container = QWidget()
+        clayout = QVBoxLayout()
+        clayout.setContentsMargins(0, 0, 0, 0)
+        clayout.setSpacing(TIGHT_SPACING)
+        self._lay_specs(clayout, specs)
+        container.setLayout(clayout)
+        container.setVisible(False)     # _refresh_method_visibility reveals the active one
+        self._method_blocks.append((container, method_name))
+        layout.addWidget(container)
+
+    def _build_advanced_block(self, layout, title, owner_method, specs):
+        """Emit a collapsed-by-default disclosure toggle + its (own-grid) container.
+
+        The container holds ``specs`` laid out exactly as a normal run of rows, and is
+        method-scoped: _refresh_advanced_visibility reveals the toggle only while
+        ``owner_method`` is the selected displacement method, and the container only
+        when the toggle is also expanded."""
+        toggle = QToolButton()
+        toggle.setText(title)
+        toggle.setCheckable(True)
+        toggle.setChecked(False)
+        toggle.setAutoRaise(True)
+        toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        toggle.setArrowType(Qt.RightArrow)
+        toggle.setStyleSheet(section_subheader_style())
+
+        container = QWidget()
+        cgrid = section_grid()
+        row, pending = 0, None
+        for spec in specs:
+            row, pending = self._place_spec(cgrid, row, pending, spec)
+        self._flush_pending(cgrid, row, pending)
+        container.setLayout(cgrid)
+        container.setVisible(False)
+
+        def _on_toggled(checked, tb=toggle):
+            tb.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+            self._refresh_advanced_visibility()
+
+        toggle.toggled.connect(_on_toggled)
+        self._advanced_blocks.append((toggle, container, owner_method))
+        layout.addWidget(toggle)
+        layout.addWidget(container)
+
+    def _flush_pending(self, grid, row, pending):
+        """Emit a lone scalar still waiting for a right-hand partner as a left-only row."""
+        if pending is not None:
+            add_section_pair_row(grid, row, pending[0], pending[1], left_tooltip=pending[2])
+            return row + 1, None
+        return row, pending
+
+    def _place_spec(self, grid, row, pending, spec):
+        """Place one spec into ``grid``, returning the updated ``(row, pending)``.
+
+        Scalars pair two-per-row; a GROUP sub-header or a range slider takes a full
+        row and first flushes any scalar still waiting for a partner. ``pending`` is the
+        (label, control, tooltip) of a left-hand scalar awaiting its right-hand mate."""
+        if spec[0] is GROUP:
+            row, pending = self._flush_pending(grid, row, pending)
+            subheader = QLabel(spec[1])
+            subheader.setStyleSheet(section_subheader_style())
+            add_section_header(grid, row, subheader)
+            return row + 1, pending
+        if spec[2] == "range":
+            row, pending = self._flush_pending(grid, row, pending)
+            label, control, tooltip = self._control_for_spec(spec)
+            add_section_labeled_full_row(grid, row, label, control, tooltip=tooltip)
+            return row + 1, pending
+        if pending is None:
+            return row, self._control_for_spec(spec)
+        label, control, tooltip = self._control_for_spec(spec)
+        add_section_pair_row(grid, row, pending[0], pending[1], label, control,
+                             left_tooltip=pending[2], right_tooltip=tooltip)
+        return row + 1, None
 
     def _control_for_spec(self, spec):
         name, label, kind, min_val, max_val, step, decimals, choices = spec
@@ -238,6 +531,13 @@ class WorkflowParameterPanel(QWidget):
             self.parameter_controls[lo_name] = control
             self.parameter_controls[hi_name] = control
             return control
+        if kind == "int_display":
+            # Read-only derived value (e.g. Pyramid Levels): a plain label, not wired to
+            # the parameter manager. Its text is set by the owner's refresh hook.
+            control = QLabel("—")
+            control.setObjectName(f"workflow_parameter_{name}")
+            self.parameter_controls[name] = control
+            return control
         if kind == "int":
             control = islider(min_val, max_val, self.parameter_manager.get_ui_parameter(name), step=step)
             control.valueChanged.connect(lambda value, n=name: self.parameter_manager.set_ui_parameter(n, value))
@@ -263,20 +563,120 @@ class WorkflowParameterPanel(QWidget):
         self.parameter_controls[name] = control
         return control
 
-    def _refresh_confinement_enablement(self, name=None, value=None):
-        """Grey out the forward-only Smoothness knob unless Mask Confinement > 0.
+    def set_input_shape(self, shape):
+        """Tell the panel the current input frame's ``(h, w)`` (the shell calls this
+        when an experiment/input loads) so the read-only FFD Pyramid Levels display
+        reflects the real pyramid depth. Panels without that control ignore it."""
+        new = None if shape is None else (int(shape[0]), int(shape[1]))
+        if new == self._input_shape:
+            return
+        self._input_shape = new
+        self._refresh_pyramid_levels()
 
-        With confinement at 0 the Force stage runs plain FTTC, which never reads
-        Smoothness — so it would be a dead control. Driven from parameter_changed
-        (any param → cheap no-op when it isn't the confinement dial) and once at
-        construction for the initial state.
+    def _refresh_pyramid_levels(self, name=None, value=None):
+        """Update the read-only Pyramid Levels label: the depth FFD derives from
+        Pyramid Downscale + Coarsest Size for the loaded input frame. A cheap no-op
+        when the changed parameter is neither of those two knobs, or the panel has
+        no such display (e.g. the Force/Stress panels)."""
+        if name is not None and name not in ("ffd_downscale", "ffd_min_size"):
+            return
+        label = self.parameter_controls.get("ffd_num_levels")
+        if label is None:
+            return
+        if self._input_shape is None:
+            label.setText("—")
+            return
+        downscale = float(self.parameter_manager.get_parameter("ffd_downscale"))
+        min_size = int(self.parameter_manager.get_parameter("ffd_min_size"))
+        label.setText(str(_derived_pyramid_levels(self._input_shape, downscale, min_size)))
+
+    def _refresh_confinement_enablement(self, name=None, value=None):
+        """Grey out each confinement's dependent knob unless its gate is active.
+
+        Two independent gates: the Force stage's Smoothness is dead unless Mask
+        Confinement > 0 (confinement 0 runs plain FTTC, which never reads it), and
+        the Displacement stage's Mask Margin is dead unless Confine to Mask is on.
+        Driven from parameter_changed (a cheap no-op when the changed param is
+        neither gate) and once at construction for the initial state.
         """
-        if name is not None and name != "fwd_mask_strength":
+        if name is not None and name not in ("fwd_mask_strength", "disp_mask_confine"):
             return
-        control = self.parameter_controls.get("fwd_smoothness")
-        if control is None:
+        smoothness = self.parameter_controls.get("fwd_smoothness")
+        if smoothness is not None:
+            smoothness.setEnabled(self.parameter_manager.get_parameter("fwd_mask_strength") > 0)
+        margin = self.parameter_controls.get("disp_mask_margin_um")
+        if margin is not None:
+            margin.setEnabled(bool(self.parameter_manager.get_parameter("disp_mask_confine")))
+
+    def _refresh_method_visibility(self, name=None, value=None):
+        """Show only the selected displacement method's parameter block; hide the rest,
+        so an unselected method's knobs are invisible (not merely greyed).
+
+        Driven from parameter_changed (cheap no-op unless the method dropdown moved)
+        and once at construction. No-ops when the Displacement section is not built
+        (the panel can be constructed with a subset of sections).
+        """
+        if name is not None and name != "disp_method":
             return
-        control.setEnabled(self.parameter_manager.get_parameter("fwd_mask_strength") > 0)
+        if self.parameter_controls.get("disp_method") is None:
+            return
+        active = self.parameter_manager.get_parameter("disp_method")
+        for container, method in self._method_blocks:
+            container.setVisible(method == active)
+
+    def _refresh_advanced_visibility(self, name=None, value=None):
+        """Show each Advanced disclosure only for its owning method, expanded on demand.
+
+        An Advanced block lives inside its method's block, so it is already hidden when
+        another method is selected; its toggle is revealed only for the owner method and
+        its container only when that toggle is also expanded. Driven from parameter_changed
+        (a cheap no-op unless the
+        method dropdown moved), from the toggles themselves (name is None), and once at
+        construction. No-ops when no Advanced block was built for this panel.
+        """
+        if name is not None and name != "disp_method":
+            return
+        if self.parameter_controls.get("disp_method") is None:
+            return
+        active = self.parameter_manager.get_parameter("disp_method")
+        for toggle, container, owner_method in self._advanced_blocks:
+            owner_selected = owner_method == active
+            toggle.setVisible(owner_selected)
+            container.setVisible(owner_selected and toggle.isChecked())
+
+    def _apply_method_availability(self):
+        """Disable options that cannot run on this machine, with an explaining tooltip.
+
+        FFD is GPU-only and the 'cuda' device needs a CUDA GPU + PyTorch, so both are
+        greyed in their dropdowns when no GPU is present. The user still sees them (so
+        the capability is discoverable) but cannot select an unrunnable configuration.
+        """
+        from napariTFM.backend.ffd_displacement import ffd_available
+        if ffd_available():
+            return
+        self._disable_combo_item(
+            self.parameter_controls.get("disp_method"), "FFD",
+            "FFD is GPU-only. Install the GPU extra (pip install napariTFM[gpu]) and "
+            "use a CUDA device to enable it.",
+        )
+        self._disable_combo_item(
+            self.parameter_controls.get("disp_device"), "cuda",
+            "No CUDA device / PyTorch found; 'cuda' is unavailable. 'auto' uses the "
+            "CPU reference here.",
+        )
+
+    @staticmethod
+    def _disable_combo_item(combo, text, tooltip):
+        """Grey out one item of a QComboBox by its text, leaving it visible."""
+        if combo is None:
+            return
+        idx = combo.findText(text, Qt.MatchFixedString)
+        if idx < 0:
+            return
+        item = combo.model().item(idx)
+        if item is not None:
+            item.setEnabled(False)
+            item.setToolTip(tooltip)
 
     def _sync_all_controls(self):
         for name in self.parameter_controls:
@@ -285,6 +685,10 @@ class WorkflowParameterPanel(QWidget):
     def _sync_parameter(self, param_name: str, value: Any):
         control = self.parameter_controls.get(param_name)
         if control is None:
+            return
+        if isinstance(control, QLabel):
+            # A read-only derived display (e.g. Pyramid Levels): not editable and not
+            # bound to the parameter; its text is maintained by its own refresh hook.
             return
 
         display_value = self.parameter_manager.get_ui_parameter(param_name)
@@ -577,6 +981,10 @@ class napariTFMWidget(QWidget):
         self.refresh_stage_statuses()
         self._update_disclosure()
 
+        # Pay torch's one-time import/CUDA/cuDNN init cost in the background now,
+        # so the first displacement run doesn't stall waiting on it.
+        warm_up_torch()
+
     # Title-row icons: larger and thinner-lined than the stage-header icons,
     # and drawn with the document-set's sharp square caps / miter joins.
     _TOOLBAR_ICON_SIZE = 22
@@ -798,7 +1206,21 @@ class napariTFMWidget(QWidget):
             update = getattr(widget, "_update_ui_state", None)
             if callable(update):
                 update()
+        self._refresh_pyramid_levels_display()
         self.refresh_stage_statuses()
+
+    def _refresh_pyramid_levels_display(self):
+        """Feed the displacement panel the loaded input frame's (h, w) so its read-only
+        FFD Pyramid Levels shows the depth downscale + coarsest-size will actually build.
+        Uses the bead stack (else the reference); (h, w) is the last two axes of either."""
+        panel = self._stage_parameter_panels_by_key.get("displacement")
+        if panel is None:
+            return
+        src = self.data_manager.bead_stack
+        if src is None:
+            src = self.data_manager.reference
+        shape = tuple(src.shape[-2:]) if src is not None and getattr(src, "ndim", 0) >= 2 else None
+        panel.set_input_shape(shape)
 
     def _update_disclosure(self) -> None:
         """Reveal only what the current state earns (G0/G1/G2 gated reveal).

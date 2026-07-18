@@ -98,3 +98,14 @@ pre-existing movie-writer env failure). Two deviations from the plan as written:
 GPU validated: `cupy-cuda13x` 14.1.1 in `.venv`, GPU==CPU corr>0.9999. CPU matches the
 retired L-BFGS to corr=1.00000 in 54 CG iters. Remaining: `[gpu]` extra, Phase-4 perf,
 PIV torch removal (TODO TASK 4).
+
+### Follow-up fix (2026-07-08): λ cross-branch consistency
+Matching the L-BFGS closure (data term `/denom`, Tikhonov `λ/N`) reproduced L-BFGS
+faithfully — but L-BFGS itself never matched FTTC. `λ` is the *shared* `regularization`
+dial, yet the β=0 branch (`_solve_closed_form`, = FTTC) uses `λ²‖t‖²` while the β>0
+branch used linear `λ/N`, so the same dial regularized differently across the
+confinement switch (~125× at λ=1e-2; the λ=1e-4 default sat in the accidental
+crossover band, which is why it read as fine). Fix: identity-term coefficient →
+`λ²·(E·T0)²/denom`, making β=0,γ=0 reproduce `_solve_closed_form` at the same λ on
+every frame; β/γ keep `1/N`. Golden regenerated at the corrected operating point
+(λ 1e-4→1e-6, same corr=0.9998 recovery of `t_true`). New guard test; 9 tests green.
