@@ -31,6 +31,7 @@ from napariTFM.widgets._run_config import (
     series_records,
 )
 from napariTFM.backend.batch_analysis import BatchAnalysis
+from napariTFM.backend._torch_warmup import warm_up_torch
 from napariTFM.backend.ntfm_writer import write_experiment_ntfm
 from napariTFM.utilities.batch_output import experiment_ntfm_path, resolve_output_plan
 from napariTFM.utilities.viewer_sink import ViewerSink
@@ -68,6 +69,14 @@ STAGE_DATA_ARTIFACTS = {
 # two-per-row run; it is not a parameter control.
 GROUP = object()
 
+# Sentinel marking a collapsible "Advanced" disclosure inside a section. A spec of
+# the form (ADVANCED, "Advanced", method) renders a collapsed-by-default toggle and
+# gathers the specs that follow (up to the next GROUP/ADVANCED marker, or the section
+# end) into a container the toggle shows/hides. The block is owned by ``method``: its
+# rows exist/show only while that displacement method is selected AND the disclosure
+# is expanded. It is not a parameter control.
+ADVANCED = object()
+
 
 class WorkflowParameterPanel(QWidget):
     """Single visible parameter editor for the workflow shell."""
@@ -78,8 +87,33 @@ class WorkflowParameterPanel(QWidget):
             ("frame_interval", "Frame Length (min)", "float", 0.001, 1000.0, 0.1, 3, None),
         ]),
         ("Displacement", [
+            # Method + shared device at the top: they decide which knob group below
+            # is live. Each method's primary knob is listed first in its group.
+            ("disp_method", "Method", "choice", None, None, None, None,
+             ["PIV", "Lucas-Kanade", "FFD"]),
+            ("disp_device", "Device", "choice", None, None, None, None,
+             ["auto", "cuda", "cpu"]),
+            (GROUP, "PIV (cross-correlation)"),
             ("piv_window", "Interrogation Window (px)", "int", 8, 128, 2, 0, None),
+            ("piv_overlap", "Window Overlap", "float", 0.0, 0.95, 0.025, 3, None),
             ("piv_passes", "Passes", "int", 1, 12, 1, 0, None),
+            (GROUP, "Lucas-Kanade (optical flow)"),
+            ("ilk_radius", "Window Radius (px)", "int", 1, 64, 1, 0, None),
+            ("ilk_num_warp", "Warp Iterations", "int", 1, 64, 1, 0, None),
+            (GROUP, "FFD (GPU only)"),
+            ("ffd_level_spacing", "Control Spacing (px)", "float", 4.0, 64.0, 1.0, 1, None),
+            ("ffd_num_levels", "Pyramid Levels", "int", 1, 10, 1, 0, None),
+            ("ffd_elastic", "Elastic Regularization", "float", 0.0, 10.0, 0.01, 3, None),
+            ("ffd_num_iters", "Iterations / Level", "int", 1, 200, 1, 0, None),
+            ("ffd_metric", "Image Metric", "choice", None, None, None, None, ["lncc", "mse"]),
+            ("ffd_warmstart", "Warm-Start (time-lapse)", "bool", None, None, None, None, None),
+            ("ffd_early_stop", "Early-Exit Tolerance", "float", 0.0, 0.01, 0.00001, 6, None),
+            (ADVANCED, "Advanced", "FFD"),
+            ("ffd_tol", "Early-Stop Tolerance", "float", 0.0, 0.1, 0.001, 4, None),
+            ("ffd_downscale", "Pyramid Downscale", "float", 1.1, 4.0, 0.1, 1, None),
+            ("ffd_min_size", "Min Pyramid Size (px)", "int", 4, 128, 4, 0, None),
+            ("ffd_interp", "Warp Interpolation", "choice", None, None, None, None, ["bicubic", "bilinear"]),
+            (GROUP, "General"),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
             (GROUP, "Visualization"),
             ("disp_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
@@ -130,17 +164,124 @@ class WorkflowParameterPanel(QWidget):
             "the photometric solver got for free from its coarse basis. Useful band "
             "~0.01..0.3. 0 = off. Inert (greyed) until Mask Confinement > 0."
         ),
+        "disp_method": (
+            "Displacement algorithm. PIV (FFT cross-correlation) is a forgiving "
+            "default, quietest off-cell in our benchmark and graceful up to large "
+            "motion. Lucas-Kanade (iterative optical flow) tracks it closely at "
+            "small motion and is fast and light. FFD (free-form deformation) leads "
+            "under large deformation but is GPU-only. Accuracy was a near-tie in the "
+            "one regime we tested; they separate on off-cell noise and capture "
+            "range. See the 'Choosing a displacement method' doc, and preview a "
+            "couple on your own data before committing."
+        ),
+        "disp_device": (
+            "Compute backend, shared by every method. 'auto' uses the GPU when "
+            "PyTorch and a CUDA device are present (the [gpu] extra), else the CPU "
+            "reference (openpiv for PIV, scikit-image for Lucas-Kanade). 'cuda' "
+            "requires a GPU; 'cpu' forces the reference implementation. For "
+            "Lucas-Kanade the GPU port is numerically identical to the CPU one; for "
+            "PIV it is at measured parity on dense beads, not bit-identical. FFD is "
+            "GPU-only."
+        ),
         "piv_window": (
-            "Final PIV interrogation window, in pixels. Cross-correlation is run "
-            "on windows of this size on the last (finest) pass. Smaller windows "
-            "resolve finer detail but need denser texture to stay well-posed; "
-            "larger windows are more robust to noise but blur small displacements."
+            "Final PIV interrogation window, in pixels: the primary PIV knob and the "
+            "peak-vs-noise trade-off. Cross-correlation runs on windows of this size "
+            "on the last (finest) pass. Smaller windows sharpen the near-adhesion "
+            "peak but need denser texture and raise off-cell noise; larger windows "
+            "are more robust to noise but blur small displacements. ~24 is a "
+            "reasonable start."
+        ),
+        "piv_overlap": (
+            "Fractional overlap between neighbouring PIV windows (0-0.95). Higher "
+            "overlap samples the field more finely and recovers sharp peaks better, "
+            "at more compute and memory (high overlap on large frames can exhaust "
+            "GPU memory). A first-order knob, not a default to ignore: tune it with "
+            "the window."
         ),
         "piv_passes": (
             "Number of coarse-to-fine PIV passes. Each pass re-warps the moving "
-            "image by the running estimate and correlates with a smaller window, "
-            "so more passes capture larger displacements and refine subpixel "
-            "accuracy at the cost of runtime; gains taper off after a few."
+            "image by the running estimate and correlates with a smaller window, so "
+            "more passes capture larger displacements and drive convergence at the "
+            "cost of runtime; gains taper off after a few. Raise it if large motion "
+            "is missed."
+        ),
+        "ilk_radius": (
+            "Half-window of the local Lucas-Kanade solve, in pixels: the primary iLK "
+            "knob. It acts as a noise aperture, not a capture knob (the image "
+            "pyramid handles capture). Start near 7-10; larger for noisier images, "
+            "which trades peak sharpness for a quieter field."
+        ),
+        "ilk_num_warp": (
+            "Coarse-to-fine warp iterations per pyramid level. More iterations refine "
+            "the flow and help it converge, with diminishing returns past ~16. Raise "
+            "it if the field looks under-converged; it does not extend capture range."
+        ),
+        "ffd_level_spacing": (
+            "Finest control-grid spacing, in pixels: FFD's primary knob and its "
+            "bias-variance dial. Fine (~8) recovers sharp peaks on clean data; coarse "
+            "(~16-24) regularizes noise and keeps the off-cell background quiet. Its "
+            "best value grows with image noise."
+        ),
+        "ffd_num_levels": (
+            "Image-pyramid depth for FFD. Deeper pyramids capture larger "
+            "displacements (each level halves the image, shrinking motion in pixels). "
+            "Raise it if big displacements are missed; the default handles the range "
+            "we tested."
+        ),
+        "ffd_metric": (
+            "Image-match objective FFD minimises. 'lncc' (local normalised "
+            "cross-correlation) weights every window equally, so the sharp "
+            "high-motion peak is not drowned by the low-motion bulk: it preserves "
+            "peaks better and is the default. 'mse' is simpler but softens the peak."
+        ),
+        "ffd_elastic": (
+            "Weight of the elastic (Navier strain-energy) prior on the deformation — "
+            "the physically correct regularizer for a TFM gel, penalising first "
+            "derivatives (strain) so it permits concentrated strain at force points "
+            "but forbids implausible roughness. 0 = off. Raise it to quieten a noisy "
+            "field; too high over-smooths real peaks."
+        ),
+        "ffd_num_iters": (
+            "LBFGS iterations per pyramid level. More iterations refine each level's "
+            "control-grid fit with diminishing returns; the default is ample for the "
+            "range we tested."
+        ),
+        "ffd_warmstart": (
+            "Seed each frame's fit with the previous frame's field (temporal "
+            "coherence): in a time-lapse consecutive frames are near-identical, so the "
+            "fit starts close to the answer and converges in fewer iterations — a "
+            "speed-up. The full pyramid is always kept, so a bad seed (a discontinuity, "
+            "detachment, or dropped frame) just costs iterations, never accuracy. Leave "
+            "on for time-lapses; it is inert on a single frame pair. Pair it with "
+            "Early-Exit Tolerance to actually cash in the speed-up."
+        ),
+        "ffd_early_stop": (
+            "Per-level LBFGS convergence tolerance: a level stops as soon as its loss "
+            "improves by less than this between steps, instead of always running the "
+            "full Iterations / Level budget. 0 (default) runs every level to the full "
+            "budget, unchanged. This is the real speed lever for warm-started "
+            "time-lapses — a well-seeded level converges early and exits; a cold or "
+            "poorly-seeded one keeps iterating."
+        ),
+        "ffd_tol": (
+            "Per-level early-stop tolerance: stop refining once a level's data-loss "
+            "gain falls below this. 0 = run every level's full iteration budget. Small "
+            "positive values trim wasted iterations on already-converged levels."
+        ),
+        "ffd_downscale": (
+            "Image-pyramid downscale factor per level. 2.0 halves each axis per level "
+            "(the default); smaller factors build a finer pyramid (more levels, gentler "
+            "capture steps) at more compute. Rarely needs changing."
+        ),
+        "ffd_min_size": (
+            "Smallest dimension (px) the coarsest pyramid level is allowed to reach: "
+            "the pyramid stops adding coarser levels once a level would fall below it. "
+            "Bounds capture range together with Pyramid Levels."
+        ),
+        "ffd_interp": (
+            "Interpolation used to warp the moving image. 'bicubic' (default) preserves "
+            "sharp peaks better, matching a cubic-B-spline resample; 'bilinear' is "
+            "cheaper and slightly smoother."
         ),
     }
 
@@ -149,11 +290,19 @@ class WorkflowParameterPanel(QWidget):
         self.parameter_manager = parameter_manager
         self._section_titles = set(section_titles) if section_titles is not None else None
         self.parameter_controls = {}
+        # Populated by _setup_ui: one (toggle, container, owner_method) per collapsible
+        # Advanced disclosure, for method-scoped show/hide (see _refresh_advanced_visibility).
+        self._advanced_blocks = []
         self._setup_ui()
         self._sync_all_controls()
         self._refresh_confinement_enablement()
+        self._apply_method_availability()
+        self._refresh_method_enablement()
+        self._refresh_advanced_visibility()
         self.parameter_manager.parameter_changed.connect(self._sync_parameter)
         self.parameter_manager.parameter_changed.connect(self._refresh_confinement_enablement)
+        self.parameter_manager.parameter_changed.connect(self._refresh_method_enablement)
+        self.parameter_manager.parameter_changed.connect(self._refresh_advanced_visibility)
 
     def _setup_ui(self):
         layout = QVBoxLayout()
@@ -163,50 +312,108 @@ class WorkflowParameterPanel(QWidget):
         for title, specs in self.PARAMETER_SECTIONS:
             if self._section_titles is not None and title not in self._section_titles:
                 continue
-
-            grid = section_grid()
-            header = QLabel(title)
-            header.setStyleSheet(section_label_style())
-            add_section_header(grid, 0, header)
-
-            # Lay out specs two-per-row, but a range slider (or a GROUP marker)
-            # takes a full row and flushes any scalar still waiting for a partner.
-            row = 1
-            pending = None  # (label, control, tooltip)
-
-            def flush_pending():
-                nonlocal pending, row
-                if pending is not None:
-                    add_section_pair_row(grid, row, pending[0], pending[1],
-                                         left_tooltip=pending[2])
-                    row += 1
-                    pending = None
-
-            for spec in specs:
-                if spec[0] is GROUP:
-                    flush_pending()
-                    subheader = QLabel(spec[1])
-                    subheader.setStyleSheet(section_subheader_style())
-                    add_section_header(grid, row, subheader)
-                    row += 1
-                elif spec[2] == "range":
-                    flush_pending()
-                    label, control, tooltip = self._control_for_spec(spec)
-                    add_section_labeled_full_row(grid, row, label, control, tooltip=tooltip)
-                    row += 1
-                elif pending is None:
-                    pending = self._control_for_spec(spec)
-                else:
-                    label, control, tooltip = self._control_for_spec(spec)
-                    add_section_pair_row(grid, row, pending[0], pending[1], label, control,
-                                         left_tooltip=pending[2], right_tooltip=tooltip)
-                    row += 1
-                    pending = None
-            flush_pending()
-
-            layout.addLayout(grid)
+            self._build_section(layout, title, specs)
 
         self.setLayout(layout)
+
+    def _build_section(self, layout, title, specs):
+        """Build one titled parameter section, splitting out any ADVANCED disclosure.
+
+        Specs are laid two-per-row into a grid until an ADVANCED marker, which closes
+        the current grid, emits a collapsible block for the specs up to the next
+        GROUP/ADVANCED marker, then resumes a fresh grid for whatever follows (so the
+        groups after the disclosure, e.g. General/Visualization, stay outside it)."""
+        grid = section_grid()
+        header = QLabel(title)
+        header.setStyleSheet(section_label_style())
+        add_section_header(grid, 0, header)
+
+        row, pending = 1, None
+        i, n = 0, len(specs)
+        while i < n:
+            spec = specs[i]
+            if spec[0] is ADVANCED:
+                row, pending = self._flush_pending(grid, row, pending)
+                layout.addLayout(grid)
+                j = i + 1
+                block = []
+                while j < n and specs[j][0] not in (GROUP, ADVANCED):
+                    block.append(specs[j])
+                    j += 1
+                self._build_advanced_block(layout, spec[1], spec[2], block)
+                grid = section_grid()          # fresh grid for the specs after the block
+                row, pending = 0, None
+                i = j
+                continue
+            row, pending = self._place_spec(grid, row, pending, spec)
+            i += 1
+        row, pending = self._flush_pending(grid, row, pending)
+        layout.addLayout(grid)
+
+    def _build_advanced_block(self, layout, title, owner_method, specs):
+        """Emit a collapsed-by-default disclosure toggle + its (own-grid) container.
+
+        The container holds ``specs`` laid out exactly as a normal run of rows, and is
+        method-scoped: _refresh_advanced_visibility reveals the toggle only while
+        ``owner_method`` is the selected displacement method, and the container only
+        when the toggle is also expanded."""
+        toggle = QToolButton()
+        toggle.setText(title)
+        toggle.setCheckable(True)
+        toggle.setChecked(False)
+        toggle.setAutoRaise(True)
+        toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        toggle.setArrowType(Qt.RightArrow)
+        toggle.setStyleSheet(section_subheader_style())
+
+        container = QWidget()
+        cgrid = section_grid()
+        row, pending = 0, None
+        for spec in specs:
+            row, pending = self._place_spec(cgrid, row, pending, spec)
+        self._flush_pending(cgrid, row, pending)
+        container.setLayout(cgrid)
+        container.setVisible(False)
+
+        def _on_toggled(checked, tb=toggle):
+            tb.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+            self._refresh_advanced_visibility()
+
+        toggle.toggled.connect(_on_toggled)
+        self._advanced_blocks.append((toggle, container, owner_method))
+        layout.addWidget(toggle)
+        layout.addWidget(container)
+
+    def _flush_pending(self, grid, row, pending):
+        """Emit a lone scalar still waiting for a right-hand partner as a left-only row."""
+        if pending is not None:
+            add_section_pair_row(grid, row, pending[0], pending[1], left_tooltip=pending[2])
+            return row + 1, None
+        return row, pending
+
+    def _place_spec(self, grid, row, pending, spec):
+        """Place one spec into ``grid``, returning the updated ``(row, pending)``.
+
+        Scalars pair two-per-row; a GROUP sub-header or a range slider takes a full
+        row and first flushes any scalar still waiting for a partner. ``pending`` is the
+        (label, control, tooltip) of a left-hand scalar awaiting its right-hand mate."""
+        if spec[0] is GROUP:
+            row, pending = self._flush_pending(grid, row, pending)
+            subheader = QLabel(spec[1])
+            subheader.setStyleSheet(section_subheader_style())
+            add_section_header(grid, row, subheader)
+            return row + 1, pending
+        if spec[2] == "range":
+            row, pending = self._flush_pending(grid, row, pending)
+            label, control, tooltip = self._control_for_spec(spec)
+            add_section_labeled_full_row(grid, row, label, control, tooltip=tooltip)
+            return row + 1, pending
+        if pending is None:
+            return row, self._control_for_spec(spec)
+        label, control, tooltip = self._control_for_spec(spec)
+        add_section_pair_row(grid, row, pending[0], pending[1], label, control,
+                             left_tooltip=pending[2], right_tooltip=tooltip)
+        return row + 1, None
 
     def _control_for_spec(self, spec):
         name, label, kind, min_val, max_val, step, decimals, choices = spec
@@ -277,6 +484,88 @@ class WorkflowParameterPanel(QWidget):
         if control is None:
             return
         control.setEnabled(self.parameter_manager.get_parameter("fwd_mask_strength") > 0)
+
+    # Which knobs belong to which displacement method, so only the selected
+    # method's group stays live (the others grey out, like the confinement dial).
+    _METHOD_PARAMS = {
+        "PIV": ("piv_window", "piv_overlap", "piv_passes"),
+        "Lucas-Kanade": ("ilk_radius", "ilk_num_warp"),
+        "FFD": ("ffd_level_spacing", "ffd_num_levels", "ffd_elastic", "ffd_num_iters",
+                "ffd_metric", "ffd_warmstart", "ffd_early_stop", "ffd_tol", "ffd_downscale",
+                "ffd_min_size", "ffd_interp"),
+    }
+
+    def _refresh_method_enablement(self, name=None, value=None):
+        """Enable only the selected displacement method's knob group; grey the rest.
+
+        Driven from parameter_changed (cheap no-op unless the method dropdown moved)
+        and once at construction. No-ops when the Displacement section is not built
+        (the panel can be constructed with a subset of sections).
+        """
+        if name is not None and name != "disp_method":
+            return
+        if self.parameter_controls.get("disp_method") is None:
+            return
+        active = self.parameter_manager.get_parameter("disp_method")
+        for method, names in self._METHOD_PARAMS.items():
+            for n in names:
+                control = self.parameter_controls.get(n)
+                if control is not None:
+                    control.setEnabled(method == active)
+
+    def _refresh_advanced_visibility(self, name=None, value=None):
+        """Show each Advanced disclosure only for its owning method, expanded on demand.
+
+        An Advanced block's toggle is revealed only when its owner method is the
+        selected one (unlike the primary knobs, which merely grey out for the inactive
+        methods — the advanced rows hide entirely); its container shows only when that
+        toggle is also expanded. Driven from parameter_changed (a cheap no-op unless the
+        method dropdown moved), from the toggles themselves (name is None), and once at
+        construction. No-ops when no Advanced block was built for this panel.
+        """
+        if name is not None and name != "disp_method":
+            return
+        if self.parameter_controls.get("disp_method") is None:
+            return
+        active = self.parameter_manager.get_parameter("disp_method")
+        for toggle, container, owner_method in self._advanced_blocks:
+            owner_selected = owner_method == active
+            toggle.setVisible(owner_selected)
+            container.setVisible(owner_selected and toggle.isChecked())
+
+    def _apply_method_availability(self):
+        """Disable options that cannot run on this machine, with an explaining tooltip.
+
+        FFD is GPU-only and the 'cuda' device needs a CUDA GPU + PyTorch, so both are
+        greyed in their dropdowns when no GPU is present. The user still sees them (so
+        the capability is discoverable) but cannot select an unrunnable configuration.
+        """
+        from napariTFM.backend.ffd_displacement import ffd_available
+        if ffd_available():
+            return
+        self._disable_combo_item(
+            self.parameter_controls.get("disp_method"), "FFD",
+            "FFD is GPU-only. Install the GPU extra (pip install napariTFM[gpu]) and "
+            "use a CUDA device to enable it.",
+        )
+        self._disable_combo_item(
+            self.parameter_controls.get("disp_device"), "cuda",
+            "No CUDA device / PyTorch found; 'cuda' is unavailable. 'auto' uses the "
+            "CPU reference here.",
+        )
+
+    @staticmethod
+    def _disable_combo_item(combo, text, tooltip):
+        """Grey out one item of a QComboBox by its text, leaving it visible."""
+        if combo is None:
+            return
+        idx = combo.findText(text, Qt.MatchFixedString)
+        if idx < 0:
+            return
+        item = combo.model().item(idx)
+        if item is not None:
+            item.setEnabled(False)
+            item.setToolTip(tooltip)
 
     def _sync_all_controls(self):
         for name in self.parameter_controls:
@@ -575,6 +864,10 @@ class napariTFMWidget(QWidget):
         self.data_manager.add_change_callback(self.refresh)
         self.refresh_stage_statuses()
         self._update_disclosure()
+
+        # Pay torch's one-time import/CUDA/cuDNN init cost in the background now,
+        # so the first displacement run doesn't stall waiting on it.
+        warm_up_torch()
 
     # Title-row icons: larger and thinner-lined than the stage-header icons,
     # and drawn with the document-set's sharp square caps / miter joins.

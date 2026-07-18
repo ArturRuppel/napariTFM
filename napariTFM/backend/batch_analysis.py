@@ -589,8 +589,9 @@ class BatchAnalysis:
         Processing Steps
         ---------------
         1. Displacement Analysis:
-            - Multi-pass PIV of the raw bead frames against the raw reference
-              (bulk stage drift folded in and subtracted)
+            - The selected method (PIV, Lucas-Kanade, or FFD) on the bead frames
+              against the reference, after registering both to the first frame to
+              remove bulk stage drift
 
         2. Force Analysis:
             - Computes traction forces using FTTC
@@ -707,13 +708,12 @@ class BatchAnalysis:
     def _handle_displacement_execution(self, folder: Path, tfm_folder: Path) -> Optional[dict]:
         """Handle displacement analysis execution. Always runs if enabled.
 
-        PIV consumes the *raw* bead/reference inputs straight from the input
-        folder. The multi-pass PIV coarse pass absorbs bulk stage drift (which
-        ``calculate_displacement_field`` then subtracts from the reported
-        field), so image-level pre-registration is no longer needed — this is
-        why the old preprocessing stage could be removed entirely. A
-        missing/unreadable input raises and is recorded as a displacement
-        failure by ``_guard_stage``.
+        The displacement stage consumes the *raw* bead/reference inputs straight
+        from the input folder. ``calculate_displacement_field`` registers the
+        reference and every frame to the first frame (removing bulk stage drift)
+        before measuring, so a separate image-level preprocessing stage is not
+        needed. A missing/unreadable input raises and is recorded as a
+        displacement failure by ``_guard_stage``.
         """
         def body():
             print("Loading raw bead/reference images from file...")
@@ -882,14 +882,16 @@ class BatchAnalysis:
 
         Processing Steps
         ---------------
-        1. Runs multi-pass PIV of each raw bead frame against the raw reference
-        2. Subtracts the per-frame bulk drift from the field (translation
-           correction, folded into PIV)
+        1. Registers the reference and each bead frame to the first frame,
+           removing bulk stage drift (parameter-free, translation only)
+        2. Runs the selected method (PIV, Lucas-Kanade, or FFD) on the registered
+           pair; records each frame's drift in drift_pixels for the cell overlay
         3. Optional downscaling to the analysis grid
         4. Returns the displacement field (persisted later in the .ntfm)
 
         The displacement parameters are taken from the config:
-            - piv_window, piv_passes (PIV parameters)
+            - disp_method, disp_device
+            - piv_window/overlap/passes, ilk_radius/num_warp, ffd_level_spacing/num_levels
             - downscale_factor, pixel_size
 
         Raises

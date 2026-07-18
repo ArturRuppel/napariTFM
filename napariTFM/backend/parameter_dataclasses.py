@@ -8,14 +8,45 @@ _T = TypeVar("_T")
 
 @dataclass
 class DisplacementParameters:
-    """Parameters for displacement analysis"""
-    # PIV (multi-pass FFT cross-correlation) parameters. The backend has a
-    # torch-free numpy core and is GPU-accelerated automatically when torch +
-    # CUDA are available (see napariTFM/backend/piv_displacement.py).
+    """Parameters for displacement analysis.
+
+    Three interchangeable backends selected by ``disp_method``; each has a trusted
+    CPU reference (openpiv / scikit-image) and a torch GPU port used when available
+    and selected by the shared ``disp_device``. FFD is GPU-only. See
+    napariTFM/backend/{piv,ilk,ffd}_displacement.py.
+    """
+    # Method + shared device selector.
+    disp_method: str = "PIV"      # "PIV" | "Lucas-Kanade" | "FFD"
+    disp_device: str = "auto"     # "auto" | "cuda" | "cpu" (shared by all methods)
+
+    # PIV (multi-pass FFT cross-correlation): openpiv CPU / torch GPU, same knobs.
     piv_window: int = 16          # final interrogation window (px)
     piv_overlap: float = 0.75     # window overlap fraction [0, 1)
     piv_passes: int = 8           # coarse->fine window-deformation passes
-    piv_device: str = "auto"      # "auto" | "cuda" | "cpu"
+
+    # iLK (iterative Lucas-Kanade): scikit-image CPU / torch GPU, same knobs.
+    ilk_radius: int = 7           # half-window of the local LK solve (px), the primary knob
+    ilk_num_warp: int = 10        # coarse->fine warp iterations per pyramid level
+
+    # FFD (grid-pyramid free-form deformation): GPU-only.
+    ffd_level_spacing: float = 12.0   # finest control spacing (px) -- the bias-variance dial
+    ffd_num_levels: int = 6           # image-pyramid depth (capture range)
+    ffd_metric: str = "lncc"          # "lncc" | "mse" image-match objective
+    ffd_num_iters: int = 50           # LBFGS iterations per pyramid level
+    ffd_elastic: float = 0.0          # elastic (Navier strain-energy) regularization weight; 0 = off
+    ffd_tol: float = 0.0              # per-level early-stop: stop when a level's data-loss gain < tol
+    ffd_downscale: float = 2.0        # image-pyramid downscale factor per level
+    ffd_min_size: int = 16            # coarsest pyramid level min dimension (px)
+    ffd_interp: str = "bicubic"       # warp interpolation: "bicubic" | "bilinear"
+    # FFD warm-start (temporal coherence): consecutive time-lapse frames' fields are
+    # nearly identical, so seed frame t's fit with frame t-1's result. The full
+    # pyramid is always kept -- a bad seed just costs iterations, never diverges --
+    # so there is no fallback and no level-dropping to configure. Off by default:
+    # warm-start only pays off WITH early exit (ffd_early_stop > 0) enabled -- on its
+    # own it just adds the seeding cost while still running full num_iters, i.e. it is
+    # slower than cold for no gain. Turn both on together for the speed-up.
+    ffd_warmstart: bool = False       # warm-start each frame from the previous frame's field
+    ffd_early_stop: float = 0.0       # per-level LBFGS convergence tolerance; 0 = run full num_iters (current behaviour)
 
     # Analysis parameters
     downscale_factor: int = 4
@@ -103,11 +134,25 @@ class UnifiedParameters:
     pixel_size: float = 0.1  # µm
     frame_interval: float = 1.0  # min
 
-    # Displacement parameters (PIV backend)
+    # Displacement parameters (PIV / iLK / FFD backends; see DisplacementParameters)
+    disp_method: str = "PIV"  # "PIV" | "Lucas-Kanade" | "FFD"
+    disp_device: str = "auto"  # "auto" | "cuda" | "cpu" (shared by all methods)
     piv_window: int = 16
     piv_overlap: float = 0.75
     piv_passes: int = 8
-    piv_device: str = "auto"  # "auto" | "cuda" | "cpu"
+    ilk_radius: int = 7
+    ilk_num_warp: int = 10
+    ffd_level_spacing: float = 12.0
+    ffd_num_levels: int = 6
+    ffd_metric: str = "lncc"
+    ffd_num_iters: int = 50
+    ffd_elastic: float = 0.0
+    ffd_tol: float = 0.0
+    ffd_downscale: float = 2.0
+    ffd_min_size: int = 16
+    ffd_interp: str = "bicubic"
+    ffd_warmstart: bool = False
+    ffd_early_stop: float = 0.0
     downscale_factor: int = 4
     disp_vector_stride: int = 20
     disp_arrow_scale: float = 1.0

@@ -132,60 +132,45 @@ To perform TFM analysis, you need:
 
 napariTFM consists of three main analysis modules:
 
-1. **Displacement Analysis**: Displacement field measurement (multi-pass PIV on the raw bead images)
+1. **Displacement Analysis**: Displacement field measurement (PIV, Lucas-Kanade, or FFD on the raw bead images)
 2. **Force Calculation**: Traction force computation using FTTC
 3. **Stress Analysis**: Internal stress field calculation using BISM
 
-There is no separate preprocessing stage: the multi-pass PIV coarse pass
-absorbs bulk stage drift (which is subtracted from the reported field), so the
-displacement stage consumes the raw bead/reference inputs directly. The
-optional cell channel is contrast-scaled and drift-corrected on the fly for the
-force-cell overlay.
+There is no separate preprocessing stage: the displacement stage first registers
+the reference and every bead frame to the first bead frame (parameter-free phase
+cross-correlation, translation only), removing bulk stage drift before any method
+runs, then measures the residual cell-induced deformation. Registering up front,
+rather than subtracting drift afterward, keeps the motion within each method's
+capture range. The optional cell channel is contrast-scaled and shifted by the
+same per-frame drift so it lines up with the traction field in the overlay.
 
 ## Displacement Analysis
 
 ### Purpose
-Calculate displacement fields from bead movements using optical flow algorithms. The analysis determines how fluorescent beads embedded in the substrate move between a reference state (relaxed) and subsequent images (deformed), providing a quantitative measure of substrate deformation.
+Calculate displacement fields from bead movements using one of three displacement algorithms (PIV, Lucas-Kanade, or FFD). The analysis determines how fluorescent beads embedded in the substrate move between a reference state (relaxed) and subsequent images (deformed), providing a quantitative measure of substrate deformation.
+
+> **Which method should I use?** In the one imaging regime we benchmarked, the methods agreed on accuracy and separated on noise and capture range. [Choosing a displacement method](docs/choosing-a-displacement-method.md) reports what the test found (PIV a forgiving default, FFD-pyr strongest under large deformation), the regimes it does not cover, and how to tune each method on your own data.
 
 ### Technical Background
-#### Optical Flow Algorithm
-napariTFM uses OpenCV's Farneback dense optical flow algorithm, which is well-suited for production TFM analysis because it:
-- Runs with standard `opencv-python` without requiring OpenCV contrib modules
-- Handles large displacements through multi-scale analysis
-- Provides dense sub-pixel displacement estimates
-- Uses local polynomial expansion to estimate bead motion from intensity structure
 
-The algorithm works by:
-1. Estimating local polynomial models of image intensity in the reference and deformed images.
+napariTFM offers three displacement algorithms, chosen in the **Method** dropdown. They agreed on accuracy in the one regime we benchmarked and separated on off-cell noise and capture range; [Choosing a displacement method](docs/choosing-a-displacement-method.md) reports what the benchmark found, the regimes it does not cover, and how to tune each on your own data.
 
-2. Using a multi-scale pyramid approach:
-   - Images are analyzed at different resolution levels
-   - Large displacements are captured at coarse scales
-   - Fine details are refined at higher resolutions
+- **PIV** (particle image velocimetry): FFT cross-correlation of interrogation windows, coarse-to-fine with window deformation. The forgiving default: quietest off-cell in our benchmark and graceful up to large motion.
+- **Lucas-Kanade** (iterative optical flow): a dense local least-squares solve at every pixel over an image pyramid. Fast and light, and it tracked PIV closely at small motion.
+- **FFD** (free-form deformation): a cubic B-spline control grid fit to the image pair over a pyramid. Strongest under large deformation. GPU-only.
+
+Each method runs on the CPU by default (openpiv for PIV, scikit-image for Lucas-Kanade) with no extra dependency. Installing the GPU extra (`pip install napariTFM[gpu]`, which provides PyTorch) adds a CUDA-accelerated backend for all three and enables FFD. The **Device** dropdown selects `auto` (GPU when present, else CPU), `cuda` (require a GPU), or `cpu`. For Lucas-Kanade the GPU port is numerically identical to the CPU reference; for PIV it is at measured parity on dense beads, not bit-identical.
 
 ### Parameters
 
-#### Basic Parameters
-- **Farneback Levels**: Number of pyramid levels used for multi-scale tracking
-  - More levels handle larger displacements but increase computation time
-  - Default: 10
+Every knob is in the parameter panel, the most important first in each method's group, each with a tooltip. Only the selected method's group is active. Start from the defaults and check on a frame with **Preview Current Frame** before a full run: no method is set-once, and the right values depend on your beads and motion.
 
-#### Advanced Parameters
-- **Farneback Iterations**
-  - Number of refinement iterations per pyramid level
-  - More iterations may improve accuracy but increase computation time
-  - Default: 10
+#### Method Parameters
+- **PIV**: **Interrogation Window** (px) is the primary peak-versus-noise knob (smaller sharpens the peak and raises noise). **Window Overlap** samples the field more finely (higher recovers sharp peaks, at more compute and GPU memory). **Passes** drive capture range and convergence.
+- **Lucas-Kanade**: **Window Radius** (px) is a noise aperture (larger for noisier images, at the cost of peak sharpness). **Warp Iterations** refine convergence, not capture range.
+- **FFD**: **Control Spacing** (px) is the bias-variance dial (fine recovers sharp peaks, coarse regularizes noise). **Pyramid Levels** set capture range. **Image Metric** (`lncc` or `mse`) chooses the match objective; `lncc` preserves peaks better.
 
-- **Window Size**
-  - Local averaging window size for Farneback flow
-  - Larger odd values produce smoother dense fields
-  - Default: 9
-  - Default: 0.01
-
-- **Scale Step**
-  - Factor between pyramid levels (0.5-0.8)
-  - Smaller values create more intermediate scales
-  - Example: 0.5 means each level is half the size of the previous
+**Downscale Factor** (shared) reduces the output field resolution by block-mean averaging.
 
 #### Visualization Parameters
 - **Vector Stride**: Display every nth vector
@@ -225,21 +210,19 @@ The algorithm works by:
 - Avoid saturated or very dim regions
 
 #### Parameter Selection
-1. Start with Default Parameters:
-   - Lambda = 0.1
-   - Pyramid scales = 4
-   - Warps = 3
+1. Start from the defaults for your chosen method and preview one frame. Each knob's
+   tooltip says which way to move it; [Choosing a displacement method](docs/choosing-a-displacement-method.md)
+   gives worked starting points per beads-and-motion regime.
 
-2. Adjust Based on Data:
-   - Increase scales for larger displacements
-   - Adjust lambda if result is too noisy or too smooth
-   - Fine-tune warps for accuracy
+2. Adjust based on the preview:
+   - Blunted peak: shrink the window (PIV) or control spacing (FFD), or raise PIV overlap.
+   - Missed large displacements: raise PIV passes or FFD pyramid levels.
+   - Noisy off-cell background: enlarge the window (PIV), radius (iLK), or control spacing (FFD).
 
-3. Common Issues and Solutions:
-   - Noisy results: Decrease lambda, increase smoothing
-   - Missed displacements: Increase pyramid scales
-   - Artifacts: Check input image quality, adjust parameters
-   - Slow processing: Reduce scales or warps
+3. Common issues and solutions:
+   - Poor results everywhere: check input image quality (focus, density, saturation).
+   - Out-of-memory on large frames (GPU): lower PIV overlap, or switch Device to `cpu`.
+   - Slow processing: install the GPU extra and use Device `auto`, or increase Downscale Factor.
 
 #### Validation
 - Compare different parameter sets

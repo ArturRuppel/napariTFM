@@ -3,8 +3,37 @@ from typing import Generator, Optional, Tuple
 
 import numpy as np
 
+from napariTFM.backend._displacement_base import BaseDisplacementAnalyzer
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
+from napariTFM.backend.ffd_displacement import FFDDisplacementAnalyzer
+from napariTFM.backend.ilk_displacement import ILKDisplacementAnalyzer
 from napariTFM.backend.piv_displacement import PIVDisplacementAnalyzer
+from napariTFM.backend.registration import apply_drift, estimate_drift, valid_region
+
+# Map the UI method label (stored verbatim in DisplacementParameters.disp_method) to
+# its analyzer. Each analyzer honours DisplacementParameters.disp_device the same way:
+# a trusted CPU reference by default, the torch GPU port when available/selected.
+_ANALYZERS = {
+    "PIV": PIVDisplacementAnalyzer,
+    "Lucas-Kanade": ILKDisplacementAnalyzer,
+    "FFD": FFDDisplacementAnalyzer,
+}
+
+
+def build_analyzer(params: DisplacementParameters):
+    """Construct the displacement analyzer selected by ``params.disp_method``.
+
+    Raises ``ValueError`` on an unknown method label. FFD raises ``RuntimeError`` at
+    construction when no CUDA GPU is available (it is GPU-only).
+    """
+    try:
+        cls = _ANALYZERS[params.disp_method]
+    except KeyError:
+        raise ValueError(
+            f"Unknown displacement method {params.disp_method!r}; "
+            f"expected one of {sorted(_ANALYZERS)}."
+        )
+    return cls(params)
 
 
 @dataclass
@@ -16,10 +45,11 @@ class DisplacementResult:
     displacement_field_shape: tuple  # Displacement field shape (y, x)
     parameters: DisplacementParameters
     physical_scale: dict  # Dictionary containing physical scaling information
-    # Per-frame bulk translation (stage drift) removed from the field, shape
-    # (t, 2) in pixels, ordered [u_x, u_y] to match displacement_field's last
-    # axis. This is the translation-correction PIV absorbed; retained so the
-    # same shift can be applied to the cell channel.
+    # Per-frame bulk translation (stage drift) of each target frame relative to
+    # the anchor (first frame), shape (t, 2) in pixels, ordered [u_x, u_y] to
+    # match displacement_field's last axis. Estimated by the registration step
+    # that removed it before measurement; retained so the same shift registers
+    # the cell channel into the anchor frame for overlays.
     drift_pixels: Optional[np.ndarray] = None
 
 
@@ -44,13 +74,27 @@ def calculate_displacement_field(
     reference: np.ndarray,
     target: np.ndarray,
     params: DisplacementParameters,
-    analyzer: Optional[PIVDisplacementAnalyzer] = None,
+    analyzer: Optional[BaseDisplacementAnalyzer] = None,
 ) -> Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]:
     """Calculate the displacement field between a reference image and target image(s).
 
-    Uses the multi-pass PIV backend (:class:`PIVDisplacementAnalyzer`). Yields
-    per-frame displacement fields in physical units with 1-based frame progress,
-    and returns a complete :class:`DisplacementResult` when exhausted.
+    Dispatches to the backend selected by ``params.disp_method`` (PIV, Lucas-Kanade,
+    or FFD) via :func:`build_analyzer`. Before measuring, it removes bulk stage drift
+    by rigidly registering the reference and every target frame to a common anchor
+    (the first target frame) with parameter-free phase cross-correlation, so the
+    displacement method only ever sees cell-induced deformation, not drift. This is
+    what keeps the residual within each method's capture range (critical for the
+    capture-limited Lucas-Kanade and FFD). The per-frame drift is recorded in
+    ``drift_pixels`` and reused to register the cell channel for overlays.
+
+    Registering by a shift fabricates a border strip (edge replication), so the
+    measurement is confined to the interior region every registered frame still
+    fills with real, co-observed data (:func:`registration.valid_region`); the
+    excluded border is returned as zero displacement. The output field keeps the
+    full frame shape regardless.
+
+    Yields per-frame displacement fields in physical units with 1-based frame
+    progress, and returns a complete :class:`DisplacementResult` when exhausted.
     """
     is_valid, error_msg = validate_displacement_image(reference)
     if not is_valid:
@@ -63,7 +107,7 @@ def calculate_displacement_field(
     if target.ndim == 2:
         target = target[np.newaxis, ...]
 
-    analyzer = analyzer or PIVDisplacementAnalyzer(params)
+    analyzer = analyzer or build_analyzer(params)
     total_frames = target.shape[0]
 
     if params.downscale_factor > 1:
@@ -79,20 +123,34 @@ def calculate_displacement_field(
     displacement_field_stack = np.zeros(displacement_field_shape, dtype=np.float32)
     drift_pixels = np.zeros((total_frames, 2), dtype=np.float32)
 
+    # Register everything to the first target frame (the anchor) so bulk stage drift
+    # is gone before the displacement method runs. Estimate every bulk drift first
+    # (reference + all frames): the whole set is needed up front to fix the common
+    # measurement region. drift_pixels[frame] is that frame's bulk (u_x, u_y) drift
+    # relative to the anchor, reused to move the cell channel into the same frame
+    # downstream (batch_analysis._cells_for_overlay). FTTC nulls the DC mode, so the
+    # shared anchor leaves traction unchanged.
+    anchor = target[0]
+    ref_drift = estimate_drift(anchor, reference)
     for frame in range(total_frames):
-        displacement_field_pixels = analyzer.calculate_flow(reference, target[frame])
+        drift_pixels[frame] = estimate_drift(anchor, target[frame])
 
-        # Fold translation-correction into PIV. Bulk stage drift between the
-        # reference and this frame is a spatially-uniform offset that the
-        # multi-pass coarse pass already captures; estimate it robustly as the
-        # per-frame median vector and subtract it, so the reported field is the
-        # cell-induced deformation only — the job image-level registration used
-        # to do. FTTC nulls the DC mode, so this leaves traction unchanged; it
-        # only cleans the displacement output and hands back the shift for the
-        # cell channel.
-        frame_drift = np.median(displacement_field_pixels.reshape(-1, 2), axis=0)
-        displacement_field_pixels = displacement_field_pixels - frame_drift
-        drift_pixels[frame] = frame_drift
+    # Registering by a shift fabricates a border strip (edge replication). Crop every
+    # registered frame to the interior box that ALL frames still fill with real,
+    # co-observed data, so no method measures a fabricated border. The measurement
+    # runs on the crop and is re-embedded into a full-size zero field, so the excluded
+    # border reads as no motion and the output shape is unchanged.
+    r0, r1, c0, c1 = valid_region(ref_drift, drift_pixels, (target.shape[1], target.shape[2]))
+    reference_registered = apply_drift(reference, ref_drift)[r0:r1, c0:c1]
+
+    for frame in range(total_frames):
+        frame_registered = apply_drift(target[frame], drift_pixels[frame])[r0:r1, c0:c1]
+        field_crop = analyzer.calculate_flow(reference_registered, frame_registered)
+
+        displacement_field_pixels = np.zeros(
+            (target.shape[1], target.shape[2], 2), dtype=np.float32
+        )
+        displacement_field_pixels[r0:r1, c0:c1] = field_crop
 
         if params.downscale_factor > 1:
             displacement_field_pixels = analyzer.downscale_flow(
