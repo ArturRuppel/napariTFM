@@ -31,6 +31,9 @@ TFM_DATA_BUCKET = "TFM_data"
 #: Filename of the sole data artifact written into each experiment's bucket.
 RESULTS_FILENAME = "TFM_results.ome.tif"
 
+#: Bucket holding the cross-experiment aggregate output (summary + sidecars).
+AGGREGATE_BUCKET = "TFM_aggregate"
+
 
 @dataclass
 class OutputPlan:
@@ -107,6 +110,27 @@ def experiment_ntfm_path(
     """
     out_dir = experiment_output_dir(experiment_path, processed_root)
     return out_dir / RESULTS_FILENAME
+
+
+def aggregate_output_dir(
+    input_folders: Sequence[str], processed_root: Optional[str] = None
+) -> Path:
+    """Directory that holds the pooled cross-experiment summary (+ sidecars).
+
+    Processed-root set → ``<root>/TFM_aggregate``. In-place → ``TFM_aggregate``
+    at the longest common parent of the input folders (a peer of their
+    ``TFM_data`` buckets), falling back to the first folder's parent when there is
+    no common parent (a single folder, or disconnected roots).
+    """
+    if processed_root:
+        return Path(processed_root) / AGGREGATE_BUCKET
+    folders = [Path(f) for f in input_folders]
+    if not folders:
+        return Path.cwd() / AGGREGATE_BUCKET
+    base = _mirror_base([str(f) for f in folders], [])
+    if base is None:
+        return folders[0].parent / AGGREGATE_BUCKET
+    return base / AGGREGATE_BUCKET
 
 
 def _mirror_base(input_folders: Sequence[str], warnings: List[str]) -> Optional[Path]:

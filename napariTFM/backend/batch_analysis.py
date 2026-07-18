@@ -827,7 +827,14 @@ class BatchAnalysis:
         persisted form of the results — the scattered ``.npy`` files are gone;
         stage-resume reads displacement/force back from this container.
         """
-        labels = (self.config.get('labels') or {}).get(str(folder), {})
+        # Per-folder design tags come in under ``experiment_metadata`` — the key
+        # ``build_run_config`` / ``build_series_config`` emit and every config
+        # test asserts. (Historically this read ``labels``, a key nothing sets,
+        # so batch-produced containers silently lost their condition/replicate
+        # tags; the aggregator groups by these.) Fall back to ``labels`` for
+        # hand-built configs that still use the container-field name directly.
+        tags = self.config.get('experiment_metadata') or self.config.get('labels') or {}
+        labels = tags.get(str(folder), {})
         ntfm_path = output_dir / RESULTS_FILENAME
         # Delegate to the one shared writer (also used by interactive per-stage
         # runs), so batch- and live-saved containers are identical.

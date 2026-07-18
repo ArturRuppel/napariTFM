@@ -2344,3 +2344,125 @@ def test_new_project_proceeds_when_discard_confirmed(monkeypatch, app):
 
     widget._new_project()
     assert widget.experiments_list.experiments() == []
+
+
+# ---------------------------------------------------------------------------
+# Aggregate section: pool the batch into one tidy summary table
+# ---------------------------------------------------------------------------
+
+def _write_pool_ntfm(folder, *, with_force=True, with_mask=True, labels=None):
+    """Write a pool-ready container at the canonical in-place location.
+
+    Mirrors a real batch output: mask + displacement (+ force), with the source
+    folder and design tags recorded in metadata so the aggregator can derive an
+    id and read labels off disk.
+    """
+    import numpy as np
+
+    from napariTFM.utilities import ntfm
+    from napariTFM.utilities.batch_output import experiment_ntfm_path
+
+    nt, ny, nx = 1, 4, 4
+    disp = np.ones((nt, ny, nx, 2))
+    force = np.ones((nt, ny, nx, 2)) * 10.0
+    mask = np.zeros((ny, nx), dtype=np.int64)
+    mask[1:3, 1:3] = 1  # one region
+
+    df = ntfm.arrays_to_tidy(
+        displacement_field=disp,
+        force_field=force if with_force else None,
+        mask=mask if with_mask else None,
+        grid_spacing=1.0,
+        frame_interval=1.0,
+    )
+    metadata = ntfm.build_metadata(
+        config={}, inputs={"folder": str(folder)}, labels=labels or {}
+    )
+    ntfm_path = experiment_ntfm_path(str(folder), None)
+    ntfm.write_ntfm(ntfm_path, df, metadata)
+    return ntfm_path
+
+
+def test_pool_readiness_enables_button_and_reports_counts(monkeypatch, app, tmp_path):
+    """The Aggregate section counts ready experiments and enables Pool only when
+    at least one is ready (mask + force). A displacement-only container is not
+    ready and is reported as such."""
+    widget = _stub_main_widget(monkeypatch)
+    try:
+        ready_folder = tmp_path / "exp_ready"
+        not_ready = tmp_path / "exp_noforce"
+        _write_pool_ntfm(ready_folder)
+        _write_pool_ntfm(not_ready, with_force=False)
+
+        widget.experiments_list.set_experiments([str(ready_folder), str(not_ready)])
+        widget._refresh_aggregate_readiness()
+
+        assert widget.experiments_list.pool_btn.isEnabled()  # one is ready
+        assert "1 of 2" in widget.experiments_list._aggregate_summary.text()
+    finally:
+        widget.close()
+        widget.deleteLater()
+
+
+def test_pool_requested_writes_summary_csv_with_labels(monkeypatch, app, tmp_path):
+    """End-to-end: committing two ready experiments and asking to pool writes a
+    tidy summary.csv + provenance.json into the TFM_aggregate bucket, with each
+    container's on-disk design tags promoted to columns."""
+    import json
+
+    import pandas as pd
+
+    from napariTFM.utilities.batch_output import aggregate_output_dir
+
+    widget = _stub_main_widget(monkeypatch)
+    try:
+        a = tmp_path / "exp_a"
+        b = tmp_path / "exp_b"
+        _write_pool_ntfm(a, labels={"condition": "ctrl"})
+        _write_pool_ntfm(b, labels={"condition": "drug"})
+
+        widget.experiments_list.set_experiments([str(a), str(b)])
+        widget._on_pool_requested()
+
+        out_dir = aggregate_output_dir([str(a), str(b)], None)
+        summary = out_dir / "summary.csv"
+        assert summary.exists()
+        assert (out_dir / "provenance.json").exists()
+
+        loaded = pd.read_csv(summary)
+        assert set(loaded["experiment_id"]) == {"exp_a", "exp_b"}
+        assert set(loaded["condition"]) == {"ctrl", "drug"}
+
+        prov = json.loads((out_dir / "provenance.json").read_text())
+        assert prov["table"]["n_rows"] == len(loaded)
+        # Result label reports where it landed.
+        assert "summary.csv" in widget.experiments_list._aggregate_result.text()
+    finally:
+        widget.close()
+        widget.deleteLater()
+
+
+def test_pool_requested_skips_not_ready_and_reports(monkeypatch, app, tmp_path):
+    """A not-ready container is skipped, named in the result, and never blocks the
+    pool of the ready ones."""
+    import pandas as pd
+
+    from napariTFM.utilities.batch_output import aggregate_output_dir
+
+    widget = _stub_main_widget(monkeypatch)
+    try:
+        good = tmp_path / "exp_good"
+        bad = tmp_path / "exp_bad"
+        _write_pool_ntfm(good)
+        _write_pool_ntfm(bad, with_force=False)
+
+        widget.experiments_list.set_experiments([str(good), str(bad)])
+        widget._on_pool_requested()
+
+        out_dir = aggregate_output_dir([str(good), str(bad)], None)
+        loaded = pd.read_csv(out_dir / "summary.csv")
+        assert set(loaded["experiment_id"]) == {"exp_good"}
+        assert "skipped" in widget.experiments_list._aggregate_result.text()
+    finally:
+        widget.close()
+        widget.deleteLater()

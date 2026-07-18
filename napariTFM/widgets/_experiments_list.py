@@ -407,6 +407,9 @@ class ExperimentsList(QWidget):
     active_changed = Signal(str)
     run_selected_requested = Signal()
     cancel_run_selected_requested = Signal()
+    # Emitted when the user asks to pool every ready experiment's results into
+    # one tidy summary table (the owner resolves paths + runs the aggregator).
+    pool_requested = Signal()
     # Emitted when a row's stage dot is clicked, asking the owner to bring that
     # experiment's stage on screen (select the row + decode that one series).
     stage_load_requested = Signal(str, str)  # path, stage
@@ -568,6 +571,11 @@ class ExperimentsList(QWidget):
         body_layout.addWidget(self._meta)
         self._update_meta()
 
+        # Aggregate: pool every committed experiment's .ntfm into one tidy table
+        # (the capstone step — the owner resolves paths + runs the aggregator).
+        self.aggregate_section = self._build_aggregate_section()
+        body_layout.addWidget(self.aggregate_section)
+
         if self._parameter_manager is not None:
             self._parameter_manager.parameter_changed.connect(self._sync_parameter)
         if self._data_manager is not None:
@@ -592,6 +600,106 @@ class ExperimentsList(QWidget):
         box.addLayout(self._build_output_dir_row())
         inner.setLayout(box)
         return CollapsibleSection("Setup", inner, expanded=True, title_color=TEXT_MID)
+
+    # -- aggregate: pool the batch into one tidy summary table ------------
+    def _build_aggregate_section(self) -> CollapsibleSection:
+        """The capstone: reduce every ready experiment's ``.ntfm`` to one table.
+
+        The section shows how many experiments are ready to pool (mask + force
+        present), a Pool button (disabled until at least one is ready), and the
+        result of the last pool. The actual reduction is the owner's job — this
+        only surfaces state and emits :attr:`pool_requested`.
+        """
+        inner = QWidget()
+        box = QVBoxLayout()
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(COMPACT_SPACING)
+
+        self._aggregate_summary = QLabel("No experiments to pool yet.")
+        self._aggregate_summary.setStyleSheet(f"color: {TEXT_DIM};")
+        self._aggregate_summary.setWordWrap(True)
+        box.addWidget(self._aggregate_summary)
+
+        pool_row = QHBoxLayout()
+        pool_row.setContentsMargins(0, 0, 0, 0)
+        self.pool_btn = QToolButton()
+        self.pool_btn.setObjectName("experiments_pool_button")
+        self.pool_btn.setText("Pool experiments")
+        self.pool_btn.setIcon(stage_action_icon("run", muted_accent(stage_accent("stress"))))
+        self.pool_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.pool_btn.setToolTip(
+            "Reduce every ready experiment's results into one tidy summary.csv "
+            "(+ provenance.json / schema.json)"
+        )
+        self.pool_btn.setEnabled(False)
+        self.pool_btn.clicked.connect(self._on_pool_clicked)
+        pool_row.addWidget(self.pool_btn)
+        pool_row.addStretch()
+        box.addLayout(pool_row)
+
+        self._aggregate_result = QLabel("")
+        self._aggregate_result.setStyleSheet(f"color: {TEXT_DIM};")
+        self._aggregate_result.setWordWrap(True)
+        self._aggregate_result.setVisible(False)
+        box.addWidget(self._aggregate_result)
+
+        inner.setLayout(box)
+        return CollapsibleSection("Aggregate", inner, title_color=TEXT_MID)
+
+    def _on_pool_clicked(self) -> None:  # pragma: no cover - GUI event
+        self.pool_requested.emit()
+
+    def set_aggregate_readiness(
+        self, ready: int, total: int, skipped: Optional[list[tuple[str, str]]] = None
+    ) -> None:
+        """Show how many experiments can pool and enable/disable the Pool button.
+
+        ``ready``/``total`` are experiment counts; ``skipped`` is a list of
+        ``(name, reason)`` for the not-ready ones, surfaced in the button tooltip
+        so the user knows *why* a folder won't contribute (e.g. "no force").
+        """
+        if total == 0:
+            self._aggregate_summary.setText("No experiments to pool yet.")
+        elif ready == 0:
+            self._aggregate_summary.setText(
+                f"0 of {total} experiments ready to pool (need force + mask)."
+            )
+        else:
+            self._aggregate_summary.setText(
+                f"{ready} of {total} experiments ready to pool."
+            )
+        if skipped:
+            self.pool_btn.setToolTip(
+                "Not ready (skipped):\n"
+                + "\n".join(f"  {name} — {reason}" for name, reason in skipped)
+            )
+        else:
+            self.pool_btn.setToolTip(
+                "Reduce every ready experiment's results into one tidy summary.csv "
+                "(+ provenance.json / schema.json)"
+            )
+        # Never override the "busy" disabled state mid-pool.
+        if not getattr(self, "_pool_active", False):
+            self.pool_btn.setEnabled(ready > 0)
+
+    def set_pool_active(self, active: bool) -> None:
+        """Toggle the pooling-in-progress state (disables the button, shows busy).
+
+        While active the button is disabled and reads "Pooling…". On completion
+        the owner calls :meth:`set_aggregate_readiness` to restore the enabled
+        state from the current readiness, so this only clears the busy label.
+        """
+        self._pool_active = active
+        self.pool_btn.setText("Pooling…" if active else "Pool experiments")
+        if active:
+            self.pool_btn.setEnabled(False)
+
+    def set_aggregate_result(self, text: str, *, status: Optional[str] = None) -> None:
+        """Show the outcome of the last pool (path written, positions skipped)."""
+        self._aggregate_result.setText(text)
+        self._aggregate_result.setVisible(bool(text))
+        if status is not None:
+            self.aggregate_section.set_status(status)
 
     def _build_calibration_row(self) -> QHBoxLayout:
         """Pixel size + frame interval, free-text fields with a soft validator."""

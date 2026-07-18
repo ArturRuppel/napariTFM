@@ -40,6 +40,37 @@ def test_write_experiment_ntfm_round_trips(tmp_path):
     assert metadata["inputs"]["folder"] == str(folder)
 
 
+def test_build_run_config_columns_reach_ntfm_labels(tmp_path):
+    """End-to-end through the real UI path: a row's free-form columns must land
+    in the container's ``labels`` (the aggregator groups by these). Regression
+    for the ``experiment_metadata`` vs ``labels`` key mismatch that silently
+    dropped every batch-run tag."""
+    from napariTFM.widgets._run_config import build_run_config
+
+    folder = tmp_path / "exp_A"
+    records = [
+        {
+            "path": str(folder),
+            "input_files": {"beads": "b.tif", "reference": "r.tif"},
+            "columns": {"condition": "soft", "replicate": "2"},
+        }
+    ]
+    config = build_run_config(records, {"pixel_size": 0.1, "downscale_factor": 4})
+
+    analysis = BatchAnalysis.__new__(BatchAnalysis)
+    analysis.config = config
+
+    scale = {"grid_spacing": 0.4, "time_interval": 2.0}
+    disp = _Result(displacement_field=np.ones((1, 3, 3, 2)), physical_scale=scale)
+    out = tmp_path / "out"
+    out.mkdir()
+
+    analysis._write_experiment_ntfm(out, folder, disp, None, None, None)
+
+    _df, metadata = ntfm.read_ntfm(out / RESULTS_FILENAME)
+    assert metadata["labels"] == {"condition": "soft", "replicate": "2"}
+
+
 def test_write_experiment_ntfm_aligns_mask_to_grid(tmp_path):
     scale = {"grid_spacing": 1.0, "time_interval": 1.0}
     force = _Result(force_field=np.ones((1, 3, 3, 2)), physical_scale=scale)

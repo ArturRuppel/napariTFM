@@ -419,6 +419,7 @@ class napariTFMWidget(QWidget):
         )
         self.experiments_list.run_selected_requested.connect(self._run_selected_experiments)
         self.experiments_list.cancel_run_selected_requested.connect(self._cancel_run_selected)
+        self.experiments_list.pool_requested.connect(self._on_pool_requested)
         self.experiments_list.stage_load_requested.connect(self._on_row_stage_clicked)
         self._active_batch = None
         container_layout.addWidget(self.experiments_list)
@@ -1159,6 +1160,102 @@ class napariTFMWidget(QWidget):
             status = disk_status.get(key, memory_status) if disk_status else memory_status
             section.set_status(status)
         self.experiments_list.refresh_statuses()
+        self._refresh_aggregate_readiness()
+
+    def _aggregate_ntfm_paths(self):
+        """Resolve every committed experiment's ``.ntfm`` path (folder → container).
+
+        Returns a list of ``(folder, ntfm_path)`` in table order. The folder name
+        is the human label used in readiness/skip messages.
+        """
+        from napariTFM.utilities.batch_output import experiment_ntfm_path
+
+        out = []
+        for record in self.experiments_list.experiment_records():
+            folder = record["path"]
+            out.append(
+                (folder, experiment_ntfm_path(folder, self.data_manager.output_dir))
+            )
+        return out
+
+    def _refresh_aggregate_readiness(self) -> None:
+        """Recompute how many experiments can pool and push it to the section.
+
+        A header-only walk (``aggregate.partition_ready`` reads OME-XML series
+        names, no pixel decode), so it is cheap to run on every status refresh.
+        """
+        from pathlib import Path
+
+        from napariTFM.backend import aggregate
+
+        pairs = self._aggregate_ntfm_paths()
+        paths = [ntfm_path for _folder, ntfm_path in pairs]
+        ready, skipped = aggregate.partition_ready(paths)
+        # Map each container path back to its folder basename for the message.
+        name_by_path = {ntfm_path: Path(folder).name for folder, ntfm_path in pairs}
+        skipped_named = [
+            (name_by_path.get(p, Path(p).parent.name), reason) for p, reason in skipped
+        ]
+        self.experiments_list.set_aggregate_readiness(
+            len(ready), len(pairs), skipped_named
+        )
+
+    def _on_pool_requested(self) -> None:
+        """Pool every ready experiment's ``.ntfm`` into one tidy summary table.
+
+        Runs synchronously on the GUI thread (as the sequential batch does): the
+        aggregator only reads + reduces containers — no compute — so it finishes
+        quickly relative to a run. Writes ``summary.csv`` + ``provenance.json`` +
+        ``schema.json`` into the ``TFM_aggregate`` bucket and reports the outcome.
+        """
+        from pathlib import Path
+
+        from napariTFM.backend import aggregate
+        from napariTFM.utilities.batch_output import aggregate_output_dir
+
+        pairs = self._aggregate_ntfm_paths()
+        if not pairs:
+            return
+        paths = [ntfm_path for _folder, ntfm_path in pairs]
+        out_dir = aggregate_output_dir(
+            [folder for folder, _ in pairs], self.data_manager.output_dir
+        )
+
+        self.experiments_list.set_pool_active(True)
+        QApplication.processEvents()
+        try:
+            result = aggregate.pool_experiments(paths, out_dir)
+        except ValueError as exc:
+            # The one expected, actionable failure: colliding experiment ids.
+            self.experiments_list.set_pool_active(False)
+            self.experiments_list.set_aggregate_result(str(exc), status="error")
+            self._refresh_aggregate_readiness()
+            QMessageBox.warning(self, "Pool experiments", str(exc))
+            return
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.exception("Pool failed")
+            self.experiments_list.set_pool_active(False)
+            self.experiments_list.set_aggregate_result(f"Pooling failed: {exc}", status="error")
+            self._refresh_aggregate_readiness()
+            QMessageBox.critical(self, "Pool experiments", f"Pooling failed: {exc}")
+            return
+
+        self.experiments_list.set_pool_active(False)
+        if result.summary_path is None:
+            msg = "No experiments were ready to pool (need force + mask)."
+            self.experiments_list.set_aggregate_result(msg, status=None)
+        else:
+            skipped_note = (
+                f"; skipped {len(result.skipped)} "
+                f"({', '.join(Path(p).parent.name for p, _ in result.skipped)})"
+                if result.skipped
+                else ""
+            )
+            self.experiments_list.set_aggregate_result(
+                f"Pooled {result.n_rows} rows → {result.summary_path}{skipped_note}",
+                status="done",
+            )
+        self._refresh_aggregate_readiness()
 
     def _on_stage_node_clicked(self, key: str) -> None:
         """Decode one stage's series into the viewer (display-only, on demand).
@@ -1530,6 +1627,9 @@ class napariTFMWidget(QWidget):
     def _on_experiments_changed(self) -> None:
         if not self._applying_state:
             self._dirty = True
+        # Keep the pool-readiness count in step with the table (commit/delete):
+        # a header-only walk, so cheap to run whenever the row set changes.
+        self._refresh_aggregate_readiness()
 
     def _reset_parameters(self):
         """Reset parameters to default values and notify all widgets."""
