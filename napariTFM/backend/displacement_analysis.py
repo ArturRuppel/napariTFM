@@ -1,14 +1,22 @@
 from dataclasses import dataclass
-from typing import Generator, Optional, Tuple
+from pathlib import Path
+from typing import Generator, Optional, Tuple, Union
 
 import numpy as np
 
-from napariTFM.backend._displacement_base import BaseDisplacementAnalyzer
+from napariTFM.backend._displacement_base import BaseDisplacementAnalyzer, resolve_gpu_device
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 from napariTFM.backend.ffd_displacement import FFDDisplacementAnalyzer
 from napariTFM.backend.ilk_displacement import ILKDisplacementAnalyzer
 from napariTFM.backend.piv_displacement import PIVDisplacementAnalyzer
-from napariTFM.backend.registration import apply_drift, estimate_drift, valid_region
+from napariTFM.backend.registration import (
+    apply_drift,
+    drift_fingerprint,
+    estimate_drift,
+    load_drift_csv,
+    save_drift_csv,
+    valid_region,
+)
 
 # Map the UI method label (stored verbatim in DisplacementParameters.disp_method) to
 # its analyzer. Each analyzer honours DisplacementParameters.disp_device the same way:
@@ -70,11 +78,39 @@ def validate_displacement_image(image: np.ndarray) -> Tuple[bool, str]:
     return True, ""
 
 
+def _registration_ops(anchor: np.ndarray, params: DisplacementParameters):
+    """Resolve the per-frame registration ops ``(estimate, apply)`` for this run's device.
+
+    Reads the shared ``disp_device`` knob through the exact same
+    :func:`resolve_gpu_device` the displacement backends use, so ``"cpu"``/``"auto"``/
+    ``"cuda"`` mean the same thing here as for the method (and ``"cuda"`` on a machine
+    with no GPU raises identically, rather than silently degrading). On a resolved
+    CUDA device both the drift estimate and the drift-undoing resample run on the GPU
+    via :mod:`napariTFM.backend._registration_torch`: phase cross-correlation that is
+    bit-identical to the scikit-image reference (so results are unchanged) but ~17x
+    faster at 2048^2 by caching the fixed anchor's spectrum, plus a ``grid_sample``
+    resample. Otherwise it returns the scikit-image reference functions.
+
+    ``estimate(image) -> (u_x, u_y)`` is bound to ``anchor``; ``apply(image, drift)``
+    resamples into the anchor frame. Both take/return numpy, matching the CPU path.
+    """
+    device = resolve_gpu_device(str(params.disp_device), method="registration")
+    if device is not None:
+        from napariTFM.backend._registration_torch import (
+            TorchDriftEstimator, apply_drift_torch,
+        )
+        estimator = TorchDriftEstimator(anchor, device=device)
+        return (estimator,
+                lambda image, drift: apply_drift_torch(image, drift, device=device, order=3))
+    return (lambda image: estimate_drift(anchor, image), apply_drift)
+
+
 def calculate_displacement_field(
     reference: np.ndarray,
     target: np.ndarray,
     params: DisplacementParameters,
     analyzer: Optional[BaseDisplacementAnalyzer] = None,
+    drift_cache: Optional[Union[str, Path]] = None,
 ) -> Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]:
     """Calculate the displacement field between a reference image and target image(s).
 
@@ -92,6 +128,14 @@ def calculate_displacement_field(
     fills with real, co-observed data (:func:`registration.valid_region`); the
     excluded border is returned as zero displacement. The output field keeps the
     full frame shape regardless.
+
+    ``drift_cache`` (optional) is a CSV path the estimated drift is persisted to
+    and read back from. Registration drift depends only on the reference and the
+    bead frames, not on the displacement method or its knobs, so a tune-loop that
+    re-runs the same folder can skip re-estimation. The cache is keyed by a content
+    fingerprint of the inputs (see :func:`registration.drift_fingerprint`): any
+    change to the images fails safe to a fresh estimate. The resample still runs
+    every frame, so the cache saves the estimate, not the whole registration step.
 
     Yields per-frame displacement fields in physical units with 1-based frame
     progress, and returns a complete :class:`DisplacementResult` when exhausted.
@@ -131,9 +175,29 @@ def calculate_displacement_field(
     # downstream (batch_analysis._cells_for_overlay). FTTC nulls the DC mode, so the
     # shared anchor leaves traction unchanged.
     anchor = target[0]
-    ref_drift = estimate_drift(anchor, reference)
-    for frame in range(total_frames):
-        drift_pixels[frame] = estimate_drift(anchor, target[frame])
+    # GPU phase-correlation + grid_sample resample when the device is CUDA (drift
+    # bit-identical to the scikit-image reference), else the CPU reference. Bound to
+    # the fixed anchor so its spectrum is computed once for the whole stack.
+    estimate, apply = _registration_ops(anchor, params)
+
+    # Reuse a persisted drift estimate when the inputs are unchanged (a tune-loop
+    # re-running the same folder), else estimate and persist. The fingerprint keys
+    # the cache to the exact reference + bead frames, so a swapped/edited dataset
+    # fails safe to recomputation rather than silently reusing stale drift.
+    cached = None
+    fingerprint = None
+    if drift_cache is not None:
+        fingerprint = drift_fingerprint(reference, target)
+        cached = load_drift_csv(drift_cache, total_frames, fingerprint)
+
+    if cached is not None:
+        ref_drift, drift_pixels = cached
+    else:
+        ref_drift = estimate(reference)
+        for frame in range(total_frames):
+            drift_pixels[frame] = estimate(target[frame])
+        if drift_cache is not None:
+            save_drift_csv(drift_cache, ref_drift, drift_pixels, fingerprint)
 
     # Registering by a shift fabricates a border strip (edge replication). Crop every
     # registered frame to the interior box that ALL frames still fill with real,
@@ -141,10 +205,10 @@ def calculate_displacement_field(
     # runs on the crop and is re-embedded into a full-size zero field, so the excluded
     # border reads as no motion and the output shape is unchanged.
     r0, r1, c0, c1 = valid_region(ref_drift, drift_pixels, (target.shape[1], target.shape[2]))
-    reference_registered = apply_drift(reference, ref_drift)[r0:r1, c0:c1]
+    reference_registered = apply(reference, ref_drift)[r0:r1, c0:c1]
 
     for frame in range(total_frames):
-        frame_registered = apply_drift(target[frame], drift_pixels[frame])[r0:r1, c0:c1]
+        frame_registered = apply(target[frame], drift_pixels[frame])[r0:r1, c0:c1]
         field_crop = analyzer.calculate_flow(reference_registered, frame_registered)
 
         displacement_field_pixels = np.zeros(

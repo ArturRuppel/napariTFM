@@ -913,10 +913,17 @@ class BatchAnalysis:
             'downscale_factor': disp_params.downscale_factor,
         })
 
+        # Persist the registration drift to a CSV sidecar in the output folder and
+        # reuse it on later runs of the same folder (e.g. a parameter tune-loop):
+        # drift depends only on the images, not the displacement knobs, so it need
+        # only be estimated once. A content fingerprint invalidates it if the input
+        # images change.
+        drift_cache = (tfm_folder / "registration_drift.csv") if tfm_folder is not None else None
         displacement_field_generator = calculate_displacement_field(
             image_data['reference'],
             beads,
             disp_params,
+            drift_cache=drift_cache,
         )
 
         # Initialize result container
