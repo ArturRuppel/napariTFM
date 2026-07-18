@@ -51,9 +51,11 @@ class FTTCController(VectorStageController):
         """The support mask for the mask-consuming inversions, or None.
 
         Reuses the same externally-loaded mask the Stress stage consumes
-        (``data_manager.mask_stack``). It is read by the confined forward solver
-        (when Mask Confinement > 0) and, as an optional hard support, by the sparse
-        L1 solver (when L1 Sparsity > 0). Plain FTTC never reads it.
+        (``data_manager.mask_stack``). It is read only when Mask Confinement > 0:
+        by the confined forward solver, or (when L1 Sparsity > 0 as well) by the
+        sparse L1 solver as a hard support. With confinement off the mask is
+        withheld, so L1 runs as pure sparsity, as if no mask were loaded. Plain
+        FTTC never reads it.
 
         ``frame`` selects a single mask slice for a single-frame solve (the
         preview): the backend indexes the mask by the *displacement stack* frame,
@@ -61,7 +63,7 @@ class FTTCController(VectorStageController):
         mask frame, not the whole stack (else it always uses frame 0). The run
         path passes no frame and gets the full stack, aligned frame-by-frame.
         """
-        if params.fwd_mask_strength <= 0 and params.l1_sparsity <= 0:
+        if params.fwd_mask_strength <= 0:
             return None
         mask = getattr(self.data_manager, "mask_stack", None)
         if mask is None or frame is None:
