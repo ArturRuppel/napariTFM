@@ -14,9 +14,9 @@ def validate_fttc_parameters(params: FTTCParameters) -> Tuple[bool, str]:
       ``force_vector_stride``) never enter the solve — they drive arrow rendering
       and the colormap ceiling — so a bad value there must not block a force
       computation. They are clamped/validated at the rendering layer.
-    * **``regularization``** is checked only when it is used. Under
-      ``auto_gcv=True`` the manual value is ignored (GCV supplies lambda), so
-      requiring it > 0 would spuriously fail an otherwise-valid auto-GCV run.
+    * **``regularization``** is checked only when it is used. Under ``auto_gcv=True``
+      (GCV) or ``bayesian_l2=True`` (evidence maximization) the manual value is ignored,
+      so requiring it > 0 would spuriously fail an otherwise-valid automatic run.
     """
     if params.young_modulus <= 0:
         return False, "Young's modulus must be positive"
@@ -30,7 +30,11 @@ def validate_fttc_parameters(params: FTTCParameters) -> Tuple[bool, str]:
     if params.lanczos_exp < 0:
         return False, "Lanczos exponent must be non-negative"
 
-    if not params.auto_gcv and params.regularization <= 0:
+    # The manual λ is only consumed when neither automatic selector is on. Under
+    # auto_gcv (GCV) or bayesian_l2 (evidence maximization) the manual value is ignored,
+    # so requiring it > 0 would spuriously fail an otherwise-valid automatic run.
+    if not params.auto_gcv and not getattr(params, "bayesian_l2", False) \
+            and params.regularization <= 0:
         return False, "Regularization parameter must be positive"
 
     if params.frame_interval <= 0:
@@ -64,6 +68,9 @@ def validate_fttc_parameters(params: FTTCParameters) -> Tuple[bool, str]:
             return False, "l1_sparsity must be in (0, 1]"
         if params.l1_max_iter < 1:
             return False, "l1_max_iter must be at least 1"
+        # Elastic-net ridge: a non-negative fraction of the data curvature (0 = pure L1).
+        if getattr(params, "l2_ridge", 0.0) < 0:
+            return False, "l2_ridge must be non-negative"
         if str(params.fwd_device) not in ("auto", "cuda", "cpu"):
             return False, "fwd_device must be 'auto', 'cuda', or 'cpu'"
         if str(params.fwd_dtype) not in ("float64", "float32"):

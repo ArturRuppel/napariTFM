@@ -97,9 +97,14 @@ def calculate_force_field(
     * else ``fwd_mask_strength > 0`` with a ``mask`` → the confined forward solver
       (:mod:`napariTFM.backend.forward_tfm`), L2 + smoothness confined to the mask,
       sharing ``regularization`` as its Tikhonov λ.
-    * else → plain FTTC (regularized Fourier inversion + Lanczos + GCV).
+    * else → plain FTTC (regularized Fourier inversion + Lanczos). Its Tikhonov λ is
+      the manual ``regularization``, or — if ``bayesian_l2`` — chosen automatically by
+      Bayesian evidence maximization (:mod:`napariTFM.backend.bayesian_l2`; BL2 when a
+      ``mask`` gives the cell exterior for the noise estimate, ABL2 otherwise), or — if
+      ``auto_gcv`` — by GCV. ``bayesian_l2`` takes precedence over ``auto_gcv``.
 
-    ``mask`` is consumed only on the L1 and confined paths.
+    ``mask`` is consumed on the L1 and confined paths, and on the plain-FTTC path only
+    for the BL2 noise estimate.
     """
     is_valid, error_msg = validate_fttc_parameters(params)
     if not is_valid:
@@ -133,11 +138,25 @@ def calculate_force_field(
             force_stack[frame, ..., 0] = traction[0]
             force_stack[frame, ..., 1] = traction[1]
         else:
+            use_bayes = getattr(params, "bayesian_l2", False)
+            noise_var = None
+            if use_bayes:
+                # BL2: measure the noise level from the displacement — from the cell-free
+                # exterior when a mask is loaded, else a global high-pass estimate. Only
+                # if that fails (None) does the solver infer the noise itself (ABL2).
+                from napariTFM.backend.bayesian_l2 import estimate_noise_variance
+                m = (_mask_frame_for_grid(mask, frame, force_shape[:2])
+                     if mask is not None else None)
+                noise_var = estimate_noise_variance(displacement_field[frame], m)
+            # Pass the Bayesian kwargs only when actually selecting the Bayesian path, so
+            # the common (manual / GCV) call keeps its original signature.
+            extra = {"bayesian": True, "noise_var": noise_var} if use_bayes else {}
             result = calculator.calculate_traction(
                 displacements=displacement_field[frame],
                 pixel_size=params.pixel_size,
                 downscale_factor=params.downscale_factor,
                 regularization=None if params.auto_gcv else params.regularization,
+                **extra,
             )
 
             force_stack[frame, ..., 0] = result[1][0]
@@ -218,7 +237,9 @@ class FTTC:
     def calculate_traction(self, displacements: Tuple[np.ndarray, np.ndarray],
                            pixel_size: float,
                            downscale_factor: int = 1,
-                           regularization: float = None) -> Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]:
+                           regularization: float = None,
+                           bayesian: bool = False,
+                           noise_var: Optional[float] = None) -> Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]:
         """
         Calculate traction forces from displacement field measurements using Fourier Transform
         Traction Cytometry (FTTC).
@@ -248,6 +269,16 @@ class FTTC:
             If None, will be automatically determined using Generalized Cross-Validation (GCV).
             Typical values range from 1e-6 to 1e-3.
             Higher values give smoother force fields but may underestimate peak forces.
+
+        bayesian : bool, optional (default=False)
+            If True, choose λ by Bayesian evidence maximization
+            (:meth:`_bayesian_regularization`) instead of the manual value or GCV. Takes
+            precedence over ``regularization``.
+
+        noise_var : float, optional (default=None)
+            Per-component real-space displacement noise variance for the Bayesian path.
+            Supplied (BL2) pins the noise level; None (ABL2) infers it from the data.
+            Ignored unless ``bayesian`` is True.
 
         Returns
         -------
@@ -320,7 +351,11 @@ class FTTC:
         forcemap_pixel_size = pixel_size * downscale_factor
 
         # Calculate forces with exact input dimensions preserved
-        if regularization is None:
+        if bayesian:
+            regularization = self._bayesian_regularization(
+                pos, vec, forcemap_pixel_size, input_width, input_height,
+                noise_var=noise_var)
+        elif regularization is None:
             regularization = self._find_regularization(pos, vec, forcemap_pixel_size,
                                                        input_width, input_height)
 
@@ -508,6 +543,43 @@ class FTTC:
         # stored as `regularization` and later hits math.log10() in the UI, which
         # rejects negatives. Return the magnitude — an exact, lossless fix.
         return abs(reg_min)
+
+    def _bayesian_regularization(self, pos0: np.ndarray, vec0: np.ndarray,
+                                 forcemap_pixel_size: float, input_width: int,
+                                 input_height: int,
+                                 noise_var: Optional[float] = None) -> float:
+        """Find the Tikhonov λ by Bayesian evidence maximization (Huang et al. 2019).
+
+        The Bayesian alternative to :meth:`_find_regularization`'s GCV: it maximizes the
+        marginal likelihood of the displacement over the same Fourier-SVD blocks GCV
+        uses (:meth:`_svd_block`), so it is a drop-in swap for the λ search. See
+        :mod:`napariTFM.backend.bayesian_l2`.
+
+        Args:
+            pos0, vec0, forcemap_pixel_size, input_width, input_height: as for
+                :meth:`_find_regularization`.
+            noise_var: per-component real-space displacement noise variance ``σ_r²``. When
+                supplied, the noise level is pinned from it (**BL2**); when ``None``, both
+                the prior width and noise level are inferred from the evidence (**ABL2**).
+
+        Returns:
+            The optimal ``regularization`` λ (already square-rooted, so the force path's
+            ``λ**2`` reproduces the Bayesian ridge ``α/β``).
+        """
+        from napariTFM.backend.bayesian_l2 import evidence_optimal_lambda
+
+        blockU, s, b = self._svd_block(pos0, vec0, forcemap_pixel_size,
+                                       i_max=input_width, j_max=input_height)
+        data_coef = blkmul_adj(blockU, b)
+        # Unnormalized FFT (Parseval): white real-space noise of per-component variance
+        # σ_r² has per-Fourier-coefficient variance N·σ_r² with N = i_max·j_max grid
+        # points, and the per-mode SVD rotation U is unitary so preserves it.
+        noise_var_fourier = (None if noise_var is None
+                             else float(input_width) * float(input_height) * noise_var)
+        lam_ridge, _ = evidence_optimal_lambda(s, data_coef,
+                                               noise_var_fourier=noise_var_fourier)
+        # Stored as `regularization`; the force path squares it, so return sqrt(ridge).
+        return float(np.sqrt(lam_ridge))
 
     def _svd_block(self, pos: np.ndarray, vec: np.ndarray, forcemap_pixel_size: float,
                    i_max: int = None, j_max: int = None):

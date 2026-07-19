@@ -161,8 +161,10 @@ class WorkflowParameterPanel(QWidget):
             ("lanczos_exp", "Lanczos Exponent", "int", 0, 5, 1, 0, None),
             ("regularization", "Regularization (10^x)", "float", -21.0, 0.0, 0.5, 1, None),
             ("auto_gcv", "Auto-GCV per frame", "bool", None, None, None, None, None),
-            (GROUP, "Sparse inversion (L1)"),
+            ("bayesian_l2", "Bayesian L2 (auto λ)", "bool", None, None, None, None, None),
+            (GROUP, "Sparse inversion (L1 / Elastic Net)"),
             ("l1_sparsity", "L1 Sparsity", "float", 0.0, 1.0, 0.01, 2, None),
+            ("l2_ridge", "L2 Ridge (Elastic Net)", "float", 0.0, 1.0, 0.01, 2, None),
             (GROUP, "Mask confinement"),
             ("fwd_mask_strength", "Mask Confinement", "float", 0.0, 100.0, 1.0, 0, None),
             ("fwd_smoothness", "Smoothness", "float", 0.0, 1.0, 0.01, 2, None),
@@ -196,6 +198,26 @@ class WorkflowParameterPanel(QWidget):
             "soft support: Mask Confinement adds an off-mask L2 penalty (ramped over a "
             "collar, no hard edge), so it self-confines but the exterior is discouraged "
             "rather than forbidden. 0 = off."
+        ),
+        "l2_ridge": (
+            "Elastic Net: adds an L2 (Tikhonov) shrinkage on top of the L1 sparsity, "
+            "which Huang et al. (2019) found to be the most accurate TFM regularizer. "
+            "Pure L1 keeps a clean background but overshoots the peak traction; this "
+            "L2 term pulls that overshoot back toward the true magnitude while the L1 "
+            "term still zeros the background. Only active when L1 Sparsity > 0. The "
+            "value is a scene-independent fraction (like L1 Sparsity), useful band "
+            "~0.05..0.5. 0 = pure group-L1 (unchanged)."
+        ),
+        "bayesian_l2": (
+            "Choose the FTTC regularization λ automatically by Bayesian evidence "
+            "maximization (Huang et al. 2019) — the noise-robust alternative to "
+            "Auto-GCV, which the paper shows becomes unreliable as noise grows. It "
+            "infers λ from the data with no manual tuning and adapts per frame, which "
+            "matters most for comparing cells across conditions or across a time series. "
+            "With a mask loaded it measures the noise from the cell-free exterior (BL2); "
+            "without one it infers the noise too (ABL2). Overrides Auto-GCV and the "
+            "manual value. Only applies to plain FTTC (L1 Sparsity and Mask Confinement "
+            "off)."
         ),
         "fwd_mask_strength": (
             "How hard traction is pushed out of the loaded mask's exterior — a "
