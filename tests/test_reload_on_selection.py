@@ -210,6 +210,10 @@ class _StubVisualizationManager:
         self.vector_stream_frames = []
         self.stress_stream_calls = []
         self.stress_stream_frames = []
+        self.display_reference_shape = None
+
+    def set_display_reference_shape(self, shape):
+        self.display_reference_shape = shape
 
     def begin_vector_field_stream(self, kind, num_frames, vis_params):
         self.vector_stream_calls.append((kind, num_frames, dict(vis_params)))
@@ -227,6 +231,9 @@ class _StubVisualizationManager:
 class _StubController(QObject):
     progress_updated = Signal(int, str)
     ui_frozen = Signal(bool)
+
+    def set_displacement_loader(self, loader):
+        self.displacement_loader = loader
 
 
 class _StubStageWidget(QWidget):
@@ -269,6 +276,9 @@ class _StubStageWidget(QWidget):
 
     def _update_ui_state(self):
         self.update_count += 1
+
+    def set_displacement_available_check(self, check):
+        self.displacement_available_check = check
 
     def run_action(self):
         self.action_calls["run"] += 1
@@ -525,6 +535,79 @@ def test_load_force_sets_force_results(monkeypatch, app, tmp_path):
         force,
         rtol=1e-5,
     )
+
+
+def test_load_force_only_keeps_displacement_resident_without_streaming(monkeypatch, app, tmp_path):
+    """Decoding only the Force series (a Force-circle click) must make its displacement
+    INPUT resident in memory — so Force Preview/Run enable — WITHOUT streaming the
+    displacement to the viewer (display stays lazy). Regression: loading ["force"] used
+    to leave displacement_results None, greying Force even though it was on disk.
+    """
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_force_only"
+    folder.mkdir()
+
+    disp = np.ones((1, 2, 3, 2)) * 0.3
+    force = np.ones((1, 2, 3, 2)) * 100.0
+    _write_ntfm(folder, displacement_field=disp, force_field=force)
+
+    widget._load_stage_results(str(folder), ["force"])
+
+    # Resident in memory (the enabler for Force Preview/Run)…
+    assert widget.data_manager.displacement_results is not None
+    np.testing.assert_allclose(
+        widget.data_manager.displacement_results.displacement_field, disp, rtol=1e-5
+    )
+    # …but only force was streamed to the viewer — displacement display stays lazy.
+    streamed = [kind for kind, *_ in widget.visualization_manager.vector_stream_calls]
+    assert "force" in streamed
+    assert "displacement" not in streamed
+
+
+def test_displacement_available_reads_disk_without_decoding(monkeypatch, app, tmp_path):
+    """Force enables from disk: displacement done on disk but NOT resident makes
+    _displacement_available() True via a header-only check, while displacement_results
+    stays None (no pixel decode on selection)."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_disk"
+    folder.mkdir()
+    _write_ntfm(folder, displacement_field=np.ones((1, 2, 3, 2)) * 0.3)
+
+    _select(widget, folder)  # selects + loads inputs, but decodes no output
+
+    assert widget.data_manager.displacement_results is None   # not resident
+    assert widget._displacement_available() is True           # yet visible on disk
+
+
+def test_displacement_available_false_when_absent(monkeypatch, app, tmp_path):
+    """No displacement on disk and none resident ⇒ not available (Force stays greyed)."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_empty_avail"
+    folder.mkdir()
+
+    _select(widget, folder)
+
+    assert widget._displacement_available() is False
+
+
+def test_ensure_displacement_resident_loads_from_disk_data_only(monkeypatch, app, tmp_path):
+    """The on-demand loader (fired from Force Preview/Run) pulls displacement off disk
+    into memory without streaming it to the viewer."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_ondemand"
+    folder.mkdir()
+    disp = np.ones((1, 2, 3, 2)) * 0.42
+    _write_ntfm(folder, displacement_field=disp)
+
+    _select(widget, folder)
+    assert widget.data_manager.displacement_results is None
+
+    assert widget._ensure_displacement_resident() is True
+    np.testing.assert_allclose(
+        widget.data_manager.displacement_results.displacement_field, disp, rtol=1e-5
+    )
+    streamed = [kind for kind, *_ in widget.visualization_manager.vector_stream_calls]
+    assert "displacement" not in streamed
 
 
 def test_loaded_results_carry_reconstructed_parameters(monkeypatch, app, tmp_path):

@@ -176,6 +176,10 @@ class _StubVisualizationManager:
         self.vector_stream_frames = []
         self.stress_stream_calls = []
         self.stress_stream_frames = []
+        self.display_reference_shape = None
+
+    def set_display_reference_shape(self, shape):
+        self.display_reference_shape = shape
 
     # Run-selected snapshots/restores layer visibility around the streaming
     # takeover (worklist §4); the stub has no real viewer, so these no-op.
@@ -201,6 +205,9 @@ class _StubVisualizationManager:
 class _StubController(QObject):
     progress_updated = Signal(int, str)
     ui_frozen = Signal(bool)
+
+    def set_displacement_loader(self, loader):
+        self.displacement_loader = loader
 
 
 class _StubStageWidget(QWidget):
@@ -234,6 +241,12 @@ class _StubStageWidget(QWidget):
 
     def _update_ui_state(self):
         self.update_count += 1
+
+    def peek_input_xy_shape(self, folder, input_files, slot="beads"):
+        return None
+
+    def set_displacement_available_check(self, check):
+        self.displacement_available_check = check
 
     def run_action(self):
         self.action_calls["run"] += 1
@@ -755,9 +768,10 @@ def test_experiment_stage_status_reads_output_eagerly(monkeypatch, app, tmp_path
 
 
 def test_stage_node_click_loads_only_that_stage_data(monkeypatch, app, tmp_path):
-    """Clicking a stage circle decodes only that stage's series into the viewer
-    (display-only); other stages' data stays unloaded. Selection alone loads no
-    output, and the status dots are eager regardless of what's been clicked.
+    """Clicking a stage circle streams only that stage's series into the viewer
+    (display stays lazy); selection alone streams nothing. The clicked stage's
+    upstream INPUT does become resident in memory (data-only, not shown), so a
+    downstream Preview/Run can use it — but no other stage is painted.
     """
     import numpy as np
 
@@ -777,9 +791,15 @@ def test_stage_node_click_loads_only_that_stage_data(monkeypatch, app, tmp_path)
 
         widget._on_stage_node_clicked("force")
 
-        # Only force's series was decoded; displacement stays unloaded.
+        # Force is decoded and streamed to the viewer; displacement is NOT streamed
+        # (display stays lazy for the input).
         assert widget.data_manager.force_results is not None
-        assert widget.data_manager.displacement_results is None
+        streamed = [kind for kind, *_ in widget.visualization_manager.vector_stream_calls]
+        assert "force" in streamed
+        assert "displacement" not in streamed
+        # But force's displacement input is now resident in memory (data-only), so
+        # Force's Preview/Run can compute without a re-decode.
+        assert widget.data_manager.displacement_results is not None
     finally:
         widget.close()
         widget.deleteLater()

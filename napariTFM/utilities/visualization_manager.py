@@ -23,6 +23,15 @@ class VisualizationManager(ErrorHandlingMixin):
         self._layers: Dict[str, Any] = {}
         self.colorbar_manager = ViewerColorbarManager(viewer)
 
+        # The original input (bead-image) ``(H, W)`` that every analysis-grid field
+        # is displayed at. Set per selection from the raw input on disk; when known,
+        # fields resize to *exactly* this instead of ``grid × downscale_factor``. The
+        # latter silently oversizes whenever the display's downscale dial disagrees
+        # with the grid the data was actually computed on (e.g. previewing force with
+        # downscale=4 over a displacement loaded from disk at downscale=2). None ⇒
+        # fall back to the downscale-factor behaviour (ad-hoc data, no selection).
+        self._display_reference_xy: Optional[tuple] = None
+
         # Connect to viewer events
         self.viewer.layers.events.removed.connect(self._on_layer_removed)
 
@@ -185,9 +194,35 @@ class VisualizationManager(ErrorHandlingMixin):
             if layer.name in snapshot:
                 layer.visible = snapshot[layer.name]
 
+    def set_display_reference_shape(self, shape) -> None:
+        """Set the original input ``(H, W)`` that analysis-grid fields display at.
+
+        Call on selection with the raw bead-image xy size; pass ``None`` to clear
+        (revert to the ``grid × downscale_factor`` behaviour). See
+        ``_display_reference_xy``.
+        """
+        self._display_reference_xy = None if shape is None else tuple(int(s) for s in shape[-2:])
+
+    def _to_display_resolution(self, arr: np.ndarray, downscale_factor: int) -> np.ndarray:
+        """Resize an analysis-grid array to the display resolution.
+
+        When a display reference shape is set, resize to *exactly* that (the true
+        original input size), which is robust to a stale ``downscale_factor``.
+        Otherwise fall back to ``grid × downscale_factor``. Handles both a 2D image
+        and an ``(H, W, C)`` field (cv2 resizes per channel). A no-op when the array
+        is already at the target size.
+        """
+        ref = getattr(self, "_display_reference_xy", None)
+        if ref is not None:
+            h, w = ref
+            if arr.shape[0] == h and arr.shape[1] == w:
+                return arr
+            return cv2.resize(arr, (w, h), interpolation=cv2.INTER_LINEAR)
+        return upscale_field(arr, downscale_factor)
+
     def _upscale_field(self, field: np.ndarray, downscale_factor: int) -> np.ndarray:
-        """Upscale a vector field for visualization (shared with headless export)."""
-        return upscale_field(field, downscale_factor)
+        """Upscale a vector field to display resolution (shared with headless export)."""
+        return self._to_display_resolution(field, downscale_factor)
 
     def clear_disp_vector_cache(self) -> None:
         """Clear displacement vector cache from data manager."""
@@ -497,16 +532,10 @@ class VisualizationManager(ErrorHandlingMixin):
                 'Average Normal Stress'
             ])
 
-            # Function to upscale stress components
+            # Upscale stress components to the display resolution (see
+            # _to_display_resolution: the original input size when known).
             def upscale_component(component):
-                if downscale_factor > 1:
-                    return cv2.resize(
-                        component,
-                        (component.shape[1] * downscale_factor,
-                         component.shape[0] * downscale_factor),
-                        interpolation=cv2.INTER_LINEAR
-                    )
-                return component
+                return self._to_display_resolution(component, downscale_factor)
 
             # Extract and upscale stress components
             sigma_xx = upscale_component(np.squeeze(stress_tensor[..., 0, 0]))
@@ -855,13 +884,7 @@ class VisualizationManager(ErrorHandlingMixin):
             max_stress = cfg['max_stress']
 
             def upscale(component):
-                if downscale > 1:
-                    return cv2.resize(
-                        component,
-                        (component.shape[1] * downscale, component.shape[0] * downscale),
-                        interpolation=cv2.INTER_LINEAR,
-                    )
-                return component
+                return self._to_display_resolution(component, downscale)
 
             sigma_xx = upscale(np.squeeze(stress_tensor_frame[..., 0, 0]))
             sigma_yy = upscale(np.squeeze(stress_tensor_frame[..., 1, 1]))

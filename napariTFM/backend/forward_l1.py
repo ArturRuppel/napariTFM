@@ -24,10 +24,18 @@ method (it thresholds rather than spreads).
   across fields), so the dial means the same thing everywhere: ~0 dense, ~1 empty,
   useful band ~0.05–0.2, scaling up with noise. 0 disables this solver.
 - ``mask`` (optional) is used *both* as the data fit-region weight ``W`` (trust the
-  displacement only inside mask + ``fwd_fit_margin_um``) and as a hard support (traction
-  forced to zero outside it each iteration). With no mask the solve is pure sparsity,
-  which already finds the support on its own; a mask then only guarantees an exactly
-  clean background.
+  displacement only inside mask + ``fwd_fit_margin_um``) and as a *soft* support: an
+  off-mask L2 penalty ``½ Σ c(x)·|t(x)|²`` added to the objective, with ``c`` zero
+  inside the mask and ramping up to ``β`` (from the shared ``confinement_to_beta``
+  dial) in the exterior over a smoothstep collar. This is the *same* mechanism the L2
+  confined solver uses, so the dial means the same on both routes; the old hard
+  support (``t ≡ 0`` outside) is the ``β → ∞`` limit it replaces — that cliff rang at
+  the mask edge, the collar does not. It must be a penalty *in the objective*, not a
+  per-iteration nudge (a scaled threshold or a <1 window): the exterior traction lies
+  in the fit's near-nullspace (the non-local Green's operator lets off-mask force
+  explain in-mask displacement), so any in-loop nudge is compensated away, whereas the
+  objective penalty is a real trade-off the minimizer honours. With no mask, or the
+  dial at 0, the solve is pure sparsity, which already finds the support on its own.
 
 The problem is convex but non-smooth (the L1 term), so it is solved by FISTA
 (accelerated proximal gradient): a gradient step on the smooth data term followed by
@@ -47,9 +55,49 @@ import numpy as np
 
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 from napariTFM.backend.forward_tfm import (
-    _greens_operator, _fit_weight, _resolve_backend, _asnumpy)
+    _greens_operator, _fit_weight, _resolve_backend, _asnumpy,
+    confinement_to_beta)
 
 logger = logging.getLogger(__name__)
+
+# Collar width (px) over which the exterior L2 penalty ramps up from 0 (inside the
+# mask) to its full weight. This graded collar — not the penalty depth — is what
+# removes the Gibbs ringing the old hard support had: a hard projection drops
+# traction to 0 in one pixel, so P(t) has a discontinuity that rings in the fit; a
+# C1 smoothstep collar does not.
+_COLLAR_PX = 4.0
+
+
+def _exterior_penalty(mask, valid, l_data, params, xp, dtype):
+    """Per-pixel L2 penalty coefficient confining traction to the mask — the soft
+    support. Added to the *smooth objective* (``+ ½ Σ c(x)·|t(x)|²``), so its gradient
+    is ``c·t`` and the minimizer genuinely trades data-fit against off-mask energy.
+
+    This is the lever that actually works. A per-iteration nudge (scaling the L1
+    threshold, or multiplying the iterate by a <1 window) is *transparent* at the
+    fixed point: the exterior traction lives in the fit's near-nullspace — many
+    fields fit the in-region displacement equally through the non-local Green's
+    operator — so FISTA just rebuilds a larger pre-nudge value to compensate and the
+    exterior is unchanged. A penalty *in the objective* is not compensable; it is the
+    same mechanism the L2 confined solver uses (``β·off·|t|²``), ported to FISTA.
+
+    ``c(x) = 0`` inside the mask (force is free where the cell is), smoothstepping up
+    to ``β · l_data`` in the exterior over a ``_COLLAR_PX`` collar. Scaling by
+    ``l_data`` (the data term's curvature ``λmax(GᵀWG)/denom``) makes ``β`` a
+    scene-independent *fraction* of the data curvature, and ``β`` is the shared
+    :func:`confinement_to_beta` dial, so 0..100 means the same on both routes. Hard
+    support is the ``β → ∞`` limit; ``mask is None`` or the dial at 0 ⇒ no penalty.
+    Returns ``(1, H, W)`` (broadcasts onto the traction).
+    """
+    if mask is None or params.fwd_mask_strength <= 0:
+        return xp.zeros((1,) + valid.shape, dtype=dtype)
+    from scipy import ndimage
+    support = np.asarray(mask) > 0
+    dist = ndimage.distance_transform_edt(~support)         # 0 on mask, grows outward
+    r = np.clip(dist / _COLLAR_PX, 0.0, 1.0)
+    r = r * r * (3.0 - 2.0 * r)                             # smoothstep → C1 at the edge
+    coef = confinement_to_beta(params.fwd_mask_strength) * float(l_data) * r
+    return xp.asarray(coef[None], dtype=dtype)              # (1,H,W)
 
 
 def l1_traction_frame(displacement_frame: np.ndarray,
@@ -62,8 +110,10 @@ def l1_traction_frame(displacement_frame: np.ndarray,
         params: FTTC/force parameters; ``l1_sparsity`` (fraction of λ₁_max) sets the
             sparsity, ``l1_max_iter`` the FISTA iteration budget, ``fwd_device`` /
             ``fwd_dtype`` / ``fwd_fit_margin_um`` are shared with the confined solver.
-        mask: optional ``(H, W)`` support; used as the data fit-region and as a hard
-            traction support (``t = 0`` off it). None ⇒ pure sparsity.
+        mask: optional ``(H, W)`` support; used as the data fit-region and as a
+            *soft* traction support (an off-mask L2 penalty of weight
+            ``confinement_to_beta(fwd_mask_strength)`` added to the objective, ramped
+            up over a collar outside the mask). None or confinement 0 ⇒ pure sparsity.
 
     Returns:
         ``(2, H, W)`` float32 traction in Pa (``[0] = t_x``, ``[1] = t_y``).
@@ -87,7 +137,6 @@ def l1_traction_frame(displacement_frame: np.ndarray,
     u_t = xp.asarray(np.nan_to_num(u, nan=0.0), dtype=dtype)
     denom = float((wf * u_t ** 2).sum())
     denom = denom if denom > 1e-12 else 1e-12
-    support = None if mask is None else xp.asarray(np.asarray(mask) > 0)
 
     def P(t):                                                  # traction → u_pred (µm)
         tk = fft.fft2(t.astype(cdtype), axes=(-2, -1))
@@ -104,22 +153,28 @@ def l1_traction_frame(displacement_frame: np.ndarray,
     tr = GtG[0, 0] + GtG[1, 1]
     det = GtG[0, 0] * GtG[1, 1] - GtG[0, 1] * GtG[1, 0]
     lmax = float((0.5 * (tr + xp.sqrt(xp.clip(tr * tr - 4 * det, 0.0, None)))).max())
-    L = lmax / denom
+    l_data = lmax / denom
+
+    # Soft support: an exterior-weighted L2 term added to the smooth objective (its
+    # gradient is pen·t). pen raises the smooth part's curvature, so its max folds
+    # into the Lipschitz constant / step (else FISTA diverges when confinement is up).
+    pen = _exterior_penalty(mask, valid, l_data, params, xp, dtype)   # (1,H,W) ≥ 0
+    L = l_data + float(pen.max())
     step = 1.0 / max(L, 1e-30)
 
     # λ₁_max: the per-pixel gradient magnitude at t=0. Above it every pixel thresholds
     # to zero, so parametrizing λ₁ = frac · λ₁_max makes the dial scene-independent.
+    # (pen·t vanishes at t=0, so it leaves λ₁_max — and thus the sparsity dial — intact.)
     grad0 = Pt(wf * u_t) / denom
     lam1 = frac * float(xp.sqrt((grad0 * grad0).sum(axis=0)).max())
     tau = lam1 * step
 
-    def prox(z):                                               # group soft-threshold (+ support)
+    def prox(z):                                               # group soft-threshold
         n = xp.sqrt((z * z).sum(axis=0, keepdims=True) + 1e-30)
-        out = z * xp.clip(1.0 - tau / n, 0.0, None)
-        return out if support is None else out * support
+        return z * xp.clip(1.0 - tau / n, 0.0, None)
 
     def gradf(t):
-        return Pt(wf * (P(t) - u_t)) / denom
+        return Pt(wf * (P(t) - u_t)) / denom + pen * t
 
     t = xp.zeros((2, height, width), dtype=dtype)
     z = t.copy()
@@ -138,6 +193,7 @@ def l1_traction_frame(displacement_frame: np.ndarray,
     t = t - t.mean(axis=(1, 2), keepdims=True)
 
     nnz = float((xp.sqrt((t * t).sum(axis=0)) > 1e-6).mean())
-    logger.info("forward L1: frac=%.3f lam1=%.3g nnz=%.3f iters=%d backend=%s",
-                frac, lam1, nnz, int(params.l1_max_iter), "cupy" if on_gpu else "numpy")
+    beta = confinement_to_beta(params.fwd_mask_strength) if mask is not None else 0.0
+    logger.info("forward L1: frac=%.3f lam1=%.3g beta=%.3g nnz=%.3f iters=%d backend=%s",
+                frac, lam1, beta, nnz, int(params.l1_max_iter), "cupy" if on_gpu else "numpy")
     return _asnumpy(t).astype(np.float32)

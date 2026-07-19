@@ -22,8 +22,21 @@ class FTTCController(VectorStageController):
     STAGE_KIND = 'force'
     RESULT_SETTER = 'set_force_results'
 
+    def set_displacement_loader(self, loader) -> None:
+        """Wire a callback that pulls the active experiment's displacement off disk
+        into memory (data-only) if it is not resident. Injected by the shell so this
+        stage can run straight from a done-on-disk displacement without it first
+        being viewed. See napariTFMWidget._ensure_displacement_resident."""
+        self._displacement_loader = loader
+
     # region === Run lifecycle hooks (template lives in the base) ===
     def _validate(self):
+        # The solver reads the displacement field from memory; if it is only on disk
+        # (a done experiment not yet viewed), pull it in now — the Preview/Run that
+        # got here is a compute the user just asked for.
+        loader = getattr(self, "_displacement_loader", None)
+        if self.data_manager.displacement_results is None and loader is not None:
+            loader()
         if self.data_manager.displacement_results is None:
             raise ValueError("No displacement data loaded")
 
@@ -53,9 +66,9 @@ class FTTCController(VectorStageController):
         Reuses the same externally-loaded mask the Stress stage consumes
         (``data_manager.mask_stack``). It is read only when Mask Confinement > 0:
         by the confined forward solver, or (when L1 Sparsity > 0 as well) by the
-        sparse L1 solver as a hard support. With confinement off the mask is
-        withheld, so L1 runs as pure sparsity, as if no mask were loaded. Plain
-        FTTC never reads it.
+        sparse L1 solver as a soft support (an off-mask L2 penalty). With confinement
+        off the mask is withheld, so L1 runs as pure sparsity, as if no mask were
+        loaded. Plain FTTC never reads it.
 
         ``frame`` selects a single mask slice for a single-frame solve (the
         preview): the backend indexes the mask by the *displacement stack* frame,
@@ -213,6 +226,12 @@ class FTTCWidget(BaseAnalysisWidget):
             "run": False, "preview": False, "cancel": True, "gcv": False,
         }
 
+        # Optional shell-injected predicate: True when displacement is usable as this
+        # stage's input even if not resident (i.e. done on disk for the active
+        # experiment). Lets Preview/Run enable straight from disk. See
+        # set_displacement_available_check / napariTFMWidget._displacement_available.
+        self._displacement_available_check = None
+
         # Initialize controller
         self.controller = FTTCController(
             viewer=viewer,
@@ -265,9 +284,24 @@ class FTTCWidget(BaseAnalysisWidget):
     def gcv_action(self):
         self.controller.calculate_optimal_regularization()
 
+    def set_displacement_available_check(self, check) -> None:
+        """Wire a predicate reporting whether displacement is available as this
+        stage's input (resident OR done on disk for the active experiment). Injected
+        by the shell so Preview/Run enable from the on-disk status, not only when the
+        field is resident. See napariTFMWidget._displacement_available."""
+        self._displacement_available_check = check
+        self._update_ui_state()
+
     def _update_ui_state(self, event=None):
         """Update UI state based on current data and selection."""
         has_displacement = self.data_manager.displacement_results is not None
+        # Also enable from disk: displacement done for the active experiment is a
+        # valid input, pulled into memory on demand when Preview/Run actually fires.
+        if not has_displacement and self._displacement_available_check is not None:
+            try:
+                has_displacement = bool(self._displacement_available_check())
+            except Exception:
+                has_displacement = False
 
         self._action_enabled["preview"] = has_displacement
         self._action_enabled["run"] = has_displacement

@@ -117,8 +117,9 @@ class FTTCParameters:
     # l1_sparsity > 0, ahead of the confined and plain-FTTC paths. Regularizes with an
     # L1 sparsity prior instead of L2: it thresholds rather than spreads, so it wins
     # in-cell accuracy and peak recovery over FTTC/confinement and needs NO mask. A
-    # mask, if supplied, is used as a hard support. Shares fwd_device/fwd_dtype/
-    # fwd_fit_margin_um with the confined solver.
+    # mask, if supplied, is a *soft* support: fwd_mask_strength sets an off-mask L2
+    # penalty in the objective (ramped over a collar, no hard edge). Shares fwd_device/
+    # fwd_dtype/fwd_fit_margin_um with the confined solver.
     l1_sparsity: float = 0.0   # 0..1 fraction of λ₁_max (0 = off); useful band ~0.05..0.2, ↑ with noise
     l1_max_iter: int = 400     # FISTA iteration budget
 

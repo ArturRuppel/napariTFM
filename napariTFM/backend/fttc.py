@@ -91,8 +91,9 @@ def calculate_force_field(
     * ``l1_sparsity > 0`` → the sparse group-L1 solver
       (:mod:`napariTFM.backend.forward_l1`). Regularizes with an L1 sparsity prior
       (thresholds rather than spreads); needs no mask, and a ``mask`` if supplied is
-      used as a hard support. The recommended default (best in-cell accuracy + peak
-      recovery on the force benchmark).
+      used as a *soft* support (``fwd_mask_strength`` sets an off-mask L2 penalty in
+      the objective, ramped over a collar — no hard cliff). The recommended default
+      (best in-cell accuracy + peak recovery on the force benchmark).
     * else ``fwd_mask_strength > 0`` with a ``mask`` → the confined forward solver
       (:mod:`napariTFM.backend.forward_tfm`), L2 + smoothness confined to the mask,
       sharing ``regularization`` as its Tikhonov λ.

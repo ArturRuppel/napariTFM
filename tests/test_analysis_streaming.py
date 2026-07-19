@@ -154,6 +154,29 @@ def _make_manager(viewer, data_manager):
     return manager
 
 
+def test_display_reference_scales_field_to_original_not_downscale():
+    """A field on the analysis grid must display at the original input resolution,
+    not ``grid × downscale_factor``. When the two disagree — e.g. previewing force
+    with downscale=4 over a 1024-grid displacement loaded from 2048 inputs — the
+    downscale path oversizes to 4096; scaling to the reference gives the true 2048.
+    """
+    mgr = _make_manager(_FakeViewer(), _DataManager())
+    field = np.zeros((1024, 1024, 2), dtype=np.float32)
+
+    # Stale downscale (4) would give 4096; the reference pins it to the real 2048.
+    mgr.set_display_reference_shape((2048, 2048))
+    out = mgr._to_display_resolution(field, downscale_factor=4)
+    assert out.shape[:2] == (2048, 2048)
+
+    # A field already at the reference size is returned untouched (no needless resize).
+    assert mgr._to_display_resolution(np.zeros((2048, 2048, 2), np.float32), 4).shape[:2] == (2048, 2048)
+
+    # With no reference set, it falls back to grid × downscale_factor (legacy).
+    mgr.set_display_reference_shape(None)
+    assert mgr._to_display_resolution(field, downscale_factor=2).shape[:2] == (2048, 2048)
+    assert mgr._to_display_resolution(field, downscale_factor=4).shape[:2] == (4096, 4096)
+
+
 def _vis_params(v_max=5.0):
     return {
         'v_max': v_max,

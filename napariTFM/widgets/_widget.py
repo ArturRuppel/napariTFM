@@ -192,17 +192,20 @@ class WorkflowParameterPanel(QWidget):
             "and keeps the peak better than FTTC or confinement, with NO mask needed. "
             "The value is a fraction (0..1) of the level that zeros the whole field: "
             "~0.1 is a good start, raise it for noisier data (more sparsity), lower it "
-            "if real forces are being erased. A loaded mask, if present, is used as a "
-            "hard support (traction forced to zero outside it). 0 = off."
+            "if real forces are being erased. A loaded mask, if present, acts as a "
+            "soft support: Mask Confinement adds an off-mask L2 penalty (ramped over a "
+            "collar, no hard edge), so it self-confines but the exterior is discouraged "
+            "rather than forbidden. 0 = off."
         ),
         "fwd_mask_strength": (
-            "The master switch for the Force stage. 0 = plain FTTC (regularized "
-            "Fourier inversion + Lanczos + GCV). Above 0 = confine traction to the "
-            "loaded mask (the same external mask the Stress stage uses) with the "
-            "forward solver; higher = the off-mask traction is more strongly "
-            "penalized (log-scaled, so every step does something). Needs a mask "
-            "loaded — without one it stays on FTTC. The 'Regularization' above is "
-            "the Tikhonov λ for both paths."
+            "How hard traction is pushed out of the loaded mask's exterior — a "
+            "soft support on whichever solver is active. 0 = no confinement (with "
+            "L1 Sparsity on, pure sparsity; with it off, plain FTTC). Above 0 = the "
+            "off-mask traction is penalized more, log-scaled so every step does "
+            "something: both the L1 and the forward solver add an off-mask L2 penalty "
+            "to their objective. Same dial, same meaning on both routes; the exterior "
+            "is discouraged, never forbidden (no hard edge). "
+            "Needs a mask loaded — the same external mask the Stress stage uses."
         ),
         "fwd_smoothness": (
             "Gradient-smoothness on the traction field — the primary regularizer "
@@ -888,6 +891,14 @@ class napariTFMWidget(QWidget):
             self.parameter_manager,
             self.visualization_manager
         )
+
+        # Wire Force to the disk: its displacement input may live only on disk (a done
+        # experiment selected but not yet viewed). Force's Preview/Run then enable from
+        # the on-disk displacement status, and the solver pulls that displacement into
+        # memory on demand when it actually runs — matching the "calculations re-read
+        # from disk" model rather than requiring the field be resident first.
+        self.force_widget.set_displacement_available_check(self._displacement_available)
+        self.force_widget.controller.set_displacement_loader(self._ensure_displacement_resident)
 
         # Funnel every pipeline stage's progress into the single global status
         # label (P2). Run-selected (the retired batch widget's successor) reports via
@@ -1747,6 +1758,14 @@ class napariTFMWidget(QWidget):
         self.status_label.setText(f"Loading {label}…")
         self.status_label.repaint()
         self._load_stage_results(path, [stage])
+        # Loading a stage makes its upstream inputs resident (see _load_stage_results),
+        # which can newly enable a downstream stage's Preview/Run. Refresh action
+        # enablement explicitly: the streamed layer adds happen under viewer event
+        # blockers, so the widgets' selection-driven refresh may not fire on its own.
+        for widget in self._stage_widgets():
+            update = getattr(widget, "_update_ui_state", None)
+            if callable(update):
+                update()
         # Report by what actually landed in the data manager, not merely that a
         # container existed: a container can hold force but no displacement, and
         # a click on the empty stage must say so rather than claim a load.
@@ -1918,12 +1937,20 @@ class napariTFMWidget(QWidget):
 
         return arr is not None and not np.all(np.isnan(arr))
 
-    def _apply_displacement_result(self, data) -> None:
+    def _set_displacement_result_data(self, data) -> bool:
+        """Make the displacement result resident in memory — no viewer stream.
+
+        Force (and Stress upstream of it) needs the displacement field as its input;
+        when a downstream stage is decoded for display, that displacement is already
+        in ``data``, so keeping it resident is free and is what lets Force's
+        Preview/Run enable and re-compute without a separate decode. Returns True
+        when a result was set. Display stays lazy: this paints nothing.
+        """
         import types
 
         disp = data.arrays.get("displacement_field")
         if not self._array_present(disp):
-            return
+            return False
         result = types.SimpleNamespace(
             displacement_field=disp,
             physical_scale=data.physical_scale,
@@ -1932,6 +1959,12 @@ class napariTFMWidget(QWidget):
             parameters=data.disp_params,
         )
         self.data_manager.set_displacement_results(result, dirty=False)
+        return True
+
+    def _apply_displacement_result(self, data) -> None:
+        if not self._set_displacement_result_data(data):
+            return
+        disp = data.arrays.get("displacement_field")
         self.visualization_manager.begin_vector_field_stream(
             'displacement', disp.shape[0],
             {
@@ -1946,12 +1979,18 @@ class napariTFMWidget(QWidget):
                 'displacement', frame_index, disp[frame_index]
             )
 
-    def _apply_force_result(self, data) -> None:
+    def _set_force_result_data(self, data) -> bool:
+        """Make the force result resident in memory — no viewer stream.
+
+        Stress needs the force field as its input; keeping it resident when Stress is
+        decoded (its force input is already in ``data``) lets Stress Preview/Run work
+        without a re-decode. Returns True when a result was set. Paints nothing.
+        """
         import types
 
         force = data.arrays.get("force_field")
         if not self._array_present(force):
-            return
+            return False
         result = types.SimpleNamespace(
             force_field=force,
             physical_scale=data.physical_scale,
@@ -1960,6 +1999,12 @@ class napariTFMWidget(QWidget):
             parameters=data.force_params,
         )
         self.data_manager.set_force_results(result, dirty=False)
+        return True
+
+    def _apply_force_result(self, data) -> None:
+        if not self._set_force_result_data(data):
+            return
+        force = data.arrays.get("force_field")
         self.visualization_manager.begin_vector_field_stream(
             'force', force.shape[0],
             {
@@ -2019,18 +2064,66 @@ class napariTFMWidget(QWidget):
         if ntfm_stages:
             data = self._read_stage_arrays(path)
             if data is not None:
-                # Applied in dependency order (displacement → force → stress) so
-                # that if a caller does ask for several at once,
-                # set_displacement_results' downstream-invalidation never clears
-                # a stage this same call just set.
-                if "displacement" in ntfm_stages:
+                want = set(ntfm_stages)
+                # Keep each requested stage's upstream INPUTS resident in memory
+                # (data only — no viewer stream, so display stays lazy). The arrays
+                # are already in `data`, so this is free, and it is what lets a
+                # downstream stage's Preview/Run enable after only its own circle was
+                # clicked: displacement is Force's input, force is Stress's.
+                resident = set()
+                if "force" in want:
+                    resident.add("displacement")
+                if "stress" in want:
+                    resident.update({"displacement", "force"})
+                # Applied in dependency order (displacement → force → stress) so that
+                # set_displacement_results' downstream-invalidation never clears a
+                # stage this same call is about to (re)set.
+                if "displacement" in want:
                     self._apply_displacement_result(data)
-                if "force" in ntfm_stages:
+                elif "displacement" in resident:
+                    self._set_displacement_result_data(data)
+                if "force" in want:
                     self._apply_force_result(data)
-                if "stress" in ntfm_stages:
+                elif "force" in resident:
+                    self._set_force_result_data(data)
+                if "stress" in want:
                     self._apply_stress_result(data)
                 loaded.extend(ntfm_stages)
         return loaded
+
+    def _displacement_available(self) -> bool:
+        """Whether displacement is usable as Force's input — resident in memory, or the
+        displacement stage is done on disk for the active experiment (so it can be
+        pulled in on demand). Lets Force's Preview/Run enable straight from the disk
+        status; the `.ntfm` check is header-only (`populated_measures`), no decode.
+        """
+        if self.data_manager.displacement_results is not None:
+            return True
+        if not self._active_experiment:
+            return False
+        from napariTFM.utilities import ntfm as _ntfm
+        from napariTFM.utilities.batch_output import RESULTS_FILENAME, experiment_output_dir
+
+        out_dir = experiment_output_dir(self._active_experiment, self.data_manager.output_dir)
+        return "displacement" in _ntfm.populated_measures(out_dir / RESULTS_FILENAME)
+
+    def _ensure_displacement_resident(self) -> bool:
+        """Pull the active experiment's displacement off disk into memory (data-only,
+        no viewer stream) if not already resident, so the Force solver — which reads
+        the displacement field from memory — can run. Returns True if resident after.
+
+        Decodes on the calling (GUI) thread, like a stage-circle click; the Preview/
+        Run that triggers it is a compute the user just asked for. A no-op once
+        resident (e.g. the Force circle was viewed, which already keeps it resident).
+        """
+        if self.data_manager.displacement_results is not None:
+            return True
+        if not self._active_experiment:
+            return False
+        data = self._read_stage_arrays(self._active_experiment)
+        if data is None:
+            return False
+        return self._set_displacement_result_data(data)
 
     def _on_active_experiment_changed(self, path: str) -> None:
         self._active_experiment = path or None
@@ -2051,6 +2144,7 @@ class napariTFMWidget(QWidget):
             if self._active_experiment is None:
                 self._pipeline_context_label.setText("Pipeline")
                 self.data_manager.set_active_inputs(None, {})
+                self.visualization_manager.set_display_reference_shape(None)
             else:
                 from pathlib import Path
 
@@ -2070,24 +2164,34 @@ class napariTFMWidget(QWidget):
                 # already show the on-disk status eagerly, and a stage's pixels
                 # only stream in when its circle is clicked (calculations re-read
                 # from disk regardless, so nothing must be resident to run).
+                # The bead image's xy size (read cheaply from disk — the bead arrays
+                # stream in asynchronously and aren't in memory yet) is the display
+                # reference: every analysis-grid field (displacement/force/stress) and
+                # the mask are scaled to it, so they overlay the beads at original
+                # resolution regardless of the grid or downscale dial they were
+                # computed at.
+                beads_shape = self.displacement_widget.peek_input_xy_shape(
+                    self._active_experiment, input_files, "beads"
+                )
+                self.visualization_manager.set_display_reference_shape(beads_shape)
                 # The mask is an external Stress input; load the discovered
                 # masks.tif from disk into memory too, so Stress Run/Preview enable
                 # on selection the same way beads/reference do — no manual layer
                 # load required.
                 mask_name = input_files.get("masks")
                 if mask_name:
-                    # The mask is stored on the downsampled force grid; pass the
-                    # bead image's xy size (read cheaply from disk — the bead arrays
-                    # stream in asynchronously and aren't in memory yet) so the
-                    # mask's visualization layer is scaled to fit the beads in the
-                    # viewer.
-                    beads_shape = self.displacement_widget.peek_input_xy_shape(
-                        self._active_experiment, input_files, "beads"
-                    )
                     self.stress_widget.load_mask_from_file(
                         Path(self._active_experiment) / mask_name, beads_shape=beads_shape
                     )
         self._update_disclosure()
+        # The newly selected experiment's on-disk stage availability may enable or
+        # disable a stage's Preview/Run (e.g. Force enables when displacement is on
+        # disk). Nothing else re-evaluates enablement on a bare selection, so do it
+        # here — cheap header-only `.ntfm` checks.
+        for widget in self._stage_widgets():
+            update = getattr(widget, "_update_ui_state", None)
+            if callable(update):
+                update()
 
     def _on_experiments_changed(self) -> None:
         if not self._applying_state:
