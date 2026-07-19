@@ -68,7 +68,7 @@ class _StubParameterManager(QObject):
             "bayesian_l2": False,
             "l1_sparsity": 0.0,
             "fwd_mask_strength": 0.0,
-            "fwd_mask_softness": 2.0,
+            "fwd_mask_reach": 2.0,
             "force_vector_stride": 20,
             "force_arrow_scale": 1.0,
             "f_max": 500.0,

@@ -73,15 +73,14 @@ def _exterior_penalty(mask, valid, l_data, params, xp, dtype):
     exterior is unchanged. A penalty *in the objective* is not compensable; it is the
     same mechanism the L2 confined solver uses (``β·(1−p)·|t|²``), ported to FISTA.
 
-    ``c(x) = β · l_data · (1 − p(x))``, with ``p`` the support softened by the shared
-    one-sided Gaussian skirt (:func:`support_probability`, width ``fwd_mask_softness``):
-    ``c`` is 0 inside the mask *and its rim* and ramps up to ``β · l_data`` outside over
-    ~σ, so the boundary is soft without ever penalizing the peripheral traction. Scaling
-    by ``l_data`` (the data term's curvature ``λmax(GᵀWG)/denom``) makes ``β`` a
-    scene-independent *fraction* of the data curvature, and ``β`` is the shared
-    :func:`confinement_to_beta` dial, so both β and the softness mean the same on both
-    routes. ``σ = 0`` is the hard binary edge; ``mask is None`` or the dial at 0 ⇒ no
-    penalty. Returns ``(1, H, W)`` (broadcasts onto the traction).
+    ``c(x) = β · l_data · (1 − p(x))``, with ``p`` the shared support-probability map
+    (:func:`support_probability`): ``c`` is 0 inside the mask *and its ``fwd_mask_reach``
+    apron* and ramps up to ``β · l_data`` beyond, so forces are free out to mask+reach
+    and pushed out past it. Scaling by ``l_data`` (the data term's curvature
+    ``λmax(GᵀWG)/denom``) makes ``β`` a scene-independent *fraction* of the data
+    curvature, and ``β`` is the shared :func:`confinement_to_beta` dial, so both β and the
+    reach mean the same on both routes. ``mask is None`` or the dial at 0 ⇒ no penalty.
+    Returns ``(1, H, W)`` (broadcasts onto the traction).
     """
     if mask is None or params.fwd_mask_strength <= 0:
         return xp.zeros((1,) + valid.shape, dtype=dtype)

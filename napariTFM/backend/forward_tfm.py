@@ -25,11 +25,13 @@ For each frame we solve for the surface traction ``t`` (Pa) by minimizing
   deliberately no hard gate: the one-shot benchmark found gating clips genuine
   near-edge forces (|t| r 0.95 vs 0.99 for strong-soft), so "maximum confinement" is
   strong soft.
-- ``σ`` (``fwd_mask_softness``) softens the *boundary*: ``p = exp(−d²/2σ²)`` over the
-  exterior distance ``d``, so the penalty ramps from 0 (on the cell and its rim) to
-  full over ~σ px going outward — a fuzzy, one-sided skirt. ``σ = 0`` ⇒ the hard binary
-  edge. This is orthogonal to β's *depth*: β sets how hard the exterior is pushed, σ
-  how abrupt the boundary is. Same map feeds the L1 route's soft support.
+- ``R`` (``fwd_mask_reach``) sets *where* the boundary is: the free region is the mask
+  grown outward by R px (``p ≡ 1`` there, a zero-penalty apron), and beyond it the
+  penalty ramps up over a small fixed anti-ring edge (:func:`support_probability`). R is
+  orthogonal to β *in effect*: because the apron is genuinely zero-penalty, β cannot
+  shrink it, so R still moves the boundary at maximum strength (β sets *how hard* the
+  exterior is pushed, R sets *how far out* forces are still allowed). Same map feeds the
+  L1 route's soft support.
 - ``W`` is an optional *fit-region weight*: it trusts the displacement only inside
   ``mask`` dilated by ``fwd_fit_margin_um``. The photometric MVP had this as
   ``fit_margin_um`` and it matters here too — without it, a neighbour cell's
@@ -74,6 +76,12 @@ logger = logging.getLogger(__name__)
 MASK_BETA_MIN = 1e-3
 MASK_BETA_MAX = 1e1
 
+# Fixed Gaussian width (force-grid px) that rounds the confinement boundary — an
+# anti-ring edge so the (otherwise sharp) dilated-support edge does not Gibbs-ring.
+# Not a user knob: reach sets *where* the boundary is, strength *how hard*, and this
+# just keeps the transition C1. Small enough that the boundary still reads as crisp.
+_RING_SIGMA_PX = 1.5
+
 
 def confinement_to_beta(strength: float) -> float:
     """Map the 0..100 confinement dial onto a log-spaced soft-penalty β (0 → off)."""
@@ -87,34 +95,29 @@ def confinement_to_beta(strength: float) -> float:
 def support_probability(mask, params) -> np.ndarray:
     """Probability map ``p(x) ∈ [0, 1]`` that traction is *allowed* at ``x``.
 
-    The support mask softened by a **one-sided** Gaussian of width
-    ``fwd_mask_softness`` (force-grid px): ``p = exp(−d²/2σ²)`` where ``d(x)`` is the
-    distance *outside* the support (0 on the support). So ``p ≡ 1`` on the support
-    (the cell, and crucially its high-traction rim) and decays smoothly to 0 over ~σ
-    going outward — a skirt that only ever reaches outward, never into the cell.
+    The free region is the mask grown outward by ``fwd_mask_reach`` (R, force-grid px):
+    ``p ≡ 1`` on the mask *and* the R-px apron around it — a genuinely **zero-penalty**
+    region, so the confinement strength β cannot shrink it (``0 · β = 0``). Beyond the
+    apron ``p`` decays to 0 over a small *fixed* Gaussian (:data:`_RING_SIGMA_PX`), an
+    anti-ring edge that keeps the boundary from Gibbs-ringing. With ``d`` the exterior
+    distance from the mask (0 on the mask, growing outward),
 
-    Building the ramp from the exterior distance (rather than convolving the binary,
-    whose blur straddles the edge at ~0.5 and would leave a coefficient *step* there)
-    makes it rim-protected by construction and flat-topped: ``p`` leaves the edge with
-    zero slope, so the boundary is genuinely soft with no cliff to ring.
+        ``p = exp(−max(d − R, 0)² / 2·σ_ring²)``.
 
-    This is the shared shape of the exterior penalty on *both* mask-consuming routes
-    (the L2 confined solve and the L1 soft support), each of which penalizes traction
-    ∝ ``(1 − p)``: zero on the support, ramping to full weight far outside. ``σ = 0``
-    (or ``mask is None``) ⇒ the hard binary support (``p ∈ {0, 1}``), the old edge.
-
-    Softness lives here, in the prior, not in the solution: the one-sided ramp is
-    exactly why a soft boundary never bites into the rim — a symmetric blur of the
-    field would penalize the peripheral traction, which is the largest real signal.
-    Returns ``(H, W)`` float64.
+    This makes the two mask knobs orthogonal *in effect*: **R sets where** the boundary
+    sits — purely spatial, so even at maximum strength it still moves the boundary — and
+    **β sets how hard** the exterior beyond it is pushed. The apron only ever reaches
+    outward, so real forces on the cell rim are never clipped. This is the shared shape
+    of the exterior penalty on *both* mask-consuming routes (the L2 confined solve and
+    the L1 soft support), each penalizing traction ∝ ``(1 − p)``. ``mask is None`` or a
+    full mask ⇒ ``p ≡ 1`` (nothing to confine). Returns ``(H, W)`` float64.
     """
     support = np.asarray(mask) > 0
-    sigma = float(getattr(params, "fwd_mask_softness", 0.0))
-    if sigma <= 0.0:
-        return support.astype(np.float64)
     from scipy import ndimage
-    d = ndimage.distance_transform_edt(~support)            # 0 on support, grows outward
-    return np.exp(-(d * d) / (2.0 * sigma * sigma))
+    d = ndimage.distance_transform_edt(~support)            # 0 on the mask, grows outward
+    reach = max(float(getattr(params, "fwd_mask_reach", 0.0)), 0.0)
+    d_ext = np.maximum(d - reach, 0.0)                       # 0 within mask+R, grows beyond
+    return np.exp(-(d_ext * d_ext) / (2.0 * _RING_SIGMA_PX * _RING_SIGMA_PX))
 
 
 def _greens_operator(height: int, width: int, params: FTTCParameters) -> np.ndarray:

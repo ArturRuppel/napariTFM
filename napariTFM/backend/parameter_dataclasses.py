@@ -98,10 +98,11 @@ class FTTCParameters:
     # reuses that same `regularization` as its Tikhonov λ. The fwd_* fields below
     # are only read on that confined (> 0) path.
     fwd_mask_strength: float = 0.0        # 0..100 log-scaled mask confinement dial (0 = off → FTTC)
-    fwd_mask_softness: float = 2.0        # one-sided Gaussian σ (force-grid px) softening the mask
-    #                                       boundary: the off-mask penalty ramps 0→full over ~σ going
-    #                                       outward (interior + rim stay free). 0 = hard binary edge.
-    #                                       Shared by the confined L2 and L1 soft-support routes.
+    fwd_mask_reach: float = 2.0           # apron (force-grid px) the free region is grown by before
+    #                                       confinement bites: forces are free within mask+reach, then
+    #                                       pushed out by fwd_mask_strength beyond. Orthogonal to
+    #                                       strength (a zero-penalty apron β can't shrink); 0 = confine
+    #                                       to the mask. Shared by the confined L2 and L1 routes.
     fwd_fit_margin_um: float = 1e6        # trust displacement only within mask+margin (µm)
     fwd_max_iter: int = 200               # max CG iterations (β>0 iterative path)
     fwd_cg_tol: float = 1e-8              # CG relative-residual tolerance (β>0 path)
@@ -192,7 +193,7 @@ class UnifiedParameters:
     # Confined forward solver (see FTTCParameters / napariTFM.backend.forward_tfm);
     # gated by fwd_mask_strength, shares `regularization` as its Tikhonov λ.
     fwd_mask_strength: float = 0.0
-    fwd_mask_softness: float = 2.0     # one-sided Gaussian σ (px) softening the mask boundary
+    fwd_mask_reach: float = 2.0        # apron (px) the free region is grown by before confinement bites
     fwd_fit_margin_um: float = 1e6
     fwd_max_iter: int = 200
     fwd_cg_tol: float = 1e-8

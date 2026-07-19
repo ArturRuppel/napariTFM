@@ -48,8 +48,8 @@ def validate_fttc_parameters(params: FTTCParameters) -> Tuple[bool, str]:
     # in the solver rather than gated. λ is the shared `regularization`, already
     # checked above.
     if params.fwd_mask_strength > 0:
-        if getattr(params, "fwd_mask_softness", 0.0) < 0:
-            return False, "Mask softness (σ) must be non-negative"
+        if getattr(params, "fwd_mask_reach", 0.0) < 0:
+            return False, "Mask reach must be non-negative"
         if params.fwd_max_iter < 1:
             return False, "Forward max iterations must be at least 1"
         if str(params.fwd_device) not in ("auto", "cuda", "cpu"):

@@ -164,7 +164,7 @@ class WorkflowParameterPanel(QWidget):
             ("l1_sparsity", "L1 Sparsity", "float", 0.0, 1.0, 0.01, 2, None),
             (GROUP, "Mask confinement"),
             ("fwd_mask_strength", "Mask Confinement", "float", 0.0, 100.0, 1.0, 0, None),
-            ("fwd_mask_softness", "Mask Softness (px)", "float", 0.0, 20.0, 0.5, 1, None),
+            ("fwd_mask_reach", "Mask Reach (px)", "float", 0.0, 20.0, 0.5, 1, None),
             (GROUP, "Visualization"),
             ("force_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("force_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -215,15 +215,16 @@ class WorkflowParameterPanel(QWidget):
             "is discouraged, never forbidden (no hard edge). "
             "Needs a mask loaded — the same external mask the Stress stage uses."
         ),
-        "fwd_mask_softness": (
-            "How fuzzy the mask boundary is — the Gaussian width σ (in force-grid "
-            "pixels) of the confinement skirt. The off-mask penalty ramps from 0 to "
-            "full over ~σ pixels going outward, so the cell interior AND its rim stay "
-            "free while the exterior is discouraged over a soft, one-sided collar "
-            "(never reaching inward, so real peripheral forces are never clipped). "
-            "This is orthogonal to Mask Confinement: that sets how hard the exterior "
-            "is pushed, this sets how abrupt the boundary is. 0 = hard binary edge. "
-            "Same skirt on both the sparse (L1) and confined routes."
+        "fwd_mask_reach": (
+            "How far past the mask forces are still allowed — an apron (in force-grid "
+            "pixels) the free region is grown by before confinement bites. Forces are "
+            "free within mask+reach, then pushed out beyond it. Because the apron is a "
+            "genuinely zero-penalty region, this is orthogonal to Mask Confinement: "
+            "that sets how HARD the exterior is pushed, this sets how FAR OUT the "
+            "boundary is — and unlike a soft skirt, reach keeps moving the boundary "
+            "even at maximum confinement. The apron only ever reaches outward, so real "
+            "forces on the cell rim are never clipped. 0 = confine to the mask itself. "
+            "Same apron on both the sparse (L1) and confined routes."
         ),
         "disp_method": (
             "Displacement algorithm. PIV (FFT cross-correlation) is a forgiving "
