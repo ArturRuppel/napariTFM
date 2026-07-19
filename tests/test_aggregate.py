@@ -204,6 +204,37 @@ def test_partition_ready_splits_on_mask_and_force(tmp_path):
     assert reasons[no_mask] == "no mask"
 
 
+def test_series_names_caches_and_invalidates_on_rewrite(tmp_path):
+    # Readiness refreshes walk every committed container on each status pass, so
+    # _series_names must not re-parse an unchanged file's OME-XML each call —
+    # that walk, uncached, was the bulk of the selection-click freeze. The cache
+    # is keyed by (path, mtime_ns, size); we assert on the cache directly rather
+    # than counting TiffFile opens (tifffile itself opens the file internally).
+    import os
+
+    full, *_ = _make_ntfm(tmp_path / "full")
+    aggregate._series_names_cache.clear()
+
+    names1 = aggregate._series_names(full)
+    assert len(aggregate._series_names_cache) == 1  # first call populated it
+    key1 = next(iter(aggregate._series_names_cache))
+
+    names2 = aggregate._series_names(full)
+    # Second call served from the same key — no new entry, same result.
+    assert names2 == names1
+    assert list(aggregate._series_names_cache) == [key1]
+
+    # Bumping mtime changes the key, so the header is re-read under a fresh entry
+    # — a re-run's new output is never masked by a stale cached set. (Set mtime
+    # explicitly: a same-content rewrite can land on an identical (mtime_ns, size)
+    # under coarse filesystem clocks.)
+    st = full.stat()
+    os.utime(full, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    names3 = aggregate._series_names(full)
+    assert names3 == names1
+    assert len(aggregate._series_names_cache) == 2  # fresh read under a new key
+
+
 # ---------------------------------------------------------------------------
 # The pool: materialized CSV + provenance.json + schema.json
 # ---------------------------------------------------------------------------

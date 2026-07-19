@@ -172,6 +172,45 @@ class BaseAnalysisController(QObject):
         self.unfreeze_ui()
 
     # ------------------------------------------------------------------
+    # Async single-shot previews (NOT the sealed run template)
+    # ------------------------------------------------------------------
+    def _start_preview_worker(self, worker, on_result, *, status="Calculating preview..."):
+        """Run a single-shot preview off the GUI thread, reusing the run
+        lifecycle's terminal-state plumbing.
+
+        A preview is a full single-frame solve; its cost occasionally spikes far
+        above the usual (GPU contention, a cold kernel, allocator churn), and run
+        inline that spell freezes the whole window. Off-thread it is a moving
+        progress bar the user can cancel instead.
+
+        ``worker`` is a configured-but-unstarted ``@thread_worker`` that does ONLY
+        the (thread-safe) compute and returns its result — it must not touch napari.
+        ``on_result`` is the GUI-thread callback that receives that result and does
+        the visualization + stats; it runs via the worker's ``returned`` signal, so
+        it is the only place layers may be mutated, and a throw in it is surfaced
+        like any run error rather than crashing the thread. Unfreeze and error
+        handling reuse the run path's :meth:`_on_run_finished` / :meth:`_on_run_errored`;
+        because the worker is registered in ``active_workers``, :meth:`cancel` stops a
+        preview too (an already-running compute finishes in the background and is
+        discarded, exactly as an in-flight run frame is). Re-entry needs no guard:
+        :meth:`freeze_ui` disables the preview button for the worker's lifetime.
+        """
+        self.freeze_ui()
+
+        def _returned(result, _cb=on_result):
+            try:
+                _cb(result)
+            except Exception as exc:  # a failing visualization must not skip unfreeze
+                self._handle_error(str(exc))
+
+        worker.returned.connect(_returned)
+        worker.errored.connect(self._on_run_errored)
+        worker.finished.connect(partial(self._on_run_finished, worker))
+        self.active_workers.append(worker)
+        self.progress_updated.emit(0, status)
+        worker.start()
+
+    # ------------------------------------------------------------------
     # Hooks — subclasses that use run()/cancel() implement these.
     # ------------------------------------------------------------------
     def _validate(self):

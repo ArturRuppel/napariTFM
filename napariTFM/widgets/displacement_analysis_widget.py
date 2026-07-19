@@ -117,65 +117,74 @@ class DisplacementController(VectorStageController):
             raise ValueError(f"Displacement calculation failed: {str(e)}")
     # endregion
 
-    # region === Preview (synchronous, GUI thread) ===
+    # region === Preview (async single-shot; template lives in the base) ===
     def preview_displacement(self):
-        """Preview displacement calculation on the current frame."""
+        """Preview displacement for the current frame on a worker thread.
+
+        The single-frame solve is a full PIV/iLK/FFD compute whose cost can spike
+        far above its usual (GPU contention, a cold kernel); run inline that spell
+        freezes the window, so the compute goes off-thread. All GUI/data reads
+        happen here on the main thread and cross to the worker as plain arrays;
+        the napari visualization returns to the main thread in
+        :meth:`_show_displacement_preview`.
+        """
         try:
             self._validate()
         except Exception as e:
             QMessageBox.warning(None, "Warning", str(e))
             return
 
-        self.freeze_ui()
+        current_frame = self._current_frame()
+        moving = self.data_manager.bead_stack[current_frame]
+        reference = self.data_manager.reference
+        params = self.parameter_manager.get_displacement_parameters()
+        mask = self._confinement_mask(params, frame=current_frame)
+
+        worker = self._preview_worker(reference, moving, params, mask)
+        self._start_preview_worker(
+            worker,
+            lambda result: self._show_displacement_preview(result, params),
+            status="Calculating displacement preview...",
+        )
+
+    @thread_worker
+    def _preview_worker(self, reference, moving, params, mask):
+        """Single-frame displacement solve (worker thread; no napari access)."""
+        gen = calculate_displacement_field(reference, moving, params, mask=mask)
+        final_result = None
         try:
-            self.progress_updated.emit(0, "Calculating displacement preview...")
-            current_frame = self._current_frame()
+            while True:
+                next(gen)
+        except StopIteration as e:
+            final_result = e.value
+        if final_result is None:
+            raise RuntimeError("Preview calculation failed")
+        return final_result
 
-            moving = self.data_manager.bead_stack[current_frame]
-            reference = self.data_manager.reference
-            params = self.parameter_manager.get_displacement_parameters()
+    def _show_displacement_preview(self, final_result, params):
+        """Paint the previewed displacement field (GUI thread)."""
+        self.analysis_completed.emit(final_result)
 
-            mask = self._confinement_mask(params, frame=current_frame)
-            gen = calculate_displacement_field(reference, moving, params, mask=mask)
-            final_result = None
-            try:
-                while True:
-                    _, frame, total = next(gen)
-                    self.progress_updated.emit(
-                        int((frame + 1) / total * 100), "Processing preview frame..."
-                    )
-            except StopIteration as e:
-                final_result = e.value
+        self.visualization_manager.visualize_displacement_preview(
+            final_result.displacement_field[0],  # Single frame result
+            params.d_max,
+            params.disp_vector_stride,
+            params.disp_arrow_scale,
+            downscale_factor=params.downscale_factor,
+        )
 
-            if final_result is None:
-                raise RuntimeError("Preview calculation failed")
+        # Show only the displacement layers (magnitude below, vectors on top).
+        self.visualization_manager.bring_layers_to_front([
+            ('Displacement Magnitude', True),
+            ('Displacement Vectors', True),
+        ])
 
-            self.analysis_completed.emit(final_result)
-
-            self.visualization_manager.visualize_displacement_preview(
-                final_result.displacement_field[0],  # Single frame result
-                params.d_max,
-                params.disp_vector_stride,
-                params.disp_arrow_scale,
-                downscale_factor=params.downscale_factor,
-            )
-
-            # Show only the displacement layers (magnitude below, vectors on top).
-            self.visualization_manager.bring_layers_to_front([
-                ('Displacement Magnitude', True),
-                ('Displacement Vectors', True),
-            ])
-
-            stats = self.get_displacement_statistics(final_result.displacement_field[0])
-            self.progress_updated.emit(
-                100,
-                f"Maximum displacement: {stats['max']:.2f} µm\n"
-                f"Mean displacement: {stats['mean']:.2f} µm",
-            )
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self.unfreeze_ui()
+        stats = self.get_displacement_statistics(final_result.displacement_field[0])
+        self.progress_updated.emit(
+            100,
+            f"Maximum displacement: {stats['max']:.2f} µm\n"
+            f"Mean displacement: {stats['mean']:.2f} µm",
+        )
 
     def get_displacement_statistics(self, flow: np.ndarray) -> dict:
         """Calculate displacement statistics."""
@@ -328,6 +337,13 @@ class DisplacementController(VectorStageController):
             add_image(data, name=name, contrast_limits=contrast_limits)
         else:
             add_image(data, name=name)
+
+        # Inputs stream in on a worker and each lands on top of napari's stack;
+        # re-assert the canonical input/mask order so the arrival sequence (and
+        # the async mask racing the cells layer) can't leave them out of order.
+        order = getattr(self.visualization_manager, "order_input_layers", None)
+        if callable(order):
+            order()
 
     @thread_worker
     def _create_input_load_worker(self, folder, input_files, token):

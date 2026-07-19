@@ -135,6 +135,35 @@ class VisualizationManager(ErrorHandlingMixin):
             if current != target:
                 self.viewer.layers.move(current, target)
 
+    # Canonical bottom-to-top z-order for the raw-input + mask layers. The inputs
+    # and mask stream in asynchronously (each on its own worker), so napari's
+    # arrival-order stacking is non-deterministic — the mask, in particular,
+    # races the cells layer and visibly jumps above it when its read lands late.
+    # Pinning the order and re-asserting it on every add makes the final stack
+    # deterministic (Masks on top, then Cells, Reference, Beads) with no flip.
+    _INPUT_LAYER_ORDER = ("Beads", "Reference", "Cells", "Masks")
+
+    def order_input_layers(self) -> None:
+        """Force the raw-input + mask layers into :data:`_INPUT_LAYER_ORDER`.
+
+        Idempotent: moves each present input/mask layer into the lowest slots in
+        canonical order (so they sit as a block beneath any result layers), skip-
+        ping any that are already in place. Called after each input/mask layer is
+        added so no intermediate state ever shows the layers out of order.
+        """
+        layers = getattr(self.viewer, "layers", None)
+        move = getattr(layers, "move", None)
+        if layers is None or not callable(move):
+            return
+        present = [name for name in self._INPUT_LAYER_ORDER if name in layers]
+        for target, name in enumerate(present):
+            try:
+                current = layers.index(layers[name])
+            except (KeyError, ValueError):
+                continue
+            if current != target:
+                move(current, target)
+
     def capture_layer_visibility(self) -> dict:
         """Snapshot ``{layer_name: visible}`` for every layer in the viewer.
 
@@ -948,5 +977,8 @@ class VisualizationManager(ErrorHandlingMixin):
             upscaled_masks.astype(np.uint8),
             **add_labels_kwargs,
         )
+        # The mask read is async and may land before or after the cells layer;
+        # re-assert the canonical stack so it never briefly sits below cells.
+        self.order_input_layers()
 
     # endregion

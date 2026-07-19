@@ -70,6 +70,18 @@ class _FakeLayers(list):
         super().remove(item)
 
 
+class _OrderableFakeLayers(_FakeLayers):
+    """Fake layer list that also supports napari's ``move(src, dest)``."""
+
+    def move(self, src, dest):
+        layer = list.__getitem__(self, src)
+        list.__delitem__(self, src)
+        # napari treats a negative dest as counting from the end after removal.
+        if dest < 0:
+            dest = len(self) + dest + 1
+        self.insert(dest, layer)
+
+
 class _FakeViewer:
     def __init__(self):
         self.layers = _FakeLayers()
@@ -188,3 +200,59 @@ def test_param_panel_still_registers_controls(app):
 
     assert "piv_window" in panel.parameter_controls
     assert "d_max" in panel.parameter_controls
+
+
+def _names_bottom_to_top(viewer):
+    return [layer.name for layer in viewer.layers]
+
+
+def test_order_input_layers_pins_canonical_stack():
+    # Inputs + mask arrive in arbitrary order (the async loaders race); ordering
+    # must land them bottom->top as Beads, Reference, Cells, Masks regardless.
+    viewer = _FakeViewer()
+    viewer.layers = _OrderableFakeLayers()
+    manager = VisualizationManager(viewer, DataManager())
+
+    # Add in a deliberately scrambled arrival order.
+    for name in ("Cells", "Masks", "Reference", "Beads"):
+        viewer.add_image(np.ones((2, 2), dtype=np.float32), name=name)
+
+    manager.order_input_layers()
+
+    assert _names_bottom_to_top(viewer) == ["Beads", "Reference", "Cells", "Masks"]
+
+
+def test_order_input_layers_keeps_inputs_below_result_layers():
+    # A result layer already present must stay on top; inputs order beneath it.
+    viewer = _FakeViewer()
+    viewer.layers = _OrderableFakeLayers()
+    manager = VisualizationManager(viewer, DataManager())
+
+    for name in ("Force Magnitude", "Cells", "Beads", "Masks"):
+        viewer.add_image(np.ones((2, 2), dtype=np.float32), name=name)
+
+    manager.order_input_layers()
+
+    order = _names_bottom_to_top(viewer)
+    # The three present input/mask layers occupy the lowest slots in canon order.
+    assert order[:3] == ["Beads", "Cells", "Masks"]
+    assert order[-1] == "Force Magnitude"
+
+
+def test_order_input_layers_is_idempotent_and_stable_for_late_mask():
+    # Simulate the mask landing after cells: order once with cells on top, then
+    # again when the mask arrives. The mask must end on top with no flip of the
+    # already-correct beads/reference/cells block.
+    viewer = _FakeViewer()
+    viewer.layers = _OrderableFakeLayers()
+    manager = VisualizationManager(viewer, DataManager())
+
+    for name in ("Beads", "Reference", "Cells"):
+        viewer.add_image(np.ones((2, 2), dtype=np.float32), name=name)
+    manager.order_input_layers()
+    assert _names_bottom_to_top(viewer) == ["Beads", "Reference", "Cells"]
+
+    # Mask read completes late and lands on top of the stack.
+    viewer.add_image(np.ones((2, 2), dtype=np.float32), name="Masks")
+    manager.order_input_layers()
+    assert _names_bottom_to_top(viewer) == ["Beads", "Reference", "Cells", "Masks"]

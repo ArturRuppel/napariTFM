@@ -90,52 +90,63 @@ class FTTCController(VectorStageController):
             raise ValueError(f"Force calculation failed: {str(e)}")
     # endregion
 
-    # region === Preview & GCV (synchronous, GUI thread) ===
+    # region === Preview (async single-shot) & GCV (synchronous, GUI thread) ===
     def preview_force(self):
-        """Preview force calculation for the current frame (synchronous)."""
+        """Preview force for the current frame on a worker thread.
+
+        The single-frame inversion can spike well above its usual cost (a heavy
+        forward/L1 solve, GPU contention); run inline that spell freezes the
+        window, so the compute goes off-thread. GUI/data reads happen here on the
+        main thread; the napari visualization returns to it in
+        :meth:`_show_force_preview`.
+        """
         try:
             self._validate()
         except Exception as e:
             QMessageBox.warning(None, "Warning", str(e))
             return
 
-        self.freeze_ui()
-        try:
-            self.progress_updated.emit(0, "Calculating force preview...")
-            current_frame = self._current_frame()
+        current_frame = self._current_frame()
+        displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
+        params = self.parameter_manager.get_fttc_parameters()
 
-            displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
-            params = self.parameter_manager.get_fttc_parameters()
+        worker = self._preview_worker(displacement_field, params, current_frame)
+        self._start_preview_worker(
+            worker, self._show_force_preview,
+            status="Calculating force preview...",
+        )
 
-            result = self._compute_preview(displacement_field, params, current_frame)
-            if result is None:
-                raise RuntimeError("Preview calculation failed to produce results")
+    @thread_worker
+    def _preview_worker(self, displacement_field, params, frame):
+        """Single-frame force solve (worker thread; no napari access)."""
+        result = self._compute_preview(displacement_field, params, frame)
+        if result is None:
+            raise RuntimeError("Preview calculation failed to produce results")
+        return result
 
-            self.visualization_manager.visualize_force_preview(
-                result.force_field[0],
-                result.parameters.f_max,
-                result.parameters.force_vector_stride,
-                result.parameters.force_arrow_scale,
-                downscale_factor=result.parameters.downscale_factor,
-            )
+    def _show_force_preview(self, result):
+        """Paint the previewed force field (GUI thread)."""
+        self.visualization_manager.visualize_force_preview(
+            result.force_field[0],
+            result.parameters.f_max,
+            result.parameters.force_vector_stride,
+            result.parameters.force_arrow_scale,
+            downscale_factor=result.parameters.downscale_factor,
+        )
 
-            # Show only the force layers (magnitude below, vectors on top).
-            self.visualization_manager.bring_layers_to_front([
-                ('Force Magnitude', True),
-                ('Force Vectors', True),
-            ])
+        # Show only the force layers (magnitude below, vectors on top).
+        self.visualization_manager.bring_layers_to_front([
+            ('Force Magnitude', True),
+            ('Force Vectors', True),
+        ])
 
-            magnitude = np.sqrt(np.sum(result.force_field[0] ** 2, axis=-1))
-            self.progress_updated.emit(
-                100,
-                f"Preview statistics:\n"
-                f"Max force: {np.max(magnitude):.2f} Pa\n"
-                f"Mean force: {np.mean(magnitude):.2f} Pa",
-            )
-        except Exception as e:
-            self._handle_error(str(e))
-        finally:
-            self.unfreeze_ui()
+        magnitude = np.sqrt(np.sum(result.force_field[0] ** 2, axis=-1))
+        self.progress_updated.emit(
+            100,
+            f"Preview statistics:\n"
+            f"Max force: {np.max(magnitude):.2f} Pa\n"
+            f"Mean force: {np.mean(magnitude):.2f} Pa",
+        )
 
     def _compute_preview(self, displacement_field, params, frame=None) -> FTTCResult:
         """Run the single-frame force calculation to completion and return it.

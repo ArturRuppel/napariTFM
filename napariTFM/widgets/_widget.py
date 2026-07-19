@@ -1,6 +1,7 @@
 import json
 import logging
 import math
+from contextlib import nullcontext
 from datetime import datetime
 from typing import Any
 
@@ -2033,47 +2034,59 @@ class napariTFMWidget(QWidget):
 
     def _on_active_experiment_changed(self, path: str) -> None:
         self._active_experiment = path or None
-        # Switching experiments drops the previous one's in-memory results so they
-        # can never be persisted into the newly selected experiment's .ntfm. The
-        # dots fall back to the new experiment's on-disk truth (which may already
-        # read "done" from a prior batch/interactive run).
-        self.data_manager.clear_generated_results()
-        if self._active_experiment is None:
-            self._pipeline_context_label.setText("Pipeline")
-            self.data_manager.set_active_inputs(None, {})
-        else:
-            from pathlib import Path
+        # A single selection mutates the data manager several times in a row
+        # (clear results, repoint inputs, load the mask). Each mutation would
+        # otherwise drive a full ``refresh`` — a whole-list on-disk status walk —
+        # so one click walked the list several times over. Coalesce the burst
+        # into one notification. The async input load fires its own (separate,
+        # later) notifications, which is correct. ``batch_changes`` is defensive
+        # here so test stubs without it still work.
+        batch = getattr(self.data_manager, "batch_changes", None)
+        with (batch() if callable(batch) else nullcontext()):
+            # Switching experiments drops the previous one's in-memory results so
+            # they can never be persisted into the newly selected experiment's
+            # .ntfm. The dots fall back to the new experiment's on-disk truth
+            # (which may already read "done" from a prior batch/interactive run).
+            self.data_manager.clear_generated_results()
+            if self._active_experiment is None:
+                self._pipeline_context_label.setText("Pipeline")
+                self.data_manager.set_active_inputs(None, {})
+            else:
+                from pathlib import Path
 
-            self._pipeline_context_label.setText(
-                f"Pipeline · tuning ▸ {Path(self._active_experiment).name}"
-            )
-            # Point the raw-input disk check at the selected experiment so the
-            # displacement input dots read green from its discovery files.
-            input_files = self.experiments_list.input_files_for(self._active_experiment)
-            self.data_manager.set_active_inputs(self._active_experiment, input_files)
-            # And actually load those files from disk into memory + the viewer, so
-            # Preview and Run (which need the arrays loaded) work on selection.
-            # Displacement is the first stage and now owns raw-input loading.
-            self.displacement_widget.load_input_files(self._active_experiment, input_files)
-            # No output series is decoded on selection: the row/section dots
-            # already show the on-disk status eagerly, and a stage's pixels
-            # only stream in when its circle is clicked (calculations re-read
-            # from disk regardless, so nothing must be resident to run).
-            # The mask is an external Stress input; load the discovered masks.tif
-            # from disk into memory too, so Stress Run/Preview enable on selection
-            # the same way beads/reference do — no manual layer load required.
-            mask_name = input_files.get("masks")
-            if mask_name:
-                # The mask is stored on the downsampled force grid; pass the bead
-                # image's xy size (read cheaply from disk — the bead arrays stream
-                # in asynchronously and aren't in memory yet) so the mask's
-                # visualization layer is scaled to fit the beads in the viewer.
-                beads_shape = self.displacement_widget.peek_input_xy_shape(
-                    self._active_experiment, input_files, "beads"
+                self._pipeline_context_label.setText(
+                    f"Pipeline · tuning ▸ {Path(self._active_experiment).name}"
                 )
-                self.stress_widget.load_mask_from_file(
-                    Path(self._active_experiment) / mask_name, beads_shape=beads_shape
-                )
+                # Point the raw-input disk check at the selected experiment so the
+                # displacement input dots read green from its discovery files.
+                input_files = self.experiments_list.input_files_for(self._active_experiment)
+                self.data_manager.set_active_inputs(self._active_experiment, input_files)
+                # And actually load those files from disk into memory + the viewer,
+                # so Preview and Run (which need the arrays loaded) work on
+                # selection. Displacement is the first stage and now owns raw-input
+                # loading.
+                self.displacement_widget.load_input_files(self._active_experiment, input_files)
+                # No output series is decoded on selection: the row/section dots
+                # already show the on-disk status eagerly, and a stage's pixels
+                # only stream in when its circle is clicked (calculations re-read
+                # from disk regardless, so nothing must be resident to run).
+                # The mask is an external Stress input; load the discovered
+                # masks.tif from disk into memory too, so Stress Run/Preview enable
+                # on selection the same way beads/reference do — no manual layer
+                # load required.
+                mask_name = input_files.get("masks")
+                if mask_name:
+                    # The mask is stored on the downsampled force grid; pass the
+                    # bead image's xy size (read cheaply from disk — the bead arrays
+                    # stream in asynchronously and aren't in memory yet) so the
+                    # mask's visualization layer is scaled to fit the beads in the
+                    # viewer.
+                    beads_shape = self.displacement_widget.peek_input_xy_shape(
+                        self._active_experiment, input_files, "beads"
+                    )
+                    self.stress_widget.load_mask_from_file(
+                        Path(self._active_experiment) / mask_name, beads_shape=beads_shape
+                    )
         self._update_disclosure()
 
     def _on_experiments_changed(self) -> None:

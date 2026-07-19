@@ -278,19 +278,50 @@ def summarize_ntfm(path, *, experiment_id: Optional[str] = None) -> pd.DataFrame
 # Ready / not-ready partition (header-only, no pixel decode)
 # ---------------------------------------------------------------------------
 
+# Cache of OME-XML series names keyed by (path, mtime_ns, size), mirroring
+# ``ntfm.populated_measures``. Readiness refreshes walk every committed
+# container on each status pass; without this each pass re-parses every
+# container's OME-XML on the GUI thread, which is the bulk of the selection
+# freeze on a large list. The key self-invalidates when a container is
+# rewritten (new mtime/size).
+_series_names_cache: dict = {}
+
+
 def _series_names(path) -> set:
     """Series present in a container, read from the OME-XML header only.
 
     Empty set for a missing/unreadable container, so callers treat "no output"
     and "can't tell" identically (mirrors ``ntfm.populated_measures``).
+
+    Cached by ``(path, mtime_ns, size)`` so repeated readiness walks over an
+    unchanged list of containers cost one ``stat`` each after the first pass,
+    not a fresh OME-XML parse.
     """
     if tifffile is None:
         return set()
+
+    p = Path(path)
     try:
-        with tifffile.TiffFile(str(path)) as tf:
-            return {s.name for s in tf.series}
+        st = p.stat()
+    except OSError:
+        return set()
+
+    cache_key = (str(p), st.st_mtime_ns, st.st_size)
+    cached = _series_names_cache.get(cache_key)
+    if cached is not None:
+        return set(cached)
+
+    try:
+        with tifffile.TiffFile(str(p)) as tf:
+            names = {s.name for s in tf.series}
     except Exception:
         return set()
+
+    # Guard against unbounded growth (mirrors populated_measures).
+    if len(_series_names_cache) >= 512:
+        _series_names_cache.clear()
+    _series_names_cache[cache_key] = frozenset(names)
+    return set(names)
 
 
 def readiness(path) -> Tuple[bool, str]:

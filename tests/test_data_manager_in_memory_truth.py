@@ -113,3 +113,45 @@ def test_clearing_active_inputs_reverts_to_memory_only(tmp_path):
 
     dm.set_active_inputs(None, {})
     assert dm.artifact_available("bead_stack") is False
+
+
+def test_batch_changes_coalesces_notifications():
+    # One selection mutates several artifacts back-to-back; batch_changes must
+    # collapse the burst into a single observer callback (the whole-list status
+    # walk is what that callback drives, so firing it per-mutation is the freeze).
+    dm = DataManager()
+    calls = []
+    dm.add_change_callback(lambda: calls.append(1))
+    dm.set_active_inputs(None, {})  # sanity: one mutation -> one callback
+    assert len(calls) == 1
+
+    calls.clear()
+    with dm.batch_changes():
+        dm.clear_generated_results()
+        dm.set_active_inputs(None, {})
+        dm.set_mask_stack(np.ones((1, 4, 4), dtype=np.uint8))
+    assert len(calls) == 1
+
+
+def test_batch_changes_fires_nothing_when_nothing_changed():
+    # clear_generated_results on an empty manager mutates nothing, so an empty
+    # batch must not fire a spurious callback.
+    dm = DataManager()
+    calls = []
+    dm.add_change_callback(lambda: calls.append(1))
+    with dm.batch_changes():
+        dm.clear_generated_results()
+    assert calls == []
+
+
+def test_batch_changes_is_reentrant():
+    # Nested batches collapse into the outermost: callbacks fire once, on the
+    # outer exit, not when an inner batch closes.
+    dm = DataManager()
+    calls = []
+    dm.add_change_callback(lambda: calls.append(1))
+    with dm.batch_changes():
+        with dm.batch_changes():
+            dm.set_mask_stack(np.ones((1, 4, 4), dtype=np.uint8))
+        assert calls == []  # inner exit must not fire
+    assert len(calls) == 1

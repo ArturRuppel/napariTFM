@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -52,6 +53,11 @@ class DataManager:
         self._output_dir: Optional[Path] = None
         self._active_input_folder: Optional[Path] = None
         self._active_input_files: Dict[str, str] = {}
+        # Depth counter + dirty flag for batch_changes(): while > 0, mutations
+        # record that a change happened but suppress the per-mutation callback,
+        # so a burst of sets fires observers exactly once on exit.
+        self._batch_depth = 0
+        self._batch_pending = False
         self._artifacts: Dict[str, ArtifactState] = {
             key: ArtifactState(key=key, label=label)
             for key, label in self.ARTIFACT_LABELS.items()
@@ -61,7 +67,34 @@ class DataManager:
         if callback not in self._callbacks:
             self._callbacks.append(callback)
 
+    @contextmanager
+    def batch_changes(self):
+        """Coalesce a burst of mutations into a single change notification.
+
+        Selecting an experiment mutates several artifacts back-to-back
+        (``clear_generated_results``, ``set_active_inputs``, ``set_mask_stack``,
+        …). Each mutation otherwise fires ``_notify_changed`` and drives a full
+        ``refresh`` — a whole-list on-disk status walk — so one click triggers
+        that walk several times over. Wrapping the burst in this context defers
+        the callbacks and fires them once at the end (only if anything actually
+        changed). Reentrant: nested batches collapse into the outermost.
+        """
+        self._batch_depth += 1
+        try:
+            yield
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0 and self._batch_pending:
+                self._batch_pending = False
+                self._fire_callbacks()
+
     def _notify_changed(self) -> None:
+        if self._batch_depth > 0:
+            self._batch_pending = True
+            return
+        self._fire_callbacks()
+
+    def _fire_callbacks(self) -> None:
         for callback in list(self._callbacks):
             callback()
 

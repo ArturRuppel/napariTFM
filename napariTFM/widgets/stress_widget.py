@@ -90,68 +90,79 @@ class StressController(BaseAnalysisController):
         self.analysis_completed.emit(result)
     # endregion
 
-    # region === Preview (synchronous, GUI thread) ===
+    # region === Preview (async single-shot; template lives in the base) ===
     def preview_current_frame(self):
-        """Calculate and display the stress field for the current frame (synchronous)."""
+        """Preview the stress field for the current frame on a worker thread.
+
+        The single-frame BISM inversion can spike above its usual cost; run inline
+        that spell freezes the window, so the compute goes off-thread. GUI/data
+        reads (current frame, params, the mask + force slices) happen here on the
+        main thread; the napari visualization returns to it in
+        :meth:`_show_stress_preview`.
+        """
         try:
             self._validate()
         except Exception as e:
             QMessageBox.warning(None, "Warning", str(e))
-            return None
+            return
 
-        self.freeze_ui()
+        current_frame = self._current_frame()
+        params = self._get_current_parameters()
+        masks = self.data_manager.mask_stack
+        force_results = self.data_manager.force_results
+
+        mask = masks[current_frame] if masks.ndim > 2 else masks
+        force_field = (
+            force_results.force_field[current_frame]
+            if force_results.force_field.ndim > 3
+            else force_results.force_field
+        )
+        downscale = force_results.parameters.downscale_factor
+
+        worker = self._preview_worker(force_field, mask, params)
+        self._start_preview_worker(
+            worker,
+            lambda result: self._show_stress_preview(result, params, current_frame, downscale),
+            status="Generating stress preview...",
+        )
+
+    @thread_worker
+    def _preview_worker(self, force_field, mask, params):
+        """Single-frame BISM stress solve (worker thread; no napari access)."""
+        gen = calculate_bism_stresses(
+            force_field=force_field[np.newaxis, ...],
+            masks=mask[np.newaxis, ...],
+            params=params,
+        )
         try:
-            self.progress_updated.emit(0, "Generating stress preview...")
-            current_frame = self._current_frame()
-            params = self._get_current_parameters()
+            result, _, _ = next(gen)
+        except StopIteration:
+            raise ValueError("Stress calculation failed to produce results")
+        return result
 
-            masks = self.data_manager.mask_stack
-            force_results = self.data_manager.force_results
+    def _show_stress_preview(self, result, params, current_frame, downscale):
+        """Paint the previewed stress field (GUI thread)."""
+        self.visualization_manager.visualize_stress_preview(
+            result.stress_tensor,
+            max_stress=params.max_stress,
+            downscale_factor=downscale,
+        )
 
-            mask = masks[current_frame] if masks.ndim > 2 else masks
-            force_field = (
-                force_results.force_field[current_frame]
-                if force_results.force_field.ndim > 3
-                else force_results.force_field
-            )
+        # Show only the average-normal-stress layer on top; keep XX/YY loaded
+        # (for scrubbing) but hidden, stacked beneath it.
+        self.visualization_manager.bring_layers_to_front([
+            ('Normal Stress XX', False),
+            ('Normal Stress YY', False),
+            ('Average Normal Stress', True),
+        ])
 
-            gen = calculate_bism_stresses(
-                force_field=force_field[np.newaxis, ...],
-                masks=mask[np.newaxis, ...],
-                params=params,
-            )
-            try:
-                result, _, _ = next(gen)
-            except StopIteration:
-                raise ValueError("Stress calculation failed to produce results")
-
-            self.visualization_manager.visualize_stress_preview(
-                result.stress_tensor,
-                max_stress=params.max_stress,
-                downscale_factor=force_results.parameters.downscale_factor,
-            )
-
-            # Show only the average-normal-stress layer on top; keep XX/YY loaded
-            # (for scrubbing) but hidden, stacked beneath it.
-            self.visualization_manager.bring_layers_to_front([
-                ('Normal Stress XX', False),
-                ('Normal Stress YY', False),
-                ('Average Normal Stress', True),
-            ])
-
-            r2 = result.r2_traction
-            r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
-            self.progress_updated.emit(
-                100,
-                f"Stress preview generated for frame {current_frame} (BISM)\n"
-                f"Traction-reconstruction R²: {r2_text}",
-            )
-            return result
-        except Exception as e:
-            self._handle_error(str(e))
-            return None
-        finally:
-            self.unfreeze_ui()
+        r2 = result.r2_traction
+        r2_text = f"{r2:.4f}" if r2 is not None else "n/a"
+        self.progress_updated.emit(
+            100,
+            f"Stress preview generated for frame {current_frame} (BISM)\n"
+            f"Traction-reconstruction R²: {r2_text}",
+        )
 
     def _get_current_parameters(self) -> StressParameters:
         """Get current stress (BISM) parameters from parameter manager."""
@@ -176,6 +187,13 @@ class StressWidget(BaseAnalysisWidget):
         self._action_enabled = {
             "run": False, "preview": False, "cancel": True,
         }
+
+        # Monotonic token guarding the async mask loader against stale reads from
+        # a superseded experiment-row click. ``_mask_workers`` holds every
+        # in-flight read so it isn't garbage-collected mid-run; each removes
+        # itself on completion.
+        self._mask_load_token = 0
+        self._mask_workers = []
 
         # Get initial parameters from parameter manager
         self.stress_params = parameter_manager.get_stress_parameters()
@@ -241,13 +259,21 @@ class StressWidget(BaseAnalysisWidget):
         # straight off the data manager to fit the mask to it in the viewer.
         self._apply_mask_data(mask_data, warn=True, beads_shape=self._loaded_beads_shape())
 
-    def load_mask_from_file(self, mask_path, beads_shape=None) -> bool:
-        """Load a mask stack from a TIFF on disk into memory.
+    def load_mask_from_file(self, mask_path, beads_shape=None) -> None:
+        """Load a mask stack from a TIFF on disk into memory, off the UI thread.
 
         Used to auto-load an experiment's discovered ``masks.tif`` on selection so
         the Stress stage's Run/Preview enable without a manual layer load. Silent
         and best-effort: a missing or unreadable file is a no-op (the user can
-        still load a mask manually). Returns True when a mask was loaded.
+        still load a mask manually).
+
+        The read is a full-stack ``imread`` — hundreds of ms on a large mask — so
+        it runs on a napari ``thread_worker`` rather than freezing the selection
+        click; the decoded array is applied on the GUI thread. A monotonic token
+        supersedes an in-flight read from a previous row click: a superseded read
+        still runs to completion (a function worker can't be interrupted) but is
+        dropped by the token check when it lands, so rapid clicking never paints a
+        stale experiment's mask.
 
         ``beads_shape`` is the bead image's ``(height, width)``; when given, the
         mask's visualization layer is scaled so its xy dimensions fit the beads.
@@ -256,20 +282,57 @@ class StressWidget(BaseAnalysisWidget):
         """
         from pathlib import Path
 
+        mask_path = Path(mask_path)
+
+        # Bump the token so any in-flight read from a previous row click is
+        # recognized as stale when it lands.
+        self._mask_load_token += 1
+        token = self._mask_load_token
+
+        if not mask_path.exists():
+            return
+
+        worker = self._read_mask_worker(mask_path, token)
+        self._mask_workers.append(worker)
+        worker.returned.connect(
+            lambda payload, _w=worker, _bs=beads_shape: self._on_mask_read(payload, _w, _bs)
+        )
+        worker.start()
+
+    @thread_worker
+    def _read_mask_worker(self, mask_path, token):
+        """Read a mask TIFF off the UI thread; returns ``(token, array)``.
+
+        Returns ``(token, None)`` on any read error so the GUI-thread slot can
+        stale-check and quietly drop it — a missing or unreadable mask is not
+        fatal (the user can still load one manually).
+        """
         import tifffile
 
-        mask_path = Path(mask_path)
-        if not mask_path.exists():
-            return False
         try:
             mask_data = tifffile.imread(str(mask_path))
         except Exception as e:  # pragma: no cover - defensive
             print(f"Could not read mask file {mask_path}: {e}")
-            return False
+            return token, None
+        return token, mask_data
+
+    def _on_mask_read(self, payload, worker, beads_shape) -> None:
+        """Apply a mask array read off-thread (GUI thread).
+
+        Drops the finished worker from the in-flight list, then stale-checks the
+        token before touching the data manager or viewer so a superseded read
+        cannot overwrite the current row's mask.
+        """
+        try:
+            self._mask_workers.remove(worker)
+        except ValueError:
+            pass
+        token, mask_data = payload
+        if token != self._mask_load_token:
+            return
         if not isinstance(mask_data, np.ndarray):
-            return False
+            return
         self._apply_mask_data(mask_data, warn=False, beads_shape=beads_shape)
-        return True
 
     def _apply_mask_data(self, mask_data: np.ndarray, *, warn: bool, beads_shape=None) -> None:
         """Resize a raw mask onto the analysis grid, store it, and show it.

@@ -233,3 +233,74 @@ def test_mask_layer_scale_is_none_without_a_beads_shape(app):
 
     _, kwargs = viz.calls[-1]
     assert kwargs["scale"] is None
+
+
+def _pump_until(app, predicate, timeout_ms=5000):
+    """Spin the event loop until *predicate* holds or the timeout elapses.
+
+    The async mask read runs on a napari thread_worker; its ``returned`` signal
+    is delivered through the Qt event loop, so tests must pump events to see it.
+    """
+    from qtpy.QtCore import QElapsedTimer
+
+    timer = QElapsedTimer()
+    timer.start()
+    while not predicate() and timer.elapsed() < timeout_ms:
+        app.processEvents()
+    return predicate()
+
+
+def test_load_mask_from_file_reads_off_thread_and_applies(app, tmp_path):
+    import numpy as np
+    import tifffile
+
+    force_field = np.zeros((2, 8, 8, 2), dtype=np.float32)
+    viz = _CapturingVisualizationManager()
+    widget = _make_widget(viz, _MaskDataManager(force_results=_Forces(force_field)))
+
+    mask_path = tmp_path / "masks.tif"
+    tifffile.imwrite(str(mask_path), np.ones((2, 8, 8), dtype=np.uint8))
+
+    widget.load_mask_from_file(mask_path, beads_shape=(8, 8))
+    # The call returns immediately (worker not yet done); the mask lands after
+    # the event loop delivers the worker's result.
+    assert _pump_until(app, lambda: widget.data_manager.mask_stack is not None)
+    assert widget.data_manager.mask_stack.shape == (2, 8, 8)
+
+
+def test_load_mask_from_file_missing_is_silent_noop(app, tmp_path):
+    viz = _CapturingVisualizationManager()
+    widget = _make_widget(viz, _MaskDataManager())
+
+    # No worker is spawned for a non-existent file, so nothing is applied.
+    widget.load_mask_from_file(tmp_path / "absent.tif", beads_shape=(8, 8))
+    assert widget._mask_workers == []
+    assert widget.data_manager.mask_stack is None
+
+
+def test_rapid_mask_loads_apply_only_the_last(app, tmp_path):
+    import numpy as np
+    import tifffile
+
+    force_field = np.zeros((1, 8, 8, 2), dtype=np.float32)
+    viz = _CapturingVisualizationManager()
+    widget = _make_widget(viz, _MaskDataManager(force_results=_Forces(force_field)))
+
+    # process_mask_data binarizes, so discriminate the two masks by footprint:
+    # the first covers a 2x2 corner (4 px), the second covers the whole frame.
+    first_arr = np.zeros((1, 8, 8), dtype=np.uint8)
+    first_arr[0, :2, :2] = 1
+    second_arr = np.ones((1, 8, 8), dtype=np.uint8)
+    first = tmp_path / "first.tif"
+    second = tmp_path / "second.tif"
+    tifffile.imwrite(str(first), first_arr)
+    tifffile.imwrite(str(second), second_arr)
+
+    # Two clicks in a row: the first read is superseded before it can paint.
+    widget.load_mask_from_file(first, beads_shape=(8, 8))
+    widget.load_mask_from_file(second, beads_shape=(8, 8))
+
+    assert _pump_until(app, lambda: widget.data_manager.mask_stack is not None)
+    # The surviving mask is the second file's full-frame footprint (64 True),
+    # never the stale first's 4-px corner.
+    assert int(widget.data_manager.mask_stack.sum()) == 64
