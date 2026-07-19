@@ -235,6 +235,9 @@ class _StubController(QObject):
     def set_displacement_loader(self, loader):
         self.displacement_loader = loader
 
+    def set_force_loader(self, loader):
+        self.force_loader = loader
+
 
 class _StubStageWidget(QWidget):
     displacement_calculated = Signal(object)
@@ -279,6 +282,9 @@ class _StubStageWidget(QWidget):
 
     def set_displacement_available_check(self, check):
         self.displacement_available_check = check
+
+    def set_force_available_check(self, check):
+        self.force_available_check = check
 
     def run_action(self):
         self.action_calls["run"] += 1
@@ -608,6 +614,52 @@ def test_ensure_displacement_resident_loads_from_disk_data_only(monkeypatch, app
     )
     streamed = [kind for kind, *_ in widget.visualization_manager.vector_stream_calls]
     assert "displacement" not in streamed
+
+
+def test_force_available_reads_disk_without_decoding(monkeypatch, app, tmp_path):
+    """Stress enables from disk: force done on disk but NOT resident makes
+    _force_available() True via a header-only check, while force_results
+    stays None (no pixel decode on selection)."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_disk_force"
+    folder.mkdir()
+    _write_ntfm(folder, force_field=np.ones((1, 2, 3, 2)) * 100.0)
+
+    _select(widget, folder)  # selects + loads inputs, but decodes no output
+
+    assert widget.data_manager.force_results is None   # not resident
+    assert widget._force_available() is True            # yet visible on disk
+
+
+def test_force_available_false_when_absent(monkeypatch, app, tmp_path):
+    """No force on disk and none resident ⇒ not available (Stress stays greyed)."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_empty_avail_force"
+    folder.mkdir()
+
+    _select(widget, folder)
+
+    assert widget._force_available() is False
+
+
+def test_ensure_force_resident_loads_from_disk_data_only(monkeypatch, app, tmp_path):
+    """The on-demand loader (fired from Stress Preview/Run) pulls force off disk
+    into memory without streaming it to the viewer."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "pos_ondemand_force"
+    folder.mkdir()
+    force = np.ones((1, 2, 3, 2)) * 42.0
+    _write_ntfm(folder, force_field=force)
+
+    _select(widget, folder)
+    assert widget.data_manager.force_results is None
+
+    assert widget._ensure_force_resident() is True
+    np.testing.assert_allclose(
+        widget.data_manager.force_results.force_field, force, rtol=1e-5
+    )
+    streamed = [kind for kind, *_ in widget.visualization_manager.vector_stream_calls]
+    assert "force" not in streamed
 
 
 def test_loaded_results_carry_reconstructed_parameters(monkeypatch, app, tmp_path):

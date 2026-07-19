@@ -209,6 +209,9 @@ class _StubController(QObject):
     def set_displacement_loader(self, loader):
         self.displacement_loader = loader
 
+    def set_force_loader(self, loader):
+        self.force_loader = loader
+
 
 class _StubStageWidget(QWidget):
     displacement_calculated = Signal(object)
@@ -247,6 +250,9 @@ class _StubStageWidget(QWidget):
 
     def set_displacement_available_check(self, check):
         self.displacement_available_check = check
+
+    def set_force_available_check(self, check):
+        self.force_available_check = check
 
     def run_action(self):
         self.action_calls["run"] += 1

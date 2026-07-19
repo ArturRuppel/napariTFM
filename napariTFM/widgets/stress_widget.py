@@ -22,10 +22,23 @@ class StressController(BaseAnalysisController):
     than subclassing :class:`VectorStageController`.
     """
 
+    def set_force_loader(self, loader) -> None:
+        """Wire a callback that pulls the active experiment's force off disk
+        into memory (data-only) if it is not resident. Injected by the shell so this
+        stage can run straight from a done-on-disk force without it first
+        being viewed. See napariTFMWidget._ensure_force_resident."""
+        self._force_loader = loader
+
     # region === Run lifecycle hooks (template lives in the base) ===
     def _validate(self):
         if self.data_manager.mask_stack is None:
             raise ValueError("No mask loaded. Please load a mask first.")
+        # The solver reads the force field from memory; if it is only on disk
+        # (a done experiment not yet viewed), pull it in now — the Preview/Run that
+        # got here is a compute the user just asked for.
+        loader = getattr(self, "_force_loader", None)
+        if self.data_manager.force_results is None and loader is not None:
+            loader()
         if self.data_manager.force_results is None:
             raise ValueError("No force data available. Please calculate forces first.")
 
@@ -187,6 +200,12 @@ class StressWidget(BaseAnalysisWidget):
         self._action_enabled = {
             "run": False, "preview": False, "cancel": True,
         }
+
+        # Optional shell-injected predicate: True when force is usable as this
+        # stage's input even if not resident (i.e. done on disk for the active
+        # experiment). Lets Preview/Run enable straight from disk. See
+        # set_force_available_check / napariTFMWidget._force_available.
+        self._force_available_check = None
 
         # Monotonic token guarding the async mask loader against stale reads from
         # a superseded experiment-row click. ``_mask_workers`` holds every
@@ -400,9 +419,24 @@ class StressWidget(BaseAnalysisWidget):
     def cancel_action(self):
         self.controller.cancel()
 
+    def set_force_available_check(self, check) -> None:
+        """Wire a predicate reporting whether force is available as this
+        stage's input (resident OR done on disk for the active experiment). Injected
+        by the shell so Preview/Run enable from the on-disk status, not only when the
+        field is resident. See napariTFMWidget._force_available."""
+        self._force_available_check = check
+        self._update_ui_state()
+
     def _update_ui_state(self, event=None):
         """Update action button enablement based on available data."""
         has_force = self.data_manager.force_results is not None
+        # Also enable from disk: force done for the active experiment is a valid
+        # input, pulled into memory on demand when Preview/Run actually fires.
+        if not has_force and self._force_available_check is not None:
+            try:
+                has_force = bool(self._force_available_check())
+            except Exception:
+                has_force = False
         has_mask = self.data_manager.mask_stack is not None
 
         self._action_enabled["preview"] = has_force and has_mask

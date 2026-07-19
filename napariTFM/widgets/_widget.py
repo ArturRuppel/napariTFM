@@ -900,6 +900,13 @@ class napariTFMWidget(QWidget):
         self.force_widget.set_displacement_available_check(self._displacement_available)
         self.force_widget.controller.set_displacement_loader(self._ensure_displacement_resident)
 
+        # Same for Stress: its force input may live only on disk (a done experiment
+        # selected but not yet viewed). Stress's Preview/Run then enable from the
+        # on-disk force status, and the solver pulls that force into memory on
+        # demand when it actually runs.
+        self.stress_widget.set_force_available_check(self._force_available)
+        self.stress_widget.controller.set_force_loader(self._ensure_force_resident)
+
         # Funnel every pipeline stage's progress into the single global status
         # label (P2). Run-selected (the retired batch widget's successor) reports via
         # its own per-folder callback, not a controller progress signal.
@@ -2124,6 +2131,40 @@ class napariTFMWidget(QWidget):
         if data is None:
             return False
         return self._set_displacement_result_data(data)
+
+    def _force_available(self) -> bool:
+        """Whether force is usable as Stress's input — resident in memory, or the
+        force stage is done on disk for the active experiment (so it can be pulled
+        in on demand). Lets Stress's Preview/Run enable straight from the disk
+        status; the `.ntfm` check is header-only (`populated_measures`), no decode.
+        """
+        if self.data_manager.force_results is not None:
+            return True
+        if not self._active_experiment:
+            return False
+        from napariTFM.utilities import ntfm as _ntfm
+        from napariTFM.utilities.batch_output import RESULTS_FILENAME, experiment_output_dir
+
+        out_dir = experiment_output_dir(self._active_experiment, self.data_manager.output_dir)
+        return "force" in _ntfm.populated_measures(out_dir / RESULTS_FILENAME)
+
+    def _ensure_force_resident(self) -> bool:
+        """Pull the active experiment's force off disk into memory (data-only,
+        no viewer stream) if not already resident, so the Stress solver — which reads
+        the force field from memory — can run. Returns True if resident after.
+
+        Decodes on the calling (GUI) thread, like a stage-circle click; the Preview/
+        Run that triggers it is a compute the user just asked for. A no-op once
+        resident (e.g. the Stress circle was viewed, which already keeps it resident).
+        """
+        if self.data_manager.force_results is not None:
+            return True
+        if not self._active_experiment:
+            return False
+        data = self._read_stage_arrays(self._active_experiment)
+        if data is None:
+            return False
+        return self._set_force_result_data(data)
 
     def _on_active_experiment_changed(self, path: str) -> None:
         self._active_experiment = path or None
