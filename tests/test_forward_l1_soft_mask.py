@@ -4,8 +4,9 @@ The mask used to be a hard support (traction projected to zero outside it every
 FISTA iteration), and the resulting step at the mask edge rang (Gibbs). It is now a
 soft support: an off-mask L2 penalty ``½ Σ c(x)·|t|²`` added to the objective, with
 ``c`` zero inside the mask and ramping up to ``confinement_to_beta(fwd_mask_strength)``
-outside over a smoothstep collar. This is the same mechanism the L2 confined solver
-uses, ported to FISTA.
+outside over a one-sided Gaussian skirt of width ``fwd_mask_softness`` (σ). This is the
+same mechanism — and the same skirt (:func:`support_probability`) — the L2 confined
+solver uses, ported to FISTA.
 
 Why a penalty in the objective and not a per-iteration nudge: the exterior traction
 lives in the fit's near-nullspace (off-mask force explains in-mask displacement via
@@ -41,6 +42,32 @@ def _forward_displacement(t, params):
     return np.fft.ifft2(uk, axes=(-2, -1)).real
 
 
+# --- the support-probability skirt: one-sided Gaussian, σ = fwd_mask_softness ----
+
+def test_support_probability_one_sided_gaussian():
+    """p ≡ 1 on the support (and its rim), decays outward over σ, never bites inward,
+    and σ = 0 is the hard binary edge. Larger σ ⇒ a wider skirt (higher p at a fixed
+    exterior pixel), and p ∈ [0, 1] everywhere."""
+    h = w = 48
+    yy, xx = np.mgrid[0:h, 0:w]
+    mask = (((yy - h / 2) ** 2 + (xx - w / 2) ** 2) <= 12 ** 2).astype(np.uint8)
+    support = mask > 0
+
+    p_hard = F.support_probability(mask, _params(fwd_mask_softness=0.0))
+    assert set(np.unique(p_hard)) <= {0.0, 1.0}                 # σ=0 ⇒ binary
+    np.testing.assert_array_equal(p_hard[support], 1.0)
+
+    p2 = F.support_probability(mask, _params(fwd_mask_softness=2.0))
+    p5 = F.support_probability(mask, _params(fwd_mask_softness=5.0))
+    for p in (p2, p5):
+        assert p.min() >= 0.0 and p.max() <= 1.0
+        np.testing.assert_allclose(p[support], 1.0)             # interior + rim stay free
+    # wider σ ⇒ the skirt reaches further: strictly higher p just outside the mask
+    exterior = ~support
+    assert (p5[exterior] >= p2[exterior] - 1e-12).all()
+    assert p5[exterior].sum() > p2[exterior].sum()
+
+
 # --- the exterior penalty coefficient: graded, not a cliff ----------------------
 
 def test_exterior_penalty_off_is_zero():
@@ -56,9 +83,9 @@ def test_exterior_penalty_off_is_zero():
 
 def test_exterior_penalty_graded_without_a_cliff():
     """c(x) is exactly 0 inside the mask (force is free there), rises to β·l_data far
-    outside, and the transition is a graded smoothstep collar — the largest jump
-    between neighbouring pixels is a small fraction of the full rise. A hard support
-    would be a full-height single-pixel step (the Gibbs source)."""
+    outside, and the transition is a graded Gaussian skirt (σ = fwd_mask_softness) —
+    the largest jump between neighbouring pixels is a small fraction of the full rise.
+    A hard support would be a full-height single-pixel step (the Gibbs source)."""
     h = w = 64
     yy, xx = np.mgrid[0:h, 0:w]
     mask = (((yy - h / 2) ** 2 + (xx - w / 2) ** 2) <= 16 ** 2).astype(np.uint8)

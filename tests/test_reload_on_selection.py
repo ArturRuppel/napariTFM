@@ -64,14 +64,11 @@ class _StubParameterManager(QObject):
             "young_modulus": 5.0,
             "poisson_ratio_substrate": 0.5,
             "gel_height": 0.0,
-            "lanczos_exp": 1,
             "regularization": -4.0,
-            "auto_gcv": False,
             "bayesian_l2": False,
             "l1_sparsity": 0.0,
-            "l2_ridge": 0.0,
             "fwd_mask_strength": 0.0,
-            "fwd_smoothness": 0.05,
+            "fwd_mask_softness": 2.0,
             "force_vector_stride": 20,
             "force_arrow_scale": 1.0,
             "f_max": 500.0,
@@ -297,8 +294,8 @@ class _StubStageWidget(QWidget):
     def cancel_action(self):
         self.action_calls["cancel"] += 1
 
-    def gcv_action(self):
-        self.action_calls["gcv"] = self.action_calls.get("gcv", 0) + 1
+    def bayesian_action(self):
+        self.action_calls["bayesian"] = self.action_calls.get("bayesian", 0) + 1
 
     def action_states(self):
         return dict(self._action_states)

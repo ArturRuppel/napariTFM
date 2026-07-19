@@ -90,7 +90,7 @@ class StageSection(QWidget):
         header_layout.addWidget(self.header_label)
         header_layout.addStretch()
 
-        # Stage-specific auxiliary actions (e.g. GCV auto-select, mesh preview)
+        # Stage-specific auxiliary actions (e.g. Bayesian auto-λ, mesh preview)
         # live in the header as glyph pills, alongside the standard controls.
         self.extra_buttons: dict[str, object] = {}
         self._extra_button_icons: dict[object, str] = {}

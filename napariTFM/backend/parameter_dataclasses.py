@@ -80,35 +80,28 @@ class FTTCParameters:
     young_modulus: float = 5000  # Pa
     poisson_ratio_substrate: float = 0.5
     gel_height: Optional[float] = None  # None for infinite thickness
-    lanczos_exp: int = 1
 
     # Processing parameters
-    regularization: float = 1e-4
-    auto_gcv: bool = False
+    regularization: float = 1e-4        # manual Tikhonov λ (the override for Bayesian L2)
     # Bayesian evidence-maximizing choice of the Tikhonov λ (Huang et al. 2019), the
-    # noise-robust alternative to GCV on the plain-FTTC path. Takes precedence over
-    # auto_gcv/manual λ. BL2 (noise measured from the cell exterior) when a mask is
-    # loaded, ABL2 (noise inferred) otherwise. See napariTFM.backend.bayesian_l2.
+    # automatic, noise-robust selector on the plain-FTTC path. Takes precedence over the
+    # manual λ. BL2 (noise measured from the cell exterior) when a mask is loaded, ABL2
+    # (noise inferred) otherwise. See napariTFM.backend.bayesian_l2.
     bayesian_l2: bool = False
     pixel_size: float = 0.1  # in µm
     downscale_factor: int = 4
 
     # Traction inversion is selected by the mask-confinement dial, not a separate
     # method flag: fwd_mask_strength == 0 runs plain FTTC (regularized Fourier
-    # inversion + Lanczos + GCV, using `regularization` above); > 0 (with a mask)
+    # inversion, using `regularization` / Bayesian L2 above); > 0 (with a mask)
     # kicks off the confined forward solver (napariTFM.backend.forward_tfm), which
     # reuses that same `regularization` as its Tikhonov λ. The fwd_* fields below
     # are only read on that confined (> 0) path.
     fwd_mask_strength: float = 0.0        # 0..100 log-scaled mask confinement dial (0 = off → FTTC)
-    fwd_smoothness: float = 0.05          # gradient-smoothness weight on the traction field.
-    #                                       This is the PRIMARY regularizer of the iterative
-    #                                       (confined) solve — it replaces the coarse B-spline
-    #                                       basis the photometric one-shot used as its smoother.
-    #                                       Without it, confining forces to the mask removes the
-    #                                       solver's off-mask escape valve and the in-mask field
-    #                                       overfits the (delocalized) displacement into garbage.
-    #                                       Non-dim data term ⇒ useful band ~0.01..0.3, roughly
-    #                                       scale-independent. 0 = off (reproduces the artifacts).
+    fwd_mask_softness: float = 2.0        # one-sided Gaussian σ (force-grid px) softening the mask
+    #                                       boundary: the off-mask penalty ramps 0→full over ~σ going
+    #                                       outward (interior + rim stay free). 0 = hard binary edge.
+    #                                       Shared by the confined L2 and L1 soft-support routes.
     fwd_fit_margin_um: float = 1e6        # trust displacement only within mask+margin (µm)
     fwd_max_iter: int = 200               # max CG iterations (β>0 iterative path)
     fwd_cg_tol: float = 1e-8              # CG relative-residual tolerance (β>0 path)
@@ -127,12 +120,6 @@ class FTTCParameters:
     # fwd_dtype/fwd_fit_margin_um with the confined solver.
     l1_sparsity: float = 0.0   # 0..1 fraction of λ₁_max (0 = off); useful band ~0.05..0.2, ↑ with noise
     l1_max_iter: int = 400     # FISTA iteration budget
-    # Elastic Net: a global L2 ridge added on top of the L1 sparsity, turning the sparse
-    # solve into an elastic net (Huang et al. 2019 — the most accurate TFM regularizer).
-    # The L2 term reins in the peak overshoot pure L1 leaves while the L1 term keeps the
-    # background clean. Scene-independent fraction of the data curvature; 0 = pure L1.
-    # Only read on the L1 path (l1_sparsity > 0). Useful band ~0.05..0.5.
-    l2_ridge: float = 0.0
 
     # Time parameters
     frame_interval: float = 1  # minutes
@@ -198,16 +185,14 @@ class UnifiedParameters:
     young_modulus: float = 5000  # Pa
     poisson_ratio_substrate: float = 0.5
     gel_height: Optional[float] = None
-    lanczos_exp: int = 1
     regularization: float = 1e-4
-    auto_gcv: bool = False
     # Bayesian evidence-max λ selection on the plain-FTTC path (see FTTCParameters /
-    # napariTFM.backend.bayesian_l2); precedence over auto_gcv/manual.
+    # napariTFM.backend.bayesian_l2); precedence over the manual λ.
     bayesian_l2: bool = False
     # Confined forward solver (see FTTCParameters / napariTFM.backend.forward_tfm);
     # gated by fwd_mask_strength, shares `regularization` as its Tikhonov λ.
     fwd_mask_strength: float = 0.0
-    fwd_smoothness: float = 0.05
+    fwd_mask_softness: float = 2.0     # one-sided Gaussian σ (px) softening the mask boundary
     fwd_fit_margin_um: float = 1e6
     fwd_max_iter: int = 200
     fwd_cg_tol: float = 1e-8
@@ -218,7 +203,6 @@ class UnifiedParameters:
     # l1_sparsity > 0, ahead of the confined/FTTC paths. See FTTCParameters.
     l1_sparsity: float = 0.0
     l1_max_iter: int = 400
-    l2_ridge: float = 0.0  # elastic-net L2 ridge on the L1 path (0 = pure L1)
     force_vector_stride: int = 20
     force_arrow_scale: float = 1.0
     f_max: float = 500.0  # Pa

@@ -35,8 +35,8 @@ _ICON_BODIES = {
     ),
     # plus — "add folders"
     "plus": '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
-    # crosshair target — "auto-select the optimal regularization (GCV)"
-    "gcv": (
+    # crosshair target — "auto-select the optimal regularization (Bayesian evidence)"
+    "bayesian": (
         '<circle cx="12" cy="12" r="6.5"/>'
         '<line x1="12" y1="1.5" x2="12" y2="5"/>'
         '<line x1="12" y1="19" x2="12" y2="22.5"/>'

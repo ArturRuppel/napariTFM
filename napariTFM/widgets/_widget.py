@@ -158,16 +158,13 @@ class WorkflowParameterPanel(QWidget):
             ("young_modulus", "Young's Modulus (kPa)", "float", 0.1, 1000.0, 0.1, 2, None),
             ("poisson_ratio_substrate", "Poisson Ratio", "float", 0.0, 0.5, 0.01, 2, None),
             ("gel_height", "Gel Height (um)", "float", 0.0, 1000.0, 10.0, 1, None),
-            ("lanczos_exp", "Lanczos Exponent", "int", 0, 5, 1, 0, None),
             ("regularization", "Regularization (10^x)", "float", -21.0, 0.0, 0.5, 1, None),
-            ("auto_gcv", "Auto-GCV per frame", "bool", None, None, None, None, None),
             ("bayesian_l2", "Bayesian L2 (auto λ)", "bool", None, None, None, None, None),
-            (GROUP, "Sparse inversion (L1 / Elastic Net)"),
+            (GROUP, "Sparse inversion (L1)"),
             ("l1_sparsity", "L1 Sparsity", "float", 0.0, 1.0, 0.01, 2, None),
-            ("l2_ridge", "L2 Ridge (Elastic Net)", "float", 0.0, 1.0, 0.01, 2, None),
             (GROUP, "Mask confinement"),
             ("fwd_mask_strength", "Mask Confinement", "float", 0.0, 100.0, 1.0, 0, None),
-            ("fwd_smoothness", "Smoothness", "float", 0.0, 1.0, 0.01, 2, None),
+            ("fwd_mask_softness", "Mask Softness (px)", "float", 0.0, 20.0, 0.5, 1, None),
             (GROUP, "Visualization"),
             ("force_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("force_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -199,25 +196,14 @@ class WorkflowParameterPanel(QWidget):
             "collar, no hard edge), so it self-confines but the exterior is discouraged "
             "rather than forbidden. 0 = off."
         ),
-        "l2_ridge": (
-            "Elastic Net: adds an L2 (Tikhonov) shrinkage on top of the L1 sparsity, "
-            "which Huang et al. (2019) found to be the most accurate TFM regularizer. "
-            "Pure L1 keeps a clean background but overshoots the peak traction; this "
-            "L2 term pulls that overshoot back toward the true magnitude while the L1 "
-            "term still zeros the background. Only active when L1 Sparsity > 0. The "
-            "value is a scene-independent fraction (like L1 Sparsity), useful band "
-            "~0.05..0.5. 0 = pure group-L1 (unchanged)."
-        ),
         "bayesian_l2": (
             "Choose the FTTC regularization λ automatically by Bayesian evidence "
-            "maximization (Huang et al. 2019) — the noise-robust alternative to "
-            "Auto-GCV, which the paper shows becomes unreliable as noise grows. It "
-            "infers λ from the data with no manual tuning and adapts per frame, which "
-            "matters most for comparing cells across conditions or across a time series. "
-            "With a mask loaded it measures the noise from the cell-free exterior (BL2); "
-            "without one it infers the noise too (ABL2). Overrides Auto-GCV and the "
-            "manual value. Only applies to plain FTTC (L1 Sparsity and Mask Confinement "
-            "off)."
+            "maximization (Huang et al. 2019) — a noise-robust selector that infers λ "
+            "from the data with no manual tuning and adapts per frame, which matters most "
+            "for comparing cells across conditions or across a time series. With a mask "
+            "loaded it measures the noise from the cell-free exterior (BL2); without one "
+            "it infers the noise too (ABL2). Overrides the manual value. Only applies to "
+            "plain FTTC (L1 Sparsity and Mask Confinement off)."
         ),
         "fwd_mask_strength": (
             "How hard traction is pushed out of the loaded mask's exterior — a "
@@ -229,12 +215,15 @@ class WorkflowParameterPanel(QWidget):
             "is discouraged, never forbidden (no hard edge). "
             "Needs a mask loaded — the same external mask the Stress stage uses."
         ),
-        "fwd_smoothness": (
-            "Gradient-smoothness on the traction field — the primary regularizer "
-            "once confinement is on. Confining forces to the mask, with no smoothness, "
-            "lets the in-mask field overfit into artifacts; this term (γ‖∇t‖²) is what "
-            "the photometric solver got for free from its coarse basis. Useful band "
-            "~0.01..0.3. 0 = off. Inert (greyed) until Mask Confinement > 0."
+        "fwd_mask_softness": (
+            "How fuzzy the mask boundary is — the Gaussian width σ (in force-grid "
+            "pixels) of the confinement skirt. The off-mask penalty ramps from 0 to "
+            "full over ~σ pixels going outward, so the cell interior AND its rim stay "
+            "free while the exterior is discouraged over a soft, one-sided collar "
+            "(never reaching inward, so real peripheral forces are never clipped). "
+            "This is orthogonal to Mask Confinement: that sets how hard the exterior "
+            "is pushed, this sets how abrupt the boundary is. 0 = hard binary edge. "
+            "Same skirt on both the sparse (L1) and confined routes."
         ),
         "disp_method": (
             "Displacement algorithm. PIV (FFT cross-correlation) is a forgiving "
@@ -630,19 +619,13 @@ class WorkflowParameterPanel(QWidget):
         label.setText(str(_derived_pyramid_levels(self._input_shape, downscale, min_size)))
 
     def _refresh_confinement_enablement(self, name=None, value=None):
-        """Grey out each confinement's dependent knob unless its gate is active.
+        """Grey out the Displacement stage's Mask Margin unless Confine to Mask is on.
 
-        Two independent gates: the Force stage's Smoothness is dead unless Mask
-        Confinement > 0 (confinement 0 runs plain FTTC, which never reads it), and
-        the Displacement stage's Mask Margin is dead unless Confine to Mask is on.
-        Driven from parameter_changed (a cheap no-op when the changed param is
-        neither gate) and once at construction for the initial state.
+        Driven from parameter_changed (a cheap no-op when the changed param is not
+        the gate) and once at construction for the initial state.
         """
-        if name is not None and name not in ("fwd_mask_strength", "disp_mask_confine"):
+        if name is not None and name != "disp_mask_confine":
             return
-        smoothness = self.parameter_controls.get("fwd_smoothness")
-        if smoothness is not None:
-            smoothness.setEnabled(self.parameter_manager.get_parameter("fwd_mask_strength") > 0)
         margin = self.parameter_controls.get("disp_mask_margin_um")
         if margin is not None:
             margin.setEnabled(bool(self.parameter_manager.get_parameter("disp_mask_confine")))
@@ -969,10 +952,10 @@ class napariTFMWidget(QWidget):
                 action_states_changed=self.force_widget.action_states_changed,
                 extra_actions=[
                     {
-                        "key": "gcv",
-                        "icon": "gcv",
-                        "tooltip": "Auto-select regularization (GCV)",
-                        "handler": self.force_widget.gcv_action,
+                        "key": "bayesian",
+                        "icon": "bayesian",
+                        "tooltip": "Auto-select regularization (Bayesian evidence)",
+                        "handler": self.force_widget.bayesian_action,
                     }
                 ],
             ),

@@ -4,7 +4,7 @@ from napari.viewer import Viewer
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QMessageBox, QHBoxLayout
 
-from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_optimal_regularization
+from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_bayesian_regularization
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
@@ -16,7 +16,7 @@ class FTTCController(VectorStageController):
 
     A thin :class:`VectorStageController` subclass — the run/cancel lifecycle is
     inherited; this class supplies the stage spec, the run hooks, the synchronous
-    preview, and the (force-only) synchronous GCV auto-regularization action.
+    preview, and the (force-only) synchronous Bayesian auto-λ action.
     """
 
     STAGE_KIND = 'force'
@@ -103,7 +103,7 @@ class FTTCController(VectorStageController):
             raise ValueError(f"Force calculation failed: {str(e)}")
     # endregion
 
-    # region === Preview (async single-shot) & GCV (synchronous, GUI thread) ===
+    # region === Preview (async single-shot) & Bayesian auto-λ (synchronous, GUI thread) ===
     def preview_force(self):
         """Preview force for the current frame on a worker thread.
 
@@ -176,7 +176,13 @@ class FTTCController(VectorStageController):
             return e.value
 
     def calculate_optimal_regularization(self):
-        """Compute the GCV-optimal regularization for the current frame (synchronous)."""
+        """Fill the manual λ with the Bayesian evidence-optimal value for the current
+        frame (synchronous). The auto-λ button; the value stays overridable.
+
+        Uses the loaded foreground mask (if any) directly — not gated on Mask
+        Confinement — so BL2 can read the noise from the cell-free exterior (the paper's
+        more robust estimate); with no mask it infers the noise instead (ABL2).
+        """
         try:
             self._validate()
         except Exception as e:
@@ -185,20 +191,27 @@ class FTTCController(VectorStageController):
 
         self.freeze_ui()
         try:
-            self.progress_updated.emit(0, "Calculating optimal regularization...")
+            self.progress_updated.emit(0, "Calculating Bayesian regularization...")
             current_frame = self._current_frame()
 
             displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
             params = self.parameter_manager.get_fttc_parameters()
 
-            optimal_reg = find_optimal_regularization(displacement_field, params)
+            mask_stack = getattr(self.data_manager, "mask_stack", None)
+            mask = None
+            if mask_stack is not None:
+                mask_stack = np.asarray(mask_stack)
+                mask = (mask_stack[min(int(current_frame), mask_stack.shape[0] - 1)]
+                        if mask_stack.ndim > 2 else mask_stack)
+
+            optimal_reg = find_bayesian_regularization(displacement_field, params, mask)
             if optimal_reg is None:
-                raise RuntimeError("GCV calculation failed")
+                raise RuntimeError("Bayesian regularization failed")
 
             # Store the actual optimal value; the UI converts it to the exponent for display.
             self.parameter_manager.set_parameter('regularization', optimal_reg)
             self.progress_updated.emit(
-                100, f"Optimal regularization parameter: {optimal_reg:.2e}"
+                100, f"Bayesian regularization parameter: {optimal_reg:.2e}"
             )
         except Exception as e:
             self._handle_error(str(e))
@@ -223,7 +236,7 @@ class FTTCWidget(BaseAnalysisWidget):
 
         # Header-proxied action enablement state
         self._action_enabled = {
-            "run": False, "preview": False, "cancel": True, "gcv": False,
+            "run": False, "preview": False, "cancel": True, "bayesian": False,
         }
 
         # Optional shell-injected predicate: True when displacement is usable as this
@@ -252,7 +265,7 @@ class FTTCWidget(BaseAnalysisWidget):
     def _setup_ui(self):
         """Set up the user interface.
 
-        All stage actions — run/preview/cancel plus GCV auto-select — live in
+        All stage actions — run/preview/cancel plus Bayesian auto-λ — live in
         the stage header (P7), so this widget owns no visible body content.
         """
         main_layout = QHBoxLayout()
@@ -281,7 +294,7 @@ class FTTCWidget(BaseAnalysisWidget):
     def cancel_action(self):
         self.controller.cancel()
 
-    def gcv_action(self):
+    def bayesian_action(self):
         self.controller.calculate_optimal_regularization()
 
     def set_displacement_available_check(self, check) -> None:
@@ -305,7 +318,7 @@ class FTTCWidget(BaseAnalysisWidget):
 
         self._action_enabled["preview"] = has_displacement
         self._action_enabled["run"] = has_displacement
-        self._action_enabled["gcv"] = has_displacement
+        self._action_enabled["bayesian"] = has_displacement
         self._action_enabled["cancel"] = True
         self.action_states_changed.emit()
 

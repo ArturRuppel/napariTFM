@@ -141,8 +141,6 @@ def get_fttc_parameters(scenario_name):
         'low': {
             'young_modulus': 20000,  # Pa
             'poisson_ratio_substrate': 0.5,
-            'lanczos_exp': 1,
-            'auto_gcv': False,
             'regularization': 1e-6,
             'pixel_size': 0.1,  # µm
             'downscale_factor': 1
@@ -150,8 +148,6 @@ def get_fttc_parameters(scenario_name):
         'mid': {
             'young_modulus': 20000,  # Pa
             'poisson_ratio_substrate': 0.5,
-            'lanczos_exp': 1,
-            'auto_gcv': False,
             'regularization': 1e-6,
             'pixel_size': 0.1,  # µm
             'downscale_factor': 1
@@ -159,8 +155,6 @@ def get_fttc_parameters(scenario_name):
         'high': {
             'young_modulus': 20000,  # Pa
             'poisson_ratio_substrate': 0.5,
-            'lanczos_exp': 1,
-            'auto_gcv': False,
             'regularization': 1e-6,
             'pixel_size': 0.1,  # µm
             'downscale_factor': 1
@@ -190,8 +184,8 @@ def calculate_traction_field(disp_x, disp_y, params):
     # Stack displacements in the format expected by FTTC (H, W, 2)
     displacements = np.stack([disp_x, disp_y], axis=-1)
     
-    # Calculate traction forces - use None for regularization if auto_gcv is enabled
-    regularization = None if params.auto_gcv else params.regularization
+    # Calculate traction forces
+    regularization = params.regularization
     traction_coords, traction_values = fttc.calculate_traction(
         displacements, 
         params.pixel_size,
@@ -1162,7 +1156,7 @@ def validate_fttc_scenario(scenario_folder, displacement_flow=None):
 
     # Get scenario-specific parameters
     params = get_fttc_parameters(scenario_name)
-    regularization_info = "auto-GCV" if params.auto_gcv else f"{params.regularization}"
+    regularization_info = f"{params.regularization}"
     print(f"  Using parameters: E={params.young_modulus} Pa, nu={params.poisson_ratio_substrate}, "
           f"regularization={regularization_info}, pixel_size={params.pixel_size} µm")
 

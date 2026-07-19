@@ -252,18 +252,17 @@ Convert displacement fields to traction forces using FTTC algorithm.
      - Poisson's Ratio
      - Gel Height
    - Regularization (choose one):
-     - Manual parameter,
-     - Auto-GCV selection, or
+     - Manual parameter, or
      - Bayesian L2 (auto λ) — evidence-maximizing, noise-robust selection
        (Huang et al. 2019); infers λ per frame with no manual tuning, which is
-       preferable to Auto-GCV when comparing cells across conditions or over a
-       time series. Uses a loaded mask's cell-free exterior for the noise
-       estimate when present.
-   - Sparse inversion (L1 / Elastic Net):
-     - L1 Sparsity for sparse, peak-preserving traction, and
-     - L2 Ridge to add an Elastic Net shrinkage that reins in the L1 peak
-       overshoot (Huang et al. 2019 — the most accurate regularizer in their
-       benchmark).
+       preferable to a manual value when comparing cells across conditions or
+       over a time series. Uses a loaded mask's cell-free exterior for the noise
+       estimate when present. The auto-λ button fills the manual field for the
+       current frame (overridable).
+   - Sparse inversion (L1):
+     - L1 Sparsity for sparse, peak-preserving traction (group-L1) — thresholds
+       small forces to zero rather than spreading them, so it recovers discrete
+       adhesion forces and preserves peaks better than plain FTTC.
 
 3. Calculate Forces:
    - Preview current frame
@@ -272,8 +271,8 @@ Convert displacement fields to traction forces using FTTC algorithm.
 
 ### Tips
 - Verify substrate properties carefully
-- For automatic regularization, prefer Bayesian L2 over Auto-GCV at higher noise
-  or when comparing conditions; both choose λ per frame
+- For automatic regularization, use Bayesian L2 (it chooses λ per frame),
+  especially at higher noise or when comparing conditions
 - Check force magnitude ranges
 
 ## Stress Analysis

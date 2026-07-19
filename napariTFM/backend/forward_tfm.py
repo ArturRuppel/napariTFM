@@ -10,7 +10,7 @@ entirely.
 
 For each frame we solve for the surface traction ``t`` (Pa) by minimizing
 
-    J(t) = ‖ W · (G·t − u) ‖²  +  λ²‖t‖²  +  γ‖∇t‖²  +  β‖ t·(1−mask) ‖²
+    J(t) = ‖ W · (G·t − u) ‖²  +  λ²‖t‖²  +  β‖ t·(1−p) ‖²
 
 - ``G`` is the *same* Boussinesq / finite-thickness Green's operator FTTC inverts
   (reused verbatim from :mod:`napariTFM.backend.fttc`; folds in E, ν, gel_height,
@@ -18,19 +18,18 @@ For each frame we solve for the surface traction ``t`` (Pa) by minimizing
 - ``λ`` is the Tikhonov amplitude ridge — the *same* ``regularization`` dial FTTC
   uses, entering as the identical physical ``λ²‖t‖²`` penalty on both the β=0
   (closed-form) and β>0 (iterative) branches so the dial means one thing throughout.
-- ``γ`` (``fwd_smoothness``) is the **gradient-smoothness prior and the primary
-  regularizer of the confined solve.** The photometric one-shot parametrized
-  traction on a coarse cubic-B-spline / Gaussian-per-bead basis — a few hundred
-  DOF, smooth by construction — and *that basis was its real smoother*. This
-  displacement-input port solves on a free per-pixel grid instead, so the basis
-  smoothness has to come back as an explicit ‖∇t‖² term. Without it, confining
-  forces to the mask removes the solver's off-mask escape valve and the in-mask
-  field overfits the (delocalized) displacement into high-frequency garbage —
-  confinement then *hurts* (recovered error worse than zero). With it, confinement
-  beats unconfined FTTC. See the ``_dev`` why-artifacts probe.
-- ``β`` is the soft support prior — the off-mask penalty. There is deliberately no
-  hard gate: the one-shot benchmark found gating clips genuine near-edge forces
-  (|t| r 0.95 vs 0.99 for strong-soft), so "maximum confinement" is strong soft.
+  It is the sole traction-field regularizer on both branches (there is no separate
+  gradient-smoothness prior).
+- ``β`` is the soft support prior — the off-mask penalty, applied to ``t·(1−p)`` where
+  ``p`` is the support-probability map (:func:`support_probability`). There is
+  deliberately no hard gate: the one-shot benchmark found gating clips genuine
+  near-edge forces (|t| r 0.95 vs 0.99 for strong-soft), so "maximum confinement" is
+  strong soft.
+- ``σ`` (``fwd_mask_softness``) softens the *boundary*: ``p = exp(−d²/2σ²)`` over the
+  exterior distance ``d``, so the penalty ramps from 0 (on the cell and its rim) to
+  full over ~σ px going outward — a fuzzy, one-sided skirt. ``σ = 0`` ⇒ the hard binary
+  edge. This is orthogonal to β's *depth*: β sets how hard the exterior is pushed, σ
+  how abrupt the boundary is. Same map feeds the L1 route's soft support.
 - ``W`` is an optional *fit-region weight*: it trusts the displacement only inside
   ``mask`` dilated by ``fwd_fit_margin_um``. The photometric MVP had this as
   ``fit_margin_um`` and it matters here too — without it, a neighbour cell's
@@ -39,11 +38,10 @@ For each frame we solve for the surface traction ``t`` (Pa) by minimizing
 
 The problem is a convex quadratic in ``t``, so:
 
-- **β = 0 → closed form.** With no confinement there is no escape valve to abuse,
-  so the γ prior is unnecessary: λ is diagonal in Fourier and the per-mode 2×2
-  Tikhonov solve ``t̂ = (GᴴG + λ²I)⁻¹ Gᴴ û`` reuses FTTC's exact machinery *minus*
-  the Lanczos low-pass. Pure numpy/FFT; no torch required. (γ is iterative-only.)
-- **β > 0 → iterative.** The support and smoothness terms couple Fourier modes, so
+- **β = 0 → closed form.** With no confinement, λ is diagonal in Fourier and the
+  per-mode 2×2 Tikhonov solve ``t̂ = (GᴴG + λ²I)⁻¹ Gᴴ û`` reuses FTTC's exact
+  machinery. Pure numpy/FFT; no torch required.
+- **β > 0 → iterative.** The support term couples Fourier modes, so
   we solve the (still convex) QP as its normal equations ``A t = b`` by preconditioned
   Conjugate Gradient, with the Fourier-diagonal β=0 operator as the preconditioner
   (see docs/specs/forward-solver-pcg.md). ``A`` is SPD, so CG is exact in exact
@@ -86,6 +84,39 @@ def confinement_to_beta(strength: float) -> float:
     return MASK_BETA_MIN * (MASK_BETA_MAX / MASK_BETA_MIN) ** f
 
 
+def support_probability(mask, params) -> np.ndarray:
+    """Probability map ``p(x) ∈ [0, 1]`` that traction is *allowed* at ``x``.
+
+    The support mask softened by a **one-sided** Gaussian of width
+    ``fwd_mask_softness`` (force-grid px): ``p = exp(−d²/2σ²)`` where ``d(x)`` is the
+    distance *outside* the support (0 on the support). So ``p ≡ 1`` on the support
+    (the cell, and crucially its high-traction rim) and decays smoothly to 0 over ~σ
+    going outward — a skirt that only ever reaches outward, never into the cell.
+
+    Building the ramp from the exterior distance (rather than convolving the binary,
+    whose blur straddles the edge at ~0.5 and would leave a coefficient *step* there)
+    makes it rim-protected by construction and flat-topped: ``p`` leaves the edge with
+    zero slope, so the boundary is genuinely soft with no cliff to ring.
+
+    This is the shared shape of the exterior penalty on *both* mask-consuming routes
+    (the L2 confined solve and the L1 soft support), each of which penalizes traction
+    ∝ ``(1 − p)``: zero on the support, ramping to full weight far outside. ``σ = 0``
+    (or ``mask is None``) ⇒ the hard binary support (``p ∈ {0, 1}``), the old edge.
+
+    Softness lives here, in the prior, not in the solution: the one-sided ramp is
+    exactly why a soft boundary never bites into the rim — a symmetric blur of the
+    field would penalize the peripheral traction, which is the largest real signal.
+    Returns ``(H, W)`` float64.
+    """
+    support = np.asarray(mask) > 0
+    sigma = float(getattr(params, "fwd_mask_softness", 0.0))
+    if sigma <= 0.0:
+        return support.astype(np.float64)
+    from scipy import ndimage
+    d = ndimage.distance_transform_edt(~support)            # 0 on support, grows outward
+    return np.exp(-(d * d) / (2.0 * sigma * sigma))
+
+
 def _greens_operator(height: int, width: int, params: FTTCParameters) -> np.ndarray:
     """The Boussinesq/finite-thickness Green's operator on the force grid.
 
@@ -97,7 +128,7 @@ def _greens_operator(height: int, width: int, params: FTTCParameters) -> np.ndar
     """
     calc = FTTC(params)
     pixelsize = params.pixel_size * params.downscale_factor
-    kx, ky, _, _ = calc._calculate_fourier_modes(width, height, pixelsize)
+    kx, ky = calc._calculate_fourier_modes(width, height, pixelsize)
     return calc._calculate_greens_function(kx, ky)
 
 
@@ -122,7 +153,7 @@ def _fit_weight(mask: Optional[np.ndarray], valid: np.ndarray,
 
 
 def _solve_closed_form(u: np.ndarray, params: FTTCParameters) -> np.ndarray:
-    """β=0 path: FTTC's per-mode 2×2 Tikhonov inversion, *without* the Lanczos filter.
+    """β=0 path: FTTC's per-mode 2×2 Tikhonov inversion.
 
     ``u`` is ``(2, H, W)`` in µm. Returns traction ``(2, H, W)`` in Pa (float32).
     """
@@ -187,14 +218,13 @@ def _build_normal_equations(u: np.ndarray, mask: np.ndarray, beta: float,
     non-dimensional traction ``w`` (``t = E·T0·w``) as ``(2, H, W)`` real ``xp``
     arrays. Data term normalized by ``denom``; the λ (Tikhonov) term is FTTC's physical
     ``λ²‖t‖²`` (coefficient ``λ²·(E·T0)²/denom``, so it reproduces ``_solve_closed_form``
-    at β=0,γ=0); the β/γ terms keep the forward-native ``1/N`` normalization
+    at β=0); the β term keeps the forward-native ``1/N`` normalization
     (``N = 2·H·W``). See docs/specs/forward-solver-pcg.md.
     """
     height, width = u.shape[1:]
     E = float(params.young_modulus)
     T0 = float(params.fwd_traction_scale)
     lam = float(params.regularization)
-    gamma = float(params.fwd_smoothness)
     N = 2.0 * height * width
 
     G = _greens_operator(height, width, params)           # (2,2,H,W) real, û=G·t̂, DC=0
@@ -202,19 +232,12 @@ def _build_normal_equations(u: np.ndarray, mask: np.ndarray, beta: float,
     GEc = GE.astype(xp.complex128)
     GtG = xp.real(xp.einsum("ikhw,kjhw->ijhw", GE, GE))   # (2,2,H,W) = GᴴG per mode
 
-    # discrete roll-Laplacian symbol = Σ_axes 4 sin²(π f) — index-space (pixel-size
-    # free), matching the roll() stencil in apply_A exactly (spec [review]: the same
-    # symbol must appear in A and M or one-step exactness silently fails).
-    fy = xp.fft.fftfreq(height)
-    fx = xp.fft.fftfreq(width)
-    lap = (4.0 * xp.sin(xp.pi * fy) ** 2)[:, None] + (4.0 * xp.sin(xp.pi * fx) ** 2)[None, :]
-
     valid = np.isfinite(u).all(axis=0)
     w_fit = _fit_weight(mask, valid, params)
     u_clean = np.nan_to_num(u, nan=0.0)
     wf = xp.asarray(w_fit)                                 # (H,W) data-term weight W
     u_t = xp.asarray(u_clean)                              # (2,H,W) µm
-    off = xp.asarray((~(np.asarray(mask) > 0)).astype(np.float64))  # (H,W) off-support
+    off = xp.asarray(1.0 - support_probability(mask, params))  # (H,W) graded off-support (1−p)
     denom = float((wf * u_t ** 2).sum())
     denom = denom if denom > 1e-12 else 1e-12
 
@@ -249,15 +272,13 @@ def _build_normal_equations(u: np.ndarray, mask: np.ndarray, beta: float,
         # the solve; it is there for symmetry (and the tests that check it).
         w = w - w.mean(axis=(1, 2), keepdims=True)
         data = _Pt(wf * _P(w)) / denom
-        lapw = (4.0 * w - xp.roll(w, -1, 2) - xp.roll(w, 1, 2)
-                - xp.roll(w, -1, 1) - xp.roll(w, 1, 1))
-        out = data + lam_coef * w + (beta / N) * (off * w) + (gamma / N) * lapw
+        out = data + lam_coef * w + (beta / N) * (off * w)
         return out - out.mean(axis=(1, 2), keepdims=True)
 
-    # preconditioner: M̂ = (T0²/denom)·GᴴG + (lam_coef + γ·lap/N)·I  (W=I, β dropped).
+    # preconditioner: M̂ = (T0²/denom)·GᴴG + lam_coef·I  (W=I, β dropped).
     # lam_coef = λ²·(E·T0)²/denom is FTTC's physical Tikhonov (see above); the same
     # coefficient must sit in A and M or one-step exactness silently fails.
-    diag = lam_coef + gamma * lap / N
+    diag = lam_coef
     s = (T0 * T0) / denom
     M00 = s * GtG[0, 0] + diag
     M01 = s * GtG[0, 1]

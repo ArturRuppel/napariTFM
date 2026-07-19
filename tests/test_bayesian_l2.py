@@ -25,7 +25,7 @@ from napariTFM.backend.parameter_validation import validate_fttc_parameters
 
 def _params(**kw):
     base = dict(young_modulus=10000.0, poisson_ratio_substrate=0.3, gel_height=None,
-                pixel_size=0.1, downscale_factor=1, lanczos_exp=1)
+                pixel_size=0.1, downscale_factor=1)
     base.update(kw)
     return FTTCParameters(**base)
 
@@ -78,9 +78,9 @@ def test_bl2_lambda_increases_with_noise():
     assert regs[0] < regs[1] < regs[2], regs
 
 
-def test_bayesian_lambda_in_gcv_ballpark():
-    """The Bayesian λ should be within ~2 orders of magnitude of GCV's — a different
-    principled selector, not a wildly different scale."""
+def test_bayesian_lambda_in_sane_range():
+    """The Bayesian λ should be a positive, finite value in a physically sane range
+    (not a degenerate 0 / inf), on a noisy synthetic frame."""
     p = _params()
     t, _ = _blobs()
     h, w = t.shape[1:]
@@ -92,9 +92,7 @@ def test_bayesian_lambda_in_gcv_ballpark():
     vec = np.array([u[0].flatten(), u[1].flatten()])
     reg_bayes = calc._bayesian_regularization(_pos(h, w), vec, p.pixel_size, w, h,
                                               noise_var=sigma ** 2)
-    reg_gcv = calc._find_regularization(_pos(h, w), vec, p.pixel_size, w, h)
-    assert reg_bayes > 0 and reg_gcv > 0
-    assert abs(np.log10(reg_bayes) - np.log10(reg_gcv)) < 2.0, (reg_bayes, reg_gcv)
+    assert np.isfinite(reg_bayes) and 1e-12 < reg_bayes < 1e2, reg_bayes
 
 
 def test_evidence_lambda_degenerate_input():
@@ -153,9 +151,8 @@ def test_calculate_traction_bayesian_overrides_and_is_finite():
 
 def test_validation_allows_missing_reg_under_bayesian():
     """Under ``bayesian_l2`` the manual λ is unused, so a non-positive value must not
-    fail validation (mirrors the ``auto_gcv`` exemption)."""
+    fail validation; with it off, a non-positive λ must still be rejected."""
     ok, _ = validate_fttc_parameters(_params(bayesian_l2=True, regularization=0.0))
     assert ok
-    ok2, msg = validate_fttc_parameters(_params(bayesian_l2=False, auto_gcv=False,
-                                                regularization=0.0))
+    ok2, msg = validate_fttc_parameters(_params(bayesian_l2=False, regularization=0.0))
     assert not ok2 and "Regularization" in msg

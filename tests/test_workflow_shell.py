@@ -49,14 +49,11 @@ class _StubParameterManager(QObject):
             "young_modulus": 5.0,
             "poisson_ratio_substrate": 0.5,
             "gel_height": 0.0,
-            "lanczos_exp": 1,
             "regularization": -4.0,
-            "auto_gcv": False,
             "bayesian_l2": False,
             "l1_sparsity": 0.0,
-            "l2_ridge": 0.0,
             "fwd_mask_strength": 0.0,
-            "fwd_smoothness": 0.05,
+            "fwd_mask_softness": 2.0,
             "force_vector_stride": 20,
             "force_arrow_scale": 1.0,
             "f_max": 500.0,
@@ -265,8 +262,8 @@ class _StubStageWidget(QWidget):
     def cancel_action(self):
         self.action_calls["cancel"] += 1
 
-    def gcv_action(self):
-        self.action_calls["gcv"] = self.action_calls.get("gcv", 0) + 1
+    def bayesian_action(self):
+        self.action_calls["bayesian"] = self.action_calls.get("bayesian", 0) + 1
 
     def action_states(self):
         return dict(self._action_states)
@@ -1562,7 +1559,7 @@ def test_workflow_parameter_panel_exposes_one_control_per_managed_parameter(app)
         "piv_passes",
         "piv_window",
         "young_modulus",
-        "auto_gcv",
+        "bayesian_l2",
         "bism_regularization",
     ]:
         assert name in panel.parameter_controls
@@ -1647,7 +1644,7 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     assert "pixel_size" not in displacement_panel.parameter_controls
     assert {"piv_window", "piv_passes"}.issubset(displacement_panel.parameter_controls)
     assert "young_modulus" not in displacement_panel.parameter_controls
-    assert {"young_modulus", "auto_gcv"}.issubset(force_panel.parameter_controls)
+    assert {"young_modulus", "bayesian_l2"}.issubset(force_panel.parameter_controls)
     assert {"bism_regularization", "max_stress"}.issubset(stress_panel.parameter_controls)
     assert "threshold" not in stress_panel.parameter_controls
 

@@ -80,63 +80,63 @@ def test_extra_action_adds_named_glyph_button(app):
         "Force Analysis",
         QWidget(),
         extra_actions=[
-            {"key": "gcv", "tooltip": "Auto-select regularization", "icon": "gcv"}
+            {"key": "bayesian", "tooltip": "Auto-select regularization", "icon": "bayesian"}
         ],
     )
 
-    button = section.extra_buttons["gcv"]
-    assert button.objectName() == "stage_force_analysis_gcv_button"
+    button = section.extra_buttons["bayesian"]
+    assert button.objectName() == "stage_force_analysis_bayesian_button"
     assert button.text() == ""
     assert not button.icon().isNull()
     assert button.toolTip() == "Auto-select regularization"
 
 
 def test_extra_action_button_invokes_handler(app):
-    clicks = {"gcv": 0}
+    clicks = {"bayesian": 0}
     section = StageSection(
         "Force Analysis",
         QWidget(),
         extra_actions=[
             {
-                "key": "gcv",
+                "key": "bayesian",
                 "tooltip": "Auto-select regularization",
-                "icon": "gcv",
-                "handler": lambda: clicks.__setitem__("gcv", clicks["gcv"] + 1),
+                "icon": "bayesian",
+                "handler": lambda: clicks.__setitem__("bayesian", clicks["bayesian"] + 1),
             }
         ],
-        action_states=lambda: {"gcv": True},
+        action_states=lambda: {"bayesian": True},
     )
 
-    section.extra_buttons["gcv"].click()
-    assert clicks["gcv"] == 1
+    section.extra_buttons["bayesian"].click()
+    assert clicks["bayesian"] == 1
 
 
 def test_extra_action_enablement_follows_action_states(app):
-    enabled = {"gcv": False}
+    enabled = {"bayesian": False}
     section = StageSection(
         "Force Analysis",
         QWidget(),
-        extra_actions=[{"key": "gcv", "tooltip": "GCV", "icon": "gcv"}],
-        action_states=lambda: {"gcv": enabled["gcv"]},
+        extra_actions=[{"key": "bayesian", "tooltip": "Bayesian", "icon": "bayesian"}],
+        action_states=lambda: {"bayesian": enabled["bayesian"]},
     )
 
-    assert not section.extra_buttons["gcv"].isEnabled()
+    assert not section.extra_buttons["bayesian"].isEnabled()
 
-    enabled["gcv"] = True
+    enabled["bayesian"] = True
     section._refresh_action_states()
-    assert section.extra_buttons["gcv"].isEnabled()
+    assert section.extra_buttons["bayesian"].isEnabled()
 
 
 def test_extra_action_button_retints_on_accent_change(app):
     section = StageSection(
         "Force Analysis",
         QWidget(),
-        extra_actions=[{"key": "gcv", "tooltip": "GCV", "icon": "gcv"}],
+        extra_actions=[{"key": "bayesian", "tooltip": "Bayesian", "icon": "bayesian"}],
     )
-    before = section.extra_buttons["gcv"].icon().cacheKey()
+    before = section.extra_buttons["bayesian"].icon().cacheKey()
 
     section.set_accent("#ff00ff")
-    assert section.extra_buttons["gcv"].icon().cacheKey() != before
+    assert section.extra_buttons["bayesian"].icon().cacheKey() != before
 
 
 def test_action_buttons_use_vector_icons_not_text(app):

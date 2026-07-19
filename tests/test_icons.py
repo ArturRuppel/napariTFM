@@ -27,12 +27,12 @@ def _opaque_count(pixmap):
 def test_icon_names_cover_the_header_action_set():
     assert set(ICON_NAMES) == {
         "params", "preview", "run", "cancel", "power", "plus",
-        "gcv", "new", "load", "save", "reset",
+        "bayesian", "new", "load", "save", "reset",
     }
 
 
 def test_stage_specific_action_icons_render_opaque(app):
-    for name in ("gcv",):
+    for name in ("bayesian",):
         assert name in ICON_NAMES
         pixmap = stage_action_pixmap(name, "#2a788e", size=18)
         assert _opaque_count(pixmap) > 0, f"{name} rendered blank"

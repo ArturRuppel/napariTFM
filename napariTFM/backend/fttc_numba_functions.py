@@ -37,7 +37,7 @@ def calculate_2x2_inv(U):
 def blkmul_adj(mat: np.ndarray, v: np.ndarray) -> np.ndarray:
     """Calculate adjoint multiplication (mat.H) @ v for block matrices.
 
-    Used in GCV calculations for regularization parameter optimization.
+    Used in the FTTC regularization (SVD block) path, incl. Bayesian λ selection.
 
     Args:
         mat: Input matrix of shape (a, b, c)

@@ -1,8 +1,9 @@
 """
-Traction Force Microscopy (TFM) force calculation module implementing the FTTC method 
-with Generalized Cross-Validation (GCV) for regularization parameter optimization.
+Traction Force Microscopy (TFM) force calculation module implementing the FTTC method
+with a manual or Bayesian-evidence-maximizing choice of the Tikhonov regularization
+parameter (see napariTFM.backend.bayesian_l2).
 
-Core TFM functions and GCV implementation is based on:
+Core TFM functions are based on:
 - DirectMethod package (https://github.com/usschwarz/DirectMethod) - MIT License
 - Blumberg & Schwarz, Comparison of direct and inverse methods for 2.5D traction force microscopy (2022)
   https://doi.org/10.1371/journal.pone.0262773
@@ -12,20 +13,18 @@ Gel height correction implementation adapted from:
 - pyTFM package (https://github.com/fabrylab/pyTFM) - GNU GPL v3.0 License
 
 Paper references:
-- Butler et al. Traction fields, moments, and strain energy that cells exert on 
+- Butler et al. Traction fields, moments, and strain energy that cells exert on
   their surroundings (2002)
-- Sabass et al. High resolution traction force microscopy based on experimental and 
+- Sabass et al. High resolution traction force microscopy based on experimental and
   computational advances (2008)
 - Trepat et al. Physical forces during collective cell migration (2009)
-- P. C. Hansen, Regularization Tools Version 4.0 for Matlab 7.3 (gcv.m and gcvfun.m)
-- Golub, G. H., Heath, M., & Wahba, G. Generalized Cross-Validation as a Method for 
-  Choosing a Good Ridge Parameter (2012)
+- Huang et al. Traction force microscopy with optimized regularization and automated
+  Bayesian parameter selection for comparing cells, Sci. Rep. 9:539 (2019)
 """
 
 from dataclasses import dataclass
 from typing import Generator, Optional, Tuple
 
-from scipy import optimize
 import numpy as np
 
 from napariTFM.backend.fttc_numba_functions import calculate_traction_2d, blkmul_adj
@@ -97,11 +96,10 @@ def calculate_force_field(
     * else ``fwd_mask_strength > 0`` with a ``mask`` → the confined forward solver
       (:mod:`napariTFM.backend.forward_tfm`), L2 + smoothness confined to the mask,
       sharing ``regularization`` as its Tikhonov λ.
-    * else → plain FTTC (regularized Fourier inversion + Lanczos). Its Tikhonov λ is
-      the manual ``regularization``, or — if ``bayesian_l2`` — chosen automatically by
-      Bayesian evidence maximization (:mod:`napariTFM.backend.bayesian_l2`; BL2 when a
-      ``mask`` gives the cell exterior for the noise estimate, ABL2 otherwise), or — if
-      ``auto_gcv`` — by GCV. ``bayesian_l2`` takes precedence over ``auto_gcv``.
+    * else → plain FTTC (regularized Fourier inversion). Its Tikhonov λ is the manual
+      ``regularization``, or — if ``bayesian_l2`` — chosen automatically by Bayesian
+      evidence maximization (:mod:`napariTFM.backend.bayesian_l2`; BL2 when a ``mask``
+      gives the cell exterior for the noise estimate, ABL2 otherwise).
 
     ``mask`` is consumed on the L1 and confined paths, and on the plain-FTTC path only
     for the BL2 noise estimate.
@@ -149,13 +147,13 @@ def calculate_force_field(
                      if mask is not None else None)
                 noise_var = estimate_noise_variance(displacement_field[frame], m)
             # Pass the Bayesian kwargs only when actually selecting the Bayesian path, so
-            # the common (manual / GCV) call keeps its original signature.
+            # the common (manual λ) call keeps its original signature.
             extra = {"bayesian": True, "noise_var": noise_var} if use_bayes else {}
             result = calculator.calculate_traction(
                 displacements=displacement_field[frame],
                 pixel_size=params.pixel_size,
                 downscale_factor=params.downscale_factor,
-                regularization=None if params.auto_gcv else params.regularization,
+                regularization=params.regularization,
                 **extra,
             )
 
@@ -182,8 +180,15 @@ def calculate_force_field(
     )
 
 
-def find_optimal_regularization(displacement_field: np.ndarray, params: FTTCParameters) -> float:
-    """Find the GCV regularization parameter for one displacement frame."""
+def find_bayesian_regularization(displacement_field: np.ndarray, params: FTTCParameters,
+                                 mask: Optional[np.ndarray] = None) -> float:
+    """Bayesian evidence-maximizing Tikhonov λ for one displacement frame.
+
+    The synchronous one-shot behind the Force stage's auto-λ button: it fills the
+    manual ``regularization`` with the evidence-optimal value for the current frame
+    (Huang et al. 2019), leaving it overridable. BL2 when a ``mask`` gives the
+    cell-free exterior for the noise estimate, ABL2 (noise inferred) otherwise.
+    """
     is_valid, error_msg = validate_fttc_parameters(params)
     if not is_valid:
         raise ValueError(error_msg)
@@ -195,11 +200,15 @@ def find_optimal_regularization(displacement_field: np.ndarray, params: FTTCPara
     if displacement_field.ndim != 3:
         raise ValueError("Optimal regularization requires one 3D displacement frame")
 
+    from napariTFM.backend.bayesian_l2 import estimate_noise_variance
+    noise_var = estimate_noise_variance(displacement_field, mask)
+
     shape = displacement_field.shape[:-1]
     pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
     vec = np.array([displacement_field[..., 0], displacement_field[..., 1]])
-    return FTTC(params)._find_regularization(
-        pos, vec, params.pixel_size * params.downscale_factor, shape[1], shape[0])
+    return FTTC(params)._bayesian_regularization(
+        pos, vec, params.pixel_size * params.downscale_factor, shape[1], shape[0],
+        noise_var=noise_var)
 
 
 class FTTC:
@@ -210,7 +219,6 @@ class FTTC:
             params (FTTCParameters): Configuration object containing:
                 - young_modulus (float): Young's modulus of the substrate in Pascals (Pa)
                 - poisson_ratio_substrate (float): Poisson ratio of the substrate
-                - lanczos_exp (float): Lanczos filter exponent for noise reduction
                 - gel_height (float, optional): Gel height in micrometers for finite thickness
                     correction. Use None for infinite thickness.
 
@@ -218,13 +226,11 @@ class FTTC:
             >>> fttc = FTTC(FTTCParameters(
             ...     young_modulus=10000,  # 10 kPa
             ...     poisson_ratio_substrate=0.5,
-            ...     lanczos_exp=2,
             ...     gel_height=None  # infinite thickness
             ... ))
         """
         self.E = params.young_modulus
         self.nu = params.poisson_ratio_substrate
-        self.lanczos_exp = params.lanczos_exp
         # 0 is the UI/config sentinel for "infinite thickness" (ParameterManager
         # flattens gel_height=None to 0 when serializing to a plain dict/YAML,
         # e.g. for batch configs, but never converts it back). A gel height of
@@ -263,16 +269,16 @@ class FTTC:
             to the displacement field data before being passed to this function.
             This is used to correctly scale the pixel size for force calculations.
 
-        regularization : float, optional (default=None)
+        regularization : float
             Tikhonov regularization parameter (λ) for the inverse problem.
             Units: dimensionless
-            If None, will be automatically determined using Generalized Cross-Validation (GCV).
             Typical values range from 1e-6 to 1e-3.
             Higher values give smoother force fields but may underestimate peak forces.
+            Ignored when ``bayesian`` is True.
 
         bayesian : bool, optional (default=False)
             If True, choose λ by Bayesian evidence maximization
-            (:meth:`_bayesian_regularization`) instead of the manual value or GCV. Takes
+            (:meth:`_bayesian_regularization`) instead of the manual value. Takes
             precedence over ``regularization``.
 
         noise_var : float, optional (default=None)
@@ -355,9 +361,6 @@ class FTTC:
             regularization = self._bayesian_regularization(
                 pos, vec, forcemap_pixel_size, input_width, input_height,
                 noise_var=noise_var)
-        elif regularization is None:
-            regularization = self._find_regularization(pos, vec, forcemap_pixel_size,
-                                                       input_width, input_height)
 
         return self._perform_tfm(pos, vec, forcemap_pixel_size, regularization,
                                  i_max=input_width, j_max=input_height)
@@ -395,7 +398,7 @@ class FTTC:
             pos, vec, i_max=i_max, j_max=j_max)
 
         # Calculate in Fourier space using physical units
-        kx, ky, lanczosx, lanczosy = self._calculate_fourier_modes(i_max, j_max, pixelsize)
+        kx, ky = self._calculate_fourier_modes(i_max, j_max, pixelsize)
         GFt = self._calculate_greens_function(kx, ky)
 
         G_inv = calculate_traction_2d(GFt, regularization ** 2)
@@ -407,7 +410,7 @@ class FTTC:
 
         # Calculate final forces
         pos, vec, f = self._calculate_stress_field(
-            Ftfx, Ftfy, lanczosx, lanczosy, grid_mat, u, i_max, j_max)
+            Ftfx, Ftfy, grid_mat, u, i_max, j_max)
 
         # Convert output coordinates to physical units
         x = np.reshape(pos[0], (i_max, j_max)).T * pixelsize
@@ -475,89 +478,19 @@ class FTTC:
 
         return GFt_std
 
-    @staticmethod
-    def _gcvfun(lmbda, s2, beta, delta0, mn):
-        """Auxiliary routine for GCV calculation"""
-        f = (lmbda ** 2) / (s2 + lmbda ** 2)
-        G = (np.linalg.norm(f * beta) ** 2 + delta0) / (mn + np.sum(f)) ** 2
-        return G
-
-    def _gcv_blockdiag(self, U: np.ndarray, s: np.ndarray, b: np.ndarray,
-                       lambdarange: np.ndarray) -> float:
-        """Return the GCV-optimal regularization for the block-diagonal system."""
-        npoints = lambdarange.size
-        beta = blkmul_adj(U, b)
-
-        reg_param = np.copy(lambdarange)
-        G = np.zeros(npoints)
-        s2 = s ** 2
-
-        for i in range(npoints):
-            G[i] = self._gcvfun(reg_param[i], s2, beta[:s.size], 0., 0)
-
-        minGi = G.argmin(0)
-        reg_min = optimize.fmin(
-            self._gcvfun,
-            x0=reg_param[np.max([minGi, 0])],
-            args=(s2, beta[:s.size], 0., 0),
-            disp=0,
-        )[0]
-
-        return float(reg_min)
-
-    def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray,
-                             forcemap_pixel_size: float, input_width: int,
-                             input_height: int) -> float:
-        """Find optimal regularization parameter using Generalized Cross-Validation (GCV).
-
-        Implements the method from Golub, Heath, & Wahba (2012) to automatically
-        determine the Tikhonov regularization parameter while preserving exact
-        input dimensions.
-
-        Args:
-            pos0 (np.ndarray): Position array in pixel coordinates (2 × N)
-            vec0 (np.ndarray): Displacement vector array (2 × N)
-            forcemap_pixel_size (float): Pixel size in micrometers
-            input_width (int): Exact width of input displacement field
-            input_height (int): Exact height of input displacement field
-
-        Returns:
-            float: Optimal regularization parameter λ that minimizes the GCV function
-
-        Note:
-            The search range is centered around λ = 0.2/E with a span of ±5 orders
-            of magnitude, where E is Young's modulus. The calculation preserves
-            the exact input dimensions throughout the optimization process.
-        """
-        lamguess = 0.2 / self.E
-        lamlow = np.log10(lamguess) - 5.0
-        lamhigh = np.log10(lamguess) + 5.0
-        lambdarange = np.logspace(lamlow, lamhigh, 50)
-
-        blockU, s, b = self._svd_block(pos0, vec0, forcemap_pixel_size,
-                                       i_max=input_width, j_max=input_height)
-        reg_min = self._gcv_blockdiag(blockU, s, b, lambdarange)
-        # _gcvfun depends on lambda only via lambda**2, so the unconstrained
-        # optimizer can settle on a negative root that is numerically identical
-        # to its magnitude. The force path squares it, but the raw value is
-        # stored as `regularization` and later hits math.log10() in the UI, which
-        # rejects negatives. Return the magnitude — an exact, lossless fix.
-        return abs(reg_min)
-
     def _bayesian_regularization(self, pos0: np.ndarray, vec0: np.ndarray,
                                  forcemap_pixel_size: float, input_width: int,
                                  input_height: int,
                                  noise_var: Optional[float] = None) -> float:
         """Find the Tikhonov λ by Bayesian evidence maximization (Huang et al. 2019).
 
-        The Bayesian alternative to :meth:`_find_regularization`'s GCV: it maximizes the
-        marginal likelihood of the displacement over the same Fourier-SVD blocks GCV
-        uses (:meth:`_svd_block`), so it is a drop-in swap for the λ search. See
-        :mod:`napariTFM.backend.bayesian_l2`.
+        The automatic λ selector on the plain-FTTC path: it maximizes the marginal
+        likelihood of the displacement over the Fourier-SVD blocks (:meth:`_svd_block`).
+        See :mod:`napariTFM.backend.bayesian_l2`.
 
         Args:
-            pos0, vec0, forcemap_pixel_size, input_width, input_height: as for
-                :meth:`_find_regularization`.
+            pos0, vec0, forcemap_pixel_size, input_width, input_height: the position and
+                displacement arrays and the exact grid dimensions.
             noise_var: per-component real-space displacement noise variance ``σ_r²``. When
                 supplied, the noise level is pinned from it (**BL2**); when ``None``, both
                 the prior width and noise level are inferred from the evidence (**ABL2**).
@@ -608,7 +541,7 @@ class FTTC:
             with the input displacement field dimensions.
         """
         grid_mat, u, i_max, j_max, _, _ = self._interp_vec2grid(pos, vec, i_max=i_max, j_max=j_max)
-        kx, ky, _, _ = self._calculate_fourier_modes(i_max, j_max, forcemap_pixel_size)
+        kx, ky = self._calculate_fourier_modes(i_max, j_max, forcemap_pixel_size)
         GFt = self._calculate_greens_function(kx, ky)
 
         Ftu = np.fft.fft2(u).reshape(2, -1).T
@@ -715,23 +648,19 @@ class FTTC:
         return grid_mat, u, i_max, j_max, 0, 0
 
     def _calculate_fourier_modes(self, i_max: int, j_max: int, forcemap_pixel_size: float):
-        """Calculate Fourier modes and Lanczos filter"""
-        # Angular wavenumbers on the FFT grid. np.fft.fftfreq gives the correct
-        # frequency ordering for *both* even and odd lengths; the previous
-        # hand-rolled `arange(0, n//2), arange(-n//2, 0)` matched fftfreq only for
-        # even n and mislabelled the Nyquist-adjacent bin for odd n (e.g. n=5 →
-        # [0,1,-3,-2,-1] instead of [0,1,2,-2,-1]), silently corrupting the
-        # Green's function / Lanczos filter on odd-sized grids.
+        """Calculate the Fourier modes (angular wavenumbers) on the FFT grid."""
+        # np.fft.fftfreq gives the correct frequency ordering for *both* even and odd
+        # lengths; the previous hand-rolled `arange(0, n//2), arange(-n//2, 0)` matched
+        # fftfreq only for even n and mislabelled the Nyquist-adjacent bin for odd n
+        # (e.g. n=5 → [0,1,-3,-2,-1] instead of [0,1,2,-2,-1]), silently corrupting the
+        # Green's function on odd-sized grids.
         kx_vec = 2. * np.pi / forcemap_pixel_size * np.fft.fftfreq(int(i_max))
         ky_vec = 2. * np.pi / forcemap_pixel_size * np.fft.fftfreq(int(j_max))
         kx, ky = np.meshgrid(kx_vec, ky_vec)
 
-        lanczosx = np.sinc(kx / np.pi) ** self.lanczos_exp
-        lanczosy = np.sinc(ky / np.pi) ** self.lanczos_exp
-
         kx[0, 0] = 1
         ky[0, 0] = 1
-        return kx, ky, lanczosx, lanczosy
+        return kx, ky
 
     def _reg_fourier_TFM_L2(self, u: np.ndarray, Ginv_xx: np.ndarray,
                             Ginv_xy: np.ndarray, Ginv_yy: np.ndarray):
@@ -743,12 +672,11 @@ class FTTC:
         return Ftfx, Ftfy
 
     def _calculate_stress_field(self, Ftfx: np.ndarray, Ftfy: np.ndarray,
-                                lanczosx: np.ndarray, lanczosy: np.ndarray,
                                 grid_mat: np.ndarray, u: np.ndarray,
                                 i_max: int, j_max: int):
         """Calculate stress field and related quantities"""
-        fx = np.fft.ifft2(lanczosx * Ftfx)
-        fy = np.fft.ifft2(lanczosy * Ftfy)
+        fx = np.fft.ifft2(Ftfx)
+        fy = np.fft.ifft2(Ftfy)
 
         pos = np.array([
             np.reshape(grid_mat[0], (i_max * j_max)),

@@ -95,14 +95,14 @@ def test_fttc_validation_ignores_visualization_only_params():
     assert validate_fttc_parameters(FTTCParameters(force_vector_stride=0)) == (True, "")
 
 
-def test_fttc_validation_skips_regularization_check_under_auto_gcv():
-    """Under auto-GCV the manual regularization is unused, so reg<=0 is fine; with
-    auto-GCV off it must still be rejected."""
+def test_fttc_validation_skips_regularization_check_under_bayesian_l2():
+    """Under Bayesian L2 the manual regularization is unused, so reg<=0 is fine; with
+    it off it must still be rejected."""
     assert validate_fttc_parameters(
-        FTTCParameters(auto_gcv=True, regularization=0.0)
+        FTTCParameters(bayesian_l2=True, regularization=0.0)
     ) == (True, "")
     assert validate_fttc_parameters(
-        FTTCParameters(auto_gcv=False, regularization=0.0)
+        FTTCParameters(bayesian_l2=False, regularization=0.0)
     ) == (False, "Regularization parameter must be positive")
 
 

@@ -1,13 +1,12 @@
-"""Sparse traction inversion by group-L1 / Elastic Net (a sparsity prior — optionally
-combined with an L2 ridge — on the traction field).
+"""Sparse traction inversion by group-L1 (the sparsity prior on the traction field).
 
-FTTC and the confined forward solver both regularize with L2 (a Tikhonov ridge, a
-smoothness term, a soft support penalty). L2 *spreads*: it cannot place a force at an
+FTTC and the confined forward solver both regularize with L2 (a Tikhonov ridge and,
+for the confined solver, a soft support penalty). L2 *spreads*: it cannot place a force at an
 adhesion without raising the floor around it, so displacement noise survives as
 low-amplitude spurious traction across the cell interior. This solver regularizes
 with group-L1 instead, minimizing over the surface traction ``t`` (Pa)
 
-    ½‖W·(G·t − u)‖² / denom  +  λ₁ · Σ_pixels ‖t[:, pixel]‖₂  +  ½ λ₂ ‖t‖²
+    ½‖W·(G·t − u)‖² / denom  +  λ₁ · Σ_pixels ‖t[:, pixel]‖₂
 
 The group-L1 term (a sum over pixels of the per-pixel traction *vector* norm) drives
 whole pixels to exactly zero, so the recovered field is sparse: it concentrates on a
@@ -24,16 +23,6 @@ method (it thresholds rather than spreads).
   every pixel thresholds to zero. The fraction is scene-independent (it transfers
   across fields), so the dial means the same thing everywhere: ~0 dense, ~1 empty,
   useful band ~0.05–0.2, scaling up with noise. 0 disables this solver.
-- ``λ₂`` (``l2_ridge``) adds a global L2 (Tikhonov) shrinkage on top of the sparsity,
-  turning the solve into an **Elastic Net** (Zou & Hastie 2005). Huang et al.
-  (*Sci. Rep.* 9:539, 2019) find the elastic net is the most accurate TFM regularizer:
-  pure L1 recovers a clean background but *overshoots* the peak traction, and the L2
-  term shrinks that overshoot back toward the true magnitude while the L1 term keeps
-  the background clean. ``λ₂`` is set as a scene-independent *fraction* of the median
-  per-mode data curvature (so the dial transfers across fields, and stays gentle — see
-  the solver for why the median, not the max ``l_data``); useful band ~0.1..1, 0 = pure
-  group-L1 (unchanged). It vanishes at ``t = 0`` so it leaves ``λ₁_max`` — and thus the
-  sparsity dial's meaning — intact.
 - ``mask`` (optional) is used *both* as the data fit-region weight ``W`` (trust the
   displacement only inside mask + ``fwd_fit_margin_um``) and as a *soft* support: an
   off-mask L2 penalty ``½ Σ c(x)·|t(x)|²`` added to the objective, with ``c`` zero
@@ -67,17 +56,9 @@ import numpy as np
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 from napariTFM.backend.forward_tfm import (
     _greens_operator, _fit_weight, _resolve_backend, _asnumpy,
-    confinement_to_beta)
+    confinement_to_beta, support_probability)
 
 logger = logging.getLogger(__name__)
-
-# Collar width (px) over which the exterior L2 penalty ramps up from 0 (inside the
-# mask) to its full weight. This graded collar — not the penalty depth — is what
-# removes the Gibbs ringing the old hard support had: a hard projection drops
-# traction to 0 in one pixel, so P(t) has a discontinuity that rings in the fit; a
-# C1 smoothstep collar does not.
-_COLLAR_PX = 4.0
-
 
 def _exterior_penalty(mask, valid, l_data, params, xp, dtype):
     """Per-pixel L2 penalty coefficient confining traction to the mask — the soft
@@ -90,40 +71,35 @@ def _exterior_penalty(mask, valid, l_data, params, xp, dtype):
     fields fit the in-region displacement equally through the non-local Green's
     operator — so FISTA just rebuilds a larger pre-nudge value to compensate and the
     exterior is unchanged. A penalty *in the objective* is not compensable; it is the
-    same mechanism the L2 confined solver uses (``β·off·|t|²``), ported to FISTA.
+    same mechanism the L2 confined solver uses (``β·(1−p)·|t|²``), ported to FISTA.
 
-    ``c(x) = 0`` inside the mask (force is free where the cell is), smoothstepping up
-    to ``β · l_data`` in the exterior over a ``_COLLAR_PX`` collar. Scaling by
-    ``l_data`` (the data term's curvature ``λmax(GᵀWG)/denom``) makes ``β`` a
+    ``c(x) = β · l_data · (1 − p(x))``, with ``p`` the support softened by the shared
+    one-sided Gaussian skirt (:func:`support_probability`, width ``fwd_mask_softness``):
+    ``c`` is 0 inside the mask *and its rim* and ramps up to ``β · l_data`` outside over
+    ~σ, so the boundary is soft without ever penalizing the peripheral traction. Scaling
+    by ``l_data`` (the data term's curvature ``λmax(GᵀWG)/denom``) makes ``β`` a
     scene-independent *fraction* of the data curvature, and ``β`` is the shared
-    :func:`confinement_to_beta` dial, so 0..100 means the same on both routes. Hard
-    support is the ``β → ∞`` limit; ``mask is None`` or the dial at 0 ⇒ no penalty.
-    Returns ``(1, H, W)`` (broadcasts onto the traction).
+    :func:`confinement_to_beta` dial, so both β and the softness mean the same on both
+    routes. ``σ = 0`` is the hard binary edge; ``mask is None`` or the dial at 0 ⇒ no
+    penalty. Returns ``(1, H, W)`` (broadcasts onto the traction).
     """
     if mask is None or params.fwd_mask_strength <= 0:
         return xp.zeros((1,) + valid.shape, dtype=dtype)
-    from scipy import ndimage
-    support = np.asarray(mask) > 0
-    dist = ndimage.distance_transform_edt(~support)         # 0 on mask, grows outward
-    r = np.clip(dist / _COLLAR_PX, 0.0, 1.0)
-    r = r * r * (3.0 - 2.0 * r)                             # smoothstep → C1 at the edge
-    coef = confinement_to_beta(params.fwd_mask_strength) * float(l_data) * r
+    off = 1.0 - support_probability(mask, params)          # 0 inside+rim, →1 outside over σ
+    coef = confinement_to_beta(params.fwd_mask_strength) * float(l_data) * off
     return xp.asarray(coef[None], dtype=dtype)              # (1,H,W)
 
 
 def l1_traction_frame(displacement_frame: np.ndarray,
                       params: FTTCParameters,
                       mask: Optional[np.ndarray] = None) -> np.ndarray:
-    """Invert one displacement frame to a sparse traction field via FISTA group-L1
-    (or elastic net when ``l2_ridge > 0``).
+    """Invert one displacement frame to a sparse traction field via FISTA group-L1.
 
     Args:
         displacement_frame: ``(H, W, 2)`` displacement in µm (``[...,0] = u_x``).
         params: FTTC/force parameters; ``l1_sparsity`` (fraction of λ₁_max) sets the
-            sparsity, ``l2_ridge`` (fraction of the data curvature) adds the elastic-net
-            L2 shrinkage that reins in the L1 peak overshoot (0 = pure group-L1),
-            ``l1_max_iter`` the FISTA iteration budget, ``fwd_device`` / ``fwd_dtype`` /
-            ``fwd_fit_margin_um`` are shared with the confined solver.
+            sparsity, ``l1_max_iter`` the FISTA iteration budget, ``fwd_device`` /
+            ``fwd_dtype`` / ``fwd_fit_margin_um`` are shared with the confined solver.
         mask: optional ``(H, W)`` support; used as the data fit-region and as a
             *soft* traction support (an off-mask L2 penalty of weight
             ``confinement_to_beta(fwd_mask_strength)`` added to the objective, ramped
@@ -162,37 +138,23 @@ def l1_traction_frame(displacement_frame: np.ndarray,
         sk = xp.einsum("ijhw,jhw->ihw", GEc, rk)
         return fft.ifft2(sk, axes=(-2, -1)).real
 
-    # Per-mode data curvature λmax(GᵀG)/denom (W ≤ 1). λmax of a symmetric 2×2 is
-    # ½(tr + √(tr²−4det)).
+    # Lipschitz constant of the smooth part's gradient: ‖GᵀWG‖/denom ≤ max_mode λmax(GᵀG)
+    # / denom (W ≤ 1). λmax of a symmetric 2×2 is ½(tr + √(tr²−4det)).
     tr = GtG[0, 0] + GtG[1, 1]
     det = GtG[0, 0] * GtG[1, 1] - GtG[0, 1] * GtG[1, 0]
-    lam_mode = 0.5 * (tr + xp.sqrt(xp.clip(tr * tr - 4 * det, 0.0, None)))  # (H,W) ≥ 0
-    l_data = float(lam_mode.max()) / denom      # Lipschitz constant uses the MAX curvature
+    lmax = float((0.5 * (tr + xp.sqrt(xp.clip(tr * tr - 4 * det, 0.0, None)))).max())
+    l_data = lmax / denom
 
     # Soft support: an exterior-weighted L2 term added to the smooth objective (its
     # gradient is pen·t). pen raises the smooth part's curvature, so its max folds
     # into the Lipschitz constant / step (else FISTA diverges when confinement is up).
     pen = _exterior_penalty(mask, valid, l_data, params, xp, dtype)   # (1,H,W) ≥ 0
-
-    # Elastic Net ridge: a *global* L2 shrinkage ½ λ₂‖t‖² (gradient λ₂·t) added to the
-    # smooth objective, turning the pure-L1 solve into an elastic net. λ₂ is a
-    # scene-independent fraction of the *median* per-mode curvature — NOT l_data (the
-    # max): the Boussinesq spectrum decays steeply (l_data is O(100×) the median here),
-    # and the traction peak lives in the low-gain high-k modes, so a ridge scaled to
-    # l_data would crush the peak instead of gently reining in the L1 overshoot. Scaling
-    # to the median keeps the dial in a useful band (~0.1..1) with a gentle, monotone
-    # effect. Being a constant curvature it still folds into the Lipschitz constant /
-    # step. 0 ⇒ pure group-L1.
-    pos_curv = lam_mode[lam_mode > 0]
-    l_ridge = (float(xp.median(pos_curv)) / denom) if pos_curv.size else l_data
-    lam2 = float(getattr(params, "l2_ridge", 0.0)) * l_ridge
-    L = l_data + float(pen.max()) + lam2
+    L = l_data + float(pen.max())
     step = 1.0 / max(L, 1e-30)
 
     # λ₁_max: the per-pixel gradient magnitude at t=0. Above it every pixel thresholds
     # to zero, so parametrizing λ₁ = frac · λ₁_max makes the dial scene-independent.
-    # (both pen·t and the ridge λ₂·t vanish at t=0, so they leave λ₁_max — and thus the
-    # sparsity dial — intact.)
+    # (pen·t vanishes at t=0, so it leaves λ₁_max — and thus the sparsity dial — intact.)
     grad0 = Pt(wf * u_t) / denom
     lam1 = frac * float(xp.sqrt((grad0 * grad0).sum(axis=0)).max())
     tau = lam1 * step
@@ -202,7 +164,7 @@ def l1_traction_frame(displacement_frame: np.ndarray,
         return z * xp.clip(1.0 - tau / n, 0.0, None)
 
     def gradf(t):
-        return Pt(wf * (P(t) - u_t)) / denom + pen * t + lam2 * t
+        return Pt(wf * (P(t) - u_t)) / denom + pen * t
 
     t = xp.zeros((2, height, width), dtype=dtype)
     z = t.copy()
@@ -222,7 +184,6 @@ def l1_traction_frame(displacement_frame: np.ndarray,
 
     nnz = float((xp.sqrt((t * t).sum(axis=0)) > 1e-6).mean())
     beta = confinement_to_beta(params.fwd_mask_strength) if mask is not None else 0.0
-    logger.info("forward L1: frac=%.3f lam1=%.3g lam2=%.3g beta=%.3g nnz=%.3f iters=%d backend=%s",
-                frac, lam1, lam2, beta, nnz, int(params.l1_max_iter),
-                "cupy" if on_gpu else "numpy")
+    logger.info("forward L1: frac=%.3f lam1=%.3g beta=%.3g nnz=%.3f iters=%d backend=%s",
+                frac, lam1, beta, nnz, int(params.l1_max_iter), "cupy" if on_gpu else "numpy")
     return _asnumpy(t).astype(np.float32)

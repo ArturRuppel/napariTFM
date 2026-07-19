@@ -21,7 +21,7 @@ GOLDEN = os.path.join(os.path.dirname(__file__), "data", "forward_pcg_golden.npz
 def _params(**kw):
     base = dict(regularization=1e-3, young_modulus=5000.0, poisson_ratio_substrate=0.5,
                 gel_height=None, pixel_size=0.1, downscale_factor=1,
-                fwd_smoothness=0.05, fwd_fit_margin_um=1e6, fwd_traction_scale=1e-2,
+                fwd_fit_margin_um=1e6, fwd_traction_scale=1e-2,
                 fwd_max_iter=500, fwd_cg_tol=1e-10, fwd_device="cpu", fwd_dtype="float64")
     base.update(kw)
     return FTTCParameters(**base)
@@ -38,7 +38,7 @@ def _random_field(h, w, seed):
 
 
 def test_one_step_exactness_Minv_is_A_inverse():
-    """W=I, β=0 ⇒ A == M (discrete Laplacian symbol), so M⁻¹A = I on the DC-free
+    """W=I, β=0 ⇒ A == M (the GᴴG + λ² operator), so M⁻¹A = I on the DC-free
     subspace: one CG step would suffice."""
     h = w = 24
     u = _random_field(h, w, 0)
@@ -48,23 +48,24 @@ def test_one_step_exactness_Minv_is_A_inverse():
     x = _random_field(h, w, 1)
     x = x - x.mean(axis=(1, 2), keepdims=True)          # DC-free (the observable subspace)
     y = apply_Minv(apply_A(x))
-    # A and M are the same operator in exact arithmetic; the ~1e-7 floor is FFT
-    # round-trip rounding in apply_A vs M's direct symbol apply. A *wrong* Laplacian
-    # symbol (|k|² vs 4·sin², the spec's [review] hazard) breaks this by ~100×.
-    np.testing.assert_allclose(y, x, atol=1e-6, rtol=1e-4)
+    # A and M are the same operator in exact arithmetic; the round-off floor is the FFT
+    # round-trip in apply_A vs M's direct symbol apply. With no gradient-smoothness floor
+    # on the diagonal, the high-k modes (where GᴴG→0 and λ² is tiny) are near-singular, so
+    # that round-off is amplified to ~1e-3 — PCG still converges, it just isn't one-step.
+    np.testing.assert_allclose(y, x, atol=1e-5, rtol=1e-2)
 
 
 def test_lambda_matches_closed_form_across_branches():
     """`regularization` (λ) is the SHARED dial with FTTC/`_solve_closed_form`, so it
     must produce the identical physical λ²‖t‖² penalty on the β>0 (iterative) branch.
-    With confinement inert (full mask ⇒ off≡0) and γ=0, the iterative solve must
-    reproduce `_solve_closed_form` at the SAME λ — at a λ large enough to bite. The
-    pre-fix linear-λ/denom-normalized scaling diverged ~125× here (β=0 used λ², β>0
-    used λ), which is exactly the cross-branch bug this guards."""
+    With confinement inert (full mask ⇒ off≡0), the iterative solve must reproduce
+    `_solve_closed_form` at the SAME λ — at a λ large enough to bite. The pre-fix
+    linear-λ/denom-normalized scaling diverged ~125× here (β=0 used λ², β>0 used λ),
+    which is exactly the cross-branch bug this guards."""
     h = w = 32
     u = _random_field(h, w, 7) * 0.2
     mask = np.ones((h, w), np.uint8)                    # full support ⇒ β term inert
-    params = _params(regularization=1e-2, fwd_smoothness=0.0)
+    params = _params(regularization=1e-2)
     t_closed = F._solve_closed_form(u.astype(np.float64), params)
     beta = F.confinement_to_beta(50.0)                  # >0 so the iterative path runs
     t_iter = F._solve_iterative(u.astype(np.float64), mask, beta, params)
@@ -74,7 +75,7 @@ def test_lambda_matches_closed_form_across_branches():
 
 
 def test_operator_is_symmetric():
-    """⟨A x, y⟩ = ⟨x, A y⟩ on random real fields, with non-uniform W, β>0, γ>0."""
+    """⟨A x, y⟩ = ⟨x, A y⟩ on random real fields, with non-uniform W and β>0."""
     h = w = 24
     u = _random_field(h, w, 2)
     mask = _disk_mask(h, w)
@@ -147,7 +148,6 @@ def test_golden_regression_recovers_ground_truth():
                      poisson_ratio_substrate=float(d["poisson"]),
                      pixel_size=float(d["pixel_size"]),
                      fwd_mask_strength=float(d["fwd_mask_strength"]),
-                     fwd_smoothness=float(d["fwd_smoothness"]),
                      fwd_fit_margin_um=float(d["fwd_fit_margin_um"]),
                      fwd_traction_scale=float(d["fwd_traction_scale"]))
     frame = np.stack([u[0], u[1]], axis=-1)
@@ -184,7 +184,6 @@ def test_gpu_matches_cpu():
                        poisson_ratio_substrate=float(d["poisson"]),
                        pixel_size=float(d["pixel_size"]),
                        fwd_mask_strength=float(d["fwd_mask_strength"]),
-                       fwd_smoothness=float(d["fwd_smoothness"]),
                        fwd_fit_margin_um=float(d["fwd_fit_margin_um"]),
                        fwd_traction_scale=float(d["fwd_traction_scale"]), fwd_device=dev)
 
