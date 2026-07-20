@@ -141,14 +141,25 @@ def l1_traction_frame(displacement_frame: np.ndarray,
     # / denom (W ≤ 1). λmax of a symmetric 2×2 is ½(tr + √(tr²−4det)).
     tr = GtG[0, 0] + GtG[1, 1]
     det = GtG[0, 0] * GtG[1, 1] - GtG[0, 1] * GtG[1, 0]
-    lmax = float((0.5 * (tr + xp.sqrt(xp.clip(tr * tr - 4 * det, 0.0, None)))).max())
+    lam_mode = 0.5 * (tr + xp.sqrt(xp.clip(tr * tr - 4 * det, 0.0, None)))
+    lmax = float(lam_mode.max())
     l_data = lmax / denom
 
     # Soft support: an exterior-weighted L2 term added to the smooth objective (its
     # gradient is pen·t). pen raises the smooth part's curvature, so its max folds
     # into the Lipschitz constant / step (else FISTA diverges when confinement is up).
     pen = _exterior_penalty(mask, valid, l_data, params, xp, dtype)   # (1,H,W) ≥ 0
-    L = l_data + float(pen.max())
+
+    # Elastic Net ridge: a *global* L2 shrinkage ½ λ₂‖t‖² (gradient λ₂·t) added to the
+    # smooth objective, turning the pure-L1 solve into an elastic net. λ₂ is a
+    # scene-independent fraction of the *median* per-mode curvature — NOT l_data (the
+    # max): the Boussinesq spectrum decays steeply, so scaling to the median keeps the
+    # dial gentle and in a useful band (~0.1..1). Constant curvature ⇒ folds into the
+    # Lipschitz constant / step. l2_ridge = 0 ⇒ pure group-L1 (bit-for-bit).
+    pos_curv = lam_mode[lam_mode > 0]
+    l_ridge = (float(xp.median(pos_curv)) / denom) if pos_curv.size else l_data
+    lam2 = float(getattr(params, "l2_ridge", 0.0)) * l_ridge
+    L = l_data + float(pen.max()) + lam2
     step = 1.0 / max(L, 1e-30)
 
     # λ₁_max: the per-pixel gradient magnitude at t=0. Above it every pixel thresholds
@@ -163,7 +174,7 @@ def l1_traction_frame(displacement_frame: np.ndarray,
         return z * xp.clip(1.0 - tau / n, 0.0, None)
 
     def gradf(t):
-        return Pt(wf * (P(t) - u_t)) / denom + pen * t
+        return Pt(wf * (P(t) - u_t)) / denom + pen * t + lam2 * t
 
     t = xp.zeros((2, height, width), dtype=dtype)
     z = t.copy()

@@ -125,6 +125,7 @@ class FTTCParameters:
     # penalty in the objective (ramped over a collar, no hard edge). Shares fwd_device/
     # fwd_dtype/fwd_fit_margin_um with the confined solver.
     l1_sparsity: float = 0.0   # 0..1 fraction of λ₁_max (0 = off); useful band ~0.05..0.2, ↑ with noise
+    l2_ridge: float = 0.0      # elastic-net L2 ridge, fraction of median per-mode curvature; 0 = pure L1
     l1_max_iter: int = 400     # FISTA iteration budget
 
     # Time parameters
@@ -210,6 +211,7 @@ class UnifiedParameters:
     # Sparse (group-L1) inversion (napariTFM.backend.forward_l1); selected when
     # l1_sparsity > 0, ahead of the confined/FTTC paths. See FTTCParameters.
     l1_sparsity: float = 0.0
+    l2_ridge: float = 0.0
     l1_max_iter: int = 400
     force_vector_stride: int = 20
     force_arrow_scale: float = 1.0
