@@ -3,8 +3,9 @@
 # each writes its own CSV shard (results/sweep_<condition>_<scene>.csv), so tasks
 # never contend on one file. Concatenate shards afterwards.
 #SBATCH --job-name=tfm_sweep
-#SBATCH --partition=common
-#SBATCH --qos=normal
+#SBATCH --partition=gpu
+#SBATCH --qos=gpu
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --time=01:00:00

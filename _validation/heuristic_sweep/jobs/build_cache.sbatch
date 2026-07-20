@@ -1,11 +1,12 @@
 #!/bin/bash
 # Stage 1: displacement cache, one array task per scene.
 # Submit from $CODE after `source $STAGE/env.sh` (submit.sh does the array math).
-# Runs on CPU (common): PIV + force use CPU paths, device="auto" -> cpu, no torch.
-# For a GPU run instead: partition=gpu, qos=gpu, add --gres=gpu:1, install cuda torch.
+# Runs on GPU: device="auto" -> cuda (torch cu124 in the venv). The torch PIV path is
+# the validated-correct backend; openpiv (CPU) needs the flipud fix (commit 5764c09).
 #SBATCH --job-name=tfm_cache
-#SBATCH --partition=common
-#SBATCH --qos=normal
+#SBATCH --partition=gpu
+#SBATCH --qos=gpu
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --time=02:00:00
