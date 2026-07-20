@@ -240,6 +240,13 @@ class BaseAnalysisController(QObject):
     def _on_cancel_cleanup(self):
         """Optional stage-specific cleanup, run inline when the stage is cancelled."""
 
+    def _current_frame(self) -> int:
+        """The frame a preview targets: 0 for a 2D view, else the slider index."""
+        if len(self.viewer.dims.current_step) == 2:
+            self.progress_updated.emit(0, "No image stack found, previewing frame 0")
+            return 0
+        return self.viewer.dims.current_step[0]
+
 
 class VectorStageController(BaseAnalysisController):
     """Shared controller for the two vector-field stages (displacement, force).
@@ -303,13 +310,6 @@ class VectorStageController(BaseAnalysisController):
         getattr(self.data_manager, self.RESULT_SETTER)(result, dirty=True)
         self.progress_updated.emit(100, "Analysis completed successfully")
         self.analysis_completed.emit(result)
-
-    def _current_frame(self) -> int:
-        """The frame a preview targets: 0 for a 2D view, else the slider index."""
-        if len(self.viewer.dims.current_step) == 2:
-            self.progress_updated.emit(0, "No image stack found, previewing frame 0")
-            return 0
-        return self.viewer.dims.current_step[0]
 
 
 class BaseAnalysisWidget(QWidget):
