@@ -72,10 +72,12 @@ GT_TRACTION_PROFILE = "gaussian"   # {"tophat", "gaussian"}
 GT_REFERENCE_SIZE = 700          # px, matches the source image size
 
 # --- scenario generation (make_scenes.py) -----------------------------------
-# Real bead stack: 8 timepoints (60 s apart). They fully decorrelate frame-to-frame
-# (hi-freq corr ~0.08), so they CANNOT be cross-referenced. Instead each frame is
-# self-warped: reference = frame_k, deformed = warp(frame_k) -- one real-texture
-# seed each (the original bridge construction, repeated across frames).
+# Real bead stack: 8 timepoints (60 s apart), same beads a sub-pixel real motion
+# apart (measured median ~0.24 px, zero-lag corr 0.7-0.95 -- well-matched). Each
+# scene is a CROSS-FRAME pair: deformed = warp(frame_a, u), reference = frame_b (a
+# different real frame). The real inter-frame motion rides along as genuine
+# reference-vs-deformed noise; GT stays u. No seed axis (a same-frame self-warp
+# adds no independent between-image noise, so it bought nothing).
 # The stack path is PRIVATE -- passed via --stack, never hardcoded here.
 BEAD_CHANNEL = 1                 # ch1 = fluorescent beads (ch0 is transmitted-light/cells)
 CROP_SIZE = GT_REFERENCE_SIZE    # centre-crop the 2048² frames to this
@@ -87,5 +89,6 @@ FOOTPRINTS_UM = [round(x, 3) for x in np.geomspace(0.1, 5.0, 5)]    # Gaussian s
 PEAK_DISP_PX = [round(x, 3) for x in np.geomspace(0.5, 50.0, 6)]    # target |u|max, px
 SEPARATION_UM = 40.0             # centre-to-centre; poles stay distinct up to sigma~10µm
 AXIS_DEG = 45.0
-N_SEEDS = 8                      # one self-warped seed per real frame
+DEFORM_FRAME = 0                 # real frame warped by u -> deformed.tif
+REF_FRAME = 1                    # different real frame -> reference.tif (cross-frame pair)
 
