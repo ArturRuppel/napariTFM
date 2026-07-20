@@ -101,3 +101,27 @@ PEAK_DISP_PX = [round(x, 3) for x in np.geomspace(0.5, 50.0, 6)]    # target |u|
 SEPARATION_UM = 30.0             # centre-to-centre; on 512 keeps boundary leak ~8% (vs 11% at 40)
 AXIS_DEG = 45.0
 
+# --- realistic cell scenes from benchmarkTFM fitted geometry (make_cells.py) ---
+# The dipole grid above isolates ONE localized source; a real cell is a DIFFUSE
+# superposition of many contractile stress fibres. Rather than invent a layout,
+# we reuse the benchmarkTFM synth cells: real cell outlines with 16-82 fitted
+# stress fibres (elliptical focal adhesions), traction fitted to real VIMFM PIV.
+#
+# We take their TRACTION field as the GT *shape* and forward-project it with THIS
+# pipeline's Green's operator (validated to reproduce their displacement to
+# cos > 0.999), so u and t_gt are a consistent forward/inverse pair -- no
+# cross-operator bias floor. Then we rewarp the SAME best-imaging bead stack the
+# dipole run used (scenario 6, mild jitter) at a ladder of strengths, and score
+# against the stored GT traction. Same E / pixel-size as the dipole run, so the
+# ONLY variable versus that run is the field itself: localized -> diffuse.
+CELL_SOURCE_CELLS = ["synth00", "synth01", "synth02", "synth03"]  # 82/43/16/37 fibres
+CELL_CONDITION = "cell_s6j1"      # own condition dir (isolated from the dipole s6_j1);
+                                  # one image pair: best stack (scenario 6), mild jitter
+CELL_STACK_SCENARIO = 6           # densest / longest-exposure synthetic stack (ncc 0.99 @ j1)
+CELL_REF_FRAME = 0                # reference = zero-jitter frame 0
+CELL_DEFORM_FRAME = 1             # deformed = warp(frame 1): mild registration jitter rides along
+# Strength axis = target peak |u| (px). Reuse the dipole ladder so the two runs
+# are directly comparable; 0.5 px sits in the jitter noise floor, 50 px is gross
+# decorrelation -- the range brackets the useful window into breakdown on both sides.
+CELL_STRENGTHS_PX = list(PEAK_DISP_PX)   # [0.5, 1.256, 3.155, 7.924, 19.905, 50]
+

@@ -133,9 +133,11 @@ roughly ten times larger than the mistake of a suboptimal L1.** L1's tuning is c
 This verdict is specific to the target. The benchmark source is a compact dipole, and L1's sparsity
 prior matches a localized source by construction while Bayesian-L2's smoothness prior does not: its
 coarse traction mesh cannot represent sharp poles, so it under-recovers peak magnitude and `J`
-punishes that. The result transfers to real focal adhesions, which are compact. It does not transfer
-to broad, diffuse traction fields, where smoothness may be the right prior and the gap could narrow
-or reverse. The comparison also bundles the regularizer with the mesh resolution. The defensible
+punishes that. The result transfers to real focal adhesions, which are compact. This specific
+Bayesian-L2 comparison was not re-run on broad, diffuse fields, where smoothness may be the right
+prior and the gap could narrow or reverse. The L1 *plateau* itself does carry to diffuse cells (see
+[Diffuse fields](#diffuse-fields-realistic-cells)); only the smoothness comparison stays untested
+there. The comparison also bundles the regularizer with the mesh resolution. The defensible
 claim is narrow and useful: for compact sources scored on magnitude fidelity, sparsity beats
 smoothness by enough that L1 is worth tuning, and L1 forgives any choice made on the low side.
 
@@ -208,6 +210,66 @@ sweep varies SNR through exposure on a balanced dipole, not through the camera-n
 warped-real-bead benchmark, so treat it as a second, agreeing line of evidence rather than a
 retraction.
 
+## Diffuse fields: realistic cells
+
+The dipole grid isolates one localized source. A real cell is the opposite: fifty to a hundred
+contractile stress fibres overlapping into a diffuse, centripetal field. The regularization section
+earned a caveat there, that sparsity's edge might narrow when smoothness becomes the right prior. This
+run settles the part that governs the defaults.
+
+The scenes are the benchmarkTFM synth cells: four real cell outlines carrying 16 to 82 fitted stress
+fibres, their traction fitted to real bead measurements. That traction is the ground truth. It is
+forward-projected through this pipeline's own Green's operator (which reproduces the fitted
+displacement to a cosine of 0.9996), scaled to a ladder of strengths, and used to rewarp the single
+best-imaging bead pair, scenario 6. Everything else matches the dipole run: substrate, pixel size,
+imaging. The one variable is the field, one localized source becoming a whole cell. The Sabass `J` is
+undefined here, because a centripetal field's mean traction vector cancels, so recovery is ranked on
+whole-field nRMSE.
+
+![Two-by-two panel. A: a grid of the four cells against six strengths, each cell coloured by the
+winning method, PIV filling the middle strengths, FFD the rightmost column, iLK two cells at the
+lowest strength. B: best nRMSE against strength for the three methods, each a U-shaped curve bottoming
+near 0.5 at 3 to 8 px, PIV lowest through the middle. C: nRMSE relative to the best against L1, a flat
+basin under 1.02 across L1 0.07 to 0.17, the dipole plateau shaded just left of it. D: median optimal
+L1 and L2 against strength, both high at the 0.5 px noise floor and relaxing through the useful
+range.](../images/heuristic-sweep-cells-competence.png)
+
+Three findings, all continuous with the dipole run.
+
+**Method competence keeps its shape.** PIV wins the useful window (16 of 24 scenes), FFD takes the
+breakdown end where displacements pass ~20 px and cross-correlation decorrelates (6 scenes), and iLK
+holds only the noise floor (2 scenes, thin). The regime structure survives intact: PIV the generalist,
+FFD the hedge under stress, iLK a narrow niche.
+
+**Recovery is a U in strength.** Best nRMSE bottoms near 0.5 at a peak displacement of 3 to 8 px,
+degrades into the registration-jitter floor below 1 px, and into decorrelation above 20 px. The floor
+is high because a diffuse field carries fine focal-adhesion structure below the band-limited operator's
+reach: the honest ceiling on a real cell is not a clean recovery, it is a smoothed one.
+
+**The L1 heuristic transfers.** The safe plateau, where any L1 choice costs under 2% of the best
+nRMSE, runs 0.07 to 0.17, sitting almost on top of the dipole plateau of 0.07 to 0.11 and nudged
+slightly higher. The optimum still tracks SNR: at the noise floor both L1 and L2 ramp hard (L1 to
+0.40, L2 to 16 and beyond), and through the useful range they relax to L1 near 0.11 with L2 below 1.
+Sparsity does not cede to smoothness even here: the optimum keeps L1 in the plateau with only modest
+ridge, so the worry that a diffuse field would want a smoothness prior does not show up in where the
+knobs land.
+
+![Three cell scenes, one per row, each showing the ground-truth fibre traction beside the best-nRMSE
+recovery of PIV, iLK, and FFD, winner boxed. Rows 1 and 2 (mid strength): PIV wins, recovering the
+ring of adhesions closest to truth at nRMSE 0.77 and 0.51. Row 3 (high strength): FFD wins at 0.79
+where PIV and iLK trail. Every recovery is visibly dimmer than the ground truth, and every winning
+panel uses L1 between 0.07 and 0.17.](../images/heuristic-sweep-cells-examples.png)
+
+The examples put a face on it. At the sweet spot PIV recovers the ring of adhesions closest to the
+fitted truth; at high strength FFD's smoothness holds the field together where PIV starts to break.
+The recoveries are dimmer than the truth, the magnitude under-estimate the metric reports as a
+negative bias: regularized TFM buys a clean background by shrinking the peaks.
+
+One thing this run does not settle: it fixes imaging at the ceiling and does not re-run the
+parameter-free Bayesian-L2 comparison on cells, so whether smoothness closes the gap against L1
+specifically on diffuse fields stays open. What it shows is that the tuned elastic-net heuristic,
+plateau and SNR-tracking both, carries from one dipole to a whole cell.
+
 ## The recipe
 
 - **Default to PIV**, window ~24 px, L1 ~0.05, L2 = 0. It wins or ties about two-thirds of the time
@@ -221,6 +283,9 @@ retraction.
   treat the magnitudes skeptically.
 - **To resolve small or weak sources, raise exposure**, not density or NA. It is the only imaging
   parameter that extends the recoverable envelope.
+- **On whole cells, the same defaults hold.** PIV through the useful window, FFD once displacements
+  pass ~20 px, L1 in the 0.07 to 0.17 plateau: the heuristic carries from one dipole to a diffuse
+  50-to-100-fibre field, so the per-regime starting points do not need a separate cell mode.
 
 ## Provenance
 
@@ -230,19 +295,29 @@ Compute ran as a two-stage cross-partition pipeline on the Maestro cluster: GPU 
 feeding a CPU force sweep through an element-wise `aftercorr` dependency, about 2.5 hours wall-clock
 end to end.
 
+The diffuse-cell run adds 24 scenes (4 benchmarkTFM synth cells x 6 strengths) under the isolated
+condition `cell_s6j1`, rewarping the single best-imaging bead pair; its result shards carry the
+whole-field metrics alongside the dipole schema. Same two-stage pipeline, minutes of wall-clock at 24
+scenes.
+
 Every figure here is regenerated from the result shards by a script in
 `_validation/heuristic_sweep/`: `aggregate.py` (method competence, winners, parameter heuristics),
 `imaging_quality.py` (imaging-parameter drivers, envelope), `compare_reg.py` (L1 sensitivity and the
-Bayesian-L2 comparison, which re-runs the parameter-free solver on the cached fields), and
-`compare_methods.py` (the illustrative recoveries). The exact commands, the script-to-figure map, and
-the data-generation pipeline that produces the shards are in the
+Bayesian-L2 comparison, which re-runs the parameter-free solver on the cached fields),
+`compare_methods.py` (the illustrative dipole recoveries), `cell_aggregate.py` (the diffuse-cell
+competence and heuristic transfer), and `cell_examples.py` (the cell recoveries). The cells are staged
+by `make_cells.py`. The exact commands, the script-to-figure map, and the data-generation pipeline that
+produces the shards are in the
 [sweep README](../../_validation/heuristic_sweep/README.md#reproducing-the-report). The data itself
-(1.4 GB) lives in the private stage directory, not this repo; the scripts take its path from `$STAGE`.
+lives in the private stage directory, not this repo; the scripts take its path from `$STAGE`.
 
 ## Open
 
 The L1 grid is truncated at 0.40 exactly where the hardest cells want more sparsity. Before any
 small-footprint recommendation is trusted, extend the L1 axis upward and re-sweep the saturated
-corner. With that closed, the defaults above can ship as the UI's per-regime starting points, the
-same role the tuning defaults play in
-[displacement-method-selection.md](./displacement-method-selection.md).
+corner. The diffuse-cell run closes the transfer question for the plateau but leaves two threads: the
+parameter-free Bayesian-L2 comparison was not re-run on cells, so smoothness-versus-sparsity on
+diffuse fields is still untested, and the cells were run only at best imaging, so the SNR-tracking
+seen there is inferred from the strength axis, not a second imaging ladder. With the L1 grid extended,
+the defaults above can ship as the UI's per-regime starting points, the same role the tuning defaults
+play in [displacement-method-selection.md](./displacement-method-selection.md).

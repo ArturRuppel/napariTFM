@@ -16,8 +16,10 @@ set -euo pipefail
 cd "$CODE"
 
 n_scenes() {
-    local n; n=$(cd "$STAGE/scenes" && ls -d */* 2>/dev/null | wc -l)
-    [ "$n" -gt 0 ] || { echo "no scenes under $STAGE/scenes" >&2; exit 1; }
+    # SCENE_GLOB (default */*) restricts the array to one condition, e.g.
+    # SCENE_GLOB="cell_s6j1/*" runs only the cell scenes. Must match the sbatch glob.
+    local n; n=$(cd "$STAGE/scenes" && ls -d ${SCENE_GLOB:-*/*} 2>/dev/null | wc -l)
+    [ "$n" -gt 0 ] || { echo "no scenes under $STAGE/scenes (glob ${SCENE_GLOB:-*/*})" >&2; exit 1; }
     echo "$n"
 }
 

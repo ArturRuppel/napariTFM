@@ -30,26 +30,12 @@ from napariTFM.backend.forward_l1 import l1_traction_frame
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 
 
-def rasterize_gt(scene, N):
-    """Analytic GT traction of the balanced pair on an N x N grid -> (2, N, N) Pa.
-
-    Two equal-and-opposite uniform-traction discs; net force zero (required, the
-    Green's operator zeroes DC). Direction along the pair axis.
-    """
-    pair = scene["pair"]
-    ps = scene["meta"]["pixel_size"] * (scene["meta"]["image_size"] / N)  # µm per GT px
-    foot = pair["footprint"] / ps
-    sep = pair["separation"] / ps
-    ax = np.radians(pair.get("axis_deg", 0.0))
+def _add_pair(tx, ty, xx, yy, cx, cy, sep, foot, axis_deg, mag, profile):
+    """Add one balanced contractile pair (two equal-and-opposite poles along the
+    axis, each pulling toward the pair centre) to the traction accumulators, in px
+    units. Net force of the pair is zero, so any sum of pairs is DC-free too."""
+    ax = np.radians(axis_deg)
     ux, uy = np.cos(ax), np.sin(ax)
-    cx = N / 2 + pair.get("center", [0.0, 0.0])[0] / ps
-    cy = N / 2 + pair.get("center", [0.0, 0.0])[1] / ps
-    mag = pair["magnitude"]
-    profile = pair.get("profile", C.GT_TRACTION_PROFILE)
-
-    yy, xx = np.mgrid[0:N, 0:N]
-    tx = np.zeros((N, N), np.float32)
-    ty = np.zeros((N, N), np.float32)
     for sgn in (+1.0, -1.0):
         px = cx + sgn * (sep / 2) * ux
         py = cy + sgn * (sep / 2) * uy
@@ -58,26 +44,84 @@ def rasterize_gt(scene, N):
             w = np.exp(-r2 / (2 * foot ** 2))
         else:  # tophat
             w = (r2 < foot ** 2).astype(np.float32)
-        # contractile: each pole pulls toward the pair centre (inward = -sgn·axis)
-        tx += -sgn * mag * ux * w
+        tx += -sgn * mag * ux * w      # contractile: pole pulls inward (-sgn·axis)
         ty += -sgn * mag * uy * w
+
+
+def rasterize_gt(scene, N):
+    """Analytic GT traction of the balanced dipole pair on an N x N grid ->
+    ((2, N, N) Pa, significant mask). Two equal-and-opposite contractile poles,
+    net force zero (required: the Green's operator zeroes the DC mode). Generation
+    and scoring both call this, so the dipole GT never drifts between them.
+
+    Cell scenes do NOT go through here: their GT traction is a stored field
+    (gt_traction.npy, the benchmarkTFM fitted-fibre geometry), loaded directly by
+    sweep_scene. See make_cells.py."""
+    meta = scene["meta"]
+    ps = meta["pixel_size"] * (meta["image_size"] / N)         # µm per GT px
+    pair = scene["pair"]
+    yy, xx = np.mgrid[0:N, 0:N]
+    tx = np.zeros((N, N), np.float32)
+    ty = np.zeros((N, N), np.float32)
+    cx = N / 2 + pair.get("center", [0.0, 0.0])[0] / ps
+    cy = N / 2 + pair.get("center", [0.0, 0.0])[1] / ps
+    _add_pair(tx, ty, xx, yy, cx, cy, pair["separation"] / ps, pair["footprint"] / ps,
+              pair.get("axis_deg", 0.0), pair["magnitude"],
+              pair.get("profile", C.GT_TRACTION_PROFILE))
     return np.stack([tx, ty], 0), (tx ** 2 + ty ** 2) > 0
 
 
-def metrics(t, gt):
-    """Sabass composite J (PRIMARY) + its three components, with nRMSE/corr as cross-checks.
-    The adhesion mask is the significant-GT region (|t_gt| > 0.1·peak) -- the two poles."""
-    fa = sabass.significant_mask(gt, frac=0.1)
-    s = sabass.sabass_metrics(t, gt, fa)
-    J = sabass.objective(s["dtm"], s["dtms"], s["dta"])   # |DTM| + DTMS + DTA/45
+def field_metrics(t, gt, frac=0.05):
+    """Whole-field recovery metrics that stay well-defined on a DIFFUSE field,
+    where the per-adhesion Sabass terms degrade (one merged component, a mean
+    traction vector that cancels). Scored over the significant-GT region.
+
+    - mag_bias  : magnitude-weighted scale error, sum‖t‖/sum‖t_gt‖ − 1 (signed).
+    - ang_field : magnitude-weighted mean angular error in degrees (per-pixel
+                  cosine, so it survives cancellation that kills a mean vector).
+    - bg_leak   : spurious energy off the source, sum‖t‖(bg) / sum‖t‖(sig).
+    """
+    magt, magg = np.hypot(t[0], t[1]), np.hypot(gt[0], gt[1])
+    if magg.max() <= 0:
+        return dict(mag_bias=float("nan"), ang_field=float("nan"), bg_leak=float("nan"))
+    sig = magg > frac * magg.max()
+    bg = ~sig
+    sum_g = float(magg[sig].sum()) or 1.0
+    mag_bias = float(magt[sig].sum() / sum_g - 1.0)
+    dot = (t[0] * gt[0] + t[1] * gt[1])
+    denom = np.where((magt > 0) & (magg > 0), magt * magg, 1.0)
+    cospix = np.clip(dot / denom, -1.0, 1.0)
+    w = magg[sig]
+    cos_w = float((w * cospix[sig]).sum() / (w.sum() or 1.0))
+    ang_field = float(np.degrees(np.arccos(np.clip(cos_w, -1.0, 1.0))))
+    on = float(magt[sig].sum()) or 1.0
+    bg_leak = float(magt[bg].sum() / on)
+    return dict(mag_bias=mag_bias, ang_field=ang_field, bg_leak=bg_leak)
+
+
+def metrics(t, gt, do_sabass=True):
+    """Whole-field metrics (well-suited to diffuse cells) + nRMSE/corr, plus the
+    Sabass composite J and its components when `do_sabass` (isolated dipoles).
+
+    The RANKING metric is chosen at analysis time per scene kind: J for dipoles,
+    the whole-field terms for cells. Sabass is skipped for cells: its per-adhesion
+    loop is O(n_adh · pixels) and blows up on an 82-fibre field, and DTA/DTM are
+    ill-defined once the significant region merges -- exactly why the whole-field
+    terms exist. Skipped fields are recorded as NaN so the schema stays uniform."""
     magt, magg = np.hypot(t[0], t[1]), np.hypot(gt[0], gt[1])
     gnorm = float(np.sqrt((gt ** 2).sum())) or 1.0
-    return dict(
-        J=float(J),                                        # PRIMARY objective
-        dtm=s["dtm"], dtms=s["dtms"], dta=s["dta"], n_adh=s["n_adh"],
-        nrmse=float(np.sqrt(((t - gt) ** 2).sum()) / gnorm),   # cross-check, not ranked
+    out = dict(
+        J=float("nan"), dtm=float("nan"), dtms=float("nan"), dta=float("nan"), n_adh=0,
+        nrmse=float(np.sqrt(((t - gt) ** 2).sum()) / gnorm),
         corr=float(np.corrcoef(magt.ravel(), magg.ravel())[0, 1]),
+        **field_metrics(t, gt),
     )
+    if do_sabass:
+        fa = sabass.significant_mask(gt, frac=0.1)
+        s = sabass.sabass_metrics(t, gt, fa)
+        out.update(J=float(sabass.objective(s["dtm"], s["dtms"], s["dta"])),
+                   dtm=s["dtm"], dtms=s["dtms"], dta=s["dta"], n_adh=s["n_adh"])
+    return out
 
 
 def invert(field, gt_h):
@@ -100,8 +144,21 @@ def sweep_scene(stage, condition, scene_id, writer):
     with open(os.path.join(sdir, "scene.toml"), "rb") as fh:
         scene = tomllib.load(fh)
     N = C.GT_REFERENCE_SIZE
-    gt, _ = rasterize_gt(scene, N)
-    pair = scene["pair"]
+    meta = scene["meta"]
+    if meta.get("kind") == "cell":                            # cell: stored GT field
+        kind = "cell"
+        gt = np.load(os.path.join(sdir, "gt_traction.npy")).astype(np.float32)
+        footprint = float("nan")
+        magnitude = float(meta.get("rms_traction_pa", float("nan")))
+    else:                                                      # dipole: analytic GT
+        kind = "dipole"
+        gt, _ = rasterize_gt(scene, N)
+        footprint = scene["pair"]["footprint"]
+        magnitude = scene["pair"]["magnitude"]
+    scene_cols = dict(
+        kind=kind, footprint=footprint, magnitude=magnitude,
+        peak_disp_px=float(meta.get("peak_disp_px", float("nan"))),
+        n_fibers=int(meta.get("n_fibers", 0)))
     caches = sorted(glob.glob(os.path.join(stage, "cache", condition, scene_id, "disp_*_res*.npz")))
     if not caches:
         print(f"  [{scene_id}] no cache -- run build_cache.py first", flush=True)
@@ -111,10 +168,9 @@ def sweep_scene(stage, condition, scene_id, writer):
         field = d["field"]
         method = str(d["method"])
         for f1, f2, t_up in invert(field, N):
-            m = metrics(t_up, gt)
+            m = metrics(t_up, gt, do_sabass=(kind != "cell"))
             writer.writerow(dict(
-                condition=condition, scene_id=scene_id, method=method,
-                footprint=pair["footprint"], magnitude=pair["magnitude"],
+                condition=condition, scene_id=scene_id, method=method, **scene_cols,
                 res_knob=str(d["res_knob"]), res_val=float(d["res_val"]),
                 conv_val=float(d["conv_val"]), grid=field.shape[0],
                 l1=f1, l2=f2, **m))
@@ -135,9 +191,10 @@ def main():
         d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d)))
     out = a.out or os.path.join(a.stage, "results", f"sweep_{a.condition}.csv")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    cols = ["condition", "scene_id", "method", "footprint", "magnitude", "res_knob",
-            "res_val", "conv_val", "grid", "l1", "l2",
-            "J", "dtm", "dtms", "dta", "n_adh", "nrmse", "corr"]
+    cols = ["condition", "scene_id", "method", "kind", "footprint", "magnitude",
+            "peak_disp_px", "n_fibers", "res_knob", "res_val", "conv_val", "grid",
+            "l1", "l2", "J", "dtm", "dtms", "dta", "n_adh", "nrmse", "corr",
+            "mag_bias", "ang_field", "bg_leak"]
     print(f"sweeping {len(scenes)} scene(s) -> {out}")
     with open(out, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=cols)

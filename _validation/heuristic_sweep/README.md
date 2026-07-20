@@ -146,7 +146,21 @@ IMG=../../docs/images                            # write straight into the repor
 python aggregate.py       --outdir "$IMG"        # competence + winners, parameter heuristics
 python imaging_quality.py --outdir "$IMG"        # imaging-parameter drivers, recoverable envelope
 python compare_reg.py     --outdir "$IMG"        # L1 sensitivity vs parameter-free Bayesian-L2 (~15 min)
-python compare_methods.py --outdir "$IMG"        # illustrative best-J recoveries per method
+python compare_methods.py --outdir "$IMG"        # illustrative best-J recoveries per method (dipoles)
+python cell_aggregate.py  --outdir "$IMG"        # diffuse-cell competence + L1 heuristic transfer
+python cell_examples.py   --outdir "$IMG"        # illustrative cell recoveries per method
+```
+
+The diffuse-cell scenes (condition `cell_s6j1`) are staged from the benchmarkTFM synth cells by
+`make_cells.py`: it takes each cell's fitted-fibre traction as GT, forward-projects it with this
+pipeline's Green's operator, and rewarps the best-imaging bead stack at each strength. Run once before
+the sweep (needs the benchmarkTFM scenarios locally):
+
+```bash
+python make_cells.py --scenarios-dir <benchmarkTFM>/benchmarks/scenarios \
+                     --images-dir "$STAGE/images/tif_stacks" --stage "$STAGE"
+# then the usual two-stage pipeline, scoped to the cell condition:
+SCENE_GLOB="cell_s6j1/*" bash jobs/submit.sh pipeline    # on Maestro, after source env.sh
 ```
 
 Figure map (script → files in `docs/images/`, and the report section they serve):
@@ -157,6 +171,8 @@ Figure map (script → files in `docs/images/`, and the report section they serv
 | `imaging_quality.py` | `heuristic-sweep-imaging-drivers.png`, `heuristic-sweep-imaging-envelope.png` | Imaging parameters; Recoverable envelope |
 | `compare_reg.py` | `heuristic-sweep-regularization-sensitivity.png` (+ `reg_compare.csv`) | The cost of a wrong L1 |
 | `compare_methods.py` | `heuristic-sweep-examples.png` | What winning looks like |
+| `cell_aggregate.py` | `heuristic-sweep-cells-competence.png` | Diffuse fields: realistic cells |
+| `cell_examples.py` | `heuristic-sweep-cells-examples.png` | Diffuse fields: realistic cells |
 
 Omit `--outdir` and each script writes to `figures/` (gitignored) instead, for
 scratch runs that should not touch the committed report images.

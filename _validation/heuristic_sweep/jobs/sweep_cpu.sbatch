@@ -24,7 +24,7 @@ export CUDA_VISIBLE_DEVICES=""                  # force fwd_device="auto" -> cpu
 cd "$CODE"
 # Flat array over every condition x scene: ITEMS[i] = "<condition>/<scene_id>".
 # MUST match build_cache.sbatch's ordering exactly for aftercorr to pair correctly.
-mapfile -t ITEMS < <(cd "$STAGE/scenes" && ls -d */* 2>/dev/null)
+mapfile -t ITEMS < <(cd "$STAGE/scenes" && ls -d ${SCENE_GLOB:-*/*} 2>/dev/null)
 ITEM="${ITEMS[$SLURM_ARRAY_TASK_ID]}"
 COND="${ITEM%%/*}"; SCENE="${ITEM##*/}"
 echo "task $SLURM_ARRAY_TASK_ID -> $COND / $SCENE"

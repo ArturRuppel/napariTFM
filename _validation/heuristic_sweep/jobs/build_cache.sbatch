@@ -19,7 +19,7 @@ export NUMBA_CACHE_DIR="$TMPDIR"
 cd "$CODE"
 # Flat array over every condition x scene: ITEMS[i] = "<condition>/<scene_id>".
 # Each task caches ALL methods (PIV+ILK+FFD) for its scene; --methods overridable.
-mapfile -t ITEMS < <(cd "$STAGE/scenes" && ls -d */* 2>/dev/null)
+mapfile -t ITEMS < <(cd "$STAGE/scenes" && ls -d ${SCENE_GLOB:-*/*} 2>/dev/null)
 ITEM="${ITEMS[$SLURM_ARRAY_TASK_ID]}"
 COND="${ITEM%%/*}"; SCENE="${ITEM##*/}"
 echo "task $SLURM_ARRAY_TASK_ID -> $COND / $SCENE  (methods=${METHODS:-PIV,ILK,FFD})"
