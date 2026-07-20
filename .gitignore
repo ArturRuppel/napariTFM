@@ -89,6 +89,8 @@ Thumbs.db
 
 # Docs figures are deliverables: track them despite the global *.png ignore
 !docs/images/*.png
+# ...but keep scratch CSVs the figure scripts drop in the outdir out of the repo
+docs/images/*.csv
 
 # Experimentation / scratch work — not part of the package
 _dev/

@@ -2,4 +2,5 @@
 # report figures live in docs/images/, regenerated with --outdir ../../docs/images
 figures/
 reg_compare.csv
+cell_reg_compare.csv
 __pycache__/

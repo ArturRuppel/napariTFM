@@ -149,6 +149,7 @@ python compare_reg.py     --outdir "$IMG"        # L1 sensitivity vs parameter-f
 python compare_methods.py --outdir "$IMG"        # illustrative best-J recoveries per method (dipoles)
 python cell_aggregate.py  --outdir "$IMG"        # diffuse-cell competence + L1 heuristic transfer
 python cell_examples.py   --outdir "$IMG"        # illustrative cell recoveries per method
+python cell_compare_reg.py --outdir "$IMG"       # L1 vs parameter-free Bayesian-L2 on cells
 ```
 
 The diffuse-cell scenes (condition `cell_s6j1`) are staged from the benchmarkTFM synth cells by
@@ -173,6 +174,7 @@ Figure map (script → files in `docs/images/`, and the report section they serv
 | `compare_methods.py` | `heuristic-sweep-examples.png` | What winning looks like |
 | `cell_aggregate.py` | `heuristic-sweep-cells-competence.png` | Diffuse fields: realistic cells |
 | `cell_examples.py` | `heuristic-sweep-cells-examples.png` | Diffuse fields: realistic cells |
+| `cell_compare_reg.py` | `heuristic-sweep-cells-regularization.png` (+ `cell_reg_compare.csv`) | Does smoothness win on diffuse fields? |
 
 Omit `--outdir` and each script writes to `figures/` (gitignored) instead, for
 scratch runs that should not touch the committed report images.

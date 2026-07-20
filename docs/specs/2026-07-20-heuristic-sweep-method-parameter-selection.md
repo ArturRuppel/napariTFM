@@ -133,11 +133,10 @@ roughly ten times larger than the mistake of a suboptimal L1.** L1's tuning is c
 This verdict is specific to the target. The benchmark source is a compact dipole, and L1's sparsity
 prior matches a localized source by construction while Bayesian-L2's smoothness prior does not: its
 coarse traction mesh cannot represent sharp poles, so it under-recovers peak magnitude and `J`
-punishes that. The result transfers to real focal adhesions, which are compact. This specific
-Bayesian-L2 comparison was not re-run on broad, diffuse fields, where smoothness may be the right
-prior and the gap could narrow or reverse. The L1 *plateau* itself does carry to diffuse cells (see
-[Diffuse fields](#diffuse-fields-realistic-cells)); only the smoothness comparison stays untested
-there. The comparison also bundles the regularizer with the mesh resolution. The defensible
+punishes that. The result transfers to real focal adhesions, which are compact. On broad, diffuse
+cell fields the gap narrows to about 1.3 times but does not reverse: sparsity still wins, only by
+less (see [Diffuse fields](#diffuse-fields-realistic-cells)). The comparison also bundles the
+regularizer with the mesh resolution. The defensible
 claim is narrow and useful: for compact sources scored on magnitude fidelity, sparsity beats
 smoothness by enough that L1 is worth tuning, and L1 forgives any choice made on the low side.
 
@@ -265,10 +264,30 @@ fitted truth; at high strength FFD's smoothness holds the field together where P
 The recoveries are dimmer than the truth, the magnitude under-estimate the metric reports as a
 negative bias: regularized TFM buys a clean background by shrinking the peaks.
 
-One thing this run does not settle: it fixes imaging at the ceiling and does not re-run the
-parameter-free Bayesian-L2 comparison on cells, so whether smoothness closes the gap against L1
-specifically on diffuse fields stays open. What it shows is that the tuned elastic-net heuristic,
-plateau and SNR-tracking both, carries from one dipole to a whole cell.
+### Does smoothness win on diffuse fields?
+
+The dipole run found sparsity beats parameter-free Bayesian-L2 by two and a half to three times, and
+flagged the diffuse field as the case where that might reverse: a whole cell is closer to smooth than
+a pair of poles. Re-running the comparison on the cells, displacement fixed at PIV window 24 so only
+the regularizer varies, settles it.
+
+![Two panels. Left: nRMSE relative to each scene's best against L1 sparsity, a flat basin near 1.0
+across the low-to-middle grid with a red Bayesian-L2 reference line drawn at 1.27x, far above the
+basin. Right: a boxplot ladder of whole-field nRMSE by strategy across 12 cell scenes, oracle
+per-scene L1 and best fixed L1 both at 0.75, oracle grid L2 at 0.83, parameter-free Bayesian-L2 worst
+at 0.94.](../images/heuristic-sweep-cells-regularization.png)
+
+The gap narrows but does not close. With no tuning, Bayesian-L2 lands at 1.27 times the tuned-L1
+error, down from the 2.5 to 3 times it cost on dipoles: smoothness is genuinely more competitive when
+the field is diffuse. It is still not competitive enough. It sits above the best fixed L1 across the
+useful window, beats that fixed L1 in zero of twelve scenes, and even the elastic net's own tuned
+ridge (0.83) beats parameter-free smoothness (0.94). The ordering holds on cells as on dipoles: tuned
+sparsity, then tuned smoothness, then no tuning at all. The L1 basin stays flat and forgiving across
+the low-to-middle of the grid, so the practical verdict is unchanged, only the margin shrinks: tune
+L1 and it beats the parameter-free path on every field tested, dipole or cell.
+
+The tuned elastic-net heuristic, plateau and SNR-tracking both, carries from one dipole to a whole
+cell, and sparsity keeps its edge over smoothness the whole way.
 
 ## The recipe
 
@@ -305,8 +324,9 @@ Every figure here is regenerated from the result shards by a script in
 `imaging_quality.py` (imaging-parameter drivers, envelope), `compare_reg.py` (L1 sensitivity and the
 Bayesian-L2 comparison, which re-runs the parameter-free solver on the cached fields),
 `compare_methods.py` (the illustrative dipole recoveries), `cell_aggregate.py` (the diffuse-cell
-competence and heuristic transfer), and `cell_examples.py` (the cell recoveries). The cells are staged
-by `make_cells.py`. The exact commands, the script-to-figure map, and the data-generation pipeline that
+competence and heuristic transfer), `cell_examples.py` (the cell recoveries), and `cell_compare_reg.py`
+(the Bayesian-L2 comparison on cells, which re-runs the parameter-free solver on the cached fields).
+The cells are staged by `make_cells.py`. The exact commands, the script-to-figure map, and the data-generation pipeline that
 produces the shards are in the
 [sweep README](../../_validation/heuristic_sweep/README.md#reproducing-the-report). The data itself
 lives in the private stage directory, not this repo; the scripts take its path from `$STAGE`.
@@ -315,9 +335,9 @@ lives in the private stage directory, not this repo; the scripts take its path f
 
 The L1 grid is truncated at 0.40 exactly where the hardest cells want more sparsity. Before any
 small-footprint recommendation is trusted, extend the L1 axis upward and re-sweep the saturated
-corner. The diffuse-cell run closes the transfer question for the plateau but leaves two threads: the
-parameter-free Bayesian-L2 comparison was not re-run on cells, so smoothness-versus-sparsity on
-diffuse fields is still untested, and the cells were run only at best imaging, so the SNR-tracking
-seen there is inferred from the strength axis, not a second imaging ladder. With the L1 grid extended,
-the defaults above can ship as the UI's per-regime starting points, the same role the tuning defaults
-play in [displacement-method-selection.md](./displacement-method-selection.md).
+corner. The diffuse-cell run closes both the transfer question and the smoothness-versus-sparsity
+question (sparsity still wins, by about 1.3 times), and leaves one thread: the cells were run only at
+best imaging, so the SNR-tracking seen there is inferred from the strength axis, not a second imaging
+ladder. With the L1 grid extended, the defaults above can ship as the UI's per-regime starting points,
+the same role the tuning defaults play in
+[displacement-method-selection.md](./displacement-method-selection.md).
