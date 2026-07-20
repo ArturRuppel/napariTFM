@@ -51,8 +51,9 @@ def rasterize_gt(scene, N):
             w = np.exp(-r2 / (2 * foot ** 2))
         else:  # tophat
             w = (r2 < foot ** 2).astype(np.float32)
-        tx += sgn * mag * ux * w
-        ty += sgn * mag * uy * w
+        # contractile: each pole pulls toward the pair centre (inward = -sgn·axis)
+        tx += -sgn * mag * ux * w
+        ty += -sgn * mag * uy * w
     return np.stack([tx, ty], 0), (tx ** 2 + ty ** 2) > 0
 
 

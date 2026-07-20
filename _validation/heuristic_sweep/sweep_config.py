@@ -27,7 +27,11 @@ CONDITIONS = ["realistic"]
 # --- displacement stage -----------------------------------------------------
 DISP_METHOD = "PIV"          # bridge used PIV; ILK/FFD parameterized below
 
-# Resolution knob: swept, one cached field per value, kept in the force search.
+# Resolution knob: the displacement method's INTERNAL spatial-resolution control,
+# swept at a FIXED output grid (downscale_factor is a fixed pipeline convention,
+# never swept). For PIV that is piv_window (smaller = finer/noisier, larger =
+# coarser/smoother). At high SNR the window barely matters; at low SNR it is the
+# bias-variance tradeoff -- so the axis earns its keep across the noisy scenes.
 RES_KNOB = {"PIV": "piv_window", "ILK": "ilk_radius", "FFD": "ffd_level_spacing"}
 RES_VALUES = {
     "PIV": [8, 12, 16, 24, 32],
@@ -47,9 +51,9 @@ CONV_TOL = 0.01              # rel. L2 change between successive settings -> con
 DOWNSCALE_FACTOR = 4         # global binning, held fixed (700 -> ~175 grid)
 
 # --- forward / substrate ----------------------------------------------------
-YOUNG_MODULUS = 20000.0      # Pa
+YOUNG_MODULUS = 1000.0       # Pa (1 kPa, calibration substrate)
 POISSON = 0.5
-PIXEL_SIZE_UM = 0.1          # camera pixel size before binning
+PIXEL_SIZE_UM = 0.165        # camera pixel size before binning
 
 # --- regularization search (elastic net) ------------------------------------
 import numpy as np
@@ -58,11 +62,30 @@ FRAC2 = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0]        # L2 ridge (0 = 
 L1_MAX_ITER = 400
 
 # --- ground-truth traction model (balanced pair) ----------------------------
-# Each pole is a uniform-traction disc; the two poles are equal and opposite,
-# directed along the pair axis. GT_TRACTION_PROFILE names the radial profile so
-# the generator and the scorer rasterize the *same* field.
-GT_TRACTION_PROFILE = "tophat"   # {"tophat", "gaussian"}
+# Each pole is a Gaussian traction spot (sigma = footprint); the two poles are
+# equal and opposite (contractile, pointing inward). Gaussian, not tophat, so the
+# sub-pixel footprints (0.1 µm = 0.6 px) rasterize to something nonzero.
+GT_TRACTION_PROFILE = "gaussian"   # {"tophat", "gaussian"}
 
 # Reference grid on which every recovered field is compared to GT, so the
 # resolution choice is a fair comparison (not biased toward coarse grids).
 GT_REFERENCE_SIZE = 700          # px, matches the source image size
+
+# --- scenario generation (make_scenes.py) -----------------------------------
+# Real bead stack: 8 timepoints (60 s apart). They fully decorrelate frame-to-frame
+# (hi-freq corr ~0.08), so they CANNOT be cross-referenced. Instead each frame is
+# self-warped: reference = frame_k, deformed = warp(frame_k) -- one real-texture
+# seed each (the original bridge construction, repeated across frames).
+# The stack path is PRIVATE -- passed via --stack, never hardcoded here.
+BEAD_CHANNEL = 1                 # ch1 = fluorescent beads (ch0 is transmitted-light/cells)
+CROP_SIZE = GT_REFERENCE_SIZE    # centre-crop the 2048² frames to this
+# The grid is (footprint x PEAK DISPLACEMENT): peak displacement is the natural SNR
+# axis, and the traction magnitude is DERIVED per cell to hit it (Green's op is
+# linear, so one forward solve per footprint sets the scale). E and separation are
+# absorbed into the derived magnitude.
+FOOTPRINTS_UM = [round(x, 3) for x in np.geomspace(0.1, 5.0, 5)]    # Gaussian sigma, µm
+PEAK_DISP_PX = [round(x, 3) for x in np.geomspace(0.5, 50.0, 6)]    # target |u|max, px
+SEPARATION_UM = 40.0             # centre-to-centre; poles stay distinct up to sigma~10µm
+AXIS_DEG = 45.0
+N_SEEDS = 8                      # one self-warped seed per real frame
+

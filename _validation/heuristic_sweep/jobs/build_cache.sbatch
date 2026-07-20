@@ -1,13 +1,13 @@
 #!/bin/bash
 # Stage 1: displacement cache, one array task per scene.
 # Submit from $CODE after `source $STAGE/env.sh` (submit.sh does the array math).
-# All methods (PIV/iLK/FFD) have GPU paths; device="auto" uses the allocated GPU.
+# Runs on CPU (common): PIV + force use CPU paths, device="auto" -> cpu, no torch.
+# For a GPU run instead: partition=gpu, qos=gpu, add --gres=gpu:1, install cuda torch.
 #SBATCH --job-name=tfm_cache
-#SBATCH --partition=gpu
-#SBATCH --qos=gpu
-#SBATCH --gres=gpu:1
+#SBATCH --partition=common
+#SBATCH --qos=normal
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --mem=8G
 #SBATCH --time=02:00:00
 #SBATCH --output=../logs/cache_%A_%a.out
 #SBATCH --error=../logs/cache_%A_%a.err

@@ -40,14 +40,10 @@ def prep(im):
 
 def run_disp(ref, dfm, method, res_val, conv_val):
     """One displacement solve at a given resolution + convergence setting."""
-    kw = {
-        "disp_method": method,
-        "disp_device": "auto",
-        "pixel_size": C.PIXEL_SIZE_UM,
-        "downscale_factor": C.DOWNSCALE_FACTOR,
-        C.RES_KNOB[method]: res_val,
-        C.CONV_KNOB[method]: conv_val,
-    }
+    kw = {"disp_method": method, "disp_device": "auto",
+          "pixel_size": C.PIXEL_SIZE_UM, "downscale_factor": C.DOWNSCALE_FACTOR}
+    kw[C.RES_KNOB[method]] = res_val      # for PIV this IS downscale_factor (overrides default)
+    kw[C.CONV_KNOB[method]] = conv_val
     p = DisplacementParameters(**kw)
     g = calculate_displacement_field(ref, dfm, p)
     try:
