@@ -14,10 +14,12 @@
 set -euo pipefail
 export TMPDIR="${TMPDIR:-/local/scratch/tmp}"   # node /tmp is capped at 500 MB
 export NUMBA_CACHE_DIR="$TMPDIR"
-: "${STAGE:?source env.sh first}" "${CODE:?}" "${CONDITION:?}"
+: "${STAGE:?source env.sh first}" "${CODE:?}"
 cd "$CODE"
-mapfile -t SCENES < <(ls -1 "$STAGE/scenes/$CONDITION")
-SCENE="${SCENES[$SLURM_ARRAY_TASK_ID]}"
-echo "task $SLURM_ARRAY_TASK_ID -> scene $SCENE"
-python sweep_forces.py --stage "$STAGE" --condition "$CONDITION" --scene "$SCENE" \
-    --out "$STAGE/results/sweep_${CONDITION}_${SCENE}.csv"
+# Flat array over every condition x scene: ITEMS[i] = "<condition>/<scene_id>".
+mapfile -t ITEMS < <(cd "$STAGE/scenes" && ls -d */* 2>/dev/null)
+ITEM="${ITEMS[$SLURM_ARRAY_TASK_ID]}"
+COND="${ITEM%%/*}"; SCENE="${ITEM##*/}"
+echo "task $SLURM_ARRAY_TASK_ID -> $COND / $SCENE"
+python sweep_forces.py --stage "$STAGE" --condition "$COND" --scene "$SCENE" \
+    --out "$STAGE/results/sweep_${COND}_${SCENE}.csv"

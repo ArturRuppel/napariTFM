@@ -20,9 +20,16 @@ Design (agreed 2026-07-20):
 from __future__ import annotations
 
 # --- imaging conditions -----------------------------------------------------
-# Start with the ceiling only (realistic, undegraded). The jitter+camera-noise
-# degradation ladder slots in here later as extra condition labels.
+# The condition ladder is now the synthetic scenario stacks under IMAGES_DIR: 8
+# scenarios sampling (bead density x NA/PSF x exposure/SNR), each a (4,512,512)
+# TYX stack whose frame 0 is the zero-jitter reference and frames 1-3 add
+# registration jitter [0.067, 0.133, 0.2] px. Each (scenario, jitter-frame) pair
+# is one condition -> one full footprint x disp sweep. make_scenes enumerates
+# them from disk and labels them "s<idx>_j<frame>"; CONDITIONS below is only a
+# fallback default for single-condition runs.
 CONDITIONS = ["realistic"]
+REF_FRAME = 0                    # frame 0 = zero-jitter reference (per stack metadata)
+JITTER_FRAMES = [1, 3]           # deform-source frames -> 2 conditions/scenario (mild/severe jitter)
 
 # --- displacement stage -----------------------------------------------------
 DISP_METHOD = "PIV"          # bridge used PIV; ILK/FFD parameterized below
@@ -53,7 +60,7 @@ DOWNSCALE_FACTOR = 4         # global binning, held fixed (700 -> ~175 grid)
 # --- forward / substrate ----------------------------------------------------
 YOUNG_MODULUS = 1000.0       # Pa (1 kPa, calibration substrate)
 POISSON = 0.5
-PIXEL_SIZE_UM = 0.165        # camera pixel size before binning
+PIXEL_SIZE_UM = 0.1612       # synthetic-stack pitch (pitch_um in the TIFF metadata)
 
 # --- regularization search (elastic net) ------------------------------------
 import numpy as np
@@ -69,26 +76,21 @@ GT_TRACTION_PROFILE = "gaussian"   # {"tophat", "gaussian"}
 
 # Reference grid on which every recovered field is compared to GT, so the
 # resolution choice is a fair comparison (not biased toward coarse grids).
-GT_REFERENCE_SIZE = 700          # px, matches the source image size
+GT_REFERENCE_SIZE = 512          # px, matches the synthetic-stack size
 
 # --- scenario generation (make_scenes.py) -----------------------------------
-# Real bead stack: 8 timepoints (60 s apart), same beads a sub-pixel real motion
-# apart (measured median ~0.24 px, zero-lag corr 0.7-0.95 -- well-matched). Each
-# scene is a CROSS-FRAME pair: deformed = warp(frame_a, u), reference = frame_b (a
-# different real frame). The real inter-frame motion rides along as genuine
-# reference-vs-deformed noise; GT stays u. No seed axis (a same-frame self-warp
-# adds no independent between-image noise, so it bought nothing).
-# The stack path is PRIVATE -- passed via --stack, never hardcoded here.
-BEAD_CHANNEL = 1                 # ch1 = fluorescent beads (ch0 is transmitted-light/cells)
-CROP_SIZE = GT_REFERENCE_SIZE    # centre-crop the 2048² frames to this
+# Each scene is a CROSS-FRAME pair from one synthetic scenario stack: reference =
+# frame 0 (zero jitter), deformed = warp(frame_k, u) for a jitter frame k in
+# JITTER_FRAMES. The registration jitter + photon noise between frame 0 and frame k
+# rides along as genuine reference-vs-deformed noise; GT stays u. No seed axis.
+BEAD_CHANNEL = 0                 # synthetic stacks are single-channel (TYX); channel 0
+CROP_SIZE = GT_REFERENCE_SIZE    # synthetic stacks are already 512²; no crop needed
 # The grid is (footprint x PEAK DISPLACEMENT): peak displacement is the natural SNR
 # axis, and the traction magnitude is DERIVED per cell to hit it (Green's op is
 # linear, so one forward solve per footprint sets the scale). E and separation are
 # absorbed into the derived magnitude.
 FOOTPRINTS_UM = [round(x, 3) for x in np.geomspace(0.1, 5.0, 5)]    # Gaussian sigma, µm
 PEAK_DISP_PX = [round(x, 3) for x in np.geomspace(0.5, 50.0, 6)]    # target |u|max, px
-SEPARATION_UM = 40.0             # centre-to-centre; poles stay distinct up to sigma~10µm
+SEPARATION_UM = 30.0             # centre-to-centre; on 512 keeps boundary leak ~8% (vs 11% at 40)
 AXIS_DEG = 45.0
-DEFORM_FRAME = 0                 # real frame warped by u -> deformed.tif
-REF_FRAME = 1                    # different real frame -> reference.tif (cross-frame pair)
 
