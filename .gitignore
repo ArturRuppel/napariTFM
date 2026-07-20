@@ -87,6 +87,9 @@ Thumbs.db
 !_validation/**/*.png
 !_validation/**/*.gif
 
+# Docs figures are deliverables: track them despite the global *.png ignore
+!docs/images/*.png
+
 # Experimentation / scratch work — not part of the package
 _dev/
 
