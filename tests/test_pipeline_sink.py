@@ -1,7 +1,7 @@
 """The batch orchestrator notifies an optional PipelineSink at stage/frame
 boundaries (worklist §5: one code path for headless and in-napari runs).
 
-These tests pin the hook contract the live ``ViewerSink`` relies on — which
+These tests pin the hook contract the ``QueueProgressSink`` relies on — which
 stage keys fire, the (0-based) frame indices, and the per-stage ``info`` — while
 proving that with no sink attached the run is a silent no-op (headless is
 byte-for-byte unchanged).

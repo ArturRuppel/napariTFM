@@ -220,6 +220,12 @@ class _StubVisualizationManager:
     def stream_vector_field_frame(self, kind, frame_index, field_frame):
         self.vector_stream_frames.append((kind, frame_index, field_frame))
 
+    def display_vector_field(self, kind, field, vis_params):
+        # Lazy circle-click display: records the call and the single current
+        # frame built up front (0 here — the stub viewer has no slider).
+        self.vector_stream_calls.append((kind, int(field.shape[0]), dict(vis_params)))
+        self.vector_stream_frames.append((kind, 0, field[0]))
+
     def begin_stress_stream(self, num_frames, max_stress, downscale_factor):
         self.stress_stream_calls.append((num_frames, max_stress, downscale_factor))
 
@@ -391,6 +397,42 @@ _restore_stubbed_modules()
 # ---------------------------------------------------------------------------
 
 
+class _SyncSignal:
+    """Minimal .connect/.emit stand-in for a Qt signal."""
+
+    def __init__(self):
+        self._cb = None
+
+    def connect(self, cb):
+        self._cb = cb
+
+    def emit(self, *args):
+        if self._cb is not None:
+            self._cb(*args)
+
+
+class _SyncWorker:
+    """Runs a thread_worker's function synchronously on .start().
+
+    Replaces the real napari worker in tests so a circle/node click's off-thread
+    decode resolves deterministically, without a live Qt event loop.
+    """
+
+    def __init__(self, fn):
+        self._fn = fn
+        self.returned = _SyncSignal()
+        self.errored = _SyncSignal()
+
+    def start(self):
+        try:
+            self.returned.emit(self._fn())
+        except Exception as exc:  # pragma: no cover - defensive
+            self.errored.emit(exc)
+
+    def quit(self):
+        pass
+
+
 def _stub_main_widget(monkeypatch):
     """Create a napariTFMWidget with all heavy sub-widgets replaced by stubs."""
     monkeypatch.setattr(_widget, "DataManager", _ExtendedStubDataManager)
@@ -403,6 +445,10 @@ def _stub_main_widget(monkeypatch):
     )
     monkeypatch.setattr(_widget, "FTTCWidget", _StubStageWidget)
     monkeypatch.setattr(_widget, "StressWidget", _StubStageWidget)
+    monkeypatch.setattr(
+        _widget.napariTFMWidget, "_make_worker",
+        lambda self, fn: _SyncWorker(fn),
+    )
     return _widget.napariTFMWidget(object())
 
 
@@ -795,7 +841,9 @@ def test_load_displacement_streams_to_viewer(monkeypatch, app, tmp_path):
     assert vis_params["v_max"] == pytest.approx(1.5)
     assert vis_params["downscale_factor"] == 4
 
-    assert [f[1] for f in viz.vector_stream_frames] == [0, 1]
+    # Lazy display: only the current frame (0) is built up front; the rest
+    # render on demand as the user scrubs.
+    assert [f[1] for f in viz.vector_stream_frames] == [0]
     assert all(f[0] == "displacement" for f in viz.vector_stream_frames)
 
 
@@ -1048,6 +1096,127 @@ def test_reselecting_an_experiment_does_not_replay_data_until_clicked_again(monk
         disp_a,
         rtol=1e-5,
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests: decoded-array cache (instant re-display, mtime/size invalidation)
+# ---------------------------------------------------------------------------
+
+
+def _count_decodes(widget, monkeypatch):
+    """Wrap _decode_stage_arrays to count how often the real OME-TIFF decode runs."""
+    calls = []
+    real = widget._decode_stage_arrays
+
+    def _counting(path):
+        calls.append(path)
+        return real(path)
+
+    monkeypatch.setattr(widget, "_decode_stage_arrays", _counting)
+    return calls
+
+
+def test_reclicking_same_stage_does_not_redecode(monkeypatch, app, tmp_path):
+    """A second click on the same stage of the same experiment hits the cache —
+    the OME-TIFF is decoded once, not again."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "cache_reclick"
+    folder.mkdir()
+    _write_ntfm(folder, displacement_field=np.ones((2, 3, 4, 2)) * 1.5)
+    _select(widget, folder)
+
+    decodes = _count_decodes(widget, monkeypatch)
+    widget._on_stage_node_clicked("displacement")
+    widget._on_stage_node_clicked("displacement")
+
+    assert len(decodes) == 1
+
+
+def test_second_stage_click_reuses_the_experiment_decode(monkeypatch, app, tmp_path):
+    """Clicking Force after Displacement on the same experiment reuses the one
+    cached bundle — the whole container is not decoded twice."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "cache_crossstage"
+    folder.mkdir()
+    _write_ntfm(
+        folder,
+        displacement_field=np.ones((1, 2, 3, 2)) * 0.3,
+        force_field=np.ones((1, 2, 3, 2)) * 100.0,
+    )
+    _select(widget, folder)
+
+    decodes = _count_decodes(widget, monkeypatch)
+    widget._on_stage_node_clicked("displacement")
+    widget._on_stage_node_clicked("force")
+
+    assert len(decodes) == 1
+    assert widget.data_manager.force_results is not None
+
+
+def test_rewritten_ntfm_invalidates_cache(monkeypatch, app, tmp_path):
+    """A rewrite (a Run) changes the .ntfm's identity, so the next click decodes
+    the fresh data rather than serving the stale cached bundle."""
+    widget = _stub_main_widget(monkeypatch)
+    folder = tmp_path / "cache_invalidate"
+    folder.mkdir()
+    _write_ntfm(folder, displacement_field=np.ones((1, 2, 2, 2)) * 1.0)
+    _select(widget, folder)
+    widget._on_stage_node_clicked("displacement")
+    assert widget.data_manager.displacement_results.displacement_field.max() == pytest.approx(1.0)
+
+    # Rewrite with a different shape (so size — not just mtime — differs) and new values.
+    _write_ntfm(folder, displacement_field=np.ones((1, 3, 3, 2)) * 9.0)
+    widget._on_stage_node_clicked("displacement")
+
+    assert widget.data_manager.displacement_results.displacement_field.max() == pytest.approx(9.0)
+
+
+class _DeferredWorker:
+    """A worker whose function only runs when .fire() is called (not on .start())."""
+
+    def __init__(self, fn):
+        self._fn = fn
+        self.returned = _SyncSignal()
+        self.errored = _SyncSignal()
+
+    def start(self):
+        pass
+
+    def fire(self):
+        self.returned.emit(self._fn())
+
+    def quit(self):
+        pass
+
+
+def test_stale_decode_does_not_paint_after_experiment_switch(monkeypatch, app, tmp_path):
+    """A cold decode of experiment A that returns after the user has switched to
+    B must not paint A's data into B — the token/active-path guard drops it."""
+    widget = _stub_main_widget(monkeypatch)
+    folder_a = tmp_path / "race_a"
+    folder_a.mkdir()
+    _write_ntfm(folder_a, displacement_field=np.ones((1, 2, 2, 2)) * 1.0)
+    folder_b = tmp_path / "race_b"
+    folder_b.mkdir()
+    _write_ntfm(folder_b, displacement_field=np.ones((1, 2, 2, 2)) * 9.0)
+
+    widget._project_open = True
+    widget._update_disclosure()
+    widget.experiments_list.set_experiments([str(folder_a), str(folder_b)])
+    widget.experiments_list.set_active(str(folder_a))
+
+    workers = []
+    monkeypatch.setattr(
+        _widget.napariTFMWidget, "_make_worker",
+        lambda self, fn: workers.append(_DeferredWorker(fn)) or workers[-1],
+    )
+
+    widget._on_stage_node_clicked("displacement")   # A's decode, deferred
+    widget.experiments_list.set_active(str(folder_b))  # switch before it returns
+    workers[0].fire()                                # A's decode returns now
+
+    # A's data must not have leaked into B (which was never clicked into).
+    assert widget.data_manager.displacement_results is None
 
 
 # ---------------------------------------------------------------------------

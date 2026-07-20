@@ -217,6 +217,92 @@ def test_vector_field_streams_frame_in_place_and_follows_slider(kind, mag_name, 
     assert cache['data'][1] is None  # not computed yet
 
 
+# --- lazy circle-click display (build current frame, rest on scrub) --------
+
+@pytest.mark.parametrize("kind,mag_name,update", [
+    ("displacement", "Displacement Magnitude", "update_displacement_frame"),
+    ("force", "Force Magnitude", "update_force_frame"),
+])
+def test_display_vector_field_builds_only_current_frame(kind, mag_name, update):
+    viewer = _FakeViewer()
+    dm = _DataManager()
+    manager = _make_manager(viewer, dm)
+
+    field = np.ones((3, 4, 4, 2), dtype=np.float32)
+    manager.display_vector_field(kind, field, _vis_params())
+
+    cache_attr = 'displacement_vector_cache' if kind == 'displacement' else 'force_vector_cache'
+    cache = getattr(dm, cache_attr)
+    assert cache['num_frames'] == 3
+    # Only the current frame (0) is built up front; the rest stay lazy.
+    assert cache['data'][0] is not None
+    assert cache['data'][1] is None
+    assert cache['data'][2] is None
+    # Magnitude stack sized for the whole stack, but only frame 0 filled.
+    mag = viewer.layers[mag_name]
+    assert mag.data.shape == (3, 4, 4)
+    assert np.allclose(mag.data[0], np.sqrt(2.0))
+    assert np.all(mag.data[1] == 0.0)
+    assert np.all(mag.data[2] == 0.0)
+    # The source field is retained so scrubbing can build the rest.
+    assert cache['source_field'] is field
+
+
+@pytest.mark.parametrize("kind,mag_name,update", [
+    ("displacement", "Displacement Magnitude", "update_displacement_frame"),
+    ("force", "Force Magnitude", "update_force_frame"),
+])
+def test_scrubbing_builds_unbuilt_frame_on_demand(kind, mag_name, update):
+    viewer = _FakeViewer()
+    dm = _DataManager()
+    manager = _make_manager(viewer, dm)
+
+    field = np.ones((3, 4, 4, 2), dtype=np.float32)
+    manager.display_vector_field(kind, field, _vis_params())
+    cache_attr = 'displacement_vector_cache' if kind == 'displacement' else 'force_vector_cache'
+    cache = getattr(dm, cache_attr)
+    assert cache['data'][2] is None
+
+    # Scrub to frame 2: it is rendered on demand from the retained source field.
+    getattr(manager, update)(2)
+
+    assert cache['data'][2] is not None
+    mag = viewer.layers[mag_name]
+    assert np.allclose(mag.data[2], np.sqrt(2.0))
+
+
+def test_scrubbing_to_built_frame_does_not_rebuild():
+    """Revisiting a frame already built reuses the cached vectors (cheap set),
+    it does not re-render from the source."""
+    viewer = _FakeViewer()
+    dm = _DataManager()
+    manager = _make_manager(viewer, dm)
+
+    field = np.ones((3, 4, 4, 2), dtype=np.float32)
+    manager.display_vector_field('displacement', field, _vis_params())
+    built = dm.displacement_vector_cache['data'][0]
+
+    manager.update_displacement_frame(0)
+
+    assert dm.displacement_vector_cache['data'][0] is built  # same object, not rebuilt
+
+
+def test_scrubbing_does_not_build_hidden_stage():
+    """When another stage has isolated the viewer (this stage's magnitude layer
+    hidden), scrubbing must not spend CPU rendering frames nobody can see."""
+    viewer = _FakeViewer()
+    dm = _DataManager()
+    manager = _make_manager(viewer, dm)
+
+    field = np.ones((3, 4, 4, 2), dtype=np.float32)
+    manager.display_vector_field('displacement', field, _vis_params())
+    viewer.layers['Displacement Magnitude'].visible = False  # isolated away
+
+    manager.update_displacement_frame(2)
+
+    assert dm.displacement_vector_cache['data'][2] is None  # not built while hidden
+
+
 def test_vector_field_rerun_preserves_magnitude_settings():
     viewer = _FakeViewer()
     dm = _DataManager()

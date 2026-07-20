@@ -316,6 +316,13 @@ class VisualizationManager(ErrorHandlingMixin):
             # Validate frame index
             valid_frame = self._validate_frame_index(frame_index, num_frames)
 
+            # Lazy display: a frame the circle-click load didn't build yet is
+            # rendered on demand now (which also sets the layer), so scrubbing
+            # into unseen frames fills them one at a time instead of up front.
+            if cache['data'][valid_frame] is None:
+                self._ensure_vector_frame('displacement', cache, valid_frame)
+                return
+
             # Update vectors using stored layer reference
             if 'displacement_vectors' in self._layers and self._layers['displacement_vectors'] is not None:
                 with self.viewer.events.blocker_all():
@@ -425,6 +432,12 @@ class VisualizationManager(ErrorHandlingMixin):
 
             # Validate frame index
             valid_frame = self._validate_frame_index(frame_index, num_frames)
+
+            # Lazy display: build a not-yet-rendered frame on demand (see
+            # update_displacement_frame).
+            if cache['data'][valid_frame] is None:
+                self._ensure_vector_frame('force', cache, valid_frame)
+                return
 
             # Update vectors using stored layer reference
             if 'force_vectors' in self._layers and self._layers['force_vectors'] is not None:
@@ -739,6 +752,10 @@ class VisualizationManager(ErrorHandlingMixin):
                 'num_frames': num_frames,
                 'vectors_visible': vec_visible,
                 'magnitude_ready': False,
+                # Set by display_vector_field for the lazy circle-click path, so
+                # scrubbing can build unbuilt frames on demand. None for the live
+                # stream, which fills every frame as it computes.
+                'source_field': None,
             }
             setattr(self.data_manager, cfg['cache_attr'], cache)
 
@@ -765,45 +782,15 @@ class VisualizationManager(ErrorHandlingMixin):
 
         The frame is upscaled, reduced to a magnitude written in place into the
         pre-allocated stack, turned into a vector overlay (cached for later
-        scrubbing), and the slider auto-advances to it.
+        scrubbing), and the slider auto-advances to it. Used by the live run /
+        preview streaming, which fills every frame as it computes.
         """
         try:
             cfg = self._VECTOR_FIELD_CONFIG[kind]
             cache = getattr(self.data_manager, cfg['cache_attr'], None)
             if cache is None:
                 return
-
-            vis = cache['parameters']
-            downscale = vis.get('downscale_factor', 1)
-            vmax = vis['v_max']
-
-            display_field = self._upscale_field(field_frame, downscale)
-            magnitude = np.sqrt(np.sum(display_field ** 2, axis=-1))
-
-            if not cache['magnitude_ready']:
-                self._allocate_vector_field_magnitude(cfg, cache, magnitude.shape, vmax)
-                cache['original_resolution'] = field_frame.shape[:2]
-                cache['magnitude_ready'] = True
-
-            mag_layer = self._layers.get(cfg['magnitude_key'])
-            if mag_layer is None:
-                return
-            magnitudes = mag_layer.data
-            if frame_index < 0 or frame_index >= magnitudes.shape[0]:
-                return
-            magnitudes[frame_index] = magnitude
-
-            field_scaled = display_field * vis['arrow_scale'] / vmax * 50
-            vectors, colors = self._create_vector_visualization(
-                field_scaled, display_field, vis['vector_stride'], vmax,
-                colormap=cfg['vector_colormap'],
-            )
-            cache['data'][frame_index] = vectors
-            cache['colors'][frame_index] = colors
-
-            with self.viewer.events.blocker_all():
-                self._set_streamed_vectors(cfg, vectors, colors, cache['vectors_visible'])
-            mag_layer.refresh()
+            self._render_vector_frame(cfg, cache, field_frame, frame_index)
             self._advance_to_frame(frame_index)
 
         except Exception as e:
@@ -816,6 +803,110 @@ class VisualizationManager(ErrorHandlingMixin):
                 source="visualization",
             )
             self.handle_error(error)
+
+    def _render_vector_frame(self, cfg, cache, field_frame: np.ndarray, frame_index: int) -> None:
+        """Build and show one vector-field frame: magnitude slice + vector overlay.
+
+        The per-frame work shared by the live stream (which advances the slider
+        after) and the lazy circle-click display (which builds only the current
+        frame up front and lets this fill the rest on demand as the user
+        scrubs). Does not touch the slider itself.
+        """
+        vis = cache['parameters']
+        downscale = vis.get('downscale_factor', 1)
+        vmax = vis['v_max']
+
+        display_field = self._upscale_field(field_frame, downscale)
+        magnitude = np.sqrt(np.sum(display_field ** 2, axis=-1))
+
+        if not cache['magnitude_ready']:
+            self._allocate_vector_field_magnitude(cfg, cache, magnitude.shape, vmax)
+            cache['original_resolution'] = field_frame.shape[:2]
+            cache['magnitude_ready'] = True
+
+        mag_layer = self._layers.get(cfg['magnitude_key'])
+        if mag_layer is None:
+            return
+        magnitudes = mag_layer.data
+        if frame_index < 0 or frame_index >= magnitudes.shape[0]:
+            return
+        magnitudes[frame_index] = magnitude
+
+        field_scaled = display_field * vis['arrow_scale'] / vmax * 50
+        vectors, colors = self._create_vector_visualization(
+            field_scaled, display_field, vis['vector_stride'], vmax,
+            colormap=cfg['vector_colormap'],
+        )
+        cache['data'][frame_index] = vectors
+        cache['colors'][frame_index] = colors
+
+        with self.viewer.events.blocker_all():
+            self._set_streamed_vectors(cfg, vectors, colors, cache['vectors_visible'])
+        mag_layer.refresh()
+
+    def display_vector_field(self, kind: str, field: np.ndarray, vis_params: dict) -> None:
+        """Show a persisted vector field *lazily* — the circle-click display path.
+
+        Unlike the live stream (which fills every frame as it computes), this
+        builds only the frame currently under the slider and remembers the
+        source ``field`` on the cache, so each other frame is rendered on demand
+        the first time the user scrubs to it (see ``update_*_frame``). That keeps
+        a click on a stage with many frames near-instant instead of upscaling and
+        glyphing the whole stack up front.
+        """
+        try:
+            num_frames = int(field.shape[0])
+            self.begin_vector_field_stream(kind, num_frames, vis_params)
+            cfg = self._VECTOR_FIELD_CONFIG[kind]
+            cache = getattr(self.data_manager, cfg['cache_attr'], None)
+            if cache is None:
+                return
+            # Retain the source so scrubbing can build unbuilt frames on demand.
+            cache['source_field'] = field
+            current = self._current_frame_index(num_frames)
+            self._render_vector_frame(cfg, cache, field[current], current)
+            self._advance_to_frame(current)
+        except Exception as e:
+            error = self.create_error(
+                message="Failed to display vector field",
+                details=str(e),
+                severity=ErrorSeverity.ERROR,
+                recovery_hint="Check layer/array consistency",
+                original_error=e,
+                source="visualization",
+            )
+            self.handle_error(error)
+
+    def _current_frame_index(self, num_frames: int) -> int:
+        """The slider's current frame, clamped to ``[0, num_frames - 1]`` (0 if unknown)."""
+        try:
+            step = int(self.viewer.dims.current_step[0])
+        except Exception:
+            step = 0
+        return max(0, min(step, num_frames - 1))
+
+    def _ensure_vector_frame(self, kind: str, cache, frame_index: int) -> bool:
+        """Build ``frame_index`` from the cached source field if not yet built.
+
+        Returns ``True`` when the frame's vectors are now available in the cache
+        (either already built, or built just now). The lazy-display counterpart
+        of the live stream having filled every frame up front.
+        """
+        if cache['data'][frame_index] is not None:
+            return True
+        source = cache.get('source_field')
+        if source is None or frame_index >= source.shape[0]:
+            return False
+        cfg = self._VECTOR_FIELD_CONFIG[kind]
+        # Only build for a stage the user is actually looking at: if another
+        # stage has isolated the viewer (this stage's magnitude layer hidden),
+        # scrubbing must not spend CPU rendering frames nobody can see. A
+        # re-click rebuilds from scratch, so nothing is lost.
+        mag_layer = self._layers.get(cfg['magnitude_key'])
+        if mag_layer is None or not getattr(mag_layer, 'visible', True):
+            return False
+        self._render_vector_frame(cfg, cache, source[frame_index], frame_index)
+        return cache['data'][frame_index] is not None
 
     def _allocate_vector_field_magnitude(self, cfg, cache, upscaled_shape, vmax) -> None:
         """Allocate the magnitude stack and (re)bind its image layer + colorbar."""

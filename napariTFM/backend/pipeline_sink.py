@@ -1,22 +1,23 @@
 """Optional observation surface for a batch / run-all pass.
 
 The batch orchestrator (:class:`napariTFM.backend.batch_analysis.BatchAnalysis`)
-runs the *same* compute whether or not a napari viewer is present — item §5 of
-the worklist: "keep a headless mode, but the same code, only without the
-viewer". A :class:`PipelineSink` is how the viewer plugs in: the orchestrator
-notifies the sink at each stage and frame boundary, and a live ``ViewerSink``
-turns those notifications into napari layer updates so a run streams into the
-viewer exactly as if each stage button were pressed in turn.
+runs the *same* compute whether or not anyone is watching. A
+:class:`PipelineSink` is how an observer plugs in: the orchestrator notifies the
+sink at each stage and frame boundary. The concrete sink in use is
+:class:`napariTFM.backend.queue_progress_sink.QueueProgressSink`, which each
+worker process attaches to relay per-stage/per-frame *progress* back to the GUI
+across the process boundary. Sinks no longer stream computed frames into a live
+viewer — a batch run computes headless in background processes and results are
+inspected by reading the finished ``.ntfm`` from disk.
 
-A headless run attaches no sink (``sink=None``); every hook is then a silent
-no-op (the orchestrator short-circuits on ``sink is None``) and the run is
-byte-for-byte what it was before sinks existed. The sink is therefore purely
-additive — it never alters what is computed or written to disk, only what
-(optionally) gets shown while it runs.
+A run with no sink (``sink=None``) makes every hook a silent no-op (the
+orchestrator short-circuits on ``sink is None``) and the run is byte-for-byte
+what it was before sinks existed. The sink is therefore purely additive — it
+never alters what is computed or written to disk, only what progress gets
+reported while it runs.
 
 This module is deliberately free of Qt and napari imports so the backend stays
-headless-importable; the viewer-coupled implementation lives in
-``napariTFM.utilities.viewer_sink``.
+headless-importable.
 
 Stage keys are the three pipeline stages: ``"displacement"``, ``"force"`` and
 ``"stress"``.

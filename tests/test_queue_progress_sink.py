@@ -1,8 +1,8 @@
-"""QueueProgressSink: the process-boundary counterpart to ViewerSink.
+"""QueueProgressSink: the one concrete PipelineSink.
 
-A parallel Run-selected worker (backend/batch_analysis.py's _run_position_headless)
-attaches one of these instead of a ViewerSink, so its stage/frame lifecycle
-hooks reach the parent process via a plain queue instead of a Qt signal.
+A background Run-selected worker (backend/batch_analysis.py's _run_position_headless)
+attaches one of these so its stage/frame lifecycle hooks reach the parent
+process via a queue for the poll timer to drain.
 """
 
 import queue
@@ -36,7 +36,7 @@ def test_stage_frame_enqueues_growing_fraction():
 
 
 def test_stage_frame_falls_back_to_one_frame_when_num_frames_is_zero():
-    """Mirrors ViewerSink's max(self._stage_num_frames, 1) guard: a
+    """Mirrors the max(self._stage_num_frames, 1) guard: a
     zero-frame stage still reports a defined fraction instead of dividing by
     zero."""
     q = queue.Queue()

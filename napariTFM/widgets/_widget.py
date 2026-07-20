@@ -1,9 +1,15 @@
 import json
 import logging
 import math
+from collections import OrderedDict
 from contextlib import nullcontext
 from datetime import datetime
 from typing import Any
+
+# How many experiments' decoded stage-array bundles to keep resident for
+# instant re-display. Bundles hold full displacement/force/stress arrays, so
+# this trades memory for click latency; small on purpose.
+_STAGE_ARRAY_CACHE_SIZE = 4
 
 import napari
 from qtpy.QtCore import Qt, QObject, QTimer, QSize
@@ -36,7 +42,6 @@ from napariTFM.backend.batch_analysis import BatchAnalysis
 from napariTFM.backend._torch_warmup import warm_up_torch
 from napariTFM.backend.ntfm_writer import write_experiment_ntfm
 from napariTFM.utilities.batch_output import experiment_ntfm_path, resolve_output_plan
-from napariTFM.utilities.viewer_sink import ViewerSink
 
 logger = logging.getLogger(__name__)
 
@@ -852,6 +857,17 @@ class napariTFMWidget(QWidget):
         container_layout.addWidget(self.experiments_list)
 
         self._active_experiment: str | None = None
+        # Small LRU of decoded stage-array bundles, keyed by the .ntfm's
+        # (path, mtime, size), so a circle click that revisits an experiment —
+        # or clicks a second stage of the one just loaded — is instant instead
+        # of re-decoding the whole OME-TIFF. A stage Run rewrites the .ntfm, so
+        # its mtime change invalidates the stale entry automatically.
+        self._stage_arrays_cache: "OrderedDict[tuple, object]" = OrderedDict()
+        # Monotonic token + worker handle for the off-thread cold decode: a
+        # newer circle/row click supersedes an in-flight one so a slow decode
+        # can never paint a stage the user has already clicked away from.
+        self._stage_load_token = 0
+        self._stage_load_worker = None
         # ntfm-backed stages whose arrays are currently decoded into DataManager
         # + the viewer for the active experiment. Loading is display-only and
         self._pipeline_context_label = QLabel("Pipeline")
@@ -1315,12 +1331,13 @@ class napariTFMWidget(QWidget):
         config. The button is disabled when nothing is selected, so this is a
         no-op guard rather than the normal path.
 
-        ``num_workers`` (read once here from the experiments-list spinbox)
-        decides which of two code paths runs: ``<= 1`` keeps the original
-        synchronous, single-process, live-streaming path unchanged; ``> 1``
-        hands the folders to a process pool and polls it from a Qt timer
-        instead (no live viewer streaming in that mode -- see
-        :meth:`_run_selected_experiments_parallel`).
+        Every run goes to a background process pool and is polled from a Qt
+        timer (see :meth:`_run_selected_experiments_background`) -- the batch
+        never runs on the GUI thread and never streams frames into the viewer
+        live. ``num_workers`` (read once here from the experiments-list
+        spinbox) only sizes that pool; ``1`` means a single background worker,
+        not an in-process run. Results are inspected by reading the finished
+        ``.ntfm`` from disk, exactly as a manual circle click does.
         """
         selected = set(self.experiments_list.selected_rows())
         records = [
@@ -1338,57 +1355,19 @@ class napariTFMWidget(QWidget):
             processed_root=self.data_manager.output_dir,
             num_workers=num_workers,
         )
-        if num_workers > 1:
-            self._run_selected_experiments_parallel(config)
-        else:
-            self._run_selected_experiments_sequential(config)
+        self._run_selected_experiments_background(config)
 
-    def _run_selected_experiments_sequential(self, config: dict) -> None:
-        """Original single-process run path (unchanged behaviour).
+    def _run_selected_experiments_background(self, config: dict) -> None:
+        """The only run path: submit to a process pool, poll from a timer.
 
-        Streams each stage into the live viewer as it runs (worklist §5): the
-        same ``BatchAnalysis`` that drives a headless run also walks the rail
-        in napari via a ``ViewerSink``. Frames repaint live because the batch
-        runs synchronously on the GUI thread and the sink pumps the event loop.
-        """
-        sink = ViewerSink(
-            self.data_manager,
-            self.visualization_manager,
-            pump=QApplication.processEvents,
-            on_experiment=self._on_experiment_streaming,
-            on_stage_progress=self._on_run_selected_stage_progress,
-        )
-        analyzer = BatchAnalysis(
-            config,
-            progress_callback=self._on_batch_progress,
-            sink=sink,
-        )
-        self._active_batch = analyzer
-        self.experiments_list.set_run_selected_active(True)
-        # The sink takes over layer visibility per stage while it streams
-        # (worklist §4); snapshot now so end_run restores it however the run ends.
-        sink.begin_run()
-        try:
-            analyzer.process_all_folders()
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("Run-selected failed")
-            QMessageBox.critical(self, "Run selected", f"Batch run failed: {exc}")
-        finally:
-            sink.end_run()
-            self._active_batch = None
-            self.experiments_list.set_run_selected_active(False)
-            self.refresh_stage_statuses()
-
-    def _run_selected_experiments_parallel(self, config: dict) -> None:
-        """Process-pool run path: submit once, poll non-blockingly from a timer.
-
-        No ``ViewerSink`` is constructed here -- nothing streams into one in
-        parallel mode (workers run headless in separate processes), so
-        constructing one would sit idle or half-initialise state expecting
-        frames that never come. The per-stage progress rail simply does not
-        update live during a parallel run; it catches up via
-        ``refresh_stage_statuses`` whenever the followed position completes,
-        or at the very end. This is an accepted, deliberate trade-off.
+        Workers run headless in separate processes, so nothing streams into
+        the viewer live. The per-stage detail rail does not fill frame by
+        frame during a run; it catches up via
+        ``refresh_stage_statuses`` whenever the followed position completes, or
+        at the very end. This is the deliberate trade-off for keeping the GUI
+        thread free throughout the run. A single-worker pool
+        (``num_workers == 1``) is still a background process, not an in-process
+        run.
 
         The viewer follows the currently-selected row, or the topmost folder
         if nothing is selected yet. Cancellation reuses the existing
@@ -1509,52 +1488,15 @@ class napariTFMWidget(QWidget):
             self._active_batch.request_cancel()
             self.status_label.setText("Batch — cancelling…")
 
-    def _on_experiment_streaming(self, path: str) -> None:
-        """Make the UI follow the position a live run is now streaming (§3).
-
-        The sink calls this as the batch enters each folder. We move the
-        experiments-list row highlight and the active-experiment pointer to that
-        position so the list tracks the rail, and reveal the pipeline context so
-        the label names the position being processed. We deliberately do **not**
-        go through ``set_active`` / ``_on_active_experiment_changed``: that path
-        clears in-memory results and reloads from disk, which would fight the
-        very frames the sink is streaming into the viewer.
-        """
-        from pathlib import Path
-
-        self._active_experiment = path or None
-        self.experiments_list.follow_streaming(path)
-        if self._active_experiment:
-            self._pipeline_context_label.setText(
-                f"Pipeline · running ▸ {Path(self._active_experiment).name}"
-            )
-        self._update_disclosure()
-
-    def _on_run_selected_stage_progress(self, stage: str, status: str, fraction: float | None) -> None:
-        """Walk a run's progress onto the matching stage pill's spine node.
-
-        Mirrors the live single-stage path (``_relay_stage_status``) so a
-        run's rail fills frame by frame too, instead of sitting static
-        until ``refresh_stage_statuses`` reconciles everything at the very end.
-        """
-        section = self._stage_sections_by_key.get(stage)
-        if section is None:
-            return
-        if section.status != status:
-            section.set_status(status)
-        if fraction is not None:
-            section.set_progress(fraction)
-
     def _on_batch_stage_progress(
         self, folder: str, stage: str, status: str, fraction: float | None
     ) -> None:
         """Route one parallel-mode worker's real per-stage progress onto its row.
 
-        The parallel poll timer's per-tick stage events land here and go
-        straight to that one folder's one mini-rail dot -- the parallel-mode
-        sibling of ``_on_run_selected_stage_progress``, which does the equivalent
-        for the single-experiment detail panel's ``StageSpine`` during a
-        sequential run.
+        The poll timer's per-tick stage events land here and go straight to
+        that one folder's one mini-rail dot -- the only live per-stage feedback
+        during a run, since the batch computes headless in background
+        processes and streams nothing into the detail panel.
         """
         self.experiments_list.set_row_stage_progress(folder, stage, status, fraction)
 
@@ -1761,17 +1703,98 @@ class napariTFMWidget(QWidget):
     def _load_stage_for_display(self, path: str, stage: str) -> None:
         """Load one stage's output for viewing, narrating it in the status line.
 
-        A circle click reads and decodes an OME-TIFF series on the GUI thread,
-        which can take a moment, so it announces "Loading …" (forcing that text
-        to paint before the blocking read) and then reports whether the stage
-        actually had output to show — a click on a stage with no output is
-        otherwise a silent no-op.
+        A circle click brings a stage's pixels into the viewer. The heavy part —
+        decoding the OME-TIFF — runs off the GUI thread so the click never
+        freezes; the napari layer mutations then happen back on the GUI thread
+        when the decode returns. If the experiment's arrays are already resident
+        in the LRU (a re-click, or a second stage of the one just loaded), the
+        decode is skipped and display is applied inline, instantly. A newer
+        click supersedes an in-flight decode via a monotonic token.
         """
         label = stage.capitalize()
+        self._stage_load_token += 1
+        token = self._stage_load_token
+
+        cached = self._cached_stage_arrays(path)
+        if cached is not None:
+            self._finish_stage_display(path, stage, cached, token)
+            return
+
         self.status_label.setText(f"Loading {label}…")
         self.status_label.repaint()
-        self._load_stage_results(path, [stage])
-        # Loading a stage makes its upstream inputs resident (see _load_stage_results),
+        self._supersede_stage_load_worker()
+        worker = self._create_stage_load_worker(path, token)
+        self._stage_load_worker = worker
+        worker.returned.connect(
+            lambda payload, _stage=stage: self._on_stage_arrays_loaded(payload, _stage)
+        )
+        worker.errored.connect(
+            lambda exc, _path=path, _stage=stage, _token=token:
+            self._on_stage_load_error(exc, _path, _stage, _token)
+        )
+        worker.start()
+
+    def _supersede_stage_load_worker(self) -> None:
+        """Drop any in-flight cold decode; its stale return is token-guarded anyway."""
+        if self._stage_load_worker is not None:
+            try:
+                self._stage_load_worker.quit()
+            except Exception:
+                pass
+            self._stage_load_worker = None
+
+    def _create_stage_load_worker(self, path: str, token: int):
+        """Decode the `.ntfm` off the GUI thread, returning ``(token, path, data)``.
+
+        Uses the cache-free :meth:`_decode_stage_arrays` so it touches no napari
+        or Qt state; the GUI-thread slot stores the result in the LRU and paints
+        it.
+        """
+        return self._make_worker(
+            lambda: (token, path, self._decode_stage_arrays(path))
+        )
+
+    def _make_worker(self, fn):
+        """Wrap ``fn`` in a napari ``thread_worker`` and return the worker.
+
+        The single seam for off-thread stage decoding: tests replace this with a
+        synchronous runner so a node click resolves deterministically without a
+        live Qt event loop.
+        """
+        from napari.qt.threading import thread_worker
+
+        return thread_worker(fn)()
+
+    def _on_stage_arrays_loaded(self, payload, stage: str) -> None:
+        """GUI-thread continuation of a cold decode: cache + paint, if still current."""
+        token, path, data = payload
+        if token != self._stage_load_token:
+            return  # a newer click superseded this decode
+        self._stage_load_worker = None
+        self._store_stage_arrays(path, data)
+        self._finish_stage_display(path, stage, data, token)
+
+    def _on_stage_load_error(self, exc, path: str, stage: str, token: int) -> None:
+        logger.exception("Failed to load stage %s for %s: %s", stage, path, exc)
+        if token != self._stage_load_token:
+            return
+        self._stage_load_worker = None
+        self.status_label.setText(f"Could not load {stage.capitalize()}")
+
+    def _finish_stage_display(self, path: str, stage: str, data, token: int) -> None:
+        """Apply a decoded bundle to the viewer and report the outcome (GUI thread).
+
+        Shared tail of both the instant (cached) and off-thread (cold) paths.
+        No-ops if a newer click superseded this one, or if the user switched to
+        a different experiment while a cold decode was in flight (guarding
+        against a stale decode painting the wrong experiment's data).
+        """
+        if token != self._stage_load_token:
+            return
+        if path != self._active_experiment:
+            return
+        self._apply_stage_data(data, [stage])
+        # Loading a stage makes its upstream inputs resident (see _apply_stage_data),
         # which can newly enable a downstream stage's Preview/Run. Refresh action
         # enablement explicitly: the streamed layer adds happen under viewer event
         # blockers, so the widgets' selection-driven refresh may not fire on its own.
@@ -1782,6 +1805,7 @@ class napariTFMWidget(QWidget):
         # Report by what actually landed in the data manager, not merely that a
         # container existed: a container can hold force but no displacement, and
         # a click on the empty stage must say so rather than claim a load.
+        label = stage.capitalize()
         shown = getattr(self.data_manager, f"{stage}_results", None) is not None
         self.status_label.setText(
             f"{label} loaded" if shown else f"No {label} output to show yet"
@@ -1856,26 +1880,89 @@ class napariTFMWidget(QWidget):
     # pipeline.
     _NTFM_STAGES = ("displacement", "force", "stress")
 
-    def _read_stage_arrays(self, path: str):
-        """Read the active experiment's `.ntfm` once, for on-demand stage loads.
+    def _stage_ntfm_path(self, path: str):
+        """Resolve the `.ntfm` for an experiment folder, or ``None`` if absent."""
+        from napariTFM.utilities.batch_output import RESULTS_FILENAME, experiment_output_dir
 
-        Returns ``None`` if there's no persisted output yet, or it's
-        unreadable. Called on a circle click to bring a stage's pixels into the
-        viewer — display-only, so calculations never depend on it being resident.
+        ntfm_path = (
+            experiment_output_dir(path, self.data_manager.output_dir)
+            / RESULTS_FILENAME
+        )
+        return ntfm_path if ntfm_path.exists() else None
+
+    @staticmethod
+    def _stage_cache_key(ntfm_path):
+        """(path, mtime_ns, size) identity for a `.ntfm` — changes on any rewrite."""
+        st = ntfm_path.stat()
+        return (str(ntfm_path), st.st_mtime_ns, st.st_size)
+
+    def _cached_stage_arrays(self, path: str):
+        """Return the decoded bundle for ``path`` if resident and current, else None.
+
+        A pure cache peek: resolves the `.ntfm` identity and looks it up without
+        ever decoding, so the interactive click path can short-circuit to an
+        instant re-display. GUI-thread only (the cache is only mutated here and
+        in :meth:`_read_stage_arrays`, both on the GUI thread).
+        """
+        try:
+            ntfm_path = self._stage_ntfm_path(path)
+            if ntfm_path is None:
+                return None
+            key = self._stage_cache_key(ntfm_path)
+        except Exception:
+            return None
+        bundle = self._stage_arrays_cache.get(key)
+        if bundle is not None:
+            self._stage_arrays_cache.move_to_end(key)
+        return bundle
+
+    def _store_stage_arrays(self, path: str, bundle) -> None:
+        """Insert a freshly decoded bundle into the LRU (GUI thread only)."""
+        if bundle is None:
+            return
+        try:
+            ntfm_path = self._stage_ntfm_path(path)
+            if ntfm_path is None:
+                return
+            key = self._stage_cache_key(ntfm_path)
+        except Exception:
+            return
+        self._stage_arrays_cache[key] = bundle
+        self._stage_arrays_cache.move_to_end(key)
+        while len(self._stage_arrays_cache) > _STAGE_ARRAY_CACHE_SIZE:
+            self._stage_arrays_cache.popitem(last=False)
+
+    def _read_stage_arrays(self, path: str):
+        """Return the active experiment's decoded `.ntfm` bundle, caching it.
+
+        Cache-first wrapper around :meth:`_decode_stage_arrays`: on a hit the
+        whole OME-TIFF decode is skipped, so clicking a second stage of the same
+        experiment (or re-clicking one) is instant. GUI-thread only — the
+        off-thread decode path calls :meth:`_decode_stage_arrays` directly and
+        lets the GUI thread store the result. Returns ``None`` if there's no
+        persisted output yet, or it's unreadable.
+        """
+        cached = self._cached_stage_arrays(path)
+        if cached is not None:
+            return cached
+        bundle = self._decode_stage_arrays(path)
+        self._store_stage_arrays(path, bundle)
+        return bundle
+
+    def _decode_stage_arrays(self, path: str):
+        """Decode an experiment's `.ntfm` into a stage-array bundle (no cache).
+
+        Pure disk read + numpy/metadata assembly with no napari or Qt access, so
+        it is safe to run on a background thread. Returns ``None`` if there's no
+        persisted output yet, or it's unreadable.
         """
         import types
 
-        import numpy as np
-
         from napariTFM.utilities import ntfm as _ntfm
-        from napariTFM.utilities.batch_output import RESULTS_FILENAME, experiment_output_dir
 
         try:
-            ntfm_path = (
-                experiment_output_dir(path, self.data_manager.output_dir)
-                / RESULTS_FILENAME
-            )
-            if not ntfm_path.exists():
+            ntfm_path = self._stage_ntfm_path(path)
+            if ntfm_path is None:
                 return None
 
             # Array-native read: dense stage arrays plus the grid spacing / frame
@@ -1978,8 +2065,10 @@ class napariTFMWidget(QWidget):
         if not self._set_displacement_result_data(data):
             return
         disp = data.arrays.get("displacement_field")
-        self.visualization_manager.begin_vector_field_stream(
-            'displacement', disp.shape[0],
+        # Lazy display: only the current frame is built now; the rest render on
+        # demand as the user scrubs, so the click doesn't glyph the whole stack.
+        self.visualization_manager.display_vector_field(
+            'displacement', disp,
             {
                 'v_max': data.disp_params.d_max,
                 'vector_stride': data.disp_params.disp_vector_stride,
@@ -1987,10 +2076,6 @@ class napariTFMWidget(QWidget):
                 'downscale_factor': data.disp_params.downscale_factor,
             },
         )
-        for frame_index in range(disp.shape[0]):
-            self.visualization_manager.stream_vector_field_frame(
-                'displacement', frame_index, disp[frame_index]
-            )
 
     def _set_force_result_data(self, data) -> bool:
         """Make the force result resident in memory — no viewer stream.
@@ -2018,8 +2103,9 @@ class napariTFMWidget(QWidget):
         if not self._set_force_result_data(data):
             return
         force = data.arrays.get("force_field")
-        self.visualization_manager.begin_vector_field_stream(
-            'force', force.shape[0],
+        # Lazy display: build the current frame now, the rest on scrub.
+        self.visualization_manager.display_vector_field(
+            'force', force,
             {
                 'v_max': data.force_params.f_max,
                 'vector_stride': data.force_params.force_vector_stride,
@@ -2027,10 +2113,6 @@ class napariTFMWidget(QWidget):
                 'downscale_factor': data.force_params.downscale_factor,
             },
         )
-        for frame_index in range(force.shape[0]):
-            self.visualization_manager.stream_vector_field_frame(
-                'force', frame_index, force[frame_index]
-            )
 
     def _apply_stress_result(self, data) -> None:
         import types
@@ -2072,37 +2154,47 @@ class napariTFMWidget(QWidget):
         streams a stage nobody asked to see. Display-only — calculations always
         re-read from disk, so no prerequisite stage is pulled in.
         """
-        loaded = []
         ntfm_stages = [s for s in self._NTFM_STAGES if s in stages]
-        if ntfm_stages:
-            data = self._read_stage_arrays(path)
-            if data is not None:
-                want = set(ntfm_stages)
-                # Keep each requested stage's upstream INPUTS resident in memory
-                # (data only — no viewer stream, so display stays lazy). The arrays
-                # are already in `data`, so this is free, and it is what lets a
-                # downstream stage's Preview/Run enable after only its own circle was
-                # clicked: displacement is Force's input, force is Stress's.
-                resident = set()
-                if "force" in want:
-                    resident.add("displacement")
-                if "stress" in want:
-                    resident.update({"displacement", "force"})
-                # Applied in dependency order (displacement → force → stress) so that
-                # set_displacement_results' downstream-invalidation never clears a
-                # stage this same call is about to (re)set.
-                if "displacement" in want:
-                    self._apply_displacement_result(data)
-                elif "displacement" in resident:
-                    self._set_displacement_result_data(data)
-                if "force" in want:
-                    self._apply_force_result(data)
-                elif "force" in resident:
-                    self._set_force_result_data(data)
-                if "stress" in want:
-                    self._apply_stress_result(data)
-                loaded.extend(ntfm_stages)
-        return loaded
+        if not ntfm_stages:
+            return []
+        data = self._read_stage_arrays(path)
+        return self._apply_stage_data(data, ntfm_stages)
+
+    def _apply_stage_data(self, data, ntfm_stages) -> list:
+        """Stream/resident-load an already-decoded bundle for the given stages.
+
+        The apply half of :meth:`_load_stage_results`, split out so the
+        interactive click path can decode off-thread and then call this on the
+        GUI thread (napari layer mutations must run there). ``data`` may be
+        ``None`` (no persisted output), in which case nothing is loaded.
+        """
+        if data is None:
+            return []
+        want = set(ntfm_stages)
+        # Keep each requested stage's upstream INPUTS resident in memory
+        # (data only — no viewer stream, so display stays lazy). The arrays
+        # are already in `data`, so this is free, and it is what lets a
+        # downstream stage's Preview/Run enable after only its own circle was
+        # clicked: displacement is Force's input, force is Stress's.
+        resident = set()
+        if "force" in want:
+            resident.add("displacement")
+        if "stress" in want:
+            resident.update({"displacement", "force"})
+        # Applied in dependency order (displacement → force → stress) so that
+        # set_displacement_results' downstream-invalidation never clears a
+        # stage this same call is about to (re)set.
+        if "displacement" in want:
+            self._apply_displacement_result(data)
+        elif "displacement" in resident:
+            self._set_displacement_result_data(data)
+        if "force" in want:
+            self._apply_force_result(data)
+        elif "force" in resident:
+            self._set_force_result_data(data)
+        if "stress" in want:
+            self._apply_stress_result(data)
+        return list(ntfm_stages)
 
     def _displacement_available(self) -> bool:
         """Whether displacement is usable as Force's input — resident in memory, or the
@@ -2174,6 +2266,12 @@ class napariTFMWidget(QWidget):
 
     def _on_active_experiment_changed(self, path: str) -> None:
         self._active_experiment = path or None
+        # Invalidate any in-flight cold stage decode: bumping the token (and
+        # dropping the worker) means a decode started for the previous
+        # experiment can't paint into this one when it returns. _finish_stage_display
+        # also guards on the active path, so this is belt-and-braces.
+        self._stage_load_token += 1
+        self._supersede_stage_load_worker()
         # A single selection mutates the data manager several times in a row
         # (clear results, repoint inputs, load the mask). Each mutation would
         # otherwise drive a full ``refresh`` — a whole-list on-disk status walk —

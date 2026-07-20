@@ -261,10 +261,10 @@ class BatchAnalysis:
         # ``callback(folder_path, status)`` with status in
         # {"running", "done", "error"} so a live UI can walk the rail.
         self._progress_callback = progress_callback
-        # Optional stage/frame observation surface (worklist §5): a live napari
-        # ``ViewerSink`` streams each stage into the viewer as it runs, so an
-        # in-napari run-all and a headless run share this one code path. A
-        # headless run leaves this ``None`` and the hooks are silent no-ops.
+        # Optional stage/frame observation surface: a ``QueueProgressSink``
+        # relays per-stage/per-frame progress back to the GUI from a worker
+        # process. A headless/in-process run leaves this ``None`` and the hooks
+        # are silent no-ops. No sink streams computed frames anywhere.
         self._sink = sink
         self._cancelled = False
         # Parallel-mode pool state (populated by start_parallel).
@@ -366,20 +366,18 @@ class BatchAnalysis:
             self._process_all_folders_parallel(plan, num_workers)
 
     def _process_all_folders_sequential(self, plan) -> None:
-        """Process every folder one at a time, in-process (the original,
-        unchanged ``process_all_folders`` loop, extracted verbatim).
+        """Process every folder one at a time, in-process.
 
-        The ``ViewerSink`` (constructed by the caller, not this class) still
-        drives live frame-by-frame streaming exactly as before, via
-        ``self._emit(...)``.
+        Used by headless/CLI callers (``num_workers <= 1`` via
+        :meth:`process_all_folders`); the GUI never takes this path -- it always
+        submits to a background process pool. With no sink attached, ``_emit``
+        is a silent no-op.
         """
         for folder in self.config['root_folders']:
             if getattr(self, "_cancelled", False):
                 self._report_progress(folder, "cancelled")
                 break
             self._report_progress(folder, "running")
-            # Tell a live sink which position is now streaming so the viewer +
-            # experiments-list selection follow the rail (worklist §3).
             self._emit('experiment_started', folder)
             try:
                 self.process_folder(folder, plan.output_dirs[folder])
@@ -489,8 +487,7 @@ class BatchAnalysis:
               tuples drained from the shared progress queue (one entry per
               ``QueueProgressSink`` message a worker put since the last poll)
               -- ``status`` is ``"running"`` (with a growing ``fraction``) or
-              ``"done"`` (``fraction`` is then ``None``), mirroring
-              ``ViewerSink.on_stage_progress``'s shape. Always drained fully,
+              ``"done"`` (``fraction`` is then ``None``). Always drained fully,
               even on a call where ``events``/``finished`` report nothing new.
             - ``finished``: ``True`` once every submitted folder has been
               accounted for (no futures left pending after this call's

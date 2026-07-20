@@ -8,10 +8,9 @@ parent's 150ms poll timer (``BatchAnalysis.poll_parallel_progress``) can
 drain real per-stage, per-frame progress instead of only learning a folder's
 terminal ``done``/``error`` status when its worker fully returns.
 
-Mirrors ``ViewerSink``'s fraction math exactly (see
-``napariTFM.utilities.viewer_sink.ViewerSink``) so both sinks compute "how far
-into this stage are we" identically -- one delivers it via a Qt signal
-in-process, this one via a cross-process queue.
+This is the only concrete ``PipelineSink``: it computes "how far into this stage
+are we" from the stage's frame count and delivers that fraction to the parent
+via a cross-process queue.
 """
 
 from typing import Any, Optional
