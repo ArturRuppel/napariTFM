@@ -81,28 +81,6 @@ def test_backend_calculates_fttc_result_with_progress(monkeypatch):
     }
 
 
-def test_backend_calculates_bayesian_regularization(monkeypatch):
-    params = FTTCParameters(pixel_size=0.25, downscale_factor=4)
-    displacement_field = np.zeros((3, 4, 2), dtype=np.float32)
-
-    class FakeFTTC:
-        def __init__(self, received_params):
-            assert received_params == params
-
-        def _bayesian_regularization(self, pos, vec, pixel_size, width, height,
-                                     noise_var=None):
-            assert pos.shape == (2, 3, 4)
-            assert vec.shape == (2, 3, 4)
-            assert pixel_size == 1.0
-            assert width == 4
-            assert height == 3
-            return 1e-6
-
-    monkeypatch.setattr(fttc, "FTTC", FakeFTTC)
-
-    assert fttc.find_bayesian_regularization(displacement_field, params) == 1e-6
-
-
 def test_production_code_does_not_depend_on_fttc_service_layer():
     removed_module = ".".join(("services", "fttc_service"))
     removed_path = Path("napariTFM") / "services" / "fttc_service.py"

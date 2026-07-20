@@ -176,12 +176,17 @@ class FTTCController(VectorStageController):
             return e.value
 
     def calculate_optimal_regularization(self):
-        """Fill the manual λ with the Bayesian evidence-optimal value for the current
-        frame (synchronous). The auto-λ button; the value stays overridable.
+        """Estimate the Bayesian-L2 ridge λ on the current frame and freeze it for the batch.
 
-        Uses the loaded foreground mask (if any) directly — not gated on Mask
-        Confinement — so BL2 can read the noise from the cell-free exterior (the paper's
-        more robust estimate); with no mask it infers the noise instead (ABL2).
+        The auto-λ button (synchronous). It runs the evidence maximization on this frame and
+        stores the inferred λ in ``bayesian_lambda``; every frame of the experiment then
+        reconstructs with that same λ (the forward operator is identical across frames, so the λ
+        transfers exactly), keeping the traction maps comparable. Runs Bayesian-L2 regardless of
+        whether the ``bayesian_l2`` checkbox is set, so the estimate is available to freeze.
+
+        Uses the loaded foreground mask (if any) directly — not gated on Mask Confinement — so BL2
+        reads the noise from the cell-free exterior (the paper's more robust estimate); with no
+        mask it infers the noise instead (ABL2).
         """
         try:
             self._validate()
@@ -191,7 +196,7 @@ class FTTCController(VectorStageController):
 
         self.freeze_ui()
         try:
-            self.progress_updated.emit(0, "Calculating Bayesian regularization...")
+            self.progress_updated.emit(0, "Estimating Bayesian regularization...")
             current_frame = self._current_frame()
 
             displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
@@ -204,14 +209,14 @@ class FTTCController(VectorStageController):
                 mask = (mask_stack[min(int(current_frame), mask_stack.shape[0] - 1)]
                         if mask_stack.ndim > 2 else mask_stack)
 
-            optimal_reg = find_bayesian_regularization(displacement_field, params, mask)
-            if optimal_reg is None:
-                raise RuntimeError("Bayesian regularization failed")
+            bayesian_lambda = find_bayesian_regularization(displacement_field, params, mask)
+            if bayesian_lambda is None:
+                raise RuntimeError("Bayesian regularization estimate failed")
 
-            # Store the actual optimal value; the UI converts it to the exponent for display.
-            self.parameter_manager.set_parameter('regularization', optimal_reg)
+            # Freeze the estimate; every frame reuses this λ for a comparable reconstruction.
+            self.parameter_manager.set_parameter('bayesian_lambda', bayesian_lambda)
             self.progress_updated.emit(
-                100, f"Bayesian regularization parameter: {optimal_reg:.2e}"
+                100, f"Bayesian λ frozen for batch: {bayesian_lambda:.3g}"
             )
         except Exception as e:
             self._handle_error(str(e))

@@ -88,6 +88,11 @@ class FTTCParameters:
     # manual λ. BL2 (noise measured from the cell exterior) when a mask is loaded, ABL2
     # (noise inferred) otherwise. See napariTFM.backend.bayesian_l2.
     bayesian_l2: bool = False
+    # Frozen Bayesian-L2 ridge λ (= α/β), estimated on one representative frame (the auto-λ
+    # button) and reused across every frame for comparability -- the forward operator is identical
+    # across frames, so one λ transfers exactly. None re-infers per frame, which drifts λ frame to
+    # frame and breaks cross-frame comparison. See napariTFM.backend.bayesian_l2.
+    bayesian_lambda: Optional[float] = None
     pixel_size: float = 0.1  # in µm
     downscale_factor: int = 4
 
@@ -190,6 +195,8 @@ class UnifiedParameters:
     # Bayesian evidence-max λ selection on the plain-FTTC path (see FTTCParameters /
     # napariTFM.backend.bayesian_l2); precedence over the manual λ.
     bayesian_l2: bool = False
+    # Frozen Bayesian-L2 ridge λ estimated once and reused across frames (see FTTCParameters).
+    bayesian_lambda: Optional[float] = None
     # Confined forward solver (see FTTCParameters / napariTFM.backend.forward_tfm);
     # gated by fwd_mask_strength, shares `regularization` as its Tikhonov λ.
     fwd_mask_strength: float = 0.0
