@@ -97,7 +97,12 @@ def _piv_openpiv(ref, dfm, window=16, overlap=0.75, passes=8, coarse_factor=2.0)
     pts = np.stack([rr.ravel(), cc.ravel()], -1)
     ux = gi_u(pts).reshape(H, W)
     uy = -gi_v(pts).reshape(H, W)          # openpiv v is +up; contract wants +down
-    return np.stack([ux, uy])
+    # openpiv's grid is Cartesian-y (0 at the image BOTTOM, ascending upward), so the
+    # dense sampling above lands vertically mirrored vs this module's array contract
+    # (row 0 = top) and vs the torch backend. Flip rows to match. Verified against the
+    # torch path (flipud both components -> corr 0.99); without it the *default* CPU
+    # backend returns upside-down displacement, silently corrupting recovered traction.
+    return np.stack([ux, uy])[:, ::-1].copy()
 
 
 # ======================================================================== #

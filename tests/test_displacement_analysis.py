@@ -96,6 +96,28 @@ def test_flow_contract():
     assert np.median(flow[20:-20, 20:-20, 0]) > 0.3
 
 
+def test_cpu_recovers_localized_displacement_upright():
+    """Flip-sensitive orientation guard. A UNIFORM translation is blind to a vertical
+    flip of the field (flipud of a constant field is a no-op), so the uniform-shift
+    tests above cannot catch a row-mirrored backend. Use a displacement LOCALIZED to a
+    known off-centre spot (top quarter) and assert the recovered bump sits there, not at
+    its flipud mirror in the bottom quarter. Regression for the openpiv Cartesian-y bug
+    that silently returned upside-down displacement on the default CPU path."""
+    size = 128
+    ref = _textured_image(seed=7, size=size)
+    r0, c0, amp, sig = 32, 64, 3.0, 10.0          # bump in the TOP quarter, +down shift
+    yy, xx = np.mgrid[0:size, 0:size]
+    uy = amp * np.exp(-((yy - r0) ** 2 + (xx - c0) ** 2) / (2 * sig ** 2))
+    moving = ndimage.map_coordinates(ref, [yy - uy, xx], order=3, mode="reflect")
+
+    flow = PIVDisplacementAnalyzer(_params(piv_window=24)).calculate_flow(ref, moving)
+    mag = np.hypot(flow[..., 0], flow[..., 1])
+    pr, pc = np.unravel_index(mag.argmax(), mag.shape)
+    assert pr < size // 2, f"recovered bump at row {pr} (mirrored to bottom half -> flipud bug)"
+    assert abs(pr - r0) < 16 and abs(pc - c0) < 16, f"bump at ({pr},{pc}), expected ~({r0},{c0})"
+    assert flow[r0, c0, 1] > 0.5, f"downward shift must recover +uy, got {flow[r0, c0, 1]:.2f}"
+
+
 def test_cpu_backend_is_deterministic():
     ref = _textured_image(seed=3, size=96)
     moving = ndimage.shift(ref, shift=(0.7, -0.4), order=3, mode="reflect")
