@@ -99,7 +99,8 @@ read by the sweep; `scene.toml` is the single source of GT.
 
 ```
 $STAGE/ (= /helix/…/tfm_heuristic, set in env.sh, NOT in the repo)
-  scenes/<condition>/<scene_id>/{reference.tif,deformed.tif,scene.toml}  ← generator
+  images/tif_stacks/{scenario*_dens*_NA*_expo*.tif,manifest.csv}          ← make_stacks.py
+  scenes/<condition>/<scene_id>/{reference.tif,deformed.tif,scene.toml}  ← make_scenes.py
   cache/<condition>/<scene_id>/disp_res<k>.npz                            ← build_cache.py
   results/                                                                ← sweep_forces.py
   logs/                                                                   ← SLURM out/err
@@ -112,7 +113,13 @@ Tracked code lives in the repo (`_validation/heuristic_sweep/`); paths come from
 ## Running on Maestro (later — nothing here runs on its own)
 
 ```bash
-# from local, once the generator has populated scenes/:
+# stage 0 (local): synthesize the 8 imaging-condition bead stacks. Deterministic
+# (fixed seeds), needs psfmodels (pip install psfmodels). See make_stacks.py /
+# calib_psf.py; the one calibrated constant (flux_per_px) is frozen in calib_psf.py.
+python make_stacks.py            # -> $STAGE/images/tif_stacks/{scenario*.tif,manifest.csv}
+python make_scenes.py --images-dir "$STAGE/images/tif_stacks" --stage "$STAGE"   # -> scenes/
+
+# then, once scenes/ is populated:
 bash jobs/sync_code.sh          # stage repo code + napariTFM pkg -> $STAGE/code
 ssh aruppel@maestro.pasteur.fr
 source /helix/…/tfm_heuristic/code/env.sh   # sets STAGE, PYTHONPATH
