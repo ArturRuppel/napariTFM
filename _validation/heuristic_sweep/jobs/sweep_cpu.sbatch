@@ -8,7 +8,7 @@
 # this) so each scene's sweep starts the instant its cache lands on the gpu side.
 #SBATCH --job-name=tfm_sweep
 #SBATCH --partition=common
-#SBATCH --qos=common
+#SBATCH --qos=normal
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --time=01:00:00
