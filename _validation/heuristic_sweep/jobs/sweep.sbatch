@@ -12,6 +12,8 @@
 #SBATCH --output=../logs/sweep_%A_%a.out
 #SBATCH --error=../logs/sweep_%A_%a.err
 set -euo pipefail
+export TMPDIR="${TMPDIR:-/local/scratch/tmp}"   # node /tmp is capped at 500 MB
+export NUMBA_CACHE_DIR="$TMPDIR"
 : "${STAGE:?source env.sh first}" "${CODE:?}" "${CONDITION:?}"
 cd "$CODE"
 mapfile -t SCENES < <(ls -1 "$STAGE/scenes/$CONDITION")
