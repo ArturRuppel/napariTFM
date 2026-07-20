@@ -20,7 +20,7 @@ class DisplacementParameters:
     disp_device: str = "auto"     # "auto" | "cuda" | "cpu" (shared by all methods)
 
     # PIV (multi-pass FFT cross-correlation): openpiv CPU / torch GPU, same knobs.
-    piv_window: int = 16          # final interrogation window (px)
+    piv_window: int = 24          # final interrogation window (px); heuristic-sweep default (24-32)
     piv_overlap: float = 0.75     # window overlap fraction [0, 1)
     piv_passes: int = 8           # coarse->fine window-deformation passes
 
@@ -124,7 +124,8 @@ class FTTCParameters:
     # mask, if supplied, is a *soft* support: fwd_mask_strength sets an off-mask L2
     # penalty in the objective (ramped over a collar, no hard edge). Shares fwd_device/
     # fwd_dtype/fwd_fit_margin_um with the confined solver.
-    l1_sparsity: float = 0.0   # 0..1 fraction of λ₁_max (0 = off); useful band ~0.05..0.2, ↑ with noise
+    l1_sparsity: float = 0.05  # 0..1 fraction of λ₁_max (0 = off → FTTC); heuristic-sweep default:
+    #                            flat basin 0.02..0.11, lean low ("err low"); ↑ with noise
     l2_ridge: float = 0.0      # elastic-net L2 ridge, fraction of median per-mode curvature; 0 = pure L1
     l1_max_iter: int = 400     # FISTA iteration budget
 
@@ -166,7 +167,7 @@ class UnifiedParameters:
     # Displacement parameters (PIV / iLK / FFD backends; see DisplacementParameters)
     disp_method: str = "PIV"  # "PIV" | "Lucas-Kanade" | "FFD"
     disp_device: str = "auto"  # "auto" | "cuda" | "cpu" (shared by all methods)
-    piv_window: int = 16
+    piv_window: int = 24          # heuristic-sweep default (24-32)
     piv_overlap: float = 0.75
     piv_passes: int = 8
     ilk_radius: int = 7
@@ -210,7 +211,7 @@ class UnifiedParameters:
     fwd_dtype: str = "float32"
     # Sparse (group-L1) inversion (napariTFM.backend.forward_l1); selected when
     # l1_sparsity > 0, ahead of the confined/FTTC paths. See FTTCParameters.
-    l1_sparsity: float = 0.0
+    l1_sparsity: float = 0.05     # heuristic-sweep default (group-L1 is the recommended engine)
     l2_ridge: float = 0.0
     l1_max_iter: int = 400
     force_vector_stride: int = 20
