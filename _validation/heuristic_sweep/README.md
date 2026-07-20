@@ -7,10 +7,24 @@ benchmark told us the *shape* — `l1` pins near ~0.11, `l2` tracks inverse SNR 
 but three opaque noise points can't fit a curve. This replaces it with a
 generative ladder that has clean, analytic ground truth on a common grid.
 
-## The one objective: force nRMSE
+## The objective: Sabass composite J
 
 Only the recovered **traction** is scored, against an analytic GT traction
-rasterized on a common `GT_REFERENCE_SIZE` grid: `nRMSE = ‖t − t_GT‖ / ‖t_GT‖`.
+rasterized on a common `GT_REFERENCE_SIZE` grid. The ranked objective is the
+Sabass et al. (2008) composite (see `sabass.py`):
+
+    J = |DTM| + DTMS + DTA/45
+
+- **DTM** — deviation of traction *magnitude* on the adhesions (signed, the L2/scale error),
+- **DTMS** — spurious force in the *surrounding* ring (contour sharpness, the L1/sparsity error),
+- **DTA** — angular error in degrees (÷45 to weigh it against the two O(1) terms).
+
+J decomposes recovery error into the three modes the `(l1, l2)` knobs trade off;
+a single blended `nRMSE` collapses exactly that tradeoff, so it is **recorded as a
+cross-check but never ranked on**. (Caveat: DTMS was defined for sharp-contour disc
+adhesions; with the Gaussian profile the GT itself carries a small DTMS tail-floor —
+watch whether it biases the L1 optimum. See `sabass.py`.)
+
 Displacement error is *never* scored on its own — it does not propagate
 uniformly through the DC-stripped, band-limited Green's operator, so minimizing
 it can rank displacement settings wrongly. Let the operator do the spectral
@@ -25,9 +39,9 @@ weighting and measure the output.
    accidental second regularizer, and we want L1+L2 to do all the regularizing.
 2. **Force sweep** (`sweep_forces.py`): read the cached fields; for each, invert
    over the full `FRAC1 × FRAC2` grid; upsample each recovery to the common
-   reference grid; record force nRMSE. Resolution stays *in* this search — one
-   cached field per resolution, force nRMSE adjudicates resolution jointly with
-   `(l1, l2)`.
+   reference grid; record J and its components (+ nRMSE, corr). Resolution stays
+   *in* this search — one cached field per resolution, J adjudicates resolution
+   jointly with `(l1, l2)`.
 
 ## Why a balanced pair, never a monopole
 

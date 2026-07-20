@@ -4,7 +4,7 @@
 # Usage: bash submit.sh {cache|sweep} [max_concurrent]   (default 4, per lab GPU norm)
 set -euo pipefail
 : "${STAGE:?source env.sh first}" "${CODE:?}" "${CONDITION:?}"
-STAGEN="${1:?usage: submit.sh {cache|sweep} [max_concurrent]}"
+STAGEN="${1:?usage: submit.sh cache|sweep [max_concurrent]}"
 CONCURRENCY="${2:-${CONCURRENCY:-4}}"
 case "$STAGEN" in
     cache) SB=build_cache.sbatch ;;

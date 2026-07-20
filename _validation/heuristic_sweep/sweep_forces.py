@@ -3,9 +3,15 @@
 
 For each cached (scene, resolution) displacement field, invert over the full
 FRAC1 x FRAC2 grid, upsample each recovery to the common GT_REFERENCE_SIZE grid,
-and score force nRMSE against the analytic GT traction rasterized from scene.toml.
+and score it against the analytic GT traction rasterized from scene.toml.
 Resolution stays IN the search. Writes one tidy CSV row per
-(condition, scene, resolution, l1, l2). Force nRMSE is the only objective.
+(condition, scene, resolution, l1, l2).
+
+The objective is the Sabass (2008) composite J = |DTM| + DTMS + DTA/45 -- it splits
+recovery error into magnitude-on-adhesions / spurious-background / direction, the three
+modes the L1+L2 knobs trade off. nRMSE and corr are recorded alongside as cross-checks,
+never as the ranked objective (a single blended nRMSE hides the DTM<->DTMS tradeoff the
+heuristic exists to characterize).
 
 Usage:
     python sweep_forces.py --stage "$STAGE" [--condition realistic]
@@ -19,6 +25,7 @@ import numpy as np
 from scipy.ndimage import zoom
 
 import sweep_config as C
+import sabass
 from napariTFM.backend.forward_l1 import l1_traction_frame
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 
@@ -57,15 +64,19 @@ def rasterize_gt(scene, N):
     return np.stack([tx, ty], 0), (tx ** 2 + ty ** 2) > 0
 
 
-def metrics(t, gt, inmask):
-    mag, g = np.hypot(t[0], t[1]), np.hypot(gt[0], gt[1])
+def metrics(t, gt):
+    """Sabass composite J (PRIMARY) + its three components, with nRMSE/corr as cross-checks.
+    The adhesion mask is the significant-GT region (|t_gt| > 0.1·peak) -- the two poles."""
+    fa = sabass.significant_mask(gt, frac=0.1)
+    s = sabass.sabass_metrics(t, gt, fa)
+    J = sabass.objective(s["dtm"], s["dtms"], s["dta"])   # |DTM| + DTMS + DTA/45
+    magt, magg = np.hypot(t[0], t[1]), np.hypot(gt[0], gt[1])
     gnorm = float(np.sqrt((gt ** 2).sum())) or 1.0
-    gin = g[inmask].sum() or 1.0
     return dict(
-        nrmse=float(np.sqrt(((t - gt) ** 2).sum()) / gnorm),   # PRIMARY
-        corr=float(np.corrcoef(mag.ravel(), g.ravel())[0, 1]),
-        intf=float(mag[inmask].sum() / gin),
-        dma=float((mag[inmask].max() - g[inmask].max()) / (g[inmask].max() or 1.0)),
+        J=float(J),                                        # PRIMARY objective
+        dtm=s["dtm"], dtms=s["dtms"], dta=s["dta"], n_adh=s["n_adh"],
+        nrmse=float(np.sqrt(((t - gt) ** 2).sum()) / gnorm),   # cross-check, not ranked
+        corr=float(np.corrcoef(magt.ravel(), magg.ravel())[0, 1]),
     )
 
 
@@ -89,7 +100,7 @@ def sweep_scene(stage, condition, scene_id, writer):
     with open(os.path.join(sdir, "scene.toml"), "rb") as fh:
         scene = tomllib.load(fh)
     N = C.GT_REFERENCE_SIZE
-    gt, inmask = rasterize_gt(scene, N)
+    gt, _ = rasterize_gt(scene, N)
     pair = scene["pair"]
     caches = sorted(glob.glob(os.path.join(stage, "cache", condition, scene_id, "disp_res*.npz")))
     if not caches:
@@ -99,7 +110,7 @@ def sweep_scene(stage, condition, scene_id, writer):
         d = np.load(cf)
         field = d["field"]
         for f1, f2, t_up in invert(field, N):
-            m = metrics(t_up, gt, inmask)
+            m = metrics(t_up, gt)
             writer.writerow(dict(
                 condition=condition, scene_id=scene_id,
                 footprint=pair["footprint"], magnitude=pair["magnitude"],
@@ -124,7 +135,8 @@ def main():
     out = a.out or os.path.join(a.stage, "results", f"sweep_{a.condition}.csv")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     cols = ["condition", "scene_id", "footprint", "magnitude", "res_knob",
-            "res_val", "conv_val", "grid", "l1", "l2", "nrmse", "corr", "intf", "dma"]
+            "res_val", "conv_val", "grid", "l1", "l2",
+            "J", "dtm", "dtms", "dta", "n_adh", "nrmse", "corr"]
     print(f"sweeping {len(scenes)} scene(s) -> {out}")
     with open(out, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=cols)
