@@ -32,7 +32,14 @@ REF_FRAME = 0                    # frame 0 = zero-jitter reference (per stack me
 JITTER_FRAMES = [1, 3]           # deform-source frames -> 2 conditions/scenario (mild/severe jitter)
 
 # --- displacement stage -----------------------------------------------------
-DISP_METHOD = "PIV"          # bridge used PIV; ILK/FFD parameterized below
+DISP_METHOD = "PIV"          # single-method fallback (used when --methods omitted)
+# Cross-method sweep: every method is cached per scene so the force sweep can
+# compare them head-to-head. Keys here index RES_KNOB/RES_VALUES/CONV_* below;
+# METHOD_LABEL translates each to the analyzer's disp_method string (the registry
+# uses "Lucas-Kanade", not "ILK"). All three run their torch path on a CUDA node
+# -- FFD is GPU-only, so the cache stage must run on the gpu partition.
+METHODS = ["PIV", "ILK", "FFD"]
+METHOD_LABEL = {"PIV": "PIV", "ILK": "Lucas-Kanade", "FFD": "FFD"}
 
 # Resolution knob: the displacement method's INTERNAL spatial-resolution control,
 # swept at a FIXED output grid (downscale_factor is a fixed pipeline convention,

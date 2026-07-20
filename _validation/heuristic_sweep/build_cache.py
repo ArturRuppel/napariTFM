@@ -40,7 +40,7 @@ def prep(im):
 
 def run_disp(ref, dfm, method, res_val, conv_val):
     """One displacement solve at a given resolution + convergence setting."""
-    kw = {"disp_method": method, "disp_device": "auto",
+    kw = {"disp_method": C.METHOD_LABEL[method], "disp_device": "auto",
           "pixel_size": C.PIXEL_SIZE_UM, "downscale_factor": C.DOWNSCALE_FACTOR}
     kw[C.RES_KNOB[method]] = res_val      # for PIV this IS piv_window (downscale_factor stays fixed)
     kw[C.CONV_KNOB[method]] = conv_val
@@ -67,24 +67,37 @@ def converge(ref, dfm, method, res_val):
     return prev, C.CONV_LADDER[method][-1], float("nan")   # never settled -> last
 
 
-def cache_scene(stage, condition, scene_id, method):
+def cache_scene(stage, condition, scene_id, methods):
+    """Cache every method x resolution for one scene. Returns the number of
+    fields written. A method that raises (e.g. FFD on a node without CUDA) is
+    logged and skipped so the others still cache -- the caller exits 0 as long as
+    at least one field landed, keeping the scene's aftercorr sweep alive."""
     sdir = os.path.join(stage, "scenes", condition, scene_id)
     ref = prep(load(os.path.join(sdir, "reference.tif")))
     dfm = prep(load(os.path.join(sdir, "deformed.tif")))
     outdir = os.path.join(stage, "cache", condition, scene_id)
     os.makedirs(outdir, exist_ok=True)
-    for k, res_val in enumerate(C.RES_VALUES[method]):
-        field, conv_val, rel = converge(ref, dfm, method, res_val)
-        out = os.path.join(outdir, f"disp_res{k}.npz")
-        np.savez_compressed(
-            out, field=field.astype(np.float32),
-            method=method, res_knob=C.RES_KNOB[method], res_val=res_val,
-            conv_knob=C.CONV_KNOB[method], conv_val=conv_val, conv_rel=rel,
-            downscale=C.DOWNSCALE_FACTOR, pixel_size=C.PIXEL_SIZE_UM,
-        )
-        print(f"  [{scene_id}] res {C.RES_KNOB[method]}={res_val:<5} "
-              f"conv {C.CONV_KNOB[method]}={conv_val} (rel={rel:.4f}) "
-              f"grid={field.shape[:2]} -> {os.path.basename(out)}", flush=True)
+    n_written = 0
+    for method in methods:
+        for k, res_val in enumerate(C.RES_VALUES[method]):
+            try:
+                field, conv_val, rel = converge(ref, dfm, method, res_val)
+            except Exception as exc:                       # noqa: BLE001 -- log & skip
+                print(f"  [{scene_id}] {method} res#{k}={res_val} FAILED: "
+                      f"{type(exc).__name__}: {exc}", flush=True)
+                continue
+            out = os.path.join(outdir, f"disp_{method}_res{k}.npz")
+            np.savez_compressed(
+                out, field=field.astype(np.float32),
+                method=method, res_knob=C.RES_KNOB[method], res_val=res_val,
+                conv_knob=C.CONV_KNOB[method], conv_val=conv_val, conv_rel=rel,
+                downscale=C.DOWNSCALE_FACTOR, pixel_size=C.PIXEL_SIZE_UM,
+            )
+            n_written += 1
+            print(f"  [{scene_id}] {method} res {C.RES_KNOB[method]}={res_val:<5} "
+                  f"conv {C.CONV_KNOB[method]}={conv_val} (rel={rel:.4f}) "
+                  f"grid={field.shape[:2]} -> {os.path.basename(out)}", flush=True)
+    return n_written
 
 
 def main():
@@ -92,17 +105,26 @@ def main():
     ap.add_argument("--stage", required=True)
     ap.add_argument("--condition", default=C.CONDITIONS[0])
     ap.add_argument("--scene", default=None, help="one scene id; default = all")
-    ap.add_argument("--method", default=C.DISP_METHOD)
+    ap.add_argument("--methods", default=",".join(C.METHODS),
+                    help="comma-sep method keys to cache (default all: PIV,ILK,FFD)")
     a = ap.parse_args()
+
+    methods = [m.strip() for m in a.methods.split(",") if m.strip()]
+    bad = [m for m in methods if m not in C.METHODS]
+    if bad:
+        sys.exit(f"unknown method(s) {bad}; known: {C.METHODS}")
 
     root = os.path.join(a.stage, "scenes", a.condition)
     if not os.path.isdir(root):
         sys.exit(f"no scenes at {root} -- has the generator run?")
     scenes = [a.scene] if a.scene else sorted(
         d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d)))
-    print(f"caching {len(scenes)} scene(s), method={a.method}, condition={a.condition}")
+    print(f"caching {len(scenes)} scene(s), methods={methods}, condition={a.condition}")
+    total = 0
     for s in scenes:
-        cache_scene(a.stage, a.condition, s, a.method)
+        total += cache_scene(a.stage, a.condition, s, methods)
+    if total == 0:
+        sys.exit("no displacement fields written -- every method failed")
 
 
 if __name__ == "__main__":

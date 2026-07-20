@@ -102,17 +102,18 @@ def sweep_scene(stage, condition, scene_id, writer):
     N = C.GT_REFERENCE_SIZE
     gt, _ = rasterize_gt(scene, N)
     pair = scene["pair"]
-    caches = sorted(glob.glob(os.path.join(stage, "cache", condition, scene_id, "disp_res*.npz")))
+    caches = sorted(glob.glob(os.path.join(stage, "cache", condition, scene_id, "disp_*_res*.npz")))
     if not caches:
         print(f"  [{scene_id}] no cache -- run build_cache.py first", flush=True)
         return
     for cf in caches:
         d = np.load(cf)
         field = d["field"]
+        method = str(d["method"])
         for f1, f2, t_up in invert(field, N):
             m = metrics(t_up, gt)
             writer.writerow(dict(
-                condition=condition, scene_id=scene_id,
+                condition=condition, scene_id=scene_id, method=method,
                 footprint=pair["footprint"], magnitude=pair["magnitude"],
                 res_knob=str(d["res_knob"]), res_val=float(d["res_val"]),
                 conv_val=float(d["conv_val"]), grid=field.shape[0],
@@ -134,7 +135,7 @@ def main():
         d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d)))
     out = a.out or os.path.join(a.stage, "results", f"sweep_{a.condition}.csv")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    cols = ["condition", "scene_id", "footprint", "magnitude", "res_knob",
+    cols = ["condition", "scene_id", "method", "footprint", "magnitude", "res_knob",
             "res_val", "conv_val", "grid", "l1", "l2",
             "J", "dtm", "dtms", "dta", "n_adh", "nrmse", "corr"]
     print(f"sweeping {len(scenes)} scene(s) -> {out}")
