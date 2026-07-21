@@ -4,3 +4,4 @@ figures/
 reg_compare.csv
 cell_reg_compare.csv
 __pycache__/
+results/

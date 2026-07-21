@@ -10,10 +10,14 @@ Two numerically-equivalent implementations behind one parameter set. The default
 community-standard reference used as the credibility anchor for the benchmark's
 PIV baseline. When ``torch`` is installed (the ``[gpu]`` extra) and a CUDA device
 is available/selected, a **GPU** port runs the same multipass window-deformation
-scheme ~100x faster; it is at measured parity with openpiv on dense-bead data (the
-regime real TFM images live in), not bit-identical: the two use different FFT
-libraries, and PIV's integer peak-location argmax can pick a different pixel on a
-near-tie, so exact equality is neither expected nor claimed.
+scheme ~100x faster. The port matches openpiv's *algorithm* -- symmetric window
+deformation with bicubic interpolation (``deformation_method="symmetric"``,
+``interpolation_order=3``) and edge-extrapolating densification -- so the two track
+each other closely on stress tests (large displacement + noise), not just clean
+beads. It is not bit-identical: the two use different FFT libraries, PIV's integer
+peak-location argmax can pick a different pixel on a near-tie, and the GPU keeps its
+own (stronger) normalized-median outlier test rather than openpiv's absolute-median
+one -- so exact equality is neither expected nor claimed.
 
 Both paths read the **same three knobs** -- ``piv_window`` (final interrogation
 window, px), ``piv_overlap`` (window overlap fraction), ``piv_passes``
@@ -140,13 +144,15 @@ def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8, coarse_facto
         return _HAN[key]
 
     def warp(img, u):
+        # bicubic to match openpiv's symmetric deformation (interpolation_order=3);
+        # border padding == openpiv's map_coordinates mode='nearest' at the edges.
         H, W = img.shape
         yy, xx = torch.meshgrid(torch.arange(H, device=device, dtype=dt),
                                 torch.arange(W, device=device, dtype=dt), indexing="ij")
         gx = 2.0 * (xx + u[0]) / max(W - 1, 1) - 1.0
         gy = 2.0 * (yy + u[1]) / max(H - 1, 1) - 1.0
         grid = torch.stack([gx, gy], -1)[None]
-        return F.grid_sample(img[None, None], grid, mode="bilinear",
+        return F.grid_sample(img[None, None], grid, mode="bicubic",
                              padding_mode="border", align_corners=True)[0, 0]
 
     def subpix(c, p, r):
@@ -195,25 +201,39 @@ def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8, coarse_facto
         return nb.median(-1).values
 
     def nmt(f, thresh=2.0, eps=0.1):
+        # Normalized median test (Westerweel & Scarano 2005): replace a vector whose
+        # residual to the local median, normalized by the local median residual,
+        # exceeds ``thresh``. Kept over openpiv's absolute-threshold median test on
+        # purpose -- it is the stronger outlier detector, and on stress tests (large
+        # displacement + noise) it keeps the GPU field both closer to ground truth and
+        # in *tighter* agreement with the openpiv CPU path than replicating openpiv's
+        # own validation would (which flags different cells and widens the gap).
         med = med3(f)
         res = (f - med).abs()
         bad = res / (med3(res) + eps) > thresh
         return torch.where(bad, med, f)
 
     def to_dense(ys, xs, du, dv, H, W):
+        # Resample the sparse vector grid to full res, LINEAR-extrapolating past the
+        # grid edge (clamped cell index, unclamped interpolation weight) so the border
+        # half-window matches the CPU path's RegularGridInterpolator(fill_value=None);
+        # grid_sample's border padding would instead clamp to the edge value.
         if len(ys) < 2 or len(xs) < 2:
             return torch.zeros((2, H, W), device=device, dtype=dt)
         du = nmt(du); dv = nmt(dv)
         Ny, Nx = du.shape
         y0, x0 = float(ys[0]), float(xs[0]); sy = float(ys[1] - ys[0]); sx = float(xs[1] - xs[0])
-        ii = torch.arange(H, device=device, dtype=dt); jj = torch.arange(W, device=device, dtype=dt)
-        gy = 2.0 * ((ii - y0) / sy) / max(Ny - 1, 1) - 1.0        # resample at TRUE grid coords
-        gx = 2.0 * ((jj - x0) / sx) / max(Nx - 1, 1) - 1.0
-        gyy, gxx = torch.meshgrid(gy, gx, indexing="ij")
-        grid = torch.stack([gxx, gyy], -1)[None]
-        field = torch.stack([du, dv])[None]
-        return F.grid_sample(field, grid, mode="bilinear", padding_mode="border",
-                             align_corners=True)[0]
+        fy = (torch.arange(H, device=device, dtype=dt) - y0) / sy
+        fx = (torch.arange(W, device=device, dtype=dt) - x0) / sx
+        i0 = fy.floor().clamp(0, Ny - 2).long(); wy = (fy - i0)[:, None]
+        j0 = fx.floor().clamp(0, Nx - 2).long(); wx = (fx - j0)[None, :]
+
+        def bilin(fld):
+            top = fld[i0][:, j0] * (1 - wx) + fld[i0][:, j0 + 1] * wx
+            bot = fld[i0 + 1][:, j0] * (1 - wx) + fld[i0 + 1][:, j0 + 1] * wx
+            return top * (1 - wy) + bot * wy
+
+        return torch.stack([bilin(du), bilin(dv)])
 
     refi = norm(torch.as_tensor(np.asarray(ref), dtype=dt, device=device))
     dfmi = norm(torch.as_tensor(np.asarray(dfm), dtype=dt, device=device))
@@ -222,7 +242,9 @@ def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8, coarse_facto
     for win in _window_schedule(window, passes, coarse_factor, H, W):
         win = max(8, min(win, min(H, W) // 3)); win -= win % 2
         step = max(4, int(round(win * (1.0 - overlap))))
-        ys, xs, du, dv = one_pass(refi, warp(dfmi, u), win, step)
+        # Symmetric window deformation (openpiv deformation_method="symmetric"): split
+        # the accumulated flow over both frames and correlate the residual, then add it.
+        ys, xs, du, dv = one_pass(warp(refi, -0.5 * u), warp(dfmi, 0.5 * u), win, step)
         u = u + to_dense(ys, xs, du, dv, H, W)
     return u.cpu().numpy()
 
