@@ -95,12 +95,61 @@ from (a) the real bead texture and (b) the displacement method's recovery error
 `displacement_{x,y}.npy` dumps may be written for sanity checks but are **not**
 read by the sweep; `scene.toml` is the single source of GT.
 
+### Cell scenes (the diffuse-field variant, `make_cells.py`)
+
+The dipole grid above isolates one localized source. A real cell is a diffuse
+superposition of many contractile stress fibres, so a second scene *kind* stages
+whole cells: `make_cells.py` takes each benchmarkTFM synth cell's fitted-fibre
+traction as the GT shape, forward-projects it with **this** pipeline's Green's
+operator (so `u` and `t_gt` stay a consistent forward/inverse pair), scales to hit
+each peak-displacement target, and warps the best-imaging stack (scenario 6) exactly
+as the dipole run does. These land in their own condition dir (`cell_s6j1`).
+
+The contract inverts in one key place: **for a cell scene the GT is the stored
+`gt_traction.npy` field, not the `scene.toml`.** There is no `[pair]` block and
+nothing is rasterized from the toml; the toml carries only metadata, and the scorer
+loads `gt_traction.npy` directly (see `sweep_forces.py`, `meta.kind == "cell"`).
+
+| file             | meaning                                                            |
+|------------------|--------------------------------------------------------------------|
+| `reference.tif`  | frame 0 of the scenario-6 stack (zero-jitter reference)            |
+| `deformed.tif`   | `warp(frame 1, u)` — mild registration jitter + photon noise ride along |
+| `gt_traction.npy`| **authoritative** GT traction `(2, N, N)` Pa (scaled fibre field)  |
+| `scene.toml`     | metadata only (below); **not** the GT for cells                    |
+
+```toml
+[meta]
+condition   = "cell_s6j1"
+scene_id    = "synth00_u3.155"   # <cell>_u<peak |u| px>
+image_size  = 512
+pixel_size  = 0.1612
+kind        = "cell"             # selects the gt_traction.npy path in the scorer
+source_cell = "synth00"          # benchmarkTFM synth cell id
+n_fibers    = 82                 # fitted contractile fibres in that cell
+peak_disp_px = 3.155             # strength target the field was scaled to
+rms_traction_pa = 812.0          # RMS |t| over the significant-GT region (bookkeeping)
+
+[substrate]                      # same E / poisson as the dipole run (sweep_config)
+young_modulus = 1000.0
+poisson = 0.5
+```
+
+Because the diffuse field merges adjacent sources and its mean vector cancels, the
+per-adhesion Sabass terms (and so `J`) degenerate; cell scenes are therefore ranked
+on whole-field **nRMSE** — the blended error that is only a cross-check for dipoles
+but is well-defined here. The `field_metrics` (`mag_bias`, `ang_field`, `bg_leak`;
+see `field_metrics` in `sweep_forces.py`) are recorded as a diagnostic decomposition
+of that error, not the ranking key. Everything downstream (cache, sweep, resolution
+search) is identical to the dipole run; only the GT construction and the ranking
+metric differ.
+
 ## Layout
 
 ```
 $STAGE/ (= /helix/…/tfm_heuristic, set in env.sh, NOT in the repo)
   images/tif_stacks/{scenario*_dens*_NA*_expo*.tif,manifest.csv}          ← make_stacks.py
-  scenes/<condition>/<scene_id>/{reference.tif,deformed.tif,scene.toml}  ← make_scenes.py
+  scenes/<condition>/<scene_id>/{reference.tif,deformed.tif,scene.toml}  ← make_scenes.py (dipole)
+  scenes/cell_s6j1/<scene_id>/{reference.tif,deformed.tif,gt_traction.npy,scene.toml}  ← make_cells.py
   cache/<condition>/<scene_id>/disp_res<k>.npz                            ← build_cache.py
   results/                                                                ← sweep_forces.py
   logs/                                                                   ← SLURM out/err
