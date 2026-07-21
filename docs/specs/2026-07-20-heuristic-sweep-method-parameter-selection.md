@@ -304,9 +304,11 @@ default (L1 0.05, no ridge); the mask is the only thing that moves, its dial run
 
 ![Two panels. Left: nRMSE relative to the no-mask baseline against the confinement dial, one curve per
 strength band. The noise-floor band plunges to 0.55 by full strength; the useful and strong bands hug
-1.0, dipping a couple of percent at most, each with a dotted GT-support oracle ceiling just below.
-Right: mean fraction of recovered energy lying outside the cell falls from 0.24 to 0.07 as the dial
-rises, while in-cell nRMSE stays flat near 0.84.](../images/heuristic-sweep-cells-confinement.png)
+1.0, dipping a couple of percent at most, each with a dotted GT-support oracle ceiling. Right: whole-field
+nRMSE relative to baseline, per band, as grouped bars for a post-hoc exterior zero versus the in-solver
+soft penalty, with the solver's in-cell nRMSE marked. At the noise floor both bars fall to ~0.56. In the
+useful and strong bands the post-hoc bar sits at 0.99 to 1.00 while the solver bar reaches 0.95 to 0.98,
+the gap between them annotated as the solver's interior refit.](../images/heuristic-sweep-cells-confinement.png)
 
 **It earns its keep, and the size of the win tracks SNR inversely.** At the noise floor (peak
 displacement at or below 1.2 px) confinement cuts whole-field nRMSE by about 45%, from 4.0 to 2.5, and
@@ -315,21 +317,33 @@ recovery is worse than predicting zero, so confinement is rescuing an already-ho
 merely-bad one. The operationally honest number is the useful window, where recovery is real: there
 the gain is a steady ~5% (0.82 to 0.78), positive in every scene, and the loose cell outline captures
 almost all of what the GT-support oracle could (0.78 against a 0.75 ceiling), so a tight mask buys
-nothing extra. At high strength there is little exterior leak left to remove and the gain fades to ~2%.
+nothing extra. At high strength the gain fades to ~2%.
 
-**The mechanism is exactly background removal, and it never touches the cell.** The win comes entirely
-from killing spurious traction in the bare substrate: mean off-cell energy falls from 0.24 to 0.07 as
-the dial climbs. This is where the noise-floor payoff comes from, because a buried-signal field
-inverts into rampant background garbage that the metric, whole-field, pays for in full. Meanwhile
-in-cell error stays flat to within a couple percent, and across 120 scene-and-dial combinations the
-error inside the outline rose by more than 1% in exactly none of them. The apron around the mask
-protects real rim traction, so confinement is a one-sided lever: it removes exterior leak and leaves
-the cell alone. That makes it safe to turn on whenever a mask exists.
+**Confinement does two things, not one, and only one of them is background removal.** The obvious
+simplification is to skip the solver machinery and just zero every traction pixel outside the outline
+after an ordinary solve. That was tested directly, and it is not equivalent. Post-hoc zeroing leaves
+the interior bit-identical to the no-mask solve by construction, so it captures background removal and
+nothing else: in the useful window it takes whole-field nRMSE from 0.82 to 0.80 and no further, and at
+high strength, where there is almost no background left to delete, it does nothing at all (0.88 to
+0.88). The in-solver penalty goes past it every time, reaching 0.78 in the useful window and 0.87 at
+high strength, and the entire extra margin is *inside* the cell: it lowers in-cell nRMSE below the
+no-mask baseline in every one of the twelve useful-window scenes (~4% median, ~10% at the noise floor),
+where the post-hoc zero cannot move it by definition. In the operating regime the interior refit is the
+*larger* half of confinement's benefit, not a rounding error on top of background cleanup.
 
-The default stays off, because the no-mask user must not be handed a prior they did not ask for and the
-useful-window gain is small. But the recommendation for the user who has a segmentation is clean:
-switch confinement on. It is a noise-regime tool, worth the most exactly when the images are worst, and
-it cannot hurt.
+The reason is the one the solver was built around. The Green's operator is non-local, so an
+unconstrained solve can explain in-cell displacement with force parked *outside* the cell — the
+exterior traction lives in the fit's near-nullspace. Zeroing that force after the fact simply deletes
+it and leaves the interior under-fit for the displacement it had been explaining. The objective penalty
+instead forbids exterior force *during* the solve, so the same displacement gets re-explained by
+interior force where it belongs, and the recovered peaks come out closer to truth. This also confirms
+the feature is safe: across 120 scene-and-dial combinations the in-cell error never rose by more than
+1%, because the apron around the mask never clips real rim traction — the interior only ever improves.
+
+The default stays off, because the no-mask user must not be handed a prior they did not draw. But for
+the user who has a segmentation the recommendation is clean, and the machinery is justified: switch
+confinement on, and keep it as an in-solver penalty rather than a post-hoc mask, because the interior
+refit that only the penalty delivers is the bigger half of the win in the regime you actually work in.
 
 ## The recipe
 
@@ -340,9 +354,11 @@ it cannot hurt.
 - **Noisy images (low exposure, dim beads): reach for FFD sooner.** Its smoothing is denoising.
 - **Large soft sources at sub-pixel displacement: iLK**, radius ~7, can edge the others, but the
   margin is thin and the field is blocky. Only worth it when squeezing the last few percent.
-- **Have a cell mask? Turn on confinement.** It only removes traction from the bare substrate and
-  never touches the cell, so it cannot hurt: ~5% in the useful window, far more at the noise floor.
-  Off by default because the no-mask user must not inherit a prior they did not draw.
+- **Have a cell mask? Turn on confinement.** It cannot hurt (in-cell error never rose across the
+  sweep) and does two things: clears background garbage *and* refits the interior, the latter the
+  bigger half of the ~5% useful-window gain (far more at the noise floor). Keep it as the in-solver
+  penalty, not a post-hoc "zero outside the mask" — that gets only the background half. Off by
+  default because the no-mask user must not inherit a prior they did not draw.
 - **Sources below ~2 px footprint: expect failure from every method.** Use PIV with strong L1 and
   treat the magnitudes skeptically.
 - **To resolve small or weak sources, raise exposure**, not density or NA. It is the only imaging

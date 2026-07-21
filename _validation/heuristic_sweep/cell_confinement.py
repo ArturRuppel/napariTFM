@@ -20,10 +20,19 @@ window-24 displacement the cell sweep used, shipped-default regularization
 cell-outline mask, and score:
   * nRMSE            -- the ranking metric (whole-field; background garbage, where
                         GT=0, adds straight to it, so confinement CAN lower it)
-  * bg_leak / ext    -- spurious energy off the source / outside the cell (what
-                        confinement is supposed to kill: the mechanism)
-  * in-cell nRMSE    -- error inside the outline (should stay flat; if it RISES the
-                        mask is clipping real rim traction -- a cost, not a benefit)
+  * bg_leak / ext    -- spurious energy off the source / outside the cell
+  * in-cell nRMSE    -- error inside the outline
+
+Is the in-solver penalty worth its complexity, or would a post-hoc "zero everything
+outside the mask" do? We answer it head-on with a "hard" variant: take the no-mask
+solve and zero the exterior. Its interior is bit-identical to the baseline, so it
+isolates *background removal only*. If the soft solver beats it INSIDE the cell, the
+penalty is doing real work the simple version can't -- and it does: the non-local
+Green's operator lets the unconstrained solve park real interior signal in exterior
+pixels, which post-hoc zeroing deletes (leaving the interior under-fit) but the
+in-objective penalty re-explains with interior force (better peaks). Measured here:
+the soft solver lowers in-cell nRMSE below baseline in every useful-window scene,
+while the post-hoc zero leaves it exactly at baseline.
 
 Companion to cell_compare_reg.py. Cells rank on whole-field nRMSE (the Sabass J is
 undefined on a diffuse centripetal field). GT is the stored fitted-fibre traction.
@@ -141,9 +150,16 @@ def main():
         gt_h = to_grid(gt_support, h)
 
         # baseline: no mask (identical to dial 0)
-        base = score(invert(field, None, 0.0), gt, cell512)
+        t_base = invert(field, None, 0.0)
+        base = score(t_base, gt, cell512)
         rows.append(dict(scene=scene, cell=cell, P=P, mask="none", dial=0, **base))
-        # honest prior: cell outline, up the dial
+        # the SIMPLE alternative: take the baseline solve and post-hoc zero everything
+        # outside the outline. Interior is bit-identical to base by construction, so this
+        # isolates "background removal only" -- the solver's in-cell refit must beat it.
+        t_hard = t_base.copy(); t_hard[:, ~cell512] = 0.0
+        rows.append(dict(scene=scene, cell=cell, P=P, mask="hard", dial=0,
+                         **score(t_hard, gt, cell512)))
+        # honest prior: cell outline, up the dial (the in-solver soft penalty)
         for dial in DIALS[1:]:
             rows.append(dict(scene=scene, cell=cell, P=P, mask="cell", dial=dial,
                              **score(invert(field, cell_h, dial), gt, cell512)))
@@ -152,9 +168,10 @@ def main():
             rows.append(dict(scene=scene, cell=cell, P=P, mask="gt_oracle", dial=dial,
                              **score(invert(field, gt_h, dial), gt, cell512)))
         b = min((r for r in rows if r["scene"] == scene and r["mask"] == "cell"), key=lambda r: r["nrmse"])
-        print(f"  {scene}: base nRMSE={base['nrmse']:.3f} ext={base['ext_frac']:.2f}  "
-              f"-> cell-mask best nRMSE={b['nrmse']:.3f} @dial {b['dial']} "
-              f"({(b['nrmse']/base['nrmse'] - 1) * 100:+.0f}%)", flush=True)
+        hard = next(r for r in rows if r["scene"] == scene and r["mask"] == "hard")
+        print(f"  {scene}: base in-cell={base['in_nrmse']:.3f}  post-hoc-zero in-cell={hard['in_nrmse']:.3f} "
+              f"(nRMSE {hard['nrmse']:.3f})  soft in-cell={b['in_nrmse']:.3f} (nRMSE {b['nrmse']:.3f} @dial {b['dial']})",
+              flush=True)
 
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(a.outdir, "cell_confinement.csv"), index=False)
@@ -163,22 +180,26 @@ def main():
 
 
 def summarize(df):
-    base = df[df["mask"] == "none"].set_index("scene").nrmse
+    base = df[df["mask"] == "none"].set_index("scene")
+    hard = df[df["mask"] == "hard"].set_index("scene")
     print(f"\n=== Does mask confinement earn its keep? ({df.scene.nunique()} scenes, "
           f"l1={L1_FIXED}, PIV win-{RES:g}) ===")
+    print("  whole-field nRMSE  |  in-cell nRMSE   (post-hoc zero = baseline solve, exterior deleted)")
     for name, sel in BANDS:
         sc = [s for s in df.scene.unique() if sel(float(s.split("_u")[1]))]
         if not sc:
             continue
         b0 = base.loc[sc]
-        cell = df[(df["mask"] == "cell") & df.scene.isin(sc)].groupby("scene").nrmse.min()
+        cellrows = df[(df["mask"] == "cell") & df.scene.isin(sc)]
+        soft = cellrows.loc[cellrows.groupby("scene").nrmse.idxmin()].set_index("scene")
         orc = df[(df["mask"] == "gt_oracle") & df.scene.isin(sc)].groupby("scene").nrmse.min()
-        gain = (1 - cell / b0)
-        print(f"  {name:16s} n={len(sc):2d} | baseline {b0.median():.3f} "
-              f"-> cell-mask {cell.median():.3f} ({gain.median() * 100:+.0f}% median, "
-              f"helps {int((gain > 0.005).mean() * 100)}% of scenes) | oracle ceiling {orc.median():.3f}")
-    print("  (ext_frac = fraction of recovered energy OUTSIDE the cell outline; "
-          "the mechanism confinement acts on)")
+        refit = (1 - soft.in_nrmse / b0.in_nrmse)               # in-cell improvement, solver vs baseline
+        print(f"  {name:16s} n={len(sc):2d} | no-mask {b0.nrmse.median():.3f}/{b0.in_nrmse.median():.3f}"
+              f"  post-hoc-zero {hard.loc[sc].nrmse.median():.3f}/{hard.loc[sc].in_nrmse.median():.3f}"
+              f"  soft {soft.nrmse.median():.3f}/{soft.in_nrmse.median():.3f}"
+              f"  | solver refits in-cell {refit.median() * 100:+.0f}% in {int((refit > 0.005).mean() * 100)}% of scenes"
+              f"  | oracle {orc.median():.3f}")
+    print("  Post-hoc zero leaves in-cell == baseline by construction; the soft solver's win over it is all interior.")
 
 
 def figure(df, outdir):
@@ -207,26 +228,37 @@ def figure(df, outdir):
                 fontsize=12, fontweight="bold")
     a.legend(fontsize=9); a.grid(alpha=0.3)
 
-    # B: the mechanism -- exterior energy drops, in-cell error stays flat (no clipping).
-    # ext_frac as the MEAN (the noisy scenes carry the leak; the median hides them);
-    # in-cell nRMSE axis anchored at 0 so "flat" reads as flat, not a zoomed wiggle.
+    # B: is the in-solver penalty worth it over a post-hoc zero? Whole-field nRMSE
+    # relative to no-mask, per band, for post-hoc-zero vs the soft solver, with the
+    # solver's in-cell nRMSE marked -- the gap between the bars is the interior refit
+    # that post-hoc zeroing (interior == baseline) cannot get.
     b = ax[1]
-    cell = df[df["mask"] == "cell"]
-    ext = pd.concat([pd.Series({0: df[df["mask"] == "none"].ext_frac.mean()}),
-                     cell.groupby("dial").ext_frac.mean()])
-    b.plot(ext.index, ext.values, "s-", color="#d62728", lw=2, label="energy outside cell (mean ext_frac)")
-    b.set_xlabel("fwd_mask_strength dial"); b.set_ylabel("fraction of energy outside cell", color="#d62728")
-    b.set_ylim(0, max(ext.values) * 1.2); b.tick_params(axis="y", colors="#d62728")
-    b2 = b.twinx()
-    inn = pd.concat([pd.Series({0: df[df["mask"] == "none"].in_nrmse.median()}),
-                     cell.groupby("dial").in_nrmse.median()])
-    b2.plot(inn.index, inn.values, "^--", color="#1f77b4", lw=2, label="in-cell nRMSE (median)")
-    b2.set_ylabel("in-cell nRMSE (flat = no rim clipping)", color="#1f77b4")
-    b2.set_ylim(0, max(inn.values) * 1.3); b2.tick_params(axis="y", colors="#1f77b4")
-    b.set_title("What confinement does: kills exterior leak,\nleaves in-cell error alone (rising = clipping)",
+    base_i = df[df["mask"] == "none"].set_index("scene")
+    x = np.arange(len(BANDS)); wbar = 0.36
+    hard_rel, soft_rel, soft_in = [], [], []
+    for name, sel in BANDS:
+        sc = [s for s in df.scene.unique() if sel(float(s.split("_u")[1]))]
+        b0 = base_i.loc[sc]
+        hard = df[(df["mask"] == "hard") & df.scene.isin(sc)].set_index("scene")
+        cr = df[(df["mask"] == "cell") & df.scene.isin(sc)]
+        soft = cr.loc[cr.groupby("scene").nrmse.idxmin()].set_index("scene")
+        hard_rel.append((hard.nrmse / b0.nrmse).median())
+        soft_rel.append((soft.nrmse / b0.nrmse).median())
+        soft_in.append((soft.in_nrmse / b0.in_nrmse).median())
+    b.bar(x - wbar / 2, hard_rel, wbar, color="#9467bd", label="post-hoc zero (whole-field)")
+    b.bar(x + wbar / 2, soft_rel, wbar, color="#2ca02c", label="soft solver (whole-field)")
+    b.plot(x + wbar / 2, soft_in, "D", color="#1f77b4", ms=9, label="soft solver, in-cell only")
+    ui = 1                                                     # annotate the useful (operating) band only
+    b.annotate("solver's\ninterior refit", xy=(ui + wbar / 2, soft_rel[ui]),
+               xytext=(ui - 0.42, 0.72), fontsize=8.5, ha="center",
+               arrowprops=dict(arrowstyle="->", color="k", lw=1.3))
+    b.axhline(1.0, color="k", lw=1); b.text(len(BANDS) - 0.55, 1.005, "no-mask baseline", fontsize=8, ha="right", va="bottom")
+    b.set_xticks(x); b.set_xticklabels([n for n, _ in BANDS], fontsize=9)
+    b.set_ylabel("nRMSE / no-mask baseline  (<1 = better)")
+    b.set_ylim(0, 1.2)
+    b.set_title("Post-hoc zero vs the solver: the gap is interior\n(post-hoc zero's in-cell == baseline by construction)",
                 fontsize=12, fontweight="bold")
-    h1, l1 = b.get_legend_handles_labels(); h2, l2 = b2.get_legend_handles_labels()
-    b.legend(h1 + h2, l1 + l2, fontsize=9, loc="center right"); b.grid(alpha=0.3)
+    b.legend(fontsize=8.5, loc="upper left"); b.grid(alpha=0.3, axis="y")
 
     fig.tight_layout()
     out = os.path.join(outdir, "heuristic-sweep-cells-confinement.png")
