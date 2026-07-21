@@ -115,6 +115,7 @@ loads `gt_traction.npy` directly (see `sweep_forces.py`, `meta.kind == "cell"`).
 | `reference.tif`  | frame 0 of the scenario-6 stack (zero-jitter reference)            |
 | `deformed.tif`   | `warp(frame 1, u)` — mild registration jitter + photon noise ride along |
 | `gt_traction.npy`| **authoritative** GT traction `(2, N, N)` Pa (scaled fibre field)  |
+| `cell_mask.npy`  | cell OUTLINE `(N, N)` bool — the honest segmentation prior (looser than the traction support); consumed only by `cell_confinement.py` |
 | `scene.toml`     | metadata only (below); **not** the GT for cells                    |
 
 ```toml
@@ -149,7 +150,7 @@ metric differ.
 $STAGE/ (= /helix/…/tfm_heuristic, set in env.sh, NOT in the repo)
   images/tif_stacks/{scenario*_dens*_NA*_expo*.tif,manifest.csv}          ← make_stacks.py
   scenes/<condition>/<scene_id>/{reference.tif,deformed.tif,scene.toml}  ← make_scenes.py (dipole)
-  scenes/cell_s6j1/<scene_id>/{reference.tif,deformed.tif,gt_traction.npy,scene.toml}  ← make_cells.py
+  scenes/cell_s6j1/<scene_id>/{reference.tif,deformed.tif,gt_traction.npy,cell_mask.npy,scene.toml}  ← make_cells.py
   cache/<condition>/<scene_id>/disp_res<k>.npz                            ← build_cache.py
   results/                                                                ← sweep_forces.py
   logs/                                                                   ← SLURM out/err
@@ -199,7 +200,16 @@ python compare_methods.py --outdir "$IMG"        # illustrative best-J recoverie
 python cell_aggregate.py  --outdir "$IMG"        # diffuse-cell competence + L1 heuristic transfer
 python cell_examples.py   --outdir "$IMG"        # illustrative cell recoveries per method
 python cell_compare_reg.py --outdir "$IMG"       # L1 vs parameter-free Bayesian-L2 on cells
+python cell_confinement.py --outdir "$IMG"       # does mask confinement earn its keep? (re-inverts cache, no sweep)
 ```
+
+`cell_confinement.py` is the one analysis that consumes `cell_mask.npy`. It holds the
+displacement (cached PIV window-24) and regularization (shipped default `l1=0.05`, `l2=0`)
+fixed and varies **only** the mask: `fwd_mask_strength` 0→100 with the cell outline, against
+the no-mask baseline, with the GT-support mask as an oracle ceiling. It re-inverts the existing
+cache (no new sweep). If the stage was generated before `make_cells.py` saved `cell_mask.npy`,
+pass `--scenarios-dir <benchmarkTFM>/benchmarks/scenarios` once to backfill the masks without
+touching `reference.tif`/`deformed.tif` (so the displacement cache stays valid).
 
 The diffuse-cell scenes (condition `cell_s6j1`) are staged from the benchmarkTFM synth cells by
 `make_cells.py`: it takes each cell's fitted-fibre traction as GT, forward-projects it with this
@@ -224,6 +234,7 @@ Figure map (script → files in `docs/images/`, and the report section they serv
 | `cell_aggregate.py` | `heuristic-sweep-cells-competence.png` | Diffuse fields: realistic cells |
 | `cell_examples.py` | `heuristic-sweep-cells-examples.png` | Diffuse fields: realistic cells |
 | `cell_compare_reg.py` | `heuristic-sweep-cells-regularization.png` (+ `cell_reg_compare.csv`) | Does smoothness win on diffuse fields? |
+| `cell_confinement.py` | `heuristic-sweep-cells-confinement.png` (+ `cell_confinement.csv`) | Does mask confinement earn its keep? |
 
 Omit `--outdir` and each script writes to `figures/` (gitignored) instead, for
 scratch runs that should not touch the committed report images.

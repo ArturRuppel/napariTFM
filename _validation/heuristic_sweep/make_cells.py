@@ -13,13 +13,17 @@ cell's traction field as the GT shape and:
     is the reference, deformed = warp(frame 1) so mild registration jitter + photon
     noise ride along exactly as in the dipole run.
 The cell's scaled traction is stored as gt_traction.npy (the authoritative GT the
-scorer reads); scene.toml carries only metadata (kind="cell", strength, provenance).
+scorer reads); the cell OUTLINE mask is stored as cell_mask.npy (the honest,
+user-available segmentation prior -- looser than the traction support, which
+concentrates at the periphery -- so cell_confinement.py can test whether mask
+confinement earns its keep without cheating with the GT support); scene.toml
+carries only metadata (kind="cell", strength, provenance).
 
 Same E and pixel size as the dipole run (sweep_config), so the only variable
 versus that run is the field structure: one localized dipole -> a diffuse cell.
 
 Writes $STAGE/scenes/<condition>/<scene_id>/{reference.tif,deformed.tif,
-gt_traction.npy,scene.toml}, scene_id = "<cell>_u<peakpx>".
+gt_traction.npy,cell_mask.npy,scene.toml}, scene_id = "<cell>_u<peakpx>".
 
 Usage:
     python make_cells.py --scenarios-dir ~/Projects/benchmarkTFM/benchmarks/scenarios \
@@ -35,14 +39,16 @@ import sweep_config as C
 from make_scenes import greens_displacement, warp, centre_crop
 
 
-def load_cell_traction(scen_dir, cell):
-    """(2,N,N) GT traction (Pa) and fibre count for one benchmarkTFM synth cell."""
+def load_cell_geometry(scen_dir, cell):
+    """(2,N,N) GT traction (Pa), (N,N) cell-outline mask, and fibre count for one
+    benchmarkTFM synth cell. traction and mask share the same 512² grid (co-registered)."""
     ome = os.path.join(scen_dir, cell, f"{cell}.ome.tif")
     with tifffile.TiffFile(ome) as t:
         series = {s.name: s.asarray() for s in t.series}
     t_gt = np.asarray(series["traction"], np.float64)          # (2,H,W) Pa
+    mask = np.asarray(series["mask"]) > 0                       # (H,W) cell outline (not the traction support)
     cfg = json.load(open(os.path.join(scen_dir, cell, "config.json")))
-    return t_gt, len(cfg["fibres"])
+    return t_gt, mask, len(cfg["fibres"])
 
 
 def find_stack(images_dir, scenario):
@@ -85,7 +91,7 @@ def main():
           f"{C.CELL_REF_FRAME}->{C.CELL_DEFORM_FRAME})")
 
     for cell in cells:
-        t_gt, n_fib = load_cell_traction(a.scenarios_dir, cell)
+        t_gt, cell_mask, n_fib = load_cell_geometry(a.scenarios_dir, cell)
         u_unit = greens_displacement(t_gt, N)                  # µm, this pipeline's operator
         peak_unit = float(np.hypot(u_unit[0], u_unit[1]).max())   # µm at unit (native) scale
         for P in strengths:
@@ -103,6 +109,7 @@ def main():
             tifffile.imwrite(os.path.join(d, "deformed.tif"),
                              np.clip(deformed, 0, 65535).astype(np.uint16))
             np.save(os.path.join(d, "gt_traction.npy"), t_s)
+            np.save(os.path.join(d, "cell_mask.npy"), cell_mask)   # cell outline (strength-independent)
             write_toml(os.path.join(d, "scene.toml"),
                        dict(condition=cond, scene_id=sid, image_size=N, pixel_size=ps,
                             source_cell=cell, n_fibers=n_fib, peak_disp_px=P,
