@@ -289,6 +289,48 @@ L1 and it beats the parameter-free path on every field tested, dipole or cell.
 The tuned elastic-net heuristic, plateau and SNR-tracking both, carries from one dipole to a whole
 cell, and sparsity keeps its edge over smoothness the whole way.
 
+### Does mask confinement earn its keep?
+
+Everything above ran with no cell mask, on purpose: the sweep set the defaults, and the defaults have
+to ship safe for the user who has not drawn a segmentation. That leaves one shipped feature untested.
+The forward solver can confine traction to a cell mask, a soft off-mask penalty gated by a strength
+dial, and the sweep never asked whether that prior is worth turning on. The diffuse cells are the only
+fair place to ask, since a dipole's mask is just its two blobs and confining to it merely restates the
+ground truth. Here the honest prior is the cell *outline*, the thing a user actually segments from
+brightfield, which is genuinely looser than the traction: the fibres pull hardest at the periphery,
+well inside the edge. Confining to the true traction support would be cheating, so that appears only
+as an oracle ceiling. Displacement stays fixed at PIV window 24 and regularization at the shipped
+default (L1 0.05, no ridge); the mask is the only thing that moves, its dial run from off to full.
+
+![Two panels. Left: nRMSE relative to the no-mask baseline against the confinement dial, one curve per
+strength band. The noise-floor band plunges to 0.55 by full strength; the useful and strong bands hug
+1.0, dipping a couple of percent at most, each with a dotted GT-support oracle ceiling just below.
+Right: mean fraction of recovered energy lying outside the cell falls from 0.24 to 0.07 as the dial
+rises, while in-cell nRMSE stays flat near 0.84.](../images/heuristic-sweep-cells-confinement.png)
+
+**It earns its keep, and the size of the win tracks SNR inversely.** At the noise floor (peak
+displacement at or below 1.2 px) confinement cuts whole-field nRMSE by about 45%, from 4.0 to 2.5, and
+helps in every scene. That headline number flatters it, though: both fields are above 1, meaning the
+recovery is worse than predicting zero, so confinement is rescuing an already-hopeless field into a
+merely-bad one. The operationally honest number is the useful window, where recovery is real: there
+the gain is a steady ~5% (0.82 to 0.78), positive in every scene, and the loose cell outline captures
+almost all of what the GT-support oracle could (0.78 against a 0.75 ceiling), so a tight mask buys
+nothing extra. At high strength there is little exterior leak left to remove and the gain fades to ~2%.
+
+**The mechanism is exactly background removal, and it never touches the cell.** The win comes entirely
+from killing spurious traction in the bare substrate: mean off-cell energy falls from 0.24 to 0.07 as
+the dial climbs. This is where the noise-floor payoff comes from, because a buried-signal field
+inverts into rampant background garbage that the metric, whole-field, pays for in full. Meanwhile
+in-cell error stays flat to within a couple percent, and across 120 scene-and-dial combinations the
+error inside the outline rose by more than 1% in exactly none of them. The apron around the mask
+protects real rim traction, so confinement is a one-sided lever: it removes exterior leak and leaves
+the cell alone. That makes it safe to turn on whenever a mask exists.
+
+The default stays off, because the no-mask user must not be handed a prior they did not ask for and the
+useful-window gain is small. But the recommendation for the user who has a segmentation is clean:
+switch confinement on. It is a noise-regime tool, worth the most exactly when the images are worst, and
+it cannot hurt.
+
 ## The recipe
 
 - **Default to PIV**, window ~24 px, L1 ~0.05, L2 = 0. It wins or ties about two-thirds of the time
@@ -298,6 +340,9 @@ cell, and sparsity keeps its edge over smoothness the whole way.
 - **Noisy images (low exposure, dim beads): reach for FFD sooner.** Its smoothing is denoising.
 - **Large soft sources at sub-pixel displacement: iLK**, radius ~7, can edge the others, but the
   margin is thin and the field is blocky. Only worth it when squeezing the last few percent.
+- **Have a cell mask? Turn on confinement.** It only removes traction from the bare substrate and
+  never touches the cell, so it cannot hurt: ~5% in the useful window, far more at the noise floor.
+  Off by default because the no-mask user must not inherit a prior they did not draw.
 - **Sources below ~2 px footprint: expect failure from every method.** Use PIV with strong L1 and
   treat the magnitudes skeptically.
 - **To resolve small or weak sources, raise exposure**, not density or NA. It is the only imaging

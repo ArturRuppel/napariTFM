@@ -163,7 +163,7 @@ def main():
 
 
 def summarize(df):
-    base = df[df.mask == "none"].set_index("scene").nrmse
+    base = df[df["mask"] == "none"].set_index("scene").nrmse
     print(f"\n=== Does mask confinement earn its keep? ({df.scene.nunique()} scenes, "
           f"l1={L1_FIXED}, PIV win-{RES:g}) ===")
     for name, sel in BANDS:
@@ -171,8 +171,8 @@ def summarize(df):
         if not sc:
             continue
         b0 = base.loc[sc]
-        cell = df[(df.mask == "cell") & df.scene.isin(sc)].groupby("scene").nrmse.min()
-        orc = df[(df.mask == "gt_oracle") & df.scene.isin(sc)].groupby("scene").nrmse.min()
+        cell = df[(df["mask"] == "cell") & df.scene.isin(sc)].groupby("scene").nrmse.min()
+        orc = df[(df["mask"] == "gt_oracle") & df.scene.isin(sc)].groupby("scene").nrmse.min()
         gain = (1 - cell / b0)
         print(f"  {name:16s} n={len(sc):2d} | baseline {b0.median():.3f} "
               f"-> cell-mask {cell.median():.3f} ({gain.median() * 100:+.0f}% median, "
@@ -186,18 +186,18 @@ def figure(df, outdir):
 
     # A: nRMSE vs dial, normalized to baseline, per strength band + oracle ceiling
     a = ax[0]
-    base = df[df.mask == "none"].set_index("scene").nrmse
+    base = df[df["mask"] == "none"].set_index("scene").nrmse
     colors = ["#1f77b4", "#2ca02c", "#d62728"]
     for (name, sel), col in zip(BANDS, colors):
         sc = [s for s in df.scene.unique() if sel(float(s.split("_u")[1]))]
         if not sc:
             continue
-        sub = df[(df.mask == "cell") & df.scene.isin(sc)].copy()
+        sub = df[(df["mask"] == "cell") & df.scene.isin(sc)].copy()
         sub["rel"] = sub.nrmse.values / base.loc[sub.scene].values
         curve = sub.groupby("dial").rel.median()
         curve = pd.concat([pd.Series({0: 1.0}), curve])       # dial 0 == baseline == 1.0
         a.plot(curve.index, curve.values, "o-", color=col, lw=2, label=name)
-        orc = df[(df.mask == "gt_oracle") & df.scene.isin(sc)].copy()
+        orc = df[(df["mask"] == "gt_oracle") & df.scene.isin(sc)].copy()
         orc["rel"] = orc.nrmse.values / base.loc[orc.scene].values
         a.axhline(orc.groupby("scene").rel.min().median(), ls=":", color=col, alpha=0.6)
     a.axhline(1.0, color="k", lw=1)
@@ -207,21 +207,22 @@ def figure(df, outdir):
                 fontsize=12, fontweight="bold")
     a.legend(fontsize=9); a.grid(alpha=0.3)
 
-    # B: the mechanism -- exterior energy drops, in-cell error should stay flat
+    # B: the mechanism -- exterior energy drops, in-cell error stays flat (no clipping).
+    # ext_frac as the MEAN (the noisy scenes carry the leak; the median hides them);
+    # in-cell nRMSE axis anchored at 0 so "flat" reads as flat, not a zoomed wiggle.
     b = ax[1]
-    cell = df[df.mask == "cell"]
-    ext = cell.groupby("dial").ext_frac.median()
-    ext0 = df[df.mask == "none"].ext_frac.median()
-    ext = pd.concat([pd.Series({0: ext0}), ext])
-    b.plot(ext.index, ext.values, "s-", color="#d62728", lw=2, label="energy outside cell (ext_frac)")
+    cell = df[df["mask"] == "cell"]
+    ext = pd.concat([pd.Series({0: df[df["mask"] == "none"].ext_frac.mean()}),
+                     cell.groupby("dial").ext_frac.mean()])
+    b.plot(ext.index, ext.values, "s-", color="#d62728", lw=2, label="energy outside cell (mean ext_frac)")
     b.set_xlabel("fwd_mask_strength dial"); b.set_ylabel("fraction of energy outside cell", color="#d62728")
-    b.set_ylim(0, max(ext.values) * 1.15)
+    b.set_ylim(0, max(ext.values) * 1.2); b.tick_params(axis="y", colors="#d62728")
     b2 = b.twinx()
-    inn = cell.groupby("dial").in_nrmse.median()
-    inn0 = df[df.mask == "none"].in_nrmse.median()
-    inn = pd.concat([pd.Series({0: inn0}), inn])
-    b2.plot(inn.index, inn.values, "^--", color="#1f77b4", lw=2, label="in-cell nRMSE")
+    inn = pd.concat([pd.Series({0: df[df["mask"] == "none"].in_nrmse.median()}),
+                     cell.groupby("dial").in_nrmse.median()])
+    b2.plot(inn.index, inn.values, "^--", color="#1f77b4", lw=2, label="in-cell nRMSE (median)")
     b2.set_ylabel("in-cell nRMSE (flat = no rim clipping)", color="#1f77b4")
+    b2.set_ylim(0, max(inn.values) * 1.3); b2.tick_params(axis="y", colors="#1f77b4")
     b.set_title("What confinement does: kills exterior leak,\nleaves in-cell error alone (rising = clipping)",
                 fontsize=12, fontweight="bold")
     h1, l1 = b.get_legend_handles_labels(); h2, l2 = b2.get_legend_handles_labels()
