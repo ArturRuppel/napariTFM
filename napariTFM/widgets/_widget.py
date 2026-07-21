@@ -12,11 +12,11 @@ from typing import Any
 _STAGE_ARRAY_CACHE_SIZE = 4
 
 import napari
-from qtpy.QtCore import Qt, QObject, QTimer, QSize
+from qtpy.QtCore import Qt, QObject, QTimer, QSize, Signal
 from qtpy.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QMessageBox, QSizePolicy, QDoubleSpinBox,
     QHBoxLayout, QFrame, QSpinBox, QComboBox, QFileDialog, QCheckBox,
-    QMenu, QToolButton, QApplication
+    QMenu, QToolButton, QApplication, QPushButton
 )
 
 from napariTFM.utilities.parameter_manager import ParameterManager
@@ -111,6 +111,18 @@ ADVANCED = object()
 class WorkflowParameterPanel(QWidget):
     """Single visible parameter editor for the workflow shell."""
 
+    # Emitted (with the button's action key) when an in-panel action button is clicked.
+    # The shell connects this to the owning stage's controller (see _create_stage_parameter_panels).
+    action_requested = Signal(str)
+
+    # Parameters whose value selects a METHOD block to show; each is a dropdown owning the
+    # per-method containers built for its section (see _refresh_method_visibility).
+    METHOD_DROPDOWNS = ("disp_method", "force_method")
+
+    # Numeric flags the legacy "auto" inference reads: while force_method is stored as "auto",
+    # a change to any of these can move the inferred method shown, so visibility must refresh.
+    _AUTO_FORCE_FLAGS = ("l1_sparsity", "fwd_mask_strength", "bayesian_l2")
+
     PARAMETER_SECTIONS = [
         ("General", [
             ("pixel_size", "Pixel Size (um)", "float", 0.001, 100.0, 0.1, 3, None),
@@ -150,7 +162,7 @@ class WorkflowParameterPanel(QWidget):
             ]),
             (GROUP, "General"),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
-            ("disp_downscale_before", "Downsample Before Measurement", "bool", None, None, None, None, None),
+            ("disp_downscale_before", "Downsample Before\nMeasurement", "bool", None, None, None, None, None),
             (GROUP, "Mask confinement"),
             ("disp_mask_confine", "Confine to Mask", "bool", None, None, None, None, None),
             ("disp_mask_margin_um", "Mask Margin (um)", "float", 0.0, 200.0, 1.0, 1, None),
@@ -163,13 +175,32 @@ class WorkflowParameterPanel(QWidget):
             ("young_modulus", "Young's Modulus (kPa)", "float", 0.1, 1000.0, 0.1, 2, None),
             ("poisson_ratio_substrate", "Poisson Ratio", "float", 0.0, 0.5, 0.01, 2, None),
             ("gel_height", "Gel Height (um)", "float", 0.0, 1000.0, 10.0, 1, None),
-            ("regularization", "Regularization (10^x)", "float", -21.0, 0.0, 0.5, 1, None),
-            ("bayesian_l2", "Bayesian L2 (auto λ)", "bool", None, None, None, None, None),
-            (GROUP, "Sparse inversion (L1)"),
-            ("l1_sparsity", "L1 Sparsity", "float", 0.0, 1.0, 0.01, 2, None),
-            (GROUP, "Mask confinement"),
-            ("fwd_mask_strength", "Mask Confinement", "float", 0.0, 100.0, 1.0, 0, None),
-            ("fwd_mask_reach", "Mask Reach (px)", "float", 0.0, 20.0, 0.5, 1, None),
+            # Method dropdown decides which block below is shown; each method's knobs stay
+            # hidden until it is selected (same machinery as the Displacement Method).
+            ("force_method", "Method", "choice", None, None, None, None,
+             ["Elastic net", "FTTC + GCV", "Bayesian L2"]),
+            (METHOD, "Elastic net", [
+                (GROUP, "Elastic net (L1 + L2)"),
+                ("l1_sparsity", "L1 Sparsity", "float", 0.0, 1.0, 0.01, 2, None),
+                ("l2_ridge", "L2 Ridge", "float", 0.0, 32.0, 0.25, 2, None),
+                (GROUP, "Mask confiner (soft support)"),
+                ("fwd_mask_strength", "Mask Confinement", "float", 0.0, 100.0, 1.0, 0, None),
+                ("fwd_mask_reach", "Mask Reach (px)", "float", 0.0, 20.0, 0.5, 1, None),
+            ]),
+            (METHOD, "FTTC + GCV", [
+                (GROUP, "FTTC (Fourier Tikhonov)"),
+                ("regularization", "Regularization (10^x)", "float", -21.0, 0.0, 0.5, 1, None),
+                ("gcv_lambda", "Auto-pick λ (GCV, this frame)", "button",
+                 None, None, None, None, None),
+                ("auto_gcv", "Auto-pick λ per frame", "bool", None, None, None, None, None),
+            ]),
+            (METHOD, "Bayesian L2", [
+                (GROUP, "Bayesian L2 (evidence-max λ)"),
+                ("bayesian_freeze", "Freeze λ for the movie", "button",
+                 None, None, None, None, None),
+                ("bayesian_per_frame", "Re-estimate λ per frame", "bool",
+                 None, None, None, None, None),
+            ]),
             (GROUP, "Visualization"),
             ("force_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("force_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -202,14 +233,51 @@ class WorkflowParameterPanel(QWidget):
             "collar, no hard edge), so it self-confines but the exterior is discouraged "
             "rather than forbidden. 0 = off."
         ),
-        "bayesian_l2": (
-            "Choose the FTTC regularization λ automatically by Bayesian evidence "
-            "maximization (Huang et al. 2019) — a noise-robust selector that infers λ "
-            "from the data with no manual tuning and adapts per frame, which matters most "
-            "for comparing cells across conditions or across a time series. With a mask "
-            "loaded it measures the noise from the cell-free exterior (BL2); without one "
-            "it infers the noise too (ABL2). Overrides the manual value. Only applies to "
-            "plain FTTC (L1 Sparsity and Mask Confinement off)."
+        "l2_ridge": (
+            "Elastic-net L2 ridge, the second knob of the sparse (L1) solver — it "
+            "only does anything when L1 Sparsity > 0, and adds a global ½λ₂‖t‖² "
+            "shrinkage on top of the L1 threshold (pure sparsity becomes elastic net). "
+            "The value is a fraction of the median per-mode curvature, useful band "
+            "~0.1..1. It smooths the traction where L1 alone would leave it spiky, at "
+            "the cost of shrinking peak magnitude. In the heuristic sweep it did not "
+            "earn its keep — tuned L1 with the ridge off beat every ridge setting on "
+            "both compact dipoles and diffuse cells — so it defaults to 0. Raise it "
+            "only if a sparse recovery looks too speckled and you would rather trade "
+            "peak height for a smoother field. Unrelated to Bayesian L2 and to the "
+            "manual Regularization above, which act on the plain-FTTC path instead. 0 = "
+            "pure L1."
+        ),
+        "force_method": (
+            "Traction-inversion method. Each shows only its own controls:\n"
+            "• Elastic net (L1+L2) — sparse group-L1 with an optional L2 ridge and a soft "
+            "mask confiner. The recommended default: thresholds small forces to zero, best "
+            "in-cell accuracy and peak recovery, no mask needed.\n"
+            "• FTTC + GCV — classic Fourier Tikhonov inversion. Set λ by hand, or let "
+            "Generalized Cross-Validation pick it (button = once, checkbox = per frame).\n"
+            "• Bayesian L2 — the real-space evidence-max reconstruction (Huang et al. 2019); "
+            "λ is chosen from the data automatically, per frame or frozen for a movie."
+        ),
+        "auto_gcv": (
+            "Pick the FTTC λ by Generalized Cross-Validation on every frame automatically, "
+            "instead of the manual slider. GCV works on the Fourier operator (the same λ the "
+            "slider sets). While on, the manual slider and the one-shot button are disabled. "
+            "For a single frozen λ across the movie, use the button instead and leave this off."
+        ),
+        "gcv_lambda": (
+            "Estimate the GCV-optimal λ on the current frame and write it into the "
+            "Regularization slider, where it stays editable. One-shot: the same λ is then used "
+            "for every frame. For per-frame re-picking, use the checkbox below."
+        ),
+        "bayesian_freeze": (
+            "Estimate the Bayesian evidence-max λ on the current frame and freeze it for the "
+            "whole movie (turns off per-frame re-estimation). Freezing keeps the regularization "
+            "— and so the traction maps — comparable frame to frame. With a mask loaded the "
+            "noise is measured from the cell-free exterior (BL2); without one it is inferred (ABL2)."
+        ),
+        "bayesian_per_frame": (
+            "Re-estimate the Bayesian λ independently on every frame (parameter-free, the "
+            "default). Robust, but λ drifts frame to frame, which breaks cross-frame comparison — "
+            "use Freeze λ for a time series or a condition comparison."
         ),
         "fwd_mask_strength": (
             "How hard traction is pushed out of the loaded mask's exterior — a "
@@ -367,6 +435,9 @@ class WorkflowParameterPanel(QWidget):
         self.parameter_manager = parameter_manager
         self._section_titles = set(section_titles) if section_titles is not None else None
         self.parameter_controls = {}
+        # Action buttons (kind == "button") are not bound to a parameter value; they emit
+        # action_requested on click. Kept out of parameter_controls so sync/enumeration skip them.
+        self._action_buttons = {}
         # (h, w) of the current input frame, pushed in by the shell (set_input_shape),
         # so the read-only FFD Pyramid Levels display can show the real derived depth.
         self._input_shape = None
@@ -379,12 +450,14 @@ class WorkflowParameterPanel(QWidget):
         self._setup_ui()
         self._sync_all_controls()
         self._refresh_confinement_enablement()
+        self._refresh_force_lambda_enablement()
         self._apply_method_availability()
         self._refresh_method_visibility()
         self._refresh_advanced_visibility()
         self._refresh_pyramid_levels()
         self.parameter_manager.parameter_changed.connect(self._sync_parameter)
         self.parameter_manager.parameter_changed.connect(self._refresh_confinement_enablement)
+        self.parameter_manager.parameter_changed.connect(self._refresh_force_lambda_enablement)
         self.parameter_manager.parameter_changed.connect(self._refresh_method_visibility)
         self.parameter_manager.parameter_changed.connect(self._refresh_advanced_visibility)
         self.parameter_manager.parameter_changed.connect(self._refresh_pyramid_levels)
@@ -529,6 +602,12 @@ class WorkflowParameterPanel(QWidget):
             label, control, tooltip = self._control_for_spec(spec)
             add_section_labeled_full_row(grid, row, label, control, tooltip=tooltip)
             return row + 1, pending
+        if spec[2] == "button":
+            # A full-row action button (its label is the button text); not a bound parameter.
+            row, pending = self._flush_pending(grid, row, pending)
+            _, control, _ = self._control_for_spec(spec)
+            add_section_header(grid, row, control)
+            return row + 1, pending
         if pending is None:
             return row, self._control_for_spec(spec)
         label, control, tooltip = self._control_for_spec(spec)
@@ -538,7 +617,13 @@ class WorkflowParameterPanel(QWidget):
 
     def _control_for_spec(self, spec):
         name, label, kind, min_val, max_val, step, decimals, choices = spec
-        control = self._create_control(name, kind, min_val, max_val, step, decimals, choices)
+        if kind == "button":
+            control = QPushButton(label)
+            control.setObjectName(f"workflow_action_{name}")
+            control.clicked.connect(lambda _checked=False, n=name: self.action_requested.emit(n))
+            self._action_buttons[name] = control
+        else:
+            control = self._create_control(name, kind, min_val, max_val, step, decimals, choices)
         tooltip = self.PARAMETER_TOOLTIPS.get(name)
         if tooltip:
             control.setToolTip(tooltip)
@@ -637,21 +722,60 @@ class WorkflowParameterPanel(QWidget):
         if margin is not None:
             margin.setEnabled(bool(self.parameter_manager.get_parameter("disp_mask_confine")))
 
-    def _refresh_method_visibility(self, name=None, value=None):
-        """Show only the selected displacement method's parameter block; hide the rest,
-        so an unselected method's knobs are invisible (not merely greyed).
+    def _refresh_force_lambda_enablement(self, name=None, value=None):
+        """Grey the FTTC manual-λ slider and its one-shot GCV button while per-frame GCV is on
+        (``auto_gcv``): per-frame λ selection owns λ, so the manual value is not in play.
 
-        Driven from parameter_changed (cheap no-op unless the method dropdown moved)
-        and once at construction. No-ops when the Displacement section is not built
-        (the panel can be constructed with a subset of sections).
+        Driven from parameter_changed (no-op unless auto_gcv moved) and once at construction.
         """
-        if name is not None and name != "disp_method":
+        if name is not None and name != "auto_gcv":
             return
-        if self.parameter_controls.get("disp_method") is None:
+        slider = self.parameter_controls.get("regularization")
+        button = self._action_buttons.get("gcv_lambda")
+        if slider is None and button is None:
             return
-        active = self.parameter_manager.get_parameter("disp_method")
+        auto = bool(self.parameter_manager.get_parameter("auto_gcv"))
+        if slider is not None:
+            slider.setEnabled(not auto)
+        if button is not None:
+            button.setEnabled(not auto)
+
+    def _resolved_method_value(self, dropdown_name):
+        """The concrete method a method dropdown is currently on. For ``force_method`` the
+        stored ``"auto"`` (legacy/back-compat) is resolved to the inferred concrete method for
+        display, without mutating the stored value (so the backend keeps inferring at run time,
+        with the real mask, and an explicit user pick still wins)."""
+        value = self.parameter_manager.get_parameter(dropdown_name)
+        if dropdown_name == "force_method" and value == "auto":
+            from napariTFM.backend.fttc import infer_force_method
+            return infer_force_method(self.parameter_manager.get_fttc_parameters())
+        return value
+
+    def _active_methods(self):
+        """The set of concrete method values currently selected across every built method
+        dropdown. Method names are unique across dropdowns, so membership picks exactly one
+        block per section."""
+        return {
+            self._resolved_method_value(dd)
+            for dd in self.METHOD_DROPDOWNS
+            if self.parameter_controls.get(dd) is not None
+        }
+
+    def _refresh_method_visibility(self, name=None, value=None):
+        """Show only the selected method's parameter block per section; hide the rest, so an
+        unselected method's knobs are invisible (not merely greyed).
+
+        Driven from parameter_changed (cheap no-op unless a method dropdown moved, or a flag
+        that resolves force_method's "auto" display changed) and once at construction. No-ops
+        when no method dropdown is built (the panel can hold a subset of sections).
+        """
+        if name is not None and name not in self.METHOD_DROPDOWNS and name not in self._AUTO_FORCE_FLAGS:
+            return
+        if not any(self.parameter_controls.get(dd) is not None for dd in self.METHOD_DROPDOWNS):
+            return
+        active = self._active_methods()
         for container, method in self._method_blocks:
-            container.setVisible(method == active)
+            container.setVisible(method in active)
 
     def _refresh_advanced_visibility(self, name=None, value=None):
         """Show each Advanced disclosure only for its owning method, expanded on demand.
@@ -659,17 +783,16 @@ class WorkflowParameterPanel(QWidget):
         An Advanced block lives inside its method's block, so it is already hidden when
         another method is selected; its toggle is revealed only for the owner method and
         its container only when that toggle is also expanded. Driven from parameter_changed
-        (a cheap no-op unless the
-        method dropdown moved), from the toggles themselves (name is None), and once at
-        construction. No-ops when no Advanced block was built for this panel.
+        (a cheap no-op unless a method dropdown moved), from the toggles themselves (name is
+        None), and once at construction. No-ops when no Advanced block was built.
         """
-        if name is not None and name != "disp_method":
+        if name is not None and name not in self.METHOD_DROPDOWNS:
             return
-        if self.parameter_controls.get("disp_method") is None:
+        if not any(self.parameter_controls.get(dd) is not None for dd in self.METHOD_DROPDOWNS):
             return
-        active = self.parameter_manager.get_parameter("disp_method")
+        active = self._active_methods()
         for toggle, container, owner_method in self._advanced_blocks:
-            owner_selected = owner_method == active
+            owner_selected = owner_method in active
             toggle.setVisible(owner_selected)
             container.setVisible(owner_selected and toggle.isChecked())
 
@@ -721,6 +844,10 @@ class WorkflowParameterPanel(QWidget):
             return
 
         display_value = self.parameter_manager.get_ui_parameter(param_name)
+        if param_name == "force_method" and display_value == "auto":
+            # Display the inferred concrete method; storage stays "auto" (signals are blocked
+            # here, so selecting the item does not write back). See _resolved_method_value.
+            display_value = self._resolved_method_value("force_method")
         control.blockSignals(True)
         try:
             if isinstance(control, QLabeledDoubleRangeSlider):
@@ -777,7 +904,7 @@ class napariTFMWidget(QWidget):
         QTimer.singleShot(0, install_filter_on_inputs)
 
         # Give the dock a comfortable default/minimum width for the panel body.
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(420)
 
         # Create scroll area for widgets
         scroll = QScrollArea()
@@ -907,6 +1034,7 @@ class napariTFMWidget(QWidget):
             self.parameter_manager,
             self.visualization_manager
         )
+        self._wire_force_panel_actions()
 
         self.stress_widget = StressWidget(
             self.viewer,
@@ -968,14 +1096,9 @@ class napariTFMWidget(QWidget):
                 },
                 action_states=self.force_widget.action_states,
                 action_states_changed=self.force_widget.action_states_changed,
-                extra_actions=[
-                    {
-                        "key": "bayesian",
-                        "icon": "bayesian",
-                        "tooltip": "Auto-select regularization (Bayesian evidence)",
-                        "handler": self.force_widget.bayesian_action,
-                    }
-                ],
+                # The auto-λ actions moved off the header into the Force parameter panel's
+                # method blocks (surfaced only where the selected method can use them); see
+                # _create_stage_parameter_panels wiring action_requested to the controller.
             ),
             "stress": StageSection(
                 "Stress Analysis",
@@ -1247,6 +1370,27 @@ class napariTFMWidget(QWidget):
             key: WorkflowParameterPanel(self.parameter_manager, section_titles=titles)
             for key, titles in stage_sections.items()
         }
+
+    def _wire_force_panel_actions(self):
+        """Route the Force panel's in-block action buttons (GCV pick, Bayesian freeze) to the
+        Force controller. Replaces the old header crosshair. Called once force_widget exists.
+
+        Handlers resolve lazily (getattr at click time) so a stubbed force widget in tests, or
+        a future button, does not need every handler present at wiring time."""
+        panel = self._stage_parameter_panels_by_key.get("force")
+        if panel is None:
+            return
+        handler_names = {
+            "gcv_lambda": "gcv_action",
+            "bayesian_freeze": "bayesian_action",
+        }
+
+        def _dispatch(key, names=handler_names):
+            handler = getattr(self.force_widget, names.get(key, ""), None)
+            if callable(handler):
+                handler()
+
+        panel.action_requested.connect(_dispatch)
 
     def _stage_widgets(self):
         return [

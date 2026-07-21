@@ -25,8 +25,10 @@ from napariTFM.backend.parameter_validation import validate_fttc_parameters
 
 
 def _params(**kw):
+    # l1_sparsity=0 so dispatch reaches the FTTC/Bayesian paths this module exercises; the
+    # shipped default (0.05) would route every call to the group-L1 solver instead.
     base = dict(young_modulus=10000.0, poisson_ratio_substrate=0.3, gel_height=None,
-                pixel_size=0.1, downscale_factor=1)
+                pixel_size=0.1, downscale_factor=1, l1_sparsity=0.0)
     base.update(kw)
     return FTTCParameters(**base)
 

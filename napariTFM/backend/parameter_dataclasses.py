@@ -82,7 +82,22 @@ class FTTCParameters:
     gel_height: Optional[float] = None  # None for infinite thickness
 
     # Processing parameters
+    # Traction-inversion method (the explicit selector, superseding the old sentinel ladder):
+    #   "FTTC"        -> Fourier Tikhonov (manual λ, or per-frame GCV when auto_gcv)
+    #   "Bayesian L2" -> real-space evidence-max reconstruction (napariTFM.backend.bayesian_l2)
+    #   "Elastic net" -> group-L1 (+optional l2_ridge, +mask soft-support) (forward_l1)
+    #   "Confined"    -> standalone confined-forward L2 (forward_tfm); legacy-only, not UI-selectable
+    #   "auto"        -> infer from the numeric flags exactly as the pre-selector code did
+    #                    (l1_sparsity>0 -> Elastic net; fwd_mask_strength>0+mask -> Confined;
+    #                     bayesian_l2 -> Bayesian L2; else FTTC). Keeps the sweep and every
+    #                    pre-selector .ntfm routing unchanged. See napariTFM.backend.fttc.
+    force_method: str = "auto"
     regularization: float = 1e-4        # manual Tikhonov λ (the override for Bayesian L2)
+    # GCV auto-λ on the plain-FTTC (Fourier) path: pick the Tikhonov λ per frame by
+    # Generalized Cross-Validation instead of the manual value. The one-shot button fills
+    # `regularization` (same Fourier operator); this flag re-picks it every frame. Distinct
+    # from Bayesian L2, which is a different (real-space) solver. See napariTFM.backend.fttc.
+    auto_gcv: bool = False
     # Bayesian evidence-maximizing choice of the Tikhonov λ (Huang et al. 2019), the
     # automatic, noise-robust selector on the plain-FTTC path. Takes precedence over the
     # manual λ. BL2 (noise measured from the cell exterior) when a mask is loaded, ABL2
@@ -93,6 +108,9 @@ class FTTCParameters:
     # across frames, so one λ transfers exactly. None re-infers per frame, which drifts λ frame to
     # frame and breaks cross-frame comparison. See napariTFM.backend.bayesian_l2.
     bayesian_lambda: Optional[float] = None
+    # Bayesian-L2 λ mode: True re-infers λ every frame (parameter-free, the default); False
+    # reuses the frozen `bayesian_lambda` for comparability. The freeze button sets both.
+    bayesian_per_frame: bool = True
     pixel_size: float = 0.1  # in µm
     downscale_factor: int = 4
 
@@ -193,12 +211,20 @@ class UnifiedParameters:
     young_modulus: float = 5000  # Pa
     poisson_ratio_substrate: float = 0.5
     gel_height: Optional[float] = None
+    # Traction-inversion method selector (see FTTCParameters for the value contract). "auto"
+    # infers from the numeric flags for backward compatibility; the UI writes a concrete value.
+    force_method: str = "auto"
     regularization: float = 1e-4
+    # GCV auto-λ on the Fourier FTTC path (see FTTCParameters); per-frame λ selection that
+    # fills the same `regularization` the manual slider sets.
+    auto_gcv: bool = False
     # Bayesian evidence-max λ selection on the plain-FTTC path (see FTTCParameters /
     # napariTFM.backend.bayesian_l2); precedence over the manual λ.
     bayesian_l2: bool = False
     # Frozen Bayesian-L2 ridge λ estimated once and reused across frames (see FTTCParameters).
     bayesian_lambda: Optional[float] = None
+    # Bayesian-L2 per-frame vs frozen λ (see FTTCParameters).
+    bayesian_per_frame: bool = True
     # Confined forward solver (see FTTCParameters / napariTFM.backend.forward_tfm);
     # gated by fwd_mask_strength, shares `regularization` as its Tikhonov λ.
     fwd_mask_strength: float = 0.0

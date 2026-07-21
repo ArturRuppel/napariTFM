@@ -49,9 +49,13 @@ class _StubParameterManager(QObject):
             "young_modulus": 5.0,
             "poisson_ratio_substrate": 0.5,
             "gel_height": 0.0,
+            "force_method": "Elastic net",
             "regularization": -4.0,
+            "auto_gcv": False,
             "bayesian_l2": False,
+            "bayesian_per_frame": True,
             "l1_sparsity": 0.0,
+            "l2_ridge": 0.0,
             "fwd_mask_strength": 0.0,
             "fwd_mask_reach": 2.0,
             "force_vector_stride": 20,
@@ -1569,7 +1573,7 @@ def test_workflow_parameter_panel_exposes_one_control_per_managed_parameter(app)
         "piv_passes",
         "piv_window",
         "young_modulus",
-        "bayesian_l2",
+        "force_method",
         "bism_regularization",
     ]:
         assert name in panel.parameter_controls
@@ -1654,7 +1658,7 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     assert "pixel_size" not in displacement_panel.parameter_controls
     assert {"piv_window", "piv_passes"}.issubset(displacement_panel.parameter_controls)
     assert "young_modulus" not in displacement_panel.parameter_controls
-    assert {"young_modulus", "bayesian_l2"}.issubset(force_panel.parameter_controls)
+    assert {"young_modulus", "force_method"}.issubset(force_panel.parameter_controls)
     assert {"bism_regularization", "max_stress"}.issubset(stress_panel.parameter_controls)
     assert "threshold" not in stress_panel.parameter_controls
 

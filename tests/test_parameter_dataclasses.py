@@ -53,3 +53,20 @@ def test_projection_copies_unified_values(method, cls):
     projected = getattr(u, method)()
     for f in fields(cls):
         assert getattr(projected, f.name) == getattr(u, f.name), f.name
+
+
+def test_legacy_param_dict_without_force_method_defaults_to_auto():
+    """A pre-selector param dict (no ``force_method``) reconstructs to ``"auto"`` so the
+    dispatcher infers the engine from the numeric flags exactly as before the selector — the
+    back-compat contract for the 480-scene sweep and every .ntfm written before the selector."""
+    from napariTFM.backend.fttc import infer_force_method
+
+    valid = {f.name for f in fields(UnifiedParameters)}
+    legacy = {"young_modulus": 5000.0, "l1_sparsity": 0.0, "bayesian_l2": True}  # a BL2 run
+    reconstructed = UnifiedParameters(**{k: v for k, v in legacy.items() if k in valid})
+
+    assert reconstructed.force_method == "auto"
+    assert infer_force_method(reconstructed.to_fttc_parameters()) == "Bayesian L2"
+
+    l1_run = UnifiedParameters(**{"young_modulus": 5000.0, "l1_sparsity": 0.05})
+    assert infer_force_method(l1_run.to_fttc_parameters()) == "Elastic net"

@@ -28,8 +28,9 @@ from dataclasses import dataclass
 from typing import Generator, Optional, Tuple
 
 import numpy as np
+from scipy import optimize
 
-from napariTFM.backend.fttc_numba_functions import calculate_traction_2d
+from napariTFM.backend.fttc_numba_functions import calculate_traction_2d, blkmul_adj
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 from napariTFM.backend.parameter_validation import validate_fttc_parameters
 
@@ -80,6 +81,24 @@ def _mask_frame_for_grid(mask: np.ndarray, frame: int, hw: Tuple[int, int]) -> n
     return m
 
 
+def infer_force_method(params: FTTCParameters, *, mask_present: bool = False) -> str:
+    """Reproduce the pre-selector routing from the numeric flags (the ``"auto"`` fallback).
+
+    Exactly the old first-match ladder: ``l1_sparsity > 0`` → ``"Elastic net"``;
+    else ``fwd_mask_strength > 0`` with a mask → ``"Confined"``; else ``bayesian_l2`` →
+    ``"Bayesian L2"``; else ``"FTTC + GCV"``. Used to keep every pre-selector caller (the 480-scene
+    sweep, legacy ``.ntfm`` files) routing unchanged, and by the UI to resolve ``"auto"`` to the
+    concrete method it should display.
+    """
+    if params.l1_sparsity > 0:
+        return "Elastic net"
+    if params.fwd_mask_strength > 0 and mask_present:
+        return "Confined"
+    if getattr(params, "bayesian_l2", False):
+        return "Bayesian L2"
+    return "FTTC + GCV"
+
+
 def calculate_force_field(
         displacement_field: np.ndarray,
         params: FTTCParameters,
@@ -87,25 +106,24 @@ def calculate_force_field(
 ) -> Generator[Tuple[np.ndarray, int, int], None, FTTCResult]:
     """Calculate traction forces from displacement field data.
 
-    Three inversions, selected by dial in priority order:
+    The inversion is chosen explicitly by ``params.force_method`` (``"auto"`` reproduces the
+    legacy sentinel routing via :func:`infer_force_method`):
 
-    * ``l1_sparsity > 0`` → the sparse group-L1 solver
-      (:mod:`napariTFM.backend.forward_l1`). Regularizes with an L1 sparsity prior
-      (thresholds rather than spreads); needs no mask, and a ``mask`` if supplied is
-      used as a *soft* support (``fwd_mask_strength`` sets an off-mask L2 penalty in
-      the objective, ramped over a collar — no hard cliff). The recommended default
-      (best in-cell accuracy + peak recovery on the force benchmark).
-    * else ``fwd_mask_strength > 0`` with a ``mask`` → the confined forward solver
-      (:mod:`napariTFM.backend.forward_tfm`), L2 + smoothness confined to the mask,
-      sharing ``regularization`` as its Tikhonov λ.
-    * else ``bayesian_l2`` → the Bayesian-L2 reconstruction
-      (:mod:`napariTFM.backend.bayesian_l2`): a dedicated real-space, standardized,
-      over-determined Tikhonov inversion whose regularization is chosen automatically by
-      evidence maximization — no manual λ. BL2 (β from the cell-free exterior) when a
-      ``mask`` is present, else the parameter-free ABL2.
-    * else → plain FTTC (regularized Fourier inversion) with the manual ``regularization`` λ.
+    * ``"Elastic net"`` → the sparse group-L1 solver (:mod:`napariTFM.backend.forward_l1`).
+      Regularizes with an L1 sparsity prior (thresholds rather than spreads), optionally an
+      elastic-net ``l2_ridge``; needs no mask, and a ``mask`` if supplied is used as a *soft*
+      support (``fwd_mask_strength`` sets an off-mask L2 penalty, ramped over a collar).
+    * ``"Confined"`` → the confined forward solver (:mod:`napariTFM.backend.forward_tfm`),
+      L2 + smoothness confined to the mask, sharing ``regularization`` as its Tikhonov λ.
+      Legacy-only (reached via ``"auto"``); not a UI-selectable method.
+    * ``"Bayesian L2"`` → the Bayesian-L2 reconstruction (:mod:`napariTFM.backend.bayesian_l2`):
+      a real-space, standardized, over-determined Tikhonov inversion whose regularization is
+      chosen automatically by evidence maximization. BL2 (β from the cell-free exterior) when a
+      ``mask`` is present, else parameter-free ABL2.
+    * ``"FTTC + GCV"`` → plain Fourier Tikhonov inversion with the manual ``regularization`` λ,
+      or a per-frame GCV λ when ``auto_gcv`` is set.
 
-    ``mask`` is consumed on the L1, confined, and Bayesian-L2 paths.
+    ``mask`` is consumed on the Elastic-net, Confined, and Bayesian-L2 paths.
     """
     is_valid, error_msg = validate_fttc_parameters(params)
     if not is_valid:
@@ -121,9 +139,16 @@ def calculate_force_field(
     total_frames = displacement_field.shape[0]
     force_shape = displacement_field.shape[1:4]
     force_stack = np.zeros((total_frames, *force_shape), dtype=np.float32)
-    use_l1 = params.l1_sparsity > 0
-    use_forward = (not use_l1) and params.fwd_mask_strength > 0 and mask is not None
-    use_bayes = (not use_l1) and (not use_forward) and getattr(params, "bayesian_l2", False)
+
+    method = getattr(params, "force_method", "auto")
+    if method == "auto":
+        method = infer_force_method(params, mask_present=mask is not None)
+    use_l1 = method == "Elastic net"
+    # A "Confined" solve needs a mask; without one, fall through to plain FTTC rather than
+    # feed the confined solver a None support. (Auto-inference only yields "Confined" when a
+    # mask is present, so this only guards an explicit force_method="Confined" with no mask.)
+    use_forward = method == "Confined" and mask is not None
+    use_bayes = method == "Bayesian L2"
     calculator = None if (use_l1 or use_forward or use_bayes) else FTTC(params)
 
     for frame in range(total_frames):
@@ -146,11 +171,14 @@ def calculate_force_field(
             # parameter-free ABL2. See napariTFM.backend.bayesian_l2.
             from napariTFM.backend.bayesian_l2 import reconstruct_bl2_frame
             m = None if mask is None else _mask_frame_for_grid(mask, frame, force_shape[:2])
+            # Per-frame → re-infer λ each frame (lam=None); otherwise reuse the frozen λ. The
+            # freeze button sets both (bayesian_per_frame=False + bayesian_lambda=<value>).
+            lam = None if getattr(params, "bayesian_per_frame", True) else getattr(
+                params, "bayesian_lambda", None)
             traction = reconstruct_bl2_frame(
                 displacement_field[frame], params.young_modulus,
                 params.poisson_ratio_substrate,
-                params.pixel_size * params.downscale_factor, mask=m,
-                lam=getattr(params, "bayesian_lambda", None))
+                params.pixel_size * params.downscale_factor, mask=m, lam=lam)
             force_stack[frame, ..., 0] = traction[0]
             force_stack[frame, ..., 1] = traction[1]
         else:
@@ -158,7 +186,9 @@ def calculate_force_field(
                 displacements=displacement_field[frame],
                 pixel_size=params.pixel_size,
                 downscale_factor=params.downscale_factor,
-                regularization=params.regularization,
+                # auto_gcv → None asks calculate_traction to pick λ by GCV on this frame;
+                # otherwise the manual (or frozen) λ is used verbatim.
+                regularization=None if params.auto_gcv else params.regularization,
             )
             force_stack[frame, ..., 0] = result[1][0]
             force_stack[frame, ..., 1] = result[1][1]
@@ -213,6 +243,33 @@ def find_bayesian_regularization(displacement_field: np.ndarray, params: FTTCPar
     return estimate_bayesian_lambda(
         displacement_field, params.young_modulus, params.poisson_ratio_substrate,
         params.pixel_size * params.downscale_factor, mask=mask)
+
+
+def find_gcv_regularization(displacement_field: np.ndarray, params: FTTCParameters) -> float:
+    """Pick the Tikhonov ``λ`` for one frame by Generalized Cross-Validation (GCV).
+
+    The synchronous one-shot behind the FTTC+GCV method's auto-λ button. Unlike the Bayesian
+    estimate, this λ is for the *Fourier* FTTC operator -- the same scalar the manual
+    ``regularization`` slider sets -- so the button writes it straight back into that slider,
+    where it stays editable. (The per-frame ``auto_gcv`` checkbox re-picks it each frame instead,
+    via ``regularization=None`` in :meth:`FTTC.calculate_traction`.)
+    """
+    is_valid, error_msg = validate_fttc_parameters(params)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    is_valid, error_msg = validate_displacement_field(displacement_field)
+    if not is_valid:
+        raise ValueError(error_msg)
+
+    if displacement_field.ndim != 3:
+        raise ValueError("Optimal regularization requires one 3D displacement frame")
+
+    shape = displacement_field.shape[:-1]
+    pos = np.array(np.meshgrid(np.arange(shape[1]), np.arange(shape[0]), indexing='xy'))
+    vec = np.array([displacement_field[..., 0], displacement_field[..., 1]])
+    return FTTC(params)._find_regularization(
+        pos, vec, params.pixel_size * params.downscale_factor, shape[1], shape[0])
 
 
 class FTTC:
@@ -346,6 +403,13 @@ class FTTC:
 
         # Convert pixel coordinates to physical units inside _perform_tfm
         forcemap_pixel_size = pixel_size * downscale_factor
+
+        # regularization=None is the GCV request: pick λ from the data by Generalized
+        # Cross-Validation on this frame (the FTTC+GCV method's auto-λ path). A concrete
+        # value (manual, or a frozen GCV/Bayesian estimate) is used as-is.
+        if regularization is None:
+            regularization = self._find_regularization(
+                pos, vec, forcemap_pixel_size, input_width, input_height)
 
         return self._perform_tfm(pos, vec, forcemap_pixel_size, regularization,
                                  i_max=input_width, j_max=input_height)
@@ -599,3 +663,87 @@ class FTTC:
         f = np.array([np.real(fx), np.real(fy)])
 
         return pos, vec, f
+
+    # --- Generalized Cross-Validation (GCV) automatic λ selection ---------------------
+    # Hansen, Regularization Tools 4.0 (gcv.m / gcvfun.m); Golub, Heath & Wahba,
+    # Generalized Cross-Validation as a Method for Choosing a Good Ridge Parameter,
+    # Technometrics 21:215 (1979). GCV picks the Tikhonov λ for the *Fourier* FTTC
+    # operator directly (unlike Bayesian evidence, which lives in real space); its λ is
+    # the same scalar the manual slider sets, so the FTTC+GCV button can fill the slider.
+
+    def _svd_block(self, pos: np.ndarray, vec: np.ndarray, forcemap_pixel_size: float,
+                   i_max: int = None, j_max: int = None):
+        """Per-Fourier-mode SVD of the FTTC problem, as GCV consumes it.
+
+        Returns the block-diagonal left singular vectors ``U_h`` (M·N, 2, 2), the flattened
+        singular values ``s_h`` (2·M·N,), and the flattened Fourier transform of the gridded
+        displacement ``Ftu`` (2·M·N,). Exact input dimensions are preserved throughout.
+        """
+        grid_mat, u, i_max, j_max, _, _ = self._interp_vec2grid(pos, vec, i_max=i_max, j_max=j_max)
+        kx, ky = self._calculate_fourier_modes(i_max, j_max, forcemap_pixel_size)
+        GFt = self._calculate_greens_function(kx, ky)
+
+        Ftu = np.fft.fft2(u).reshape(2, -1).T
+        shape = GFt[0, 0].shape
+
+        U_h = np.empty((shape[0] * shape[1], 2, 2), dtype=np.complex128)
+        s_h = np.empty((shape[0] * shape[1], 2))
+        for i in range(shape[0]):
+            for j in range(shape[1]):
+                idx = i * shape[1] + j
+                U_h[idx, :], s_h[idx, :], _ = np.linalg.svd(GFt[:, :, i, j])
+
+        return U_h, s_h.flatten(), Ftu.flatten()
+
+    @staticmethod
+    def _gcvfun(lmbda, s2, beta, delta0, mn):
+        """Auxiliary routine for GCV calculation (Hansen's gcvfun)."""
+        f = (lmbda ** 2) / (s2 + lmbda ** 2)
+        G = (np.linalg.norm(f * beta) ** 2 + delta0) / (mn + np.sum(f)) ** 2
+        return G
+
+    def _gcv_blockdiag(self, U: np.ndarray, s: np.ndarray, b: np.ndarray,
+                       lambdarange: np.ndarray) -> float:
+        """Return the GCV-optimal regularization for the block-diagonal system."""
+        npoints = lambdarange.size
+        beta = blkmul_adj(U, b)
+
+        reg_param = np.copy(lambdarange)
+        G = np.zeros(npoints)
+        s2 = s ** 2
+
+        for i in range(npoints):
+            G[i] = self._gcvfun(reg_param[i], s2, beta[:s.size], 0., 0)
+
+        minGi = G.argmin(0)
+        reg_min = optimize.fmin(
+            self._gcvfun,
+            x0=reg_param[np.max([minGi, 0])],
+            args=(s2, beta[:s.size], 0., 0),
+            disp=0,
+        )[0]
+
+        return float(reg_min)
+
+    def _find_regularization(self, pos0: np.ndarray, vec0: np.ndarray,
+                             forcemap_pixel_size: float, input_width: int,
+                             input_height: int) -> float:
+        """Find the optimal Tikhonov λ by Generalized Cross-Validation (GCV).
+
+        The search range is centred on λ = 0.2/E with a span of ±5 orders of magnitude,
+        where E is Young's modulus, over 50 log-spaced points refined by ``optimize.fmin``.
+        Exact input dimensions are preserved throughout.
+        """
+        lamguess = 0.2 / self.E
+        lamlow = np.log10(lamguess) - 5.0
+        lamhigh = np.log10(lamguess) + 5.0
+        lambdarange = np.logspace(lamlow, lamhigh, 50)
+
+        blockU, s, b = self._svd_block(pos0, vec0, forcemap_pixel_size,
+                                       i_max=input_width, j_max=input_height)
+        reg_min = self._gcv_blockdiag(blockU, s, b, lambdarange)
+        # _gcvfun depends on lambda only via lambda**2, so the unconstrained optimizer can
+        # settle on a negative root numerically identical to its magnitude. The force path
+        # squares it, but the raw value is stored as `regularization` and later hits
+        # math.log10() in the UI, which rejects negatives. Return the magnitude — lossless.
+        return abs(reg_min)

@@ -4,7 +4,9 @@ from napari.viewer import Viewer
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import QMessageBox, QHBoxLayout
 
-from napariTFM.backend.fttc import FTTCResult, calculate_force_field, find_bayesian_regularization
+from napariTFM.backend.fttc import (
+    FTTCResult, calculate_force_field, find_bayesian_regularization, find_gcv_regularization,
+)
 from napariTFM.utilities.data_manager import DataManager
 from napariTFM.utilities.parameter_manager import ParameterManager
 from napariTFM.utilities.visualization_manager import VisualizationManager
@@ -215,9 +217,41 @@ class FTTCController(VectorStageController):
 
             # Freeze the estimate; every frame reuses this λ for a comparable reconstruction.
             self.parameter_manager.set_parameter('bayesian_lambda', bayesian_lambda)
+            self.parameter_manager.set_parameter('bayesian_per_frame', False)
             self.progress_updated.emit(
                 100, f"Bayesian λ frozen for batch: {bayesian_lambda:.3g}"
             )
+        except Exception as e:
+            self._handle_error(str(e))
+        finally:
+            self.unfreeze_ui()
+
+    def calculate_gcv_regularization(self):
+        """Fill the manual λ slider with the GCV-optimal value for the current frame.
+
+        The FTTC+GCV one-shot button. GCV picks λ for the Fourier FTTC operator (the same
+        scalar the slider sets), so the result is written straight back into ``regularization``
+        where it stays editable. Synchronous; runs on the GUI thread like the Bayesian freeze.
+        """
+        try:
+            self._validate()
+        except Exception as e:
+            QMessageBox.warning(None, "Warning", str(e))
+            return
+
+        self.freeze_ui()
+        try:
+            self.progress_updated.emit(0, "Estimating GCV regularization...")
+            current_frame = self._current_frame()
+            displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
+            params = self.parameter_manager.get_fttc_parameters()
+
+            lam = find_gcv_regularization(displacement_field, params)
+            if lam is None or not np.isfinite(lam) or lam <= 0:
+                raise RuntimeError("GCV regularization estimate failed")
+
+            self.parameter_manager.set_parameter('regularization', float(lam))
+            self.progress_updated.emit(100, f"GCV λ set: {lam:.3g}")
         except Exception as e:
             self._handle_error(str(e))
         finally:
@@ -301,6 +335,9 @@ class FTTCWidget(BaseAnalysisWidget):
 
     def bayesian_action(self):
         self.controller.calculate_optimal_regularization()
+
+    def gcv_action(self):
+        self.controller.calculate_gcv_regularization()
 
     def set_displacement_available_check(self, check) -> None:
         """Wire a predicate reporting whether displacement is available as this
