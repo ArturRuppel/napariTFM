@@ -898,11 +898,12 @@ class _InteractiveStageAdapter(QObject):
 
     def preview(self, *, completion=None, **inputs):
         controller = self.widget.controller
-        method = {
-            "displacement": controller.preview_displacement,
-            "force": controller.preview_force,
-            "stress": controller.preview_current_frame,
+        method_name = {
+            "displacement": "preview_displacement",
+            "force": "preview_force",
+            "stress": "preview_current_frame",
         }[self.stage]
+        method = getattr(controller, method_name)
         return method(completion=completion, **inputs)
 
     def run(self):

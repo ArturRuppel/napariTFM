@@ -335,6 +335,30 @@ def _restore_stubbed_modules():
     _ORIGINAL_MODULES.clear()
 
 
+def test_interactive_stage_adapter_only_resolves_requested_preview_method(app):
+    from napariTFM.widgets._widget import _InteractiveStageAdapter
+
+    class Controller(QObject):
+        analysis_failed = Signal(object)
+
+        def preview_displacement(self, *, completion=None, **inputs):
+            completion("preview result")
+            return True
+
+    class Widget(QObject):
+        displacement_calculated = Signal(object)
+
+        def __init__(self):
+            super().__init__()
+            self.controller = Controller()
+
+    results = []
+    adapter = _InteractiveStageAdapter("displacement", Widget())
+
+    assert adapter.preview(completion=results.append) is True
+    assert results == ["preview result"]
+
+
 _stub_module(
     "napariTFM.utilities.parameter_manager",
     ParameterManager=_StubParameterManager,
