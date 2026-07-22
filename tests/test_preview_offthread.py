@@ -43,6 +43,11 @@ class _FakeSignal:
     def connect(self, slot):
         self._slots.append(slot)
 
+    def disconnect(self, slot):
+        if slot not in self._slots:
+            raise TypeError("slot is not connected")
+        self._slots.remove(slot)
+
     def emit(self, *args):
         for slot in list(self._slots):
             slot(*args)
@@ -115,6 +120,7 @@ def test_start_preview_worker_wires_run_plumbing(app):
     # `finished` forgets the worker and unfreezes once none remain.
     worker.finished.emit()
     assert ctrl.active_workers == []
+    assert worker not in ctrl._preview_returned_slots
     assert frozen == [True, False]
 
 
@@ -151,6 +157,140 @@ def test_start_preview_worker_routes_compute_error(app, monkeypatch):
     worker.errored.emit(RuntimeError("solve failed"))
 
     assert errors and "solve failed" in errors[0]
+
+
+def test_start_preview_worker_paints_before_completion(app):
+    from napariTFM.widgets.stress_widget import StressController
+
+    ctrl = _make_controller(StressController, _RecordingViz())
+    worker = _FakeWorker()
+    calls = []
+
+    ctrl._start_preview_worker(
+        worker,
+        lambda result: calls.append(("paint", result)),
+        completion=lambda result: calls.append(("complete", result)),
+    )
+    worker.returned.emit("R")
+
+    assert calls == [("paint", "R"), ("complete", "R")]
+
+
+def test_start_preview_worker_routes_completion_error(app, monkeypatch):
+    from napariTFM.widgets.stress_widget import StressController
+
+    ctrl = _make_controller(StressController, _RecordingViz())
+    errors = []
+    monkeypatch.setattr(ctrl, "_handle_error", errors.append)
+    worker = _FakeWorker()
+
+    def _completion_boom(_result):
+        raise ValueError("completion blew up")
+
+    ctrl._start_preview_worker(worker, lambda _result: None,
+                               completion=_completion_boom)
+    worker.returned.emit("R")
+
+    assert errors == ["completion blew up"]
+
+
+def test_cancelled_preview_ignores_late_result_and_completion(app):
+    from napariTFM.widgets.stress_widget import StressController
+
+    ctrl = _make_controller(StressController, _RecordingViz())
+    calls = []
+    worker = _FakeWorker()
+    ctrl._start_preview_worker(
+        worker,
+        lambda result: calls.append(("paint", result)),
+        completion=lambda result: calls.append(("complete", result)),
+    )
+
+    ctrl.cancel()
+    worker.returned.emit("LATE")
+
+    assert calls == []
+
+
+def test_start_preview_worker_skips_completion_after_paint_error(app, monkeypatch):
+    from napariTFM.widgets.stress_widget import StressController
+
+    ctrl = _make_controller(StressController, _RecordingViz())
+    errors = []
+    completions = []
+    monkeypatch.setattr(ctrl, "_handle_error", errors.append)
+
+    worker = _FakeWorker()
+
+    def _boom(_result):
+        raise ValueError("paint blew up")
+
+    ctrl._start_preview_worker(worker, _boom, completion=completions.append)
+    worker.returned.emit("R")
+
+    assert errors == ["paint blew up"]
+    assert completions == []
+
+
+def test_force_preview_accepts_transient_displacement_without_storing_it(app, monkeypatch):
+    from napariTFM.widgets.fttc_widget import FTTCController
+
+    displacement = _Result(displacement_field=np.ones((1, 4, 4, 2)))
+    data_manager = _Result(displacement_results=None, mask_stack=None)
+    params = _Result(fwd_mask_strength=0)
+    ctrl = FTTCController(
+        viewer=object(), data_manager=data_manager,
+        parameter_manager=_Result(get_fttc_parameters=lambda: params),
+        visualization_manager=_RecordingViz(),
+    )
+    monkeypatch.setattr(ctrl, "_current_frame", lambda: 1)
+    captured = []
+    worker = _FakeWorker()
+    monkeypatch.setattr(
+        ctrl, "_preview_worker",
+        lambda field, actual_params, frame: captured.append(
+            (field, actual_params, frame)
+        ) or worker,
+    )
+
+    ctrl.preview_force(displacement_result=displacement)
+
+    assert np.array_equal(captured[0][0], displacement.displacement_field[0])
+    assert captured[0][1] is params
+    assert captured[0][2] == 1
+    assert data_manager.displacement_results is None
+
+
+def test_stress_preview_accepts_transient_force_without_storing_it(app, monkeypatch):
+    from napariTFM.widgets.stress_widget import StressController
+
+    force = _Result(
+        force_field=np.ones((1, 4, 4, 2)),
+        parameters=_Result(downscale_factor=3),
+    )
+    data_manager = _Result(mask_stack=np.ones((2, 4, 4)), force_results=None)
+    params = _Result(max_stress=100.0)
+    ctrl = StressController(
+        viewer=object(), data_manager=data_manager,
+        parameter_manager=_Result(get_stress_parameters=lambda: params),
+        visualization_manager=_RecordingViz(),
+    )
+    monkeypatch.setattr(ctrl, "_current_frame", lambda: 1)
+    captured = []
+    worker = _FakeWorker()
+    monkeypatch.setattr(
+        ctrl, "_preview_worker",
+        lambda field, mask, actual_params: captured.append(
+            (field, mask, actual_params)
+        ) or worker,
+    )
+
+    ctrl.preview_current_frame(force_result=force)
+
+    assert np.array_equal(captured[0][0], force.force_field[0])
+    assert np.array_equal(captured[0][1], data_manager.mask_stack[1])
+    assert captured[0][2] is params
+    assert data_manager.force_results is None
 
 
 # --- the paint halves (regression guard on the refactor) ------------------

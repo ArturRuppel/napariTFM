@@ -104,7 +104,7 @@ class StressController(BaseAnalysisController):
     # endregion
 
     # region === Preview (async single-shot; template lives in the base) ===
-    def preview_current_frame(self):
+    def preview_current_frame(self, *, force_result=None, completion=None):
         """Preview the stress field for the current frame on a worker thread.
 
         The single-frame BISM inversion can spike above its usual cost; run inline
@@ -113,8 +113,13 @@ class StressController(BaseAnalysisController):
         main thread; the napari visualization returns to it in
         :meth:`_show_stress_preview`.
         """
+        transient_result = force_result is not None
         try:
-            self._validate()
+            if self.data_manager.mask_stack is None:
+                raise ValueError("No mask loaded. Please load a mask first.")
+            if force_result is None:
+                self._validate()
+                force_result = self.data_manager.force_results
         except Exception as e:
             QMessageBox.warning(None, "Warning", str(e))
             return
@@ -122,21 +127,22 @@ class StressController(BaseAnalysisController):
         current_frame = self._current_frame()
         params = self._get_current_parameters()
         masks = self.data_manager.mask_stack
-        force_results = self.data_manager.force_results
 
         mask = masks[current_frame] if masks.ndim > 2 else masks
+        result_frame = 0 if transient_result else current_frame
         force_field = (
-            force_results.force_field[current_frame]
-            if force_results.force_field.ndim > 3
-            else force_results.force_field
+            force_result.force_field[result_frame]
+            if force_result.force_field.ndim > 3
+            else force_result.force_field
         )
-        downscale = force_results.parameters.downscale_factor
+        downscale = force_result.parameters.downscale_factor
 
         worker = self._preview_worker(force_field, mask, params)
         self._start_preview_worker(
             worker,
             lambda result: self._show_stress_preview(result, params, current_frame, downscale),
             status="Generating stress preview...",
+            completion=completion,
         )
 
     @thread_worker

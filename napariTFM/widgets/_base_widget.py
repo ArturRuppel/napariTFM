@@ -55,6 +55,7 @@ class BaseAnalysisController(QObject):
         self.parameter_manager = parameter_manager
         self.visualization_manager = visualization_manager
         self.active_workers = []
+        self._preview_returned_slots = {}
 
         # Live-streaming progress counters: a run fills the output stacks frame
         # by frame, so progress is "frames done / total".
@@ -130,6 +131,7 @@ class BaseAnalysisController(QObject):
         workers remaining, so a cancelled run's late finish can't unfreeze the UI
         out from under a fresh run the user has since started.
         """
+        self._preview_returned_slots.pop(worker, None)
         self._forget_worker(worker)
         if not self.active_workers:
             self.unfreeze_ui()
@@ -162,6 +164,12 @@ class BaseAnalysisController(QObject):
                     getattr(worker, signal_name).disconnect(slot)
                 except (TypeError, RuntimeError, AttributeError):
                     pass
+            preview_slot = self._preview_returned_slots.pop(worker, None)
+            if preview_slot is not None:
+                try:
+                    worker.returned.disconnect(preview_slot)
+                except (TypeError, RuntimeError, AttributeError):
+                    pass
             try:
                 worker.quit()
             except (RuntimeError, AttributeError):
@@ -174,7 +182,7 @@ class BaseAnalysisController(QObject):
     # ------------------------------------------------------------------
     # Async single-shot previews (NOT the sealed run template)
     # ------------------------------------------------------------------
-    def _start_preview_worker(self, worker, on_result, *, status="Calculating preview..."):
+    def _start_preview_worker(self, worker, on_result, *, status="Calculating preview...", completion=None):
         """Run a single-shot preview off the GUI thread, reusing the run
         lifecycle's terminal-state plumbing.
 
@@ -197,13 +205,16 @@ class BaseAnalysisController(QObject):
         """
         self.freeze_ui()
 
-        def _returned(result, _cb=on_result):
+        def _returned(result, _cb=on_result, _completion=completion):
             try:
                 _cb(result)
-            except Exception as exc:  # a failing visualization must not skip unfreeze
+                if _completion is not None:
+                    _completion(result)
+            except Exception as exc:  # callback failures must not skip unfreeze
                 self._handle_error(str(exc))
 
         worker.returned.connect(_returned)
+        self._preview_returned_slots[worker] = _returned
         worker.errored.connect(self._on_run_errored)
         worker.finished.connect(partial(self._on_run_finished, worker))
         self.active_workers.append(worker)

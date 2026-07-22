@@ -118,7 +118,7 @@ class DisplacementController(VectorStageController):
     # endregion
 
     # region === Preview (async single-shot; template lives in the base) ===
-    def preview_displacement(self):
+    def preview_displacement(self, *, completion=None):
         """Preview displacement for the current frame on a worker thread.
 
         The single-frame solve is a full PIV/iLK/FFD compute whose cost can spike
@@ -145,6 +145,7 @@ class DisplacementController(VectorStageController):
             worker,
             lambda result: self._show_displacement_preview(result, params),
             status="Calculating displacement preview...",
+            completion=completion,
         )
 
     @thread_worker

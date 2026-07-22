@@ -106,7 +106,7 @@ class FTTCController(VectorStageController):
     # endregion
 
     # region === Preview (async single-shot) & Bayesian auto-λ (synchronous, GUI thread) ===
-    def preview_force(self):
+    def preview_force(self, *, displacement_result=None, completion=None):
         """Preview force for the current frame on a worker thread.
 
         The single-frame inversion can spike well above its usual cost (a heavy
@@ -115,20 +115,25 @@ class FTTCController(VectorStageController):
         main thread; the napari visualization returns to it in
         :meth:`_show_force_preview`.
         """
-        try:
-            self._validate()
-        except Exception as e:
-            QMessageBox.warning(None, "Warning", str(e))
-            return
+        transient_result = displacement_result is not None
+        if displacement_result is None:
+            try:
+                self._validate()
+            except Exception as e:
+                QMessageBox.warning(None, "Warning", str(e))
+                return
+            displacement_result = self.data_manager.displacement_results
 
         current_frame = self._current_frame()
-        displacement_field = self.data_manager.displacement_results.displacement_field[current_frame]
+        result_frame = 0 if transient_result else current_frame
+        displacement_field = displacement_result.displacement_field[result_frame]
         params = self.parameter_manager.get_fttc_parameters()
 
         worker = self._preview_worker(displacement_field, params, current_frame)
         self._start_preview_worker(
             worker, self._show_force_preview,
             status="Calculating force preview...",
+            completion=completion,
         )
 
     @thread_worker
