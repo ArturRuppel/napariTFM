@@ -210,6 +210,19 @@ def test_stress_run_computes_both_missing_prerequisites_in_order():
     ]
 
 
+def test_force_reuses_displacement_without_validating_displacement_sources():
+    calls = []
+    artifact = _Artifact("full-displacement", "displacement-params")
+    coordinator, _, _, _, _ = _coordinator(
+        calls, artifacts={"displacement": artifact}
+    )
+    validated = []
+    coordinator._source_validator = lambda stage: validated.append(stage) or stage != "displacement"
+    coordinator.request("force", "preview")
+    assert validated == ["force"]
+    assert calls == [("force", "preview", {"displacement_result": artifact})]
+
+
 def test_matching_artifact_is_reused_without_prompt():
     calls = []
     artifact = _Artifact("full-displacement", "displacement-params")
@@ -260,6 +273,19 @@ def test_stale_artifact_cancel_starts_nothing():
     assert calls == []
 
 
+def test_cancel_by_active_prerequisite_invalidates_chain_and_blocks_late_completion():
+    calls = []
+    coordinator, stages, artifacts, _, _ = _coordinator(calls)
+    coordinator.request("force", "run")
+    coordinator.cancel("displacement")
+    artifacts["displacement"] = _Artifact("late", "displacement-params")
+    stages["displacement"].completed.emit()
+    assert calls == [
+        ("displacement", "run", {}),
+        ("displacement", "cancel", {}),
+    ]
+
+
 def test_cancel_forwards_to_active_stage_and_late_completion_does_not_continue():
     calls = []
     coordinator, stages, artifacts, _, _ = _coordinator(calls)
@@ -271,6 +297,16 @@ def test_cancel_forwards_to_active_stage_and_late_completion_does_not_continue()
         ("displacement", "run", {}),
         ("displacement", "cancel", {}),
     ]
+
+
+def test_preview_rejection_cleans_up_chain():
+    calls = []
+    coordinator, stages, _, _, progress = _coordinator(calls)
+    stages["displacement"].preview = lambda **_kwargs: False
+    coordinator.request("displacement", "preview")
+    assert coordinator._active_stage is None
+    assert coordinator._target_stage is None
+    assert "did not start" in progress[-1]
 
 
 def test_failure_terminates_chain():

@@ -114,6 +114,7 @@ class InteractiveStageCoordinator(QObject):
         self._token = 0
         self._active_stage: str | None = None
         self._target_stage: str | None = None
+        self._target_mode: str | None = None
         self._connections: list[tuple[object, Callable[..., None]]] = []
 
     def request(self, stage: str, mode: str) -> None:
@@ -129,16 +130,14 @@ class InteractiveStageCoordinator(QObject):
             self._stages[active].cancel()
         token = self._token
         self._target_stage = stage
-        if not self._source_validator(stage):
-            self._target_stage = None
-            return
+        self._target_mode = mode
 
         target_index = self.STAGES.index(stage)
         self._resolve(token, stage, mode, 0, target_index, {})
 
     def cancel(self, stage: str) -> None:
         """Cancel the active operation belonging to the requested target."""
-        if stage != self._target_stage:
+        if stage not in (self._target_stage, self._active_stage):
             return
         active = self._active_stage
         self._invalidate()
@@ -150,6 +149,7 @@ class InteractiveStageCoordinator(QObject):
         self._disconnect_all()
         self._active_stage = None
         self._target_stage = None
+        self._target_mode = None
 
     def _is_current(self, token: int) -> bool:
         return token == self._token
@@ -216,6 +216,9 @@ class InteractiveStageCoordinator(QObject):
         transient: dict[str, object],
     ) -> None:
         stage = self.STAGES[index]
+        if not self._source_validator(stage):
+            self._invalidate()
+            return
         adapter = self._stages[stage]
         self._active_stage = stage
         self._connect_failure(adapter, token, target, mode, stage)
@@ -233,7 +236,9 @@ class InteractiveStageCoordinator(QObject):
                 )
 
             try:
-                adapter.preview(completion=completed, **inputs)
+                started = adapter.preview(completion=completed, **inputs)
+                if started is False:
+                    self._fail(token, target, mode, stage, "preview did not start")
             except Exception as error:
                 self._fail(token, target, mode, stage, error)
             return
@@ -264,6 +269,9 @@ class InteractiveStageCoordinator(QObject):
         mode: str,
         transient: dict[str, object],
     ) -> None:
+        if not self._source_validator(target):
+            self._invalidate()
+            return
         adapter = self._stages[target]
         self._active_stage = target
         self._connect_failure(adapter, token, target, mode, target)
@@ -276,10 +284,12 @@ class InteractiveStageCoordinator(QObject):
                     self._finish()
 
             try:
-                adapter.preview(
+                started = adapter.preview(
                     completion=completed,
                     **self._preview_inputs(index, transient),
                 )
+                if started is False:
+                    self._fail(token, target, mode, target, "preview did not start")
             except Exception as error:
                 self._fail(token, target, mode, target, error)
             return
@@ -337,6 +347,7 @@ class InteractiveStageCoordinator(QObject):
         self._disconnect_all()
         self._active_stage = None
         self._target_stage = None
+        self._target_mode = None
 
     def _connect(self, signal: object, callback: Callable[..., None]) -> None:
         signal.connect(callback)

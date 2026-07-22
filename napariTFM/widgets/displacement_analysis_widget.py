@@ -132,7 +132,7 @@ class DisplacementController(VectorStageController):
             self._validate()
         except Exception as e:
             QMessageBox.warning(None, "Warning", str(e))
-            return
+            return False
 
         current_frame = self._current_frame()
         moving = self.data_manager.bead_stack[current_frame]
@@ -147,6 +147,7 @@ class DisplacementController(VectorStageController):
             status="Calculating displacement preview...",
             completion=completion,
         )
+        return True
 
     @thread_worker
     def _preview_worker(self, reference, moving, params, mask):
@@ -496,7 +497,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         self.controller.run()
 
     def preview_action(self):
-        self.controller.preview_displacement()
+        return self.controller.preview_displacement()
 
     def cancel_action(self):
         self.controller.cancel()

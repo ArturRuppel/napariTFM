@@ -28,6 +28,10 @@ from napariTFM.widgets.fttc_widget import FTTCWidget
 from napariTFM.widgets.stress_widget import StressWidget
 from napariTFM.widgets._stage_data_status import DataArtifactSpec, compute_stage_status
 from napariTFM.widgets._stage_section import StageSection
+from napariTFM.widgets._stage_dependencies import (
+    InteractiveStageCoordinator,
+    StaleChoice,
+)
 from napariTFM.widgets._ui_style import title_style, stage_accent, muted_accent, theme_names, active_theme_name, set_active_theme, section_grid, add_section_header, add_section_pair_row, add_section_labeled_full_row, section_label_style, section_subheader_style, caption_style, TIGHT_SPACING
 from napariTFM.widgets._icons import stage_action_icon
 from napariTFM.widgets._param_controls import dslider, islider, rslider
@@ -879,6 +883,36 @@ class SpinBoxEventFilter(QObject):
         return super().eventFilter(obj, event)
 
 
+class _InteractiveStageAdapter(QObject):
+    """Translate an existing stage widget to the dependency coordinator API."""
+
+    completed = Signal(object)
+    failed = Signal(object)
+
+    def __init__(self, stage, widget, parent=None):
+        super().__init__(parent)
+        self.stage = stage
+        self.widget = widget
+        getattr(widget, f"{stage}_calculated").connect(self.completed.emit)
+        widget.controller.analysis_failed.connect(self.failed.emit)
+
+    def preview(self, *, completion=None, **inputs):
+        controller = self.widget.controller
+        method = {
+            "displacement": controller.preview_displacement,
+            "force": controller.preview_force,
+            "stress": controller.preview_current_frame,
+        }[self.stage]
+        return method(completion=completion, **inputs)
+
+    def run(self):
+        self.widget.run_action()
+
+    def cancel(self):
+        self.widget.cancel_action()
+
+
+
 class napariTFMWidget(QWidget):
     def __init__(self, napari_viewer: "napari.Viewer"):
         super().__init__()
@@ -1058,6 +1092,31 @@ class napariTFMWidget(QWidget):
         self.stress_widget.set_force_available_check(self._force_available)
         self.stress_widget.controller.set_force_loader(self._ensure_force_resident)
 
+        self._interactive_stage_adapters = {
+            key: _InteractiveStageAdapter(key, stage_widget, self)
+            for key, stage_widget in {
+                "displacement": self.displacement_widget,
+                "force": self.force_widget,
+                "stress": self.stress_widget,
+            }.items()
+        }
+        self._interactive_stage_coordinator = InteractiveStageCoordinator(
+            stages=self._interactive_stage_adapters,
+            artifact_getters={
+                "displacement": lambda: self._interactive_artifact("displacement"),
+                "force": lambda: self._interactive_artifact("force"),
+                "stress": lambda: self._interactive_artifact("stress"),
+            },
+            parameter_getters={
+                stage: (lambda key=stage: self._interactive_parameters(key))
+                for stage in ("displacement", "force", "stress")
+            },
+            prompt=self._prompt_for_stale_stage,
+            source_validator=self._validate_interactive_sources,
+            progress=self._set_interactive_progress,
+            parent=self,
+        )
+
         # Funnel every pipeline stage's progress into the single global status
         # label (P2). Run-selected (the retired batch widget's successor) reports via
         # its own per-folder callback, not a controller progress signal.
@@ -1078,11 +1137,11 @@ class napariTFMWidget(QWidget):
                 self.displacement_widget,
                 parameter_panel=self._stage_parameter_panels_by_key.get("displacement"),
                 actions={
-                    "run": self.displacement_widget.run_action,
-                    "preview": self.displacement_widget.preview_action,
-                    "cancel": self.displacement_widget.cancel_action,
+                    "run": lambda: self._request_interactive_stage("displacement", "run"),
+                    "preview": lambda: self._request_interactive_stage("displacement", "preview"),
+                    "cancel": lambda: self._cancel_interactive_stage("displacement"),
                 },
-                action_states=self.displacement_widget.action_states,
+                action_states=lambda: self._interactive_action_states("displacement"),
                 action_states_changed=self.displacement_widget.action_states_changed,
             ),
             "force": StageSection(
@@ -1090,11 +1149,11 @@ class napariTFMWidget(QWidget):
                 self.force_widget,
                 parameter_panel=self._stage_parameter_panels_by_key.get("force"),
                 actions={
-                    "run": self.force_widget.run_action,
-                    "preview": self.force_widget.preview_action,
-                    "cancel": self.force_widget.cancel_action,
+                    "run": lambda: self._request_interactive_stage("force", "run"),
+                    "preview": lambda: self._request_interactive_stage("force", "preview"),
+                    "cancel": lambda: self._cancel_interactive_stage("force"),
                 },
-                action_states=self.force_widget.action_states,
+                action_states=lambda: self._interactive_action_states("force"),
                 action_states_changed=self.force_widget.action_states_changed,
                 # The auto-λ actions moved off the header into the Force parameter panel's
                 # method blocks (surfaced only where the selected method can use them); see
@@ -1105,11 +1164,11 @@ class napariTFMWidget(QWidget):
                 self.stress_widget,
                 parameter_panel=self._stage_parameter_panels_by_key.get("stress"),
                 actions={
-                    "run": self.stress_widget.run_action,
-                    "preview": self.stress_widget.preview_action,
-                    "cancel": self.stress_widget.cancel_action,
+                    "run": lambda: self._request_interactive_stage("stress", "run"),
+                    "preview": lambda: self._request_interactive_stage("stress", "preview"),
+                    "cancel": lambda: self._cancel_interactive_stage("stress"),
                 },
-                action_states=self.stress_widget.action_states,
+                action_states=lambda: self._interactive_action_states("stress"),
                 action_states_changed=self.stress_widget.action_states_changed,
                 optional=True,
                 # Stress needs an external mask, so it stays off until the user
@@ -1155,7 +1214,11 @@ class napariTFMWidget(QWidget):
         self.setLayout(main_layout)
 
         self.connect_signals()
-        self.data_manager.add_change_callback(self.refresh)
+        self._pending_interactive_request = None
+        self._interactive_request_generation = 0
+        self._interactive_request_context = None
+        self._interactive_retry_scheduled = False
+        self.data_manager.add_change_callback(self._on_interactive_data_changed)
         self.refresh_stage_statuses()
         self._update_disclosure()
 
@@ -1391,6 +1454,151 @@ class napariTFMWidget(QWidget):
                 handler()
 
         panel.action_requested.connect(_dispatch)
+
+    def _request_interactive_stage(self, stage, mode):
+        self._interactive_request_generation += 1
+        self._pending_interactive_request = None
+        generation = self._interactive_request_generation
+        self._interactive_request_context = (
+            stage, mode, generation, self._active_experiment
+        )
+        try:
+            self._interactive_stage_coordinator.request(stage, mode)
+        finally:
+            self._interactive_request_context = None
+
+    def _invalidate_pending_interactive_request(self):
+        self._interactive_request_generation += 1
+        self._pending_interactive_request = None
+        self._interactive_request_context = None
+
+
+    def _cancel_interactive_stage(self, stage):
+        self._invalidate_pending_interactive_request()
+        coordinator = self._interactive_stage_coordinator
+        has_chain = coordinator._target_stage is not None or coordinator._active_stage is not None
+        coordinator.cancel(stage)
+        if not has_chain:
+            self._interactive_stage_adapters[stage].cancel()
+
+    def _interactive_action_states(self, stage):
+        """Keep stage actions reachable for a selected experiment."""
+        widget = {
+            "displacement": self.displacement_widget,
+            "force": self.force_widget,
+            "stress": self.stress_widget,
+        }[stage]
+        states = widget.action_states()
+        section = getattr(self, "_stage_sections_by_key", {}).get(stage)
+        if self._active_experiment and (section is None or section.status != "running"):
+            states.update(preview=True, run=True)
+        return states
+
+    def _interactive_artifact(self, stage):
+        result = getattr(self.data_manager, f"{stage}_results", None)
+        if result is not None or not self._active_experiment:
+            return result
+        loader = {
+            "displacement": self._ensure_displacement_resident,
+            "force": self._ensure_force_resident,
+        }.get(stage)
+        if loader is not None and loader():
+            return getattr(self.data_manager, f"{stage}_results", None)
+        return None
+
+    def _interactive_parameters(self, stage):
+        getter_name = {
+            "displacement": "get_displacement_parameters",
+            "force": "get_fttc_parameters",
+            "stress": "get_stress_parameters",
+        }[stage]
+        getter = getattr(self.parameter_manager, getter_name, None)
+        return getter() if callable(getter) else self.parameter_manager.get_all_parameters()
+
+    def _exec_stale_stage_prompt(self, stage):
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Upstream data uses different parameters")
+        box.setText(
+            f"Existing {stage} data was calculated with different parameters. "
+            "What would you like to do?"
+        )
+        recalculate = box.addButton(
+            "Recalculate with current parameters", QMessageBox.ButtonRole.AcceptRole
+        )
+        box.addButton("Use existing data", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(recalculate)
+        box.exec()
+        clicked = box.clickedButton()
+        return clicked.text() if clicked is not None else "Cancel"
+
+    def _prompt_for_stale_stage(self, stage):
+        return {
+            "Recalculate with current parameters": StaleChoice.RECALCULATE,
+            "Use existing data": StaleChoice.REUSE,
+            "Cancel": StaleChoice.CANCEL,
+        }.get(self._exec_stale_stage_prompt(stage), StaleChoice.CANCEL)
+
+    def _validate_interactive_sources(self, stage):
+        raw_input_path = getattr(self.data_manager, "raw_input_path", lambda _slot: None)
+        missing = []
+        waiting = []
+        if stage == "displacement":
+            for label, slot, value in (
+                ("reference image", "reference", self.data_manager.reference),
+                ("bead stack", "beads", self.data_manager.bead_stack),
+            ):
+                if value is None:
+                    (waiting if raw_input_path(slot) is not None else missing).append(label)
+        elif stage == "stress" and self.data_manager.mask_stack is None:
+            (waiting if raw_input_path("masks") is not None else missing).append("stress mask")
+        if missing:
+            QMessageBox.warning(
+                self, "Missing source data",
+                "Cannot calculate this stage without " + " and ".join(missing) + ".",
+            )
+            self._pending_interactive_request = None
+            return False
+        if waiting:
+            context = self._interactive_request_context
+            if context is not None:
+                target, mode, generation, experiment = context
+                self._pending_interactive_request = {
+                    "target": target, "mode": mode,
+                    "generation": generation, "experiment": experiment,
+                }
+            self.status_label.setText(
+                "Waiting for " + " and ".join(waiting) + " to finish loading…"
+            )
+            return False
+        return True
+
+    def _on_interactive_data_changed(self):
+        self.refresh()
+        if self._pending_interactive_request is None or self._interactive_retry_scheduled:
+            return
+        self._interactive_retry_scheduled = True
+
+        def retry():
+            self._interactive_retry_scheduled = False
+            pending, self._pending_interactive_request = (
+                self._pending_interactive_request, None
+            )
+            if (
+                pending is not None
+                and pending["generation"] == self._interactive_request_generation
+                and pending["experiment"] == self._active_experiment
+            ):
+                self._request_interactive_stage(
+                    pending["target"], pending["mode"]
+                )
+
+        QTimer.singleShot(0, retry)
+
+    def _set_interactive_progress(self, message):
+        self.status_label.setText(message)
+
 
     def _stage_widgets(self):
         return [
@@ -2410,6 +2618,7 @@ class napariTFMWidget(QWidget):
         return self._set_force_result_data(data)
 
     def _on_active_experiment_changed(self, path: str) -> None:
+        self._invalidate_pending_interactive_request()
         self._active_experiment = path or None
         # Invalidate any in-flight cold stage decode: bumping the token (and
         # dropping the worker) means a decode started for the previous

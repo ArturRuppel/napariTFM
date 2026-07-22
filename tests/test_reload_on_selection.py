@@ -43,6 +43,7 @@ class _StubParameterManager(QObject):
             "piv_window": 16,
             "piv_overlap": 0.75,
             "piv_passes": 8,
+            "piv_smooth": 0.0,
             "ilk_radius": 7,
             "ilk_num_warp": 10,
             "ffd_level_spacing": 12.0,
@@ -240,6 +241,7 @@ class _StubVisualizationManager:
 class _StubController(QObject):
     progress_updated = Signal(int, str)
     ui_frozen = Signal(bool)
+    analysis_failed = Signal(str)
 
     def set_displacement_loader(self, loader):
         self.displacement_loader = loader

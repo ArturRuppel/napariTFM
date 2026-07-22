@@ -121,7 +121,7 @@ class FTTCController(VectorStageController):
                 self._validate()
             except Exception as e:
                 QMessageBox.warning(None, "Warning", str(e))
-                return
+                return False
             displacement_result = self.data_manager.displacement_results
 
         current_frame = self._current_frame()
@@ -135,6 +135,7 @@ class FTTCController(VectorStageController):
             status="Calculating force preview...",
             completion=completion,
         )
+        return True
 
     @thread_worker
     def _preview_worker(self, displacement_field, params, frame):
@@ -333,7 +334,7 @@ class FTTCWidget(BaseAnalysisWidget):
         self.controller.run()
 
     def preview_action(self):
-        self.controller.preview_force()
+        return self.controller.preview_force()
 
     def cancel_action(self):
         self.controller.cancel()

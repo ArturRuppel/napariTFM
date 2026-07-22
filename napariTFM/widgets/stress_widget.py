@@ -122,7 +122,7 @@ class StressController(BaseAnalysisController):
                 force_result = self.data_manager.force_results
         except Exception as e:
             QMessageBox.warning(None, "Warning", str(e))
-            return
+            return False
 
         current_frame = self._current_frame()
         params = self._get_current_parameters()
@@ -144,6 +144,7 @@ class StressController(BaseAnalysisController):
             status="Generating stress preview...",
             completion=completion,
         )
+        return True
 
     @thread_worker
     def _preview_worker(self, force_field, mask, params):
@@ -420,7 +421,7 @@ class StressWidget(BaseAnalysisWidget):
         self.controller.run()
 
     def preview_action(self):
-        self.controller.preview_current_frame()
+        return self.controller.preview_current_frame()
 
     def cancel_action(self):
         self.controller.cancel()

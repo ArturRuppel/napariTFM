@@ -28,6 +28,7 @@ class _StubParameterManager(QObject):
             "piv_window": 16,
             "piv_overlap": 0.75,
             "piv_passes": 8,
+            "piv_smooth": 0.0,
             "ilk_radius": 7,
             "ilk_num_warp": 10,
             "ffd_level_spacing": 12.0,
@@ -212,6 +213,7 @@ class _StubVisualizationManager:
 class _StubController(QObject):
     progress_updated = Signal(int, str)
     ui_frozen = Signal(bool)
+    analysis_failed = Signal(str)
 
     def set_displacement_loader(self, loader):
         self.displacement_loader = loader
@@ -269,6 +271,9 @@ class _StubStageWidget(QWidget):
 
     def cancel_action(self):
         self.action_calls["cancel"] += 1
+
+    def load_mask_from_file(self, path, beads_shape=None):
+        self.loaded_mask_file = (path, beads_shape)
 
     def bayesian_action(self):
         self.action_calls["bayesian"] = self.action_calls.get("bayesian", 0) + 1
@@ -1469,6 +1474,162 @@ def test_data_manager_change_callback_refreshes_stage_widgets(monkeypatch, app):
     assert widget.stress_widget.update_count == 1
 
 
+def test_active_experiment_enables_all_stage_preview_and_run_actions(monkeypatch, app):
+    widget = _enter_tuning(_stub_main_widget(monkeypatch))
+    for key, section in widget._stage_sections_by_key.items():
+        if key == "stress":
+            section.set_enabled(True)
+        states = section._action_states()
+        assert states["preview"] is True, key
+        assert states["run"] is True, key
+
+
+def test_cancel_header_routes_active_prerequisite_through_coordinator(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    coordinator = widget._interactive_stage_coordinator
+    coordinator._target_stage = "force"
+    coordinator._active_stage = "displacement"
+    calls = []
+    monkeypatch.setattr(coordinator, "cancel", lambda stage: calls.append(stage))
+    monkeypatch.setattr(
+        widget._interactive_stage_adapters["displacement"],
+        "cancel",
+        lambda: calls.append("direct"),
+    )
+    widget._cancel_interactive_stage("displacement")
+    assert calls == ["displacement"]
+
+
+def test_active_experiment_preserves_cancel_only_state_while_frozen(monkeypatch, app):
+    widget = _enter_tuning(_stub_main_widget(monkeypatch))
+    stage = widget.force_widget
+    stage.set_action_states(run=False, preview=False, cancel=True)
+    widget._stage_sections_by_key["force"].set_status("running")
+    states = widget._interactive_action_states("force")
+    assert states["run"] is False
+    assert states["preview"] is False
+    assert states["cancel"] is True
+
+
+def test_header_actions_route_through_stage_coordinator(monkeypatch, app):
+    widget = _enter_tuning(_stub_main_widget(monkeypatch))
+    calls = []
+    monkeypatch.setattr(widget._interactive_stage_coordinator, "request", lambda stage, mode: calls.append((stage, mode)))
+    monkeypatch.setattr(widget, "_cancel_interactive_stage", lambda stage: calls.append((stage, "cancel")))
+    force = widget._stage_sections_by_key["force"]
+    force.preview_button.click()
+    force.run_cancel_btn.click()
+    force.set_status("running")
+    force.run_cancel_btn.click()
+    assert calls == [("force", "preview"), ("force", "run"), ("force", "cancel")]
+
+
+def test_stale_prompt_maps_all_exact_choices(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    from napariTFM.widgets._stage_dependencies import StaleChoice
+    expected = {
+        "Recalculate with current parameters": StaleChoice.RECALCULATE,
+        "Use existing data": StaleChoice.REUSE,
+        "Cancel": StaleChoice.CANCEL,
+    }
+    for label, choice in expected.items():
+        monkeypatch.setattr(widget, "_exec_stale_stage_prompt", lambda *_args, x=label: x)
+        assert widget._prompt_for_stale_stage("displacement") is choice
+
+
+def test_source_validator_waits_for_async_sources_and_retries_without_imread(
+    monkeypatch, app, tmp_path
+):
+    import numpy as np
+    import tifffile
+    from napariTFM.utilities.data_manager import DataManager
+
+    widget = _stub_main_widget(monkeypatch)
+    widget.data_manager = DataManager()
+    widget.data_manager.add_change_callback(widget._on_interactive_data_changed)
+    tifffile.imwrite(tmp_path / "reference.tif", np.zeros((4, 4), dtype=np.uint8))
+    tifffile.imwrite(tmp_path / "beads.tif", np.zeros((2, 4, 4), dtype=np.uint8))
+    widget.data_manager.set_active_inputs(
+        tmp_path, {"reference": "reference.tif", "beads": "beads.tif"}
+    )
+    monkeypatch.setattr(tifffile, "imread", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GUI-thread imread")))
+    widget._request_interactive_stage("force", "preview")
+    assert widget._pending_interactive_request is not None
+    assert "Waiting for" in widget.status_label.text()
+    calls = []
+    monkeypatch.setattr(widget, "_request_interactive_stage", lambda *args: calls.append(args))
+    assert "Waiting for" in widget.status_label.text()
+    widget.data_manager.set_reference(np.zeros((4, 4), dtype=np.uint8))
+    widget.data_manager.set_bead_stack(np.zeros((2, 4, 4), dtype=np.uint8))
+    app.processEvents()
+    assert calls[-1] == ("force", "preview")
+
+    tifffile.imwrite(tmp_path / "masks.tif", np.ones((2, 4, 4), dtype=np.uint8))
+    widget.data_manager.set_active_inputs(
+        tmp_path, {
+            "reference": "reference.tif", "beads": "beads.tif", "masks": "masks.tif"
+        }
+    )
+    widget._interactive_request_generation += 1
+    widget._interactive_request_context = (
+        "stress", "run", widget._interactive_request_generation, widget._active_experiment
+    )
+    assert widget._validate_interactive_sources("stress") is False
+    widget._interactive_request_context = None
+    widget.data_manager.set_mask_stack(np.ones((2, 4, 4), dtype=np.uint8))
+    app.processEvents()
+    assert calls[-1] == ("stress", "run")
+
+
+def test_cancel_while_waiting_prevents_late_retry(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget._pending_interactive_request = {
+        "target": "force", "mode": "preview",
+        "generation": widget._interactive_request_generation,
+        "experiment": widget._active_experiment,
+    }
+    calls = []
+    monkeypatch.setattr(widget, "_request_interactive_stage", lambda *args: calls.append(args))
+    widget._on_interactive_data_changed()
+    widget._cancel_interactive_stage("force")
+    app.processEvents()
+    assert calls == []
+
+
+def test_new_explicit_action_invalidates_older_waiting_retry(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget._pending_interactive_request = {
+        "target": "force", "mode": "preview",
+        "generation": widget._interactive_request_generation,
+        "experiment": widget._active_experiment,
+    }
+    calls = []
+    monkeypatch.setattr(
+        widget._interactive_stage_coordinator, "request",
+        lambda *args: calls.append(args),
+    )
+    widget._on_interactive_data_changed()
+    widget._request_interactive_stage("stress", "run")
+    app.processEvents()
+    assert calls == [("stress", "run")]
+
+
+def test_experiment_switch_invalidates_waiting_retry(monkeypatch, app):
+    widget = _stub_main_widget(monkeypatch)
+    widget._active_experiment = "/old"
+    widget._pending_interactive_request = {
+        "target": "force", "mode": "run",
+        "generation": widget._interactive_request_generation,
+        "experiment": "/old",
+    }
+    calls = []
+    monkeypatch.setattr(widget, "_request_interactive_stage", lambda *args: calls.append(args))
+    widget._on_interactive_data_changed()
+    widget._on_active_experiment_changed("")
+    app.processEvents()
+    assert calls == []
+
+
 def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app):
     monkeypatch.setattr(_widget, "DataManager", _StubDataManager)
     monkeypatch.setattr(_widget, "ParameterManager", _StubParameterManager)
@@ -1482,13 +1643,15 @@ def test_main_widget_stage_headers_wire_existing_stage_actions(monkeypatch, app)
     app.processEvents()
 
     displacement_section = widget._stage_sections_by_key["displacement"]
+    calls = []
+    widget._interactive_stage_coordinator.request = lambda stage, mode: calls.append((stage, mode))
     # Header run drives the widget's run_action via the signal contract.
     widget.displacement_widget.set_action_states(run=True)
     app.processEvents()
 
     displacement_section.run_cancel_btn.click()
 
-    assert widget.displacement_widget.action_calls["run"] == 1
+    assert calls == [("displacement", "run")]
 
 
 def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, app):
@@ -1506,6 +1669,8 @@ def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, 
     widget._stage_sections_by_key["stress"].set_enabled(True)
 
     # Contract stages: header run invokes the widget's run_action handler.
+    calls = []
+    widget._interactive_stage_coordinator.request = lambda stage, mode: calls.append((stage, mode))
     contract_cases = [
         ("displacement", widget.displacement_widget),
         ("force", widget.force_widget),
@@ -1515,8 +1680,8 @@ def test_main_widget_stage_headers_wire_stage_specific_run_buttons(monkeypatch, 
         stage_widget.set_action_states(run=True)
         app.processEvents()
         widget._stage_sections_by_key[key].run_cancel_btn.click()
-        assert stage_widget.action_calls["run"] == 1, (
-            f"{key} header run button did not trigger its widget run_action"
+        assert calls[-1] == (key, "run"), (
+            f"{key} header run button did not route through the coordinator"
         )
 
 
@@ -1535,11 +1700,13 @@ def test_main_widget_stress_header_preview_wires_to_frame_preview(monkeypatch, a
     widget._stage_sections_by_key["stress"].set_enabled(True)
 
     # Header preview invokes the stress widget's preview_action via the contract.
+    calls = []
+    widget._interactive_stage_coordinator.request = lambda stage, mode: calls.append((stage, mode))
     widget.stress_widget.set_action_states(preview=True)
     app.processEvents()
     widget._stage_sections_by_key["stress"].preview_button.click()
 
-    assert widget.stress_widget.action_calls["preview"] == 1
+    assert calls == [("stress", "preview")]
 
 
 def test_main_widget_does_not_use_action_target_reflection(app):
@@ -1663,6 +1830,8 @@ def test_main_widget_groups_parameters_inline_per_stage(monkeypatch, app):
     assert "threshold" not in stress_panel.parameter_controls
 
     displacement_section = widget._stage_sections_by_key["displacement"]
+    calls = []
+    widget._interactive_stage_coordinator.request = lambda stage, mode: calls.append((stage, mode))
     assert displacement_section.parameter_panel is displacement_panel
     assert not displacement_panel.isVisibleTo(widget)
     displacement_section.params_btn.click()
