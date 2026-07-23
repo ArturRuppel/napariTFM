@@ -29,7 +29,7 @@ dependencies = [
     "napari[pyqt]>=0.7.0",
     "scipy>=1.9.3",
     "scikit-image>=0.24.0",
-    "openpiv>=0.25",
+    "torch>=2.0",
     "numpy>=1.25.2",
     "opencv-python>=4.8.0",
     "tifffile>=2024.6.18",
@@ -47,10 +47,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# GPU acceleration for the displacement backends. The defaults (openpiv for PIV,
-# scikit-image for Lucas-Kanade) need no extra; installing this lets
-# disp_device="auto"/"cuda" run the torch GPU ports on a CUDA device, and enables
-# the GPU-only FFD method. "piv" is kept as a backward-compatible alias.
+# torch is a core dependency: PIV runs on it (CPU and CUDA), and it powers the iLK
+# GPU port and the GPU-only FFD method. These extras are kept so `pip install
+# napariTFM[gpu]` still resolves in existing setups; GPU acceleration itself only
+# needs a CUDA-enabled torch build (an install-index choice, not a separate package).
 gpu = [
     "torch>=2.0",
 ]

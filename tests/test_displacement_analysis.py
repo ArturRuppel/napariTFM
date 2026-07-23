@@ -1,9 +1,9 @@
 """Tests for the displacement backends (PIV, Lucas-Kanade, FFD).
 
-The CPU tests are NOT gated behind torch: PIV (openpiv) and Lucas-Kanade
-(scikit-image) run on a plain install. GPU-parity tests are gated behind
-torch + CUDA. FFD is GPU-only, so its run test is CUDA-gated; its unavailable
-path (no GPU) is checked directly.
+PIV is a single torch implementation run on CPU or CUDA (torch is a core
+dependency). Lucas-Kanade still has a torch-free scikit-image CPU path.
+GPU-parity tests are gated behind CUDA. FFD is GPU-only, so its run test is
+CUDA-gated; its unavailable path (no GPU) is checked directly.
 """
 import sys
 from pathlib import Path
@@ -61,7 +61,7 @@ def test_build_analyzer_rejects_unknown_method():
 
 def test_analyzer_reports_backends():
     assert PIVDisplacementAnalyzer(_params()).algorithm_name == "PIV"
-    assert PIVDisplacementAnalyzer(_params())._backend == "openpiv"  # cpu -> openpiv
+    assert PIVDisplacementAnalyzer(_params())._backend == "torch"    # PIV is always torch
     assert ILKDisplacementAnalyzer(_params())._backend == "skimage"  # cpu -> skimage
 
 
@@ -101,8 +101,8 @@ def test_cpu_recovers_localized_displacement_upright():
     flip of the field (flipud of a constant field is a no-op), so the uniform-shift
     tests above cannot catch a row-mirrored backend. Use a displacement LOCALIZED to a
     known off-centre spot (top quarter) and assert the recovered bump sits there, not at
-    its flipud mirror in the bottom quarter. Regression for the openpiv Cartesian-y bug
-    that silently returned upside-down displacement on the default CPU path."""
+    its flipud mirror in the bottom quarter. Guards the field orientation (row 0 = top,
+    +uy = downward) against any future row-mirroring regression."""
     size = 128
     ref = _textured_image(seed=7, size=size)
     r0, c0, amp, sig = 32, 64, 3.0, 10.0          # bump in the TOP quarter, +down shift
@@ -128,30 +128,30 @@ def test_cpu_backend_is_deterministic():
     np.testing.assert_array_equal(f1, f2)
 
 
-def test_cpu_backends_need_no_torch(monkeypatch):
-    """With torch import forced to fail, PIV (openpiv) and iLK (skimage) still run on
-    the CPU reference for device 'cpu' and 'auto'. The torch-free default contract."""
+def test_ilk_cpu_needs_no_torch(monkeypatch):
+    """With torch import forced to fail, iLK still runs on its scikit-image CPU path
+    for device 'cpu' and 'auto' -- the torch-free contract that survives for iLK."""
     monkeypatch.setitem(sys.modules, "torch", None)
 
     ref = _textured_image(seed=5, size=96)
     moving = ndimage.shift(ref, shift=(0.0, 1.0), order=3, mode="reflect")
 
-    for method, expect in (("PIV", "openpiv"), ("Lucas-Kanade", "skimage")):
-        for device in ("cpu", "auto"):
-            analyzer = build_analyzer(_params(disp_method=method, disp_device=device))
-            assert analyzer._backend == expect
-            flow = analyzer.calculate_flow(ref, moving)
-            assert flow.shape == (96, 96, 2)
-            assert np.isfinite(flow).all()
+    for device in ("cpu", "auto"):
+        analyzer = build_analyzer(_params(disp_method="Lucas-Kanade", disp_device=device))
+        assert analyzer._backend == "skimage"
+        flow = analyzer.calculate_flow(ref, moving)
+        assert flow.shape == (96, 96, 2)
+        assert np.isfinite(flow).all()
 
 
-def test_cuda_without_torch_raises_actionable_error(monkeypatch):
-    """device='cuda' with torch absent errors clearly (pointing at the [gpu] extra);
-    'auto'/'cpu' do not."""
+def test_piv_without_torch_raises_actionable_error(monkeypatch):
+    """PIV is torch-only now (CPU path included); with torch absent, constructing the
+    analyzer errors clearly, for every device."""
     monkeypatch.setitem(sys.modules, "torch", None)
 
-    with pytest.raises(ImportError, match=r"napariTFM\[gpu\]"):
-        PIVDisplacementAnalyzer(_params(disp_device="cuda"))
+    for device in ("cpu", "auto", "cuda"):
+        with pytest.raises(ImportError, match=r"[Pp]y[Tt]orch"):
+            PIVDisplacementAnalyzer(_params(disp_device=device))
 
 
 # ------------------------------------------------------------------ FFD #
@@ -223,9 +223,9 @@ def test_ffd_threads_all_params_into_ffd_pyr(monkeypatch):
 # ------------------------------------------------------- GPU parity #
 @requires_cuda
 @pytest.mark.parametrize("method", ["PIV", "Lucas-Kanade"])
-def test_gpu_matches_cpu_reference_on_dense_data(method):
-    """On dense, well-posed texture the GPU port matches the CPU reference: iLK is
-    numerically identical, PIV (openpiv vs torch) is at measured parity, not bitwise."""
+def test_gpu_matches_cpu_on_dense_data(method):
+    """CPU and CUDA run the same code for both methods, so on dense, well-posed texture
+    they agree to within device-level floating-point noise, not just 'parity'."""
     ref = _textured_image(seed=7, size=160)
     moving = ndimage.shift(ref, shift=(0.6, -0.9), order=3, mode="reflect")
 
@@ -233,8 +233,7 @@ def test_gpu_matches_cpu_reference_on_dense_data(method):
     f_gpu = build_analyzer(_params(disp_method=method, disp_device="cuda")).calculate_flow(ref, moving)
 
     m = slice(32, -32)
-    tol = 0.02 if method == "Lucas-Kanade" else 0.1   # iLK identical; PIV parity
-    assert np.median(np.abs(f_cpu[m, m] - f_gpu[m, m])) < tol
+    assert np.median(np.abs(f_cpu[m, m] - f_gpu[m, m])) < 0.02
 
 
 # ----------------------------------------------------- validation/util #

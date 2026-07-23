@@ -3,10 +3,10 @@
 Each backend is a thin analyzer with the same two-method interface the pipeline
 expects: ``calculate_flow(reference, moving) -> (H, W, 2) float32`` in **pixels**
 (``[..., 0] = u_x`` columns, ``[..., 1] = u_y`` rows; positive = right/down), and
-``downscale_flow(flow, factor)``. The device story is uniform: a trusted CPU
-reference implementation by default (openpiv for PIV, scikit-image for iLK), with
-a numerically-equivalent torch GPU port used when it is both installed (the
-``[gpu]`` extra) and selected. FFD is GPU-only.
+``downscale_flow(flow, factor)``. Device story: PIV is a single torch
+implementation run on CPU or CUDA; iLK has a scikit-image CPU path with a
+numerically-equivalent torch GPU port; FFD is GPU-only. torch is a core
+dependency. The device is chosen by the shared ``disp_device``.
 """
 from __future__ import annotations
 

@@ -5,28 +5,31 @@ FFT cross-correlation of interrogation windows, coarse-to-fine with window
 deformation: the classic PIV algorithm, and the most accurate displacement front
 end on dense bead images in our benchmarks.
 
-Two numerically-equivalent implementations behind one parameter set. The default
-**CPU** path is `openpiv <https://github.com/OpenPIV/openpiv-python>`_, the
-community-standard reference used as the credibility anchor for the benchmark's
-PIV baseline. When ``torch`` is installed (the ``[gpu]`` extra) and a CUDA device
-is available/selected, a **GPU** port runs the same multipass window-deformation
-scheme ~100x faster. The port matches openpiv's *algorithm* -- symmetric window
-deformation with bicubic interpolation (``deformation_method="symmetric"``,
-``interpolation_order=3``) and edge-extrapolating densification -- so the two track
-each other closely on stress tests (large displacement + noise), not just clean
-beads. It is not bit-identical: the two use different FFT libraries, PIV's integer
-peak-location argmax can pick a different pixel on a near-tie, and the GPU keeps its
-own (stronger) normalized-median outlier test rather than openpiv's absolute-median
-one -- so exact equality is neither expected nor claimed.
+**One implementation, run on either device.** The whole multipass scheme lives in
+:func:`_piv_torch` (torch) and runs on the CPU (``disp_device="cpu"``) or a CUDA
+device (``"cuda"``, ~100x faster; ``"auto"`` picks CUDA when present, else CPU).
+Because it is literally the same code, the CPU and CUDA results are the same
+algorithm -- they differ only by device-level floating-point noise (~1e-4 px:
+cuFFT vs pocketfft rounding, non-associative parallel reductions, and PIV's integer
+peak-location argmax occasionally picking a neighbouring pixel on a near-tie), never
+by a different method. torch is therefore a hard dependency of this backend (there
+is no longer an openpiv CPU fallback).
 
-Both paths read the **same three knobs** -- ``piv_window`` (final interrogation
-window, px), ``piv_overlap`` (window overlap fraction), ``piv_passes``
-(coarse->fine passes) -- so switching ``disp_device`` changes only the compute
-backend, not the meaning of any parameter. ``calculate_flow`` returns
-``(reference, moving) -> (H, W, 2) float32`` displacement in **pixels** at full
-native resolution, ``[..., 0] = u_x`` (columns), ``[..., 1] = u_y`` (rows);
-positive = rightward/downward. Downscaling and the pixel->µm conversion happen
-downstream in :func:`napariTFM.backend.displacement_analysis.calculate_displacement_field`.
+The scheme: percentile-normalize both frames; then per coarse->fine pass, split the
+accumulated flow symmetrically over the two frames and bicubic-warp them
+(``deformation_method="symmetric"`` equivalent), FFT-cross-correlate Hann-tapered
+interrogation windows, Gaussian-fit the sub-pixel peak, reject outliers with the
+normalized-median test, optionally smooth the sparse vector field
+(``piv_smooth``), and add the edge-extrapolated dense residual to the accumulator.
+
+Knobs (all read from :class:`DisplacementParameters`): ``piv_window`` (final
+interrogation window, px), ``piv_overlap`` (window overlap fraction), ``piv_passes``
+(coarse->fine passes), ``piv_smooth`` (per-pass Gaussian sigma on the sparse vector
+grid, in grid cells; 0 disables). ``calculate_flow`` returns ``(reference, moving)
+-> (H, W, 2) float32`` displacement in **pixels** at full native resolution,
+``[..., 0] = u_x`` (columns), ``[..., 1] = u_y`` (rows); positive =
+rightward/downward. Downscaling and the pixel->µm conversion happen downstream in
+:func:`napariTFM.backend.displacement_analysis.calculate_displacement_field`.
 """
 from typing import Optional
 
@@ -37,8 +40,8 @@ from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 
 
 def _norm01(image: np.ndarray) -> np.ndarray:
-    """Percentile stretch to [0, 1] (1st..99.5th percentile), NaNs zeroed. Shared by both
-    backends so the CPU and GPU paths see identically-scaled inputs."""
+    """Percentile stretch to [0, 1] (1st..99.5th percentile), NaNs zeroed. Also imported by
+    the scikit-image iLK CPU path so every method sees identically-scaled input."""
     img = np.nan_to_num(np.asarray(image, dtype=np.float32), nan=0.0)
     lo, hi = np.percentile(img, [1.0, 99.5])
     return np.clip((img - lo) / (hi - lo + 1e-9), 0.0, 1.0)
@@ -47,8 +50,8 @@ def _norm01(image: np.ndarray) -> np.ndarray:
 def _window_schedule(window: int, passes: int, coarse_factor: float, H: int, W: int):
     """Geometric coarse->fine window sizes from a capped top window down to ``window``.
 
-    Shared by both backends. ``coarse_factor`` is fixed at 2.0 (matching openpiv's ×2
-    windowsize schedule); it is not a user knob, so the CPU and GPU schedules agree.
+    ``coarse_factor`` is fixed at 2.0 (the classic ×2 windowsize schedule); it is not a
+    user knob.
     """
     cap = max(window, min(H, W) // 3)
     if passes == 1:
@@ -58,59 +61,7 @@ def _window_schedule(window: int, passes: int, coarse_factor: float, H: int, W: 
 
 
 # ======================================================================== #
-#  openpiv CPU reference -- the default backend                            #
-# ======================================================================== #
-def _piv_openpiv(ref, dfm, window=16, overlap=0.75, passes=8, coarse_factor=2.0):
-    """Multi-pass window-deformation PIV via openpiv (the trusted CPU reference).
-
-    ``window`` is the final (finest) interrogation window; a coarse->fine schedule of
-    ``passes`` windows ends at it (openpiv's own ×2 schedule). ``overlap`` is the
-    fractional window overlap. Returns u_px (2,H,W) [0]=x/col [1]=y/row.
-
-    openpiv returns a sparse vector grid in its own convention (x ascending cols, y
-    ascending BOTTOM->TOP, v positive UP). We interpolate to a dense (H,W) field and flip
-    the y-component so the sign/axis match this module's contract.
-    """
-    from openpiv import windef
-    from scipy.interpolate import RegularGridInterpolator
-
-    a = _norm01(ref); b = _norm01(dfm)
-    H, W = a.shape
-    n = max(1, int(passes)); w = int(window)
-    # Same capped coarse->fine schedule as the GPU port (coarse_factor 2.0), so the
-    # two backends agree on the windows, not just the three knobs. Coerce to even
-    # sizes >= 8 (openpiv/FFT windows); overlap < window always for overlap < 1.
-    sizes = _window_schedule(w, n, coarse_factor, H, W)
-    windowsizes = tuple(max(8, s - s % 2) for s in sizes)
-    overlaps = tuple(max(0, min(ws - 2, int(ws * float(overlap)))) for ws in windowsizes)
-    s = windef.PIVSettings()
-    s.windowsizes = windowsizes
-    s.overlap = overlaps
-    s.num_iterations = n
-    s.deformation_method = "symmetric"
-    s.interpolation_order = 3
-    x, y, u, v, _ = windef.simple_multipass(a, b, s)
-
-    xs = x[0, :]
-    ys = y[:, 0]
-    if ys[0] > ys[-1]:
-        ys = ys[::-1]; u = u[::-1]; v = v[::-1]
-    gi_u = RegularGridInterpolator((ys, xs), np.asarray(u, float), bounds_error=False, fill_value=None)
-    gi_v = RegularGridInterpolator((ys, xs), np.asarray(v, float), bounds_error=False, fill_value=None)
-    rr, cc = np.mgrid[0:H, 0:W]
-    pts = np.stack([rr.ravel(), cc.ravel()], -1)
-    ux = gi_u(pts).reshape(H, W)
-    uy = -gi_v(pts).reshape(H, W)          # openpiv v is +up; contract wants +down
-    # openpiv's grid is Cartesian-y (0 at the image BOTTOM, ascending upward), so the
-    # dense sampling above lands vertically mirrored vs this module's array contract
-    # (row 0 = top) and vs the torch backend. Flip rows to match. Verified against the
-    # torch path (flipud both components -> corr 0.99); without it the *default* CPU
-    # backend returns upside-down displacement, silently corrupting recovered traction.
-    return np.stack([ux, uy])[:, ::-1].copy()
-
-
-# ======================================================================== #
-#  torch / GPU backend -- lazily imported, numerically equiv on dense data #
+#  torch backend -- runs on CPU or CUDA, the sole PIV implementation        #
 # ======================================================================== #
 _HAN: dict = {}
 
@@ -124,8 +75,15 @@ _HAN: dict = {}
 _PIV_TILE_BYTES = 256 * 1024 * 1024
 
 
-def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8, coarse_factor=2.0):
-    """Whole multipass PIV resident on ``device`` (GPU). Returns u_px (2,H,W) numpy."""
+def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8, coarse_factor=2.0,
+               smooth=1.0, nmt_thresh=2.0, nmt_eps=0.1):
+    """Whole multipass PIV resident on ``device`` (``torch.device`` -- CPU or CUDA).
+
+    ``smooth`` is the per-pass Gaussian sigma (in sparse-grid cells) applied to the
+    window-vector field after the normalized-median outlier test, before densification;
+    0 disables it. ``nmt_thresh``/``nmt_eps`` tune that outlier test. Returns u_px
+    (2, H, W) numpy, ``[0]=x/col``, ``[1]=y/row``, positive right/down.
+    """
     import torch
     import torch.nn.functional as F
 
@@ -144,8 +102,8 @@ def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8, coarse_facto
         return _HAN[key]
 
     def warp(img, u):
-        # bicubic to match openpiv's symmetric deformation (interpolation_order=3);
-        # border padding == openpiv's map_coordinates mode='nearest' at the edges.
+        # bicubic sub-pixel deformation (spline-order-3 equivalent); border padding
+        # holds the edge value (map_coordinates mode='nearest' equivalent).
         H, W = img.shape
         yy, xx = torch.meshgrid(torch.arange(H, device=device, dtype=dt),
                                 torch.arange(W, device=device, dtype=dt), indexing="ij")
@@ -200,27 +158,44 @@ def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8, coarse_facto
         nb = pad.unfold(2, 3, 1).unfold(3, 3, 1).reshape(*x.shape, 9)
         return nb.median(-1).values
 
-    def nmt(f, thresh=2.0, eps=0.1):
+    def nmt(f, thresh=nmt_thresh, eps=nmt_eps):
         # Normalized median test (Westerweel & Scarano 2005): replace a vector whose
         # residual to the local median, normalized by the local median residual,
-        # exceeds ``thresh``. Kept over openpiv's absolute-threshold median test on
-        # purpose -- it is the stronger outlier detector, and on stress tests (large
-        # displacement + noise) it keeps the GPU field both closer to ground truth and
-        # in *tighter* agreement with the openpiv CPU path than replicating openpiv's
-        # own validation would (which flags different cells and widens the gap).
+        # exceeds ``thresh``. A stronger outlier detector than a plain absolute-median
+        # test, which keeps the field close to ground truth on stress tests (large
+        # displacement + noise). ``eps`` is the fluctuation noise floor.
         med = med3(f)
         res = (f - med).abs()
         bad = res / (med3(res) + eps) > thresh
         return torch.where(bad, med, f)
 
+    def gauss(f, sigma):
+        # Separable Gaussian blur of the sparse vector grid (reflect pad). This is the
+        # per-pass displacement-field smoother (``piv_smooth``): the coarse passes carry
+        # the large-scale motion and it regularizes the noisy fine residual. Clamp the
+        # radius to the grid size -- the coarsest multipass grids are only a few windows
+        # across, where a large sigma would overflow reflect padding (harmless: the field
+        # is near-uniform over its own footprint there).
+        if sigma <= 0:
+            return f
+        rad = min(max(1, int(round(3 * sigma))), min(f.shape) - 1)
+        if rad < 1:
+            return f
+        x = torch.arange(-rad, rad + 1, device=f.device, dtype=f.dtype)
+        k = torch.exp(-0.5 * (x / sigma) ** 2); k = k / k.sum()
+        fp = F.pad(f[None, None], (rad, rad, rad, rad), mode="reflect")
+        fp = F.conv2d(fp, k.view(1, 1, 1, -1))
+        fp = F.conv2d(fp, k.view(1, 1, -1, 1))
+        return fp[0, 0]
+
     def to_dense(ys, xs, du, dv, H, W):
-        # Resample the sparse vector grid to full res, LINEAR-extrapolating past the
-        # grid edge (clamped cell index, unclamped interpolation weight) so the border
-        # half-window matches the CPU path's RegularGridInterpolator(fill_value=None);
-        # grid_sample's border padding would instead clamp to the edge value.
+        # Per pass: outlier-reject (NMT), smooth (piv_smooth), then resample the sparse
+        # vector grid to full res, LINEAR-extrapolating past the grid edge (clamped cell
+        # index, unclamped interpolation weight) so the border half-window is filled
+        # rather than clamped to the edge value.
         if len(ys) < 2 or len(xs) < 2:
             return torch.zeros((2, H, W), device=device, dtype=dt)
-        du = nmt(du); dv = nmt(dv)
+        du = gauss(nmt(du), smooth); dv = gauss(nmt(dv), smooth)
         Ny, Nx = du.shape
         y0, x0 = float(ys[0]), float(xs[0]); sy = float(ys[1] - ys[0]); sx = float(xs[1] - xs[0])
         fy = (torch.arange(H, device=device, dtype=dt) - y0) / sy
@@ -242,8 +217,8 @@ def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8, coarse_facto
     for win in _window_schedule(window, passes, coarse_factor, H, W):
         win = max(8, min(win, min(H, W) // 3)); win -= win % 2
         step = max(4, int(round(win * (1.0 - overlap))))
-        # Symmetric window deformation (openpiv deformation_method="symmetric"): split
-        # the accumulated flow over both frames and correlate the residual, then add it.
+        # Symmetric window deformation: split the accumulated flow over both frames
+        # (each warped by half), correlate the residual, then add it to the accumulator.
         ys, xs, du, dv = one_pass(warp(refi, -0.5 * u), warp(dfmi, 0.5 * u), win, step)
         u = u + to_dense(ys, xs, du, dv, H, W)
     return u.cpu().numpy()
@@ -255,17 +230,28 @@ def _piv_torch(ref, dfm, device, window=16, overlap=0.75, passes=8, coarse_facto
 class PIVDisplacementAnalyzer(BaseDisplacementAnalyzer):
     """Estimate displacement by multi-pass FFT cross-correlation PIV.
 
-    openpiv (CPU) by default; transparently GPU-accelerated via the torch port when
-    torch and CUDA are available and ``disp_device`` allows it. Both backends read
-    ``piv_window``/``piv_overlap``/``piv_passes`` identically.
+    A single torch implementation (:func:`_piv_torch`) runs on either device:
+    ``disp_device="cpu"`` on the CPU, ``"cuda"`` on a CUDA GPU, ``"auto"`` on CUDA
+    when present else CPU. torch is required (no openpiv fallback). Reads
+    ``piv_window``/``piv_overlap``/``piv_passes``/``piv_smooth``.
     """
 
     algorithm_name = "PIV"
 
     def __init__(self, params: Optional[DisplacementParameters] = None):
         super().__init__(params)
-        self._device = resolve_gpu_device(str(self.params.disp_device), method="PIV")
-        self._backend = "torch" if self._device is not None else "openpiv"
+        try:
+            import torch  # torch is a hard dependency of the PIV backend (CPU path too)
+        except ImportError as exc:
+            raise ImportError(
+                "The PIV backend requires PyTorch, a core dependency of napariTFM. "
+                "Reinstall napariTFM, or `pip install torch`."
+            ) from exc
+        # resolve_gpu_device returns a CUDA device for "cuda"/"auto"(+CUDA), or None for
+        # "cpu"/"auto"(no CUDA); the sole PIV path is torch, so map None -> the CPU device.
+        dev = resolve_gpu_device(str(self.params.disp_device), method="PIV")
+        self._device = dev if dev is not None else torch.device("cpu")
+        self._backend = "torch"
 
     def calculate_flow(self, reference: np.ndarray, moving: np.ndarray,
                        weight: np.ndarray | None = None) -> np.ndarray:
@@ -274,15 +260,12 @@ class PIVDisplacementAnalyzer(BaseDisplacementAnalyzer):
 
         ``weight`` is ignored (PIV's confinement is the upstream crop); it is
         accepted only to satisfy the shared analyzer interface."""
-        kw = dict(
+        u = _piv_torch(
+            reference, moving, self._device,
             window=max(8, int(self.params.piv_window)),
             overlap=float(self.params.piv_overlap),
             passes=max(1, int(self.params.piv_passes)),
+            smooth=max(0.0, float(self.params.piv_smooth)),
         )
-        if self._backend == "torch":
-            u = _piv_torch(reference, moving, self._device, **kw)
-        else:
-            u = _piv_openpiv(reference, moving, **kw)
-
         H, W = np.asarray(reference).shape
         return self._pack(u, H, W)

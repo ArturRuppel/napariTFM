@@ -29,6 +29,12 @@ submit_cache() {   # $1=concurrency ; echoes the job id
     sbatch --parsable --array="0-$((n-1))%${conc}" jobs/build_cache.sbatch
 }
 
+submit_force() {   # $1=concurrency ; echoes the job id. GT-tuned oracle force cache.
+    local conc="${1:-4}" n; n=$(n_scenes)
+    echo "force: array 0-$((n-1))%${conc} on $(awk -F= '/^#SBATCH --partition=/{print $2}' jobs/force_cache.sbatch) over $n scenes (oracle FTTC+L2 & FISTA+L1)" >&2
+    sbatch --parsable --array="0-$((n-1))%${conc}" jobs/force_cache.sbatch
+}
+
 submit_sweep() {   # $1=concurrency, $2=optional dep jobid ; echoes the job id
     local conc="${1:-64}" dep="${2:-}" n dopt=(); n=$(n_scenes)
     [ -n "$dep" ] && dopt=(--dependency="aftercorr:${dep}")
@@ -36,9 +42,11 @@ submit_sweep() {   # $1=concurrency, $2=optional dep jobid ; echoes the job id
     sbatch --parsable --array="0-$((n-1))%${conc}" "${dopt[@]}" jobs/sweep_cpu.sbatch
 }
 
-case "${1:?usage: submit.sh cache|sweep|pipeline ...}" in
+case "${1:?usage: submit.sh cache|force|sweep|pipeline ...}" in
     cache)
         JID=$(submit_cache "${2:-4}"); echo "submitted cache job $JID" ;;
+    force)
+        JID=$(submit_force "${2:-4}"); echo "submitted force job $JID" ;;
     sweep)
         DEP=""; [ "${2:-}" = "--after" ] && DEP="${3:?--after needs a jobid}"
         [ "${3:-}" = "--after" ] && DEP="${4:?--after needs a jobid}"
@@ -54,5 +62,5 @@ case "${1:?usage: submit.sh cache|sweep|pipeline ...}" in
         echo "watch:   squeue -u \$USER"
         echo "results: $STAGE/results/sweep_<condition>_<scene>.csv  (trickle in)" ;;
     *)
-        echo "unknown '$1' (cache|sweep|pipeline)"; exit 1 ;;
+        echo "unknown '$1' (cache|force|sweep|pipeline)"; exit 1 ;;
 esac

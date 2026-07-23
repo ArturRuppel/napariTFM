@@ -10,19 +10,21 @@ _T = TypeVar("_T")
 class DisplacementParameters:
     """Parameters for displacement analysis.
 
-    Three interchangeable backends selected by ``disp_method``; each has a trusted
-    CPU reference (openpiv / scikit-image) and a torch GPU port used when available
-    and selected by the shared ``disp_device``. FFD is GPU-only. See
+    Three interchangeable backends selected by ``disp_method``. PIV is a single torch
+    implementation run on CPU or CUDA; iLK has a scikit-image CPU path and a torch GPU
+    port; FFD is GPU-only. The device is chosen by the shared ``disp_device``. See
     napariTFM/backend/{piv,ilk,ffd}_displacement.py.
     """
     # Method + shared device selector.
     disp_method: str = "PIV"      # "PIV" | "Lucas-Kanade" | "FFD"
     disp_device: str = "auto"     # "auto" | "cuda" | "cpu" (shared by all methods)
 
-    # PIV (multi-pass FFT cross-correlation): openpiv CPU / torch GPU, same knobs.
+    # PIV (multi-pass FFT cross-correlation): one torch backend, CPU or CUDA.
     piv_window: int = 24          # final interrogation window (px); heuristic-sweep default (24-32)
     piv_overlap: float = 0.75     # window overlap fraction [0, 1)
     piv_passes: int = 8           # coarse->fine window-deformation passes
+    piv_smooth: float = 1.0       # per-pass Gaussian sigma (sparse-grid cells) on the vector
+                                  # field; regularizes noise. 0 = off (raw, sharper but rougher)
 
     # iLK (iterative Lucas-Kanade): scikit-image CPU / torch GPU, same knobs.
     ilk_radius: int = 7           # half-window of the local LK solve (px), the primary knob
@@ -188,6 +190,7 @@ class UnifiedParameters:
     piv_window: int = 24          # heuristic-sweep default (24-32)
     piv_overlap: float = 0.75
     piv_passes: int = 8
+    piv_smooth: float = 1.0       # per-pass Gaussian sigma on the vector field (0 = off)
     ilk_radius: int = 7
     ilk_num_warp: int = 10
     ffd_level_spacing: float = 12.0

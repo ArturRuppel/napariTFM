@@ -165,14 +165,15 @@ def sweep_scene(stage, condition, scene_id, writer):
         return
     for cf in caches:
         d = np.load(cf)
-        field = d["field"]
+        field = d["field"].astype(np.float32)   # cache is float16; compute in float32
         method = str(d["method"])
+        smooth_val = float(d["smooth_val"]) if "smooth_val" in d.files else float("nan")
         for f1, f2, t_up in invert(field, N):
             m = metrics(t_up, gt, do_sabass=(kind != "cell"))
             writer.writerow(dict(
                 condition=condition, scene_id=scene_id, method=method, **scene_cols,
                 res_knob=str(d["res_knob"]), res_val=float(d["res_val"]),
-                conv_val=float(d["conv_val"]), grid=field.shape[0],
+                conv_val=float(d["conv_val"]), smooth_val=smooth_val, grid=field.shape[0],
                 l1=f1, l2=f2, **m))
         print(f"  [{scene_id}] {os.path.basename(cf)} swept "
               f"({len(C.FRAC1)}x{len(C.FRAC2)})", flush=True)
@@ -192,8 +193,8 @@ def main():
     out = a.out or os.path.join(a.stage, "results", f"sweep_{a.condition}.csv")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     cols = ["condition", "scene_id", "method", "kind", "footprint", "magnitude",
-            "peak_disp_px", "n_fibers", "res_knob", "res_val", "conv_val", "grid",
-            "l1", "l2", "J", "dtm", "dtms", "dta", "n_adh", "nrmse", "corr",
+            "peak_disp_px", "n_fibers", "res_knob", "res_val", "conv_val", "smooth_val",
+            "grid", "l1", "l2", "J", "dtm", "dtms", "dta", "n_adh", "nrmse", "corr",
             "mag_bias", "ang_field", "bg_leak"]
     print(f"sweeping {len(scenes)} scene(s) -> {out}")
     with open(out, "w", newline="") as fh:

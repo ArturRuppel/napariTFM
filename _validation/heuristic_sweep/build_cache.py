@@ -38,12 +38,15 @@ def prep(im):
     return gaussian_filter(im, 1)
 
 
-def run_disp(ref, dfm, method, res_val, conv_val):
-    """One displacement solve at a given resolution + convergence setting."""
+def run_disp(ref, dfm, method, res_val, conv_val, smooth_val=None):
+    """One displacement solve at a given resolution + convergence + smoothing setting."""
     kw = {"disp_method": C.METHOD_LABEL[method], "disp_device": "auto",
           "pixel_size": C.PIXEL_SIZE_UM, "downscale_factor": C.DOWNSCALE_FACTOR}
     kw[C.RES_KNOB[method]] = res_val      # for PIV this IS piv_window (downscale_factor stays fixed)
     kw[C.CONV_KNOB[method]] = conv_val
+    sk = C.SMOOTH_KNOB.get(method)        # displacement-side smoother (PIV only); None = method default
+    if sk is not None and smooth_val is not None:
+        kw[sk] = smooth_val
     p = DisplacementParameters(**kw)
     g = calculate_displacement_field(ref, dfm, p)
     try:
@@ -53,11 +56,11 @@ def run_disp(ref, dfm, method, res_val, conv_val):
         return np.asarray(e.value.displacement_field)[0]   # (y, x, 2), µm
 
 
-def converge(ref, dfm, method, res_val):
+def converge(ref, dfm, method, res_val, smooth_val=None):
     """Raise the convergence knob until the field settles; return converged field."""
     prev = None
     for conv_val in C.CONV_LADDER[method]:
-        field = run_disp(ref, dfm, method, res_val, conv_val)
+        field = run_disp(ref, dfm, method, res_val, conv_val, smooth_val)
         if prev is not None and prev.shape == field.shape:
             denom = float(np.sqrt((prev ** 2).sum())) or 1.0
             rel = float(np.sqrt(((field - prev) ** 2).sum())) / denom
@@ -79,24 +82,33 @@ def cache_scene(stage, condition, scene_id, methods):
     os.makedirs(outdir, exist_ok=True)
     n_written = 0
     for method in methods:
+        smooths = C.SMOOTH_VALUES.get(method, [None])
         for k, res_val in enumerate(C.RES_VALUES[method]):
-            try:
-                field, conv_val, rel = converge(ref, dfm, method, res_val)
-            except Exception as exc:                       # noqa: BLE001 -- log & skip
-                print(f"  [{scene_id}] {method} res#{k}={res_val} FAILED: "
-                      f"{type(exc).__name__}: {exc}", flush=True)
-                continue
-            out = os.path.join(outdir, f"disp_{method}_res{k}.npz")
-            np.savez_compressed(
-                out, field=field.astype(np.float32),
-                method=method, res_knob=C.RES_KNOB[method], res_val=res_val,
-                conv_knob=C.CONV_KNOB[method], conv_val=conv_val, conv_rel=rel,
-                downscale=C.DOWNSCALE_FACTOR, pixel_size=C.PIXEL_SIZE_UM,
-            )
-            n_written += 1
-            print(f"  [{scene_id}] {method} res {C.RES_KNOB[method]}={res_val:<5} "
-                  f"conv {C.CONV_KNOB[method]}={conv_val} (rel={rel:.4f}) "
-                  f"grid={field.shape[:2]} -> {os.path.basename(out)}", flush=True)
+            for si, smooth_val in enumerate(smooths):
+                try:
+                    field, conv_val, rel = converge(ref, dfm, method, res_val, smooth_val)
+                except Exception as exc:                   # noqa: BLE001 -- log & skip
+                    print(f"  [{scene_id}] {method} res#{k}={res_val} sm#{si}={smooth_val} "
+                          f"FAILED: {type(exc).__name__}: {exc}", flush=True)
+                    continue
+                out = os.path.join(outdir, f"disp_{method}_res{k}_sm{si}.npz")
+                # Stored as float16: displacement fields are good to ~2 sig figs,
+                # float16's 10-bit mantissa (~0.05% rel) is well below solver noise,
+                # and it halves the cache (savez DEFLATE is ~useless on float32
+                # mantissa entropy). Readers promote back to float32 on load.
+                np.savez_compressed(
+                    out, field=field.astype(np.float16),
+                    method=method, res_knob=C.RES_KNOB[method], res_val=res_val,
+                    conv_knob=C.CONV_KNOB[method], conv_val=conv_val, conv_rel=rel,
+                    smooth_knob=str(C.SMOOTH_KNOB.get(method)),
+                    smooth_val=(np.nan if smooth_val is None else float(smooth_val)),
+                    downscale=C.DOWNSCALE_FACTOR, pixel_size=C.PIXEL_SIZE_UM,
+                )
+                n_written += 1
+                print(f"  [{scene_id}] {method} res {C.RES_KNOB[method]}={res_val:<5} "
+                      f"sm={smooth_val} conv {C.CONV_KNOB[method]}={conv_val} "
+                      f"(rel={rel:.4f}) grid={field.shape[:2]} -> {os.path.basename(out)}",
+                      flush=True)
     return n_written
 
 

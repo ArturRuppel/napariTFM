@@ -62,7 +62,23 @@ CONV_LADDER = {
     "FFD": [25, 50, 100, 200],
 }
 CONV_TOL = 0.01              # rel. L2 change between successive settings -> converged
-DOWNSCALE_FACTOR = 4         # global binning, held fixed (700 -> ~175 grid)
+
+# Displacement-side smoothing knob: a per-pass Gaussian sigma on the recovered
+# vector field (PIV's `piv_smooth`; the coarse->fine passes carry it). SEARCHED
+# like resolution -- one cached field per (resolution, smooth) pair, force J
+# adjudicates it jointly with (l1, l2). 0 = no displacement-side smoothing (clean
+# separation, L1+L2 do all the regularizing); 1.0 = the tool default (what real
+# users get). Only PIV exposes it; ILK/FFD carry a single None = "use the method
+# default", so the cache loop stays uniform across methods.
+SMOOTH_KNOB = {"PIV": "piv_smooth", "ILK": None, "FFD": None}
+SMOOTH_VALUES = {"PIV": [0.0, 1.0], "ILK": [None], "FFD": [None]}
+DOWNSCALE_FACTOR = 1         # no binning: displacement + traction stay on the native
+                             # 512 grid. Downsampling to 128 band-limited the traction
+                             # (sharp adhesions unrecoverable) and the 128->512 rescale
+                             # for GT scoring injected a progressive spatial offset;
+                             # working natively at 512 removes both. eff node spacing =
+                             # PIXEL_SIZE_UM * (512/h) auto-tracks h, so nothing downstream
+                             # needs to change -- the score-time zoom becomes identity.
 
 # --- forward / substrate ----------------------------------------------------
 YOUNG_MODULUS = 1000.0       # Pa (1 kPa, calibration substrate)

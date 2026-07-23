@@ -144,6 +144,7 @@ class WorkflowParameterPanel(QWidget):
                 ("piv_window", "Interrogation Window (px)", "int", 8, 128, 2, 0, None),
                 ("piv_overlap", "Window Overlap", "float", 0.0, 0.95, 0.025, 3, None),
                 ("piv_passes", "Passes", "int", 1, 12, 1, 0, None),
+                ("piv_smooth", "Field Smoothing (σ)", "float", 0.0, 3.0, 0.5, 1, None),
             ]),
             (METHOD, "Lucas-Kanade", [
                 (GROUP, "Lucas-Kanade (optical flow)"),
@@ -315,13 +316,12 @@ class WorkflowParameterPanel(QWidget):
             "couple on your own data before committing."
         ),
         "disp_device": (
-            "Compute backend, shared by every method. 'auto' uses the GPU when "
-            "PyTorch and a CUDA device are present (the [gpu] extra), else the CPU "
-            "reference (openpiv for PIV, scikit-image for Lucas-Kanade). 'cuda' "
-            "requires a GPU; 'cpu' forces the reference implementation. For "
-            "Lucas-Kanade the GPU port is numerically identical to the CPU one; for "
-            "PIV it is at measured parity on dense beads, not bit-identical. FFD is "
-            "GPU-only."
+            "Compute backend, shared by every method. 'auto' uses the GPU when a "
+            "CUDA device is present, else the CPU. 'cuda' requires a GPU; 'cpu' "
+            "forces CPU. PIV is one torch implementation run on either device, so "
+            "CPU and GPU give the same algorithm (differing only by ~1e-4 px "
+            "device-level rounding). Lucas-Kanade's GPU port is numerically "
+            "identical to its scikit-image CPU path. FFD is GPU-only."
         ),
         "piv_window": (
             "Final PIV interrogation window, in pixels: the primary PIV knob and the "
@@ -344,6 +344,13 @@ class WorkflowParameterPanel(QWidget):
             "more passes capture larger displacements and drive convergence at the "
             "cost of runtime; gains taper off after a few. Raise it if large motion "
             "is missed."
+        ),
+        "piv_smooth": (
+            "Per-pass Gaussian smoothing of the displacement field (sigma, in "
+            "vector-grid cells), applied after outlier rejection on every pass. It "
+            "regularizes noise in the fine passes -- higher = smoother fields but "
+            "damped peaks; 0 = raw output (sharper but rougher). ~1.0 is a "
+            "reasonable start."
         ),
         "ilk_radius": (
             "Half-window of the local Lucas-Kanade solve, in pixels: the primary iLK "
@@ -2027,7 +2034,6 @@ class napariTFMWidget(QWidget):
             # Expected, actionable: colliding experiment ids.
             QMessageBox.warning(self, "Pool experiments", str(exc))
         else:  # pragma: no cover - defensive
-            logger.error("Pool failed: %s", exc)
             QMessageBox.critical(self, "Pool experiments", f"Pooling failed: {exc}")
 
     def _on_stage_node_clicked(self, key: str) -> None:
@@ -2824,5 +2830,4 @@ class napariTFMWidget(QWidget):
                     update()
         elif param_name.startswith("force_"):
             self.force_widget._update_ui_state()
-
 
