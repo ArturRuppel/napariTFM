@@ -63,14 +63,12 @@ class FTTCController(VectorStageController):
         )
 
     def _support_mask(self, params, frame=None):
-        """The support mask for the mask-consuming inversions, or None.
+        """The mask used for post-hoc force clipping, or None.
 
         Reuses the same externally-loaded mask the Stress stage consumes
-        (``data_manager.mask_stack``). It is read only when Mask Confinement > 0:
-        by the confined forward solver, or (when L1 Sparsity > 0 as well) by the
-        sparse L1 solver as a soft support (an off-mask L2 penalty). With confinement
-        off the mask is withheld, so L1 runs as pure sparsity, as if no mask were
-        loaded. Plain FTTC never reads it.
+        (``data_manager.mask_stack``). It is read only when Clip Outside Mask > 0.
+        The selected force solver runs normally; the backend clips the completed
+        force frame outside mask + radius.
 
         ``frame`` selects a single mask slice for a single-frame solve (the
         preview): the backend indexes the mask by the *displacement stack* frame,
@@ -173,7 +171,7 @@ class FTTCController(VectorStageController):
         """Run the single-frame force calculation to completion and return it.
 
         ``frame`` is the source stack index being previewed; it selects the
-        matching mask slice for the forward method's confinement prior.
+        matching mask slice for post-hoc force clipping.
         """
         gen = calculate_force_field(displacement_field[np.newaxis, ...], params,
                                     mask=self._support_mask(params, frame))
@@ -192,7 +190,7 @@ class FTTCController(VectorStageController):
         transfers exactly), keeping the traction maps comparable. Runs Bayesian-L2 regardless of
         whether the ``bayesian_l2`` checkbox is set, so the estimate is available to freeze.
 
-        Uses the loaded foreground mask (if any) directly — not gated on Mask Confinement — so BL2
+        Uses the loaded foreground mask (if any) directly — not gated on force clipping — so BL2
         reads the noise from the cell-free exterior (the paper's more robust estimate); with no
         mask it infers the noise instead (ABL2).
         """

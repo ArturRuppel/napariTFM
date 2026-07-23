@@ -42,20 +42,11 @@ def validate_fttc_parameters(params: FTTCParameters) -> Tuple[bool, str]:
     if params.downscale_factor < 1:
         return False, "Downscale factor must be at least 1"
 
-    # Confined forward solver (fwd_mask_strength > 0). Only gate the fields its
-    # solve consumes; fwd_mask_strength is a 0..100 dial and fwd_fit_margin_um is
-    # visualization-adjacent (it only weights the data term), so both are clamped
-    # in the solver rather than gated. λ is the shared `regularization`, already
-    # checked above.
+    # Post-hoc force mask clipping. fwd_mask_strength is kept as the UI gate; the
+    # radius is the only field used by clipping.
     if params.fwd_mask_strength > 0:
         if getattr(params, "fwd_mask_reach", 0.0) < 0:
             return False, "Mask reach must be non-negative"
-        if params.fwd_max_iter < 1:
-            return False, "Forward max iterations must be at least 1"
-        if str(params.fwd_device) not in ("auto", "cuda", "cpu"):
-            return False, "fwd_device must be 'auto', 'cuda', or 'cpu'"
-        if str(params.fwd_dtype) not in ("float64", "float32"):
-            return False, "fwd_dtype must be 'float64' or 'float32'"
 
     # Sparse group-L1 solver (l1_sparsity > 0). The dial is a fraction of λ₁_max, so it
     # must lie in (0, 1]; it shares fwd_device/fwd_dtype with the confined solver.

@@ -125,7 +125,7 @@ class WorkflowParameterPanel(QWidget):
 
     # Numeric flags the legacy "auto" inference reads: while force_method is stored as "auto",
     # a change to any of these can move the inferred method shown, so visibility must refresh.
-    _AUTO_FORCE_FLAGS = ("l1_sparsity", "fwd_mask_strength", "bayesian_l2")
+    _AUTO_FORCE_FLAGS = ("l1_sparsity", "bayesian_l2")
 
     PARAMETER_SECTIONS = [
         ("General", [
@@ -168,9 +168,6 @@ class WorkflowParameterPanel(QWidget):
             (GROUP, "General"),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
             ("disp_downscale_before", "Downsample Before\nMeasurement", "bool", None, None, None, None, None),
-            (GROUP, "Mask confinement"),
-            ("disp_mask_confine", "Confine to Mask", "bool", None, None, None, None, None),
-            ("disp_mask_margin_um", "Mask Margin (um)", "float", 0.0, 200.0, 1.0, 1, None),
             (GROUP, "Visualization"),
             ("disp_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("disp_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -188,9 +185,6 @@ class WorkflowParameterPanel(QWidget):
                 (GROUP, "Elastic net (L1 + L2)"),
                 ("l1_sparsity", "L1 Sparsity", "float", 0.0, 1.0, 0.01, 2, None),
                 ("l2_ridge", "L2 Ridge", "float", 0.0, 32.0, 0.25, 2, None),
-                (GROUP, "Mask confiner (soft support)"),
-                ("fwd_mask_strength", "Mask Confinement", "float", 0.0, 100.0, 1.0, 0, None),
-                ("fwd_mask_reach", "Mask Reach (px)", "float", 0.0, 20.0, 0.5, 1, None),
             ]),
             (METHOD, "FTTC + GCV", [
                 (GROUP, "FTTC (Fourier Tikhonov)"),
@@ -206,6 +200,9 @@ class WorkflowParameterPanel(QWidget):
                 ("bayesian_per_frame", "Re-estimate λ per frame", "bool",
                  None, None, None, None, None),
             ]),
+            (GROUP, "Mask clipping"),
+            ("fwd_mask_strength", "Clip Outside Mask", "bool", None, None, None, None, None),
+            ("fwd_mask_reach", "Clip Radius (px)", "float", 0.0, 20.0, 0.5, 1, None),
             (GROUP, "Visualization"),
             ("force_vector_stride", "Vector Stride", "int", 1, 100, 1, 0, None),
             ("force_arrow_scale", "Arrow Scale", "float", 0.1, 50.0, 0.1, 1, None),
@@ -226,17 +223,14 @@ class WorkflowParameterPanel(QWidget):
     PARAMETER_TOOLTIPS = {
         "l1_sparsity": (
             "Sparse traction inversion (group-L1), the recommended default. Above 0 it "
-            "overrides Mask Confinement and plain FTTC. It regularizes by sparsity "
+            "overrides plain FTTC. It regularizes by sparsity "
             "instead of smoothing: it thresholds small forces to exactly zero rather "
             "than spreading them, so it recovers the adhesion forces more accurately "
-            "and keeps the peak better than FTTC or confinement, with NO mask needed. "
+            "and keeps the peak better than FTTC, with NO mask needed. "
             "The value is a fraction (0..1) of the level that zeros the whole field: "
             "~0.05 is a good start (the sweep's flat basin is 0.02-0.11, and it is "
             "safer to err low), raise it for noisier data (more sparsity), lower it "
-            "if real forces are being erased. A loaded mask, if present, acts as a "
-            "soft support: Mask Confinement adds an off-mask L2 penalty (ramped over a "
-            "collar, no hard edge), so it self-confines but the exterior is discouraged "
-            "rather than forbidden. 0 = off."
+            "if real forces are being erased. 0 = off."
         ),
         "l2_ridge": (
             "Elastic-net L2 ridge, the second knob of the sparse (L1) solver — it "
@@ -254,8 +248,8 @@ class WorkflowParameterPanel(QWidget):
         ),
         "force_method": (
             "Traction-inversion method. Each shows only its own controls:\n"
-            "• Elastic net (L1+L2) — sparse group-L1 with an optional L2 ridge and a soft "
-            "mask confiner. The recommended default: thresholds small forces to zero, best "
+            "• Elastic net (L1+L2) — sparse group-L1 with an optional L2 ridge. The "
+            "recommended default: thresholds small forces to zero, best "
             "in-cell accuracy and peak recovery, no mask needed.\n"
             "• FTTC + GCV — classic Fourier Tikhonov inversion. Set λ by hand, or let "
             "Generalized Cross-Validation pick it (button = once, checkbox = per frame).\n"
@@ -285,25 +279,16 @@ class WorkflowParameterPanel(QWidget):
             "use Freeze λ for a time series or a condition comparison."
         ),
         "fwd_mask_strength": (
-            "How hard traction is pushed out of the loaded mask's exterior — a "
-            "soft support on whichever solver is active. 0 = no confinement (with "
-            "L1 Sparsity on, pure sparsity; with it off, plain FTTC). Above 0 = the "
-            "off-mask traction is penalized more, log-scaled so every step does "
-            "something: both the L1 and the forward solver add an off-mask L2 penalty "
-            "to their objective. Same dial, same meaning on both routes; the exterior "
-            "is discouraged, never forbidden (no hard edge). "
-            "Needs a mask loaded — the same external mask the Stress stage uses."
+            "Post-process the force result with the loaded mask. When enabled, the "
+            "selected force method runs normally and then every vector outside mask "
+            "+ Clip Radius is set to exactly 0. Needs a mask loaded — the same "
+            "external mask the Stress stage uses."
         ),
         "fwd_mask_reach": (
-            "How far past the mask forces are still allowed — an apron (in force-grid "
-            "pixels) the free region is grown by before confinement bites. Forces are "
-            "free within mask+reach, then pushed out beyond it. Because the apron is a "
-            "genuinely zero-penalty region, this is orthogonal to Mask Confinement: "
-            "that sets how HARD the exterior is pushed, this sets how FAR OUT the "
-            "boundary is — and unlike a soft skirt, reach keeps moving the boundary "
-            "even at maximum confinement. The apron only ever reaches outward, so real "
-            "forces on the cell rim are never clipped. 0 = confine to the mask itself. "
-            "Same apron on both the sparse (L1) and confined routes."
+            "Force-grid pixel radius added around the loaded mask before clipping. "
+            "0 means keep only the mask itself; larger values keep a wider apron "
+            "around the cell. The edge is hard: outside this radius, force vectors "
+            "are set to exactly 0."
         ),
         "disp_method": (
             "Displacement algorithm. PIV (FFT cross-correlation) is a forgiving "
@@ -424,21 +409,6 @@ class WorkflowParameterPanel(QWidget):
             "full-res result. Drift registration always runs at full resolution either "
             "way. No effect when Downscale Factor is 1."
         ),
-        "disp_mask_confine": (
-            "Measure displacement only within the external mask (+ margin), for every "
-            "method. Each frame is analysed inside its cell's bounding box plus the "
-            "Mask Margin and read as zero outside: this skips the empty, vignette-"
-            "corrupted periphery (faster) and removes that far-field artifact from the "
-            "saved field structurally, rather than relying on the downstream mask. Needs "
-            "an external mask; a no-op without one. Off = full-frame (unchanged)."
-        ),
-        "disp_mask_margin_um": (
-            "How far beyond the cell edge to keep measuring, in microns, when Confine to "
-            "Mask is on. It must cover the substrate-displacement halo around the cell — "
-            "set it to that halo's decay length. Too small silently clips real "
-            "near-cell displacement; too large re-admits the periphery. Only read when "
-            "Confine to Mask is on."
-        ),
     }
 
     def __init__(self, parameter_manager: ParameterManager, section_titles: tuple[str, ...] | None = None):
@@ -460,14 +430,12 @@ class WorkflowParameterPanel(QWidget):
         self._method_blocks = []
         self._setup_ui()
         self._sync_all_controls()
-        self._refresh_confinement_enablement()
         self._refresh_force_lambda_enablement()
         self._apply_method_availability()
         self._refresh_method_visibility()
         self._refresh_advanced_visibility()
         self._refresh_pyramid_levels()
         self.parameter_manager.parameter_changed.connect(self._sync_parameter)
-        self.parameter_manager.parameter_changed.connect(self._refresh_confinement_enablement)
         self.parameter_manager.parameter_changed.connect(self._refresh_force_lambda_enablement)
         self.parameter_manager.parameter_changed.connect(self._refresh_method_visibility)
         self.parameter_manager.parameter_changed.connect(self._refresh_advanced_visibility)
@@ -720,18 +688,6 @@ class WorkflowParameterPanel(QWidget):
         downscale = float(self.parameter_manager.get_parameter("ffd_downscale"))
         min_size = int(self.parameter_manager.get_parameter("ffd_min_size"))
         label.setText(str(_derived_pyramid_levels(self._input_shape, downscale, min_size)))
-
-    def _refresh_confinement_enablement(self, name=None, value=None):
-        """Grey out the Displacement stage's Mask Margin unless Confine to Mask is on.
-
-        Driven from parameter_changed (a cheap no-op when the changed param is not
-        the gate) and once at construction for the initial state.
-        """
-        if name is not None and name != "disp_mask_confine":
-            return
-        margin = self.parameter_controls.get("disp_mask_margin_um")
-        if margin is not None:
-            margin.setEnabled(bool(self.parameter_manager.get_parameter("disp_mask_confine")))
 
     def _refresh_force_lambda_enablement(self, name=None, value=None):
         """Grey the FTTC manual-λ slider and its one-shot GCV button while per-frame GCV is on
@@ -2830,4 +2786,3 @@ class napariTFMWidget(QWidget):
                     update()
         elif param_name.startswith("force_"):
             self.force_widget._update_ui_state()
-

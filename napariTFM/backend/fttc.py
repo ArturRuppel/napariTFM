@@ -1,9 +1,9 @@
 """
 Traction Force Microscopy (TFM) force calculation module implementing the FTTC method
-(regularized Fourier inversion) with a manual Tikhonov λ, and dispatch to the sparse group-L1,
-confined-forward, and evidence-maximizing Bayesian-L2 (:mod:`napariTFM.backend.bayesian_l2`)
-solvers. The auto-λ button (:func:`find_bayesian_regularization`) estimates the Bayesian-L2 ridge
-on one frame to freeze and reuse across the experiment.
+(regularized Fourier inversion) with a manual Tikhonov λ, and dispatch to the sparse group-L1
+and evidence-maximizing Bayesian-L2 (:mod:`napariTFM.backend.bayesian_l2`) solvers. The auto-λ
+button (:func:`find_bayesian_regularization`) estimates the Bayesian-L2 ridge on one frame to
+freeze and reuse across the experiment.
 
 Core TFM functions are based on:
 - DirectMethod package (https://github.com/usschwarz/DirectMethod) - MIT License
@@ -81,19 +81,43 @@ def _mask_frame_for_grid(mask: np.ndarray, frame: int, hw: Tuple[int, int]) -> n
     return m
 
 
+def _force_clip_mask(mask: np.ndarray, frame: int, hw: Tuple[int, int],
+                     reach: float) -> np.ndarray:
+    """Hard support for post-hoc force clipping on the force grid.
+
+    The kept region is the loaded mask dilated outward by ``reach`` force-grid pixels.
+    There is no soft skirt or smoothing: every traction vector outside this support is
+    set to exactly zero after the selected inversion has finished.
+    """
+    support = _mask_frame_for_grid(mask, frame, hw)
+    reach = max(float(reach), 0.0)
+    if reach <= 0.0:
+        return support
+    from scipy import ndimage
+    distance_from_mask = ndimage.distance_transform_edt(~support)
+    return distance_from_mask <= reach
+
+
+def _apply_force_clip(force_frame: np.ndarray, mask: Optional[np.ndarray],
+                      frame: int, params: FTTCParameters) -> np.ndarray:
+    """Apply the Force panel's post-hoc mask clip to one ``(H, W, 2)`` frame."""
+    if mask is None or getattr(params, "fwd_mask_strength", 0.0) <= 0:
+        return force_frame
+    keep = _force_clip_mask(mask, frame, force_frame.shape[:2],
+                            getattr(params, "fwd_mask_reach", 0.0))
+    force_frame[~keep, :] = 0.0
+    return force_frame
+
+
 def infer_force_method(params: FTTCParameters, *, mask_present: bool = False) -> str:
     """Reproduce the pre-selector routing from the numeric flags (the ``"auto"`` fallback).
 
-    Exactly the old first-match ladder: ``l1_sparsity > 0`` → ``"Elastic net"``;
-    else ``fwd_mask_strength > 0`` with a mask → ``"Confined"``; else ``bayesian_l2`` →
-    ``"Bayesian L2"``; else ``"FTTC + GCV"``. Used to keep every pre-selector caller (the 480-scene
-    sweep, legacy ``.ntfm`` files) routing unchanged, and by the UI to resolve ``"auto"`` to the
-    concrete method it should display.
+    The current ladder is ``l1_sparsity > 0`` → ``"Elastic net"``; else ``bayesian_l2`` →
+    ``"Bayesian L2"``; else ``"FTTC + GCV"``. The former mask-confinement solver is no longer
+    selected here; the Force panel's mask controls are a post-hoc output clip.
     """
     if params.l1_sparsity > 0:
         return "Elastic net"
-    if params.fwd_mask_strength > 0 and mask_present:
-        return "Confined"
     if getattr(params, "bayesian_l2", False):
         return "Bayesian L2"
     return "FTTC + GCV"
@@ -111,11 +135,7 @@ def calculate_force_field(
 
     * ``"Elastic net"`` → the sparse group-L1 solver (:mod:`napariTFM.backend.forward_l1`).
       Regularizes with an L1 sparsity prior (thresholds rather than spreads), optionally an
-      elastic-net ``l2_ridge``; needs no mask, and a ``mask`` if supplied is used as a *soft*
-      support (``fwd_mask_strength`` sets an off-mask L2 penalty, ramped over a collar).
-    * ``"Confined"`` → the confined forward solver (:mod:`napariTFM.backend.forward_tfm`),
-      L2 + smoothness confined to the mask, sharing ``regularization`` as its Tikhonov λ.
-      Legacy-only (reached via ``"auto"``); not a UI-selectable method.
+      elastic-net ``l2_ridge``; needs no mask.
     * ``"Bayesian L2"`` → the Bayesian-L2 reconstruction (:mod:`napariTFM.backend.bayesian_l2`):
       a real-space, standardized, over-determined Tikhonov inversion whose regularization is
       chosen automatically by evidence maximization. BL2 (β from the cell-free exterior) when a
@@ -123,7 +143,9 @@ def calculate_force_field(
     * ``"FTTC + GCV"`` → plain Fourier Tikhonov inversion with the manual ``regularization`` λ,
       or a per-frame GCV λ when ``auto_gcv`` is set.
 
-    ``mask`` is consumed on the Elastic-net, Confined, and Bayesian-L2 paths.
+    When ``fwd_mask_strength > 0`` and ``mask`` is supplied, the completed force frame is
+    hard-clipped after inversion: vectors outside ``mask`` dilated by ``fwd_mask_reach`` are
+    set to zero. There is no soft confinement or smoothing.
     """
     is_valid, error_msg = validate_fttc_parameters(params)
     if not is_valid:
@@ -144,18 +166,14 @@ def calculate_force_field(
     if method == "auto":
         method = infer_force_method(params, mask_present=mask is not None)
     use_l1 = method == "Elastic net"
-    # A "Confined" solve needs a mask; without one, fall through to plain FTTC rather than
-    # feed the confined solver a None support. (Auto-inference only yields "Confined" when a
-    # mask is present, so this only guards an explicit force_method="Confined" with no mask.)
-    use_forward = method == "Confined" and mask is not None
+    use_forward = False
     use_bayes = method == "Bayesian L2"
     calculator = None if (use_l1 or use_forward or use_bayes) else FTTC(params)
 
     for frame in range(total_frames):
         if use_l1:
             from napariTFM.backend.forward_l1 import l1_traction_frame
-            m = None if mask is None else _mask_frame_for_grid(mask, frame, force_shape[:2])
-            traction = l1_traction_frame(displacement_field[frame], params, mask=m)
+            traction = l1_traction_frame(displacement_field[frame], params, mask=None)
             force_stack[frame, ..., 0] = traction[0]
             force_stack[frame, ..., 1] = traction[1]
         elif use_forward:
@@ -193,6 +211,7 @@ def calculate_force_field(
             force_stack[frame, ..., 0] = result[1][0]
             force_stack[frame, ..., 1] = result[1][1]
 
+        _apply_force_clip(force_stack[frame], mask, frame, params)
         yield force_stack[frame].copy(), frame + 1, total_frames
 
     physical_scale = {

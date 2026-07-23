@@ -1029,15 +1029,14 @@ class BatchAnalysis:
                        'downscale_factor': fttc_params.downscale_factor,
                    })
 
-        # The confined forward solver needs the external mask (the same one the
-        # stress stage loads). Only fetched when it will actually be used; without
-        # it, calculate_force_field falls back to plain FTTC.
+        # Post-hoc force clipping uses the external mask (the same one the stress
+        # stage loads). Only fetched when it will actually be used.
         force_mask = None
         if fttc_params.fwd_mask_strength > 0 and folder is not None:
             force_mask = self._load_mask(folder)
             if force_mask is None:
-                print("Mask confinement requested but no external mask was found; "
-                      "falling back to plain FTTC for this experiment.")
+                print("Force mask clipping requested but no external mask was found; "
+                      "leaving force fields unclipped for this experiment.")
 
         force_generator = calculate_force_field(
             displacement_data.displacement_field,

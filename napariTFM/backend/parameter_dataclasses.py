@@ -88,11 +88,9 @@ class FTTCParameters:
     #   "FTTC"        -> Fourier Tikhonov (manual λ, or per-frame GCV when auto_gcv)
     #   "Bayesian L2" -> real-space evidence-max reconstruction (napariTFM.backend.bayesian_l2)
     #   "Elastic net" -> group-L1 (+optional l2_ridge, +mask soft-support) (forward_l1)
-    #   "Confined"    -> standalone confined-forward L2 (forward_tfm); legacy-only, not UI-selectable
     #   "auto"        -> infer from the numeric flags exactly as the pre-selector code did
-    #                    (l1_sparsity>0 -> Elastic net; fwd_mask_strength>0+mask -> Confined;
-    #                     bayesian_l2 -> Bayesian L2; else FTTC). Keeps the sweep and every
-    #                    pre-selector .ntfm routing unchanged. See napariTFM.backend.fttc.
+    #                    (l1_sparsity>0 -> Elastic net; bayesian_l2 -> Bayesian L2;
+    #                     else FTTC). See napariTFM.backend.fttc.
     force_method: str = "auto"
     regularization: float = 1e-4        # manual Tikhonov λ (the override for Bayesian L2)
     # GCV auto-λ on the plain-FTTC (Fourier) path: pick the Tikhonov λ per frame by
@@ -116,18 +114,12 @@ class FTTCParameters:
     pixel_size: float = 0.1  # in µm
     downscale_factor: int = 4
 
-    # Traction inversion is selected by the mask-confinement dial, not a separate
-    # method flag: fwd_mask_strength == 0 runs plain FTTC (regularized Fourier
-    # inversion, using `regularization` / Bayesian L2 above); > 0 (with a mask)
-    # kicks off the confined forward solver (napariTFM.backend.forward_tfm), which
-    # reuses that same `regularization` as its Tikhonov λ. The fwd_* fields below
-    # are only read on that confined (> 0) path.
-    fwd_mask_strength: float = 0.0        # 0..100 log-scaled mask confinement dial (0 = off → FTTC)
-    fwd_mask_reach: float = 2.0           # apron (force-grid px) the free region is grown by before
-    #                                       confinement bites: forces are free within mask+reach, then
-    #                                       pushed out by fwd_mask_strength beyond. Orthogonal to
-    #                                       strength (a zero-penalty apron β can't shrink); 0 = confine
-    #                                       to the mask. Shared by the confined L2 and L1 routes.
+    # Post-hoc force mask clipping. When fwd_mask_strength > 0 and a mask is supplied,
+    # the selected inversion runs normally and then every force vector outside
+    # mask + fwd_mask_reach is set to zero. No soft support, smoothing, or solver
+    # dispatch is attached to these fields.
+    fwd_mask_strength: float = 0.0        # 0 disables clipping; >0 enables post-hoc clipping
+    fwd_mask_reach: float = 2.0           # force-grid px radius added around the mask before clipping
     fwd_fit_margin_um: float = 1e6        # trust displacement only within mask+margin (µm)
     fwd_max_iter: int = 200               # max CG iterations (β>0 iterative path)
     fwd_cg_tol: float = 1e-8              # CG relative-residual tolerance (β>0 path)
@@ -138,12 +130,10 @@ class FTTCParameters:
     #                                       well-conditioned, so float32 is ample)
 
     # Sparse (group-L1) inversion (napariTFM.backend.forward_l1). Selected when
-    # l1_sparsity > 0, ahead of the confined and plain-FTTC paths. Regularizes with an
+    # l1_sparsity > 0, ahead of the plain-FTTC path. Regularizes with an
     # L1 sparsity prior instead of L2: it thresholds rather than spreads, so it wins
-    # in-cell accuracy and peak recovery over FTTC/confinement and needs NO mask. A
-    # mask, if supplied, is a *soft* support: fwd_mask_strength sets an off-mask L2
-    # penalty in the objective (ramped over a collar, no hard edge). Shares fwd_device/
-    # fwd_dtype/fwd_fit_margin_um with the confined solver.
+    # in-cell accuracy and peak recovery over FTTC and needs NO mask. Mask clipping,
+    # when enabled, happens after the solver.
     l1_sparsity: float = 0.05  # 0..1 fraction of λ₁_max (0 = off → FTTC); heuristic-sweep default:
     #                            flat basin 0.02..0.11, lean low ("err low"); ↑ with noise
     l2_ridge: float = 0.0      # elastic-net L2 ridge, fraction of median per-mode curvature; 0 = pure L1
@@ -228,10 +218,9 @@ class UnifiedParameters:
     bayesian_lambda: Optional[float] = None
     # Bayesian-L2 per-frame vs frozen λ (see FTTCParameters).
     bayesian_per_frame: bool = True
-    # Confined forward solver (see FTTCParameters / napariTFM.backend.forward_tfm);
-    # gated by fwd_mask_strength, shares `regularization` as its Tikhonov λ.
+    # Post-hoc force mask clipping (see FTTCParameters).
     fwd_mask_strength: float = 0.0
-    fwd_mask_reach: float = 2.0        # apron (px) the free region is grown by before confinement bites
+    fwd_mask_reach: float = 2.0        # force-grid px radius added around the mask before clipping
     fwd_fit_margin_um: float = 1e6
     fwd_max_iter: int = 200
     fwd_cg_tol: float = 1e-8

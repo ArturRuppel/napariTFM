@@ -1,7 +1,6 @@
 """Sparse traction inversion by group-L1 (the sparsity prior on the traction field).
 
-FTTC and the confined forward solver both regularize with L2 (a Tikhonov ridge and,
-for the confined solver, a soft support penalty). L2 *spreads*: it cannot place a force at an
+FTTC regularizes with L2 (a Tikhonov ridge). L2 *spreads*: it cannot place a force at an
 adhesion without raising the floor around it, so displacement noise survives as
 low-amplitude spurious traction across the cell interior. This solver regularizes
 with group-L1 instead, minimizing over the surface traction ``t`` (Pa)
@@ -23,19 +22,10 @@ method (it thresholds rather than spreads).
   every pixel thresholds to zero. The fraction is scene-independent (it transfers
   across fields), so the dial means the same thing everywhere: ~0 dense, ~1 empty,
   useful band ~0.05–0.2, scaling up with noise. 0 disables this solver.
-- ``mask`` (optional) is used *both* as the data fit-region weight ``W`` (trust the
-  displacement only inside mask + ``fwd_fit_margin_um``) and as a *soft* support: an
-  off-mask L2 penalty ``½ Σ c(x)·|t(x)|²`` added to the objective, with ``c`` zero
-  inside the mask and ramping up to ``β`` (from the shared ``confinement_to_beta``
-  dial) in the exterior over a smoothstep collar. This is the *same* mechanism the L2
-  confined solver uses, so the dial means the same on both routes; the old hard
-  support (``t ≡ 0`` outside) is the ``β → ∞`` limit it replaces — that cliff rang at
-  the mask edge, the collar does not. It must be a penalty *in the objective*, not a
-  per-iteration nudge (a scaled threshold or a <1 window): the exterior traction lies
-  in the fit's near-nullspace (the non-local Green's operator lets off-mask force
-  explain in-mask displacement), so any in-loop nudge is compensated away, whereas the
-  objective penalty is a real trade-off the minimizer honours. With no mask, or the
-  dial at 0, the solve is pure sparsity, which already finds the support on its own.
+- ``mask`` (optional) is only a data fit-region weight ``W`` when callers opt into
+  that lower-level behavior directly. The normal force pipeline passes no mask into
+  this solver; Force-panel mask clipping is applied post-hoc in
+  :mod:`napariTFM.backend.fttc`.
 
 The problem is convex but non-smooth (the L1 term), so it is solved by FISTA
 (accelerated proximal gradient): a gradient step on the smooth data term followed by
@@ -55,38 +45,13 @@ import numpy as np
 
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 from napariTFM.backend.forward_tfm import (
-    _greens_operator, _fit_weight, _resolve_backend, _asnumpy,
-    confinement_to_beta, support_probability)
+    _greens_operator, _fit_weight, _resolve_backend, _asnumpy)
 
 logger = logging.getLogger(__name__)
 
 def _exterior_penalty(mask, valid, l_data, params, xp, dtype):
-    """Per-pixel L2 penalty coefficient confining traction to the mask — the soft
-    support. Added to the *smooth objective* (``+ ½ Σ c(x)·|t(x)|²``), so its gradient
-    is ``c·t`` and the minimizer genuinely trades data-fit against off-mask energy.
-
-    This is the lever that actually works. A per-iteration nudge (scaling the L1
-    threshold, or multiplying the iterate by a <1 window) is *transparent* at the
-    fixed point: the exterior traction lives in the fit's near-nullspace — many
-    fields fit the in-region displacement equally through the non-local Green's
-    operator — so FISTA just rebuilds a larger pre-nudge value to compensate and the
-    exterior is unchanged. A penalty *in the objective* is not compensable; it is the
-    same mechanism the L2 confined solver uses (``β·(1−p)·|t|²``), ported to FISTA.
-
-    ``c(x) = β · l_data · (1 − p(x))``, with ``p`` the shared support-probability map
-    (:func:`support_probability`): ``c`` is 0 inside the mask *and its ``fwd_mask_reach``
-    apron* and ramps up to ``β · l_data`` beyond, so forces are free out to mask+reach
-    and pushed out past it. Scaling by ``l_data`` (the data term's curvature
-    ``λmax(GᵀWG)/denom``) makes ``β`` a scene-independent *fraction* of the data
-    curvature, and ``β`` is the shared :func:`confinement_to_beta` dial, so both β and the
-    reach mean the same on both routes. ``mask is None`` or the dial at 0 ⇒ no penalty.
-    Returns ``(1, H, W)`` (broadcasts onto the traction).
-    """
-    if mask is None or params.fwd_mask_strength <= 0:
-        return xp.zeros((1,) + valid.shape, dtype=dtype)
-    off = 1.0 - support_probability(mask, params)          # 0 inside+rim, →1 outside over σ
-    coef = confinement_to_beta(params.fwd_mask_strength) * float(l_data) * off
-    return xp.asarray(coef[None], dtype=dtype)              # (1,H,W)
+    """Compatibility shim for the removed soft mask-support penalty."""
+    return xp.zeros((1,) + valid.shape, dtype=dtype)
 
 
 def l1_traction_frame(displacement_frame: np.ndarray,
@@ -97,12 +62,11 @@ def l1_traction_frame(displacement_frame: np.ndarray,
     Args:
         displacement_frame: ``(H, W, 2)`` displacement in µm (``[...,0] = u_x``).
         params: FTTC/force parameters; ``l1_sparsity`` (fraction of λ₁_max) sets the
-            sparsity, ``l1_max_iter`` the FISTA iteration budget, ``fwd_device`` /
-            ``fwd_dtype`` / ``fwd_fit_margin_um`` are shared with the confined solver.
-        mask: optional ``(H, W)`` support; used as the data fit-region and as a
-            *soft* traction support (an off-mask L2 penalty of weight
-            ``confinement_to_beta(fwd_mask_strength)`` added to the objective, ramped
-            up over a collar outside the mask). None or confinement 0 ⇒ pure sparsity.
+            sparsity, ``l1_max_iter`` the FISTA iteration budget, and ``fwd_device`` /
+            ``fwd_dtype`` select the backend.
+        mask: optional ``(H, W)`` data fit-region for direct low-level callers. The
+            normal force pipeline passes ``None`` and applies any mask clipping after
+            the solve.
 
     Returns:
         ``(2, H, W)`` float32 traction in Pa (``[0] = t_x``, ``[1] = t_y``).
@@ -145,9 +109,6 @@ def l1_traction_frame(displacement_frame: np.ndarray,
     lmax = float(lam_mode.max())
     l_data = lmax / denom
 
-    # Soft support: an exterior-weighted L2 term added to the smooth objective (its
-    # gradient is pen·t). pen raises the smooth part's curvature, so its max folds
-    # into the Lipschitz constant / step (else FISTA diverges when confinement is up).
     pen = _exterior_penalty(mask, valid, l_data, params, xp, dtype)   # (1,H,W) ≥ 0
 
     # Elastic Net ridge: a *global* L2 shrinkage ½ λ₂‖t‖² (gradient λ₂·t) added to the
@@ -193,7 +154,6 @@ def l1_traction_frame(displacement_frame: np.ndarray,
     t = t - t.mean(axis=(1, 2), keepdims=True)
 
     nnz = float((xp.sqrt((t * t).sum(axis=0)) > 1e-6).mean())
-    beta = confinement_to_beta(params.fwd_mask_strength) if mask is not None else 0.0
-    logger.info("forward L1: frac=%.3f lam1=%.3g beta=%.3g nnz=%.3f iters=%d backend=%s",
-                frac, lam1, beta, nnz, int(params.l1_max_iter), "cupy" if on_gpu else "numpy")
+    logger.info("forward L1: frac=%.3f lam1=%.3g nnz=%.3f iters=%d backend=%s",
+                frac, lam1, nnz, int(params.l1_max_iter), "cupy" if on_gpu else "numpy")
     return _asnumpy(t).astype(np.float32)

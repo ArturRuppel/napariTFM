@@ -114,7 +114,7 @@ def test_gcv_picks_positive_lambda_and_auto_path_matches_it():
 
 
 def test_force_method_auto_matches_legacy_inference_and_explicit_overrides():
-    """force_method="auto" reproduces the old sentinel routing; an explicit method overrides
+    """force_method="auto" follows the current solver routing; an explicit method overrides
     the numeric flags (so l1_sparsity=0.05 no longer forces the L1 path when FTTC is chosen)."""
     from dataclasses import replace
     from napariTFM.backend.fttc import infer_force_method
@@ -129,7 +129,7 @@ def test_force_method_auto_matches_legacy_inference_and_explicit_overrides():
     assert infer_force_method(replace(base, l1_sparsity=0.05)) == "Elastic net"
     assert infer_force_method(replace(base, l1_sparsity=0.0, bayesian_l2=True)) == "Bayesian L2"
     assert infer_force_method(replace(base, l1_sparsity=0.0, fwd_mask_strength=10.0),
-                              mask_present=True) == "Confined"
+                              mask_present=True) == "FTTC + GCV"
     assert infer_force_method(replace(base, l1_sparsity=0.0)) == "FTTC + GCV"
 
     def run(p):
@@ -148,6 +148,35 @@ def test_force_method_auto_matches_legacy_inference_and_explicit_overrides():
     f_plain = run(replace(base, force_method="auto", l1_sparsity=0.0))
     assert not np.allclose(f_fttc, f_l1)   # explicit FTTC ignores the nonzero l1_sparsity
     assert np.allclose(f_fttc, f_plain)    # ...and matches a plain-FTTC solve
+
+
+def test_force_mask_clip_is_posthoc_hard_zero_with_radius():
+    from dataclasses import replace
+
+    h = w = 32
+    rng = np.random.default_rng(4)
+    disp = rng.standard_normal((1, h, w, 2)).astype(np.float64) * 0.02
+    base = FTTCParameters(young_modulus=5000, poisson_ratio_substrate=0.5,
+                          pixel_size=0.1, downscale_factor=1, force_method="FTTC + GCV")
+    mask = np.zeros((h, w), dtype=np.uint8)
+    mask[12:20, 12:20] = 1
+
+    def run(p, m=None):
+        gen = fttc.calculate_force_field(disp, p, mask=m)
+        try:
+            while True:
+                next(gen)
+        except StopIteration as exc:
+            return exc.value.force_field[0]
+
+    unclipped = run(replace(base, fwd_mask_strength=0.0), mask)
+    clipped = run(replace(base, fwd_mask_strength=1.0, fwd_mask_reach=2.0), mask)
+
+    from scipy import ndimage
+    keep = ndimage.distance_transform_edt(~(mask > 0)) <= 2.0
+    assert np.count_nonzero(np.linalg.norm(unclipped[~keep], axis=-1) > 0) > 0
+    np.testing.assert_array_equal(clipped[~keep], 0.0)
+    assert np.count_nonzero(np.linalg.norm(clipped[keep], axis=-1) > 0) > 0
 
 
 def test_production_code_does_not_depend_on_fttc_service_layer():
