@@ -32,7 +32,7 @@ import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.ndimage import zoom
 import sweep_config as C
-from sweep_forces import rasterize_gt, metrics
+from scoring import rasterize_gt, metrics
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 from napariTFM.backend.fttc import FTTC, find_gcv_regularization
 from napariTFM.backend.bayesian_l2 import reconstruct_bl2_frame, estimate_bayesian_lambda

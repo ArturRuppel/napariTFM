@@ -139,12 +139,16 @@ class WorkflowParameterPanel(QWidget):
              ["PIV", "Lucas-Kanade", "FFD"]),
             ("disp_device", "Device", "choice", None, None, None, None,
              ["auto", "cuda", "cpu"]),
+            ("disp_tune_selector", "Tune Selector", "choice", None, None, None, None,
+             ["L-curve", "Masked holdout CV"]),
+            ("tune_displacement", "Tune current frame + preview", "button",
+             None, None, None, None, None),
             (METHOD, "PIV", [
                 (GROUP, "PIV (cross-correlation)"),
                 ("piv_window", "Interrogation Window (px)", "int", 8, 128, 2, 0, None),
                 ("piv_overlap", "Window Overlap", "float", 0.0, 0.95, 0.025, 3, None),
                 ("piv_passes", "Passes", "int", 1, 12, 1, 0, None),
-                ("piv_smooth", "Field Smoothing (σ)", "float", 0.0, 3.0, 0.5, 1, None),
+                ("piv_smooth", "Field Smoothing (σ)", "float", 0.0, 6.0, 0.5, 1, None),
             ]),
             (METHOD, "Lucas-Kanade", [
                 (GROUP, "Lucas-Kanade (optical flow)"),
@@ -155,7 +159,7 @@ class WorkflowParameterPanel(QWidget):
                 (GROUP, "FFD (GPU only)"),
                 ("ffd_num_iters", "Iterations / Level", "int", 1, 200, 1, 0, None),
                 ("ffd_metric", "Image Metric", "choice", None, None, None, None, ["lncc", "mse"]),
-                ("ffd_elastic", "Elastic Regularization", "float", 0.0, 10.0, 0.01, 3, None),
+                ("ffd_elastic", "Elastic Regularization", "float", 0.0, 30.0, 0.01, 3, None),
                 ("ffd_early_stop", "Early-Exit Tolerance", "float", 0.0, 0.01, 0.00001, 6, None),
                 (GROUP, "FFD image pyramid"),
                 ("ffd_level_spacing", "Control Spacing (px)", "float", 4.0, 64.0, 1.0, 1, None),
@@ -166,6 +170,7 @@ class WorkflowParameterPanel(QWidget):
                 ("ffd_interp", "Warp Interpolation", "choice", None, None, None, None, ["bicubic", "bilinear"]),
             ]),
             (GROUP, "General"),
+            ("disp_remove_stage_drift", "Remove Stage Drift", "bool", None, None, None, None, None),
             ("downscale_factor", "Downscale Factor", "int", 1, 10, 1, 0, None),
             ("disp_downscale_before", "Downsample Before\nMeasurement", "bool", None, None, None, None, None),
             (GROUP, "Visualization"),
@@ -337,6 +342,17 @@ class WorkflowParameterPanel(QWidget):
             "damped peaks; 0 = raw output (sharper but rougher). ~1.0 is a "
             "reasonable start."
         ),
+        "tune_displacement": (
+            "Run a current-frame candidate sweep, set the selected convergence and "
+            "smoothing parameters in the UI, then preview. This costs several full "
+            "displacement solves."
+        ),
+        "disp_tune_selector": (
+            "Smoothing selector used by Tune current frame. L-curve uses all pixels. "
+            "Masked holdout CV fits with part of the displacement mask held out and "
+            "scores the held-out masked pixels, so it requires mask confinement and "
+            "a loaded mask."
+        ),
         "ilk_radius": (
             "Half-window of the local Lucas-Kanade solve, in pixels: the primary iLK "
             "knob. It acts as a noise aperture, not a capture knob (the image "
@@ -408,6 +424,13 @@ class WorkflowParameterPanel(QWidget):
             "1/factor² the pixels — faster, and on real data within ~0.06 px of the "
             "full-res result. Drift registration always runs at full resolution either "
             "way. No effect when Downscale Factor is 1."
+        ),
+        "disp_remove_stage_drift": (
+            "Phase-register the reference and bead frames to remove one uniform "
+            "translation before displacement measurement. Leave this off for already "
+            "registered crops or whenever the global displacement component is part of "
+            "the measurement. Turn it on for raw stacks with stage drift that would "
+            "otherwise exceed the displacement method's capture range."
         ),
     }
 
@@ -1032,6 +1055,7 @@ class napariTFMWidget(QWidget):
             self.parameter_manager,
             self.visualization_manager
         )
+        self._wire_displacement_panel_actions()
         self._wire_force_panel_actions()
 
         self.stress_widget = StressWidget(
@@ -1414,6 +1438,22 @@ class napariTFMWidget(QWidget):
 
         def _dispatch(key, names=handler_names):
             handler = getattr(self.force_widget, names.get(key, ""), None)
+            if callable(handler):
+                handler()
+
+        panel.action_requested.connect(_dispatch)
+
+    def _wire_displacement_panel_actions(self):
+        """Route the Displacement panel's tune button to the Displacement controller."""
+        panel = self._stage_parameter_panels_by_key.get("displacement")
+        if panel is None:
+            return
+        handler_names = {
+            "tune_displacement": "tune_action",
+        }
+
+        def _dispatch(key, names=handler_names):
+            handler = getattr(self.displacement_widget, names.get(key, ""), None)
             if callable(handler):
                 handler()
 

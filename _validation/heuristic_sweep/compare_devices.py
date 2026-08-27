@@ -1,7 +1,7 @@
 """Backend-equivalence sweep: PIV disp_device='cpu' (openpiv) vs 'cuda' (torch).
 
 Reuses the sweep harness generators (make_stacks PSF+camera noise, make_scenes
-GT-traction->GT-displacement->warped pair) and scorer (sweep_forces.metrics) to
+GT-traction->GT-displacement->warped pair) and scorer (scoring.metrics) to
 ask: for one parameter set, do the two backends have the same signal/noise
 recovery characteristics? Signal axis = peak displacement; noise axis = the SNR
 scenarios. Scored at the DISPLACEMENT level (the direct backend output), plus a
@@ -15,7 +15,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-import make_stacks as MS, make_scenes as SC, sweep_forces as SF, sweep_config as C
+import make_stacks as MS, make_scenes as SC, scoring as SF, sweep_config as C
 from napariTFM.backend.piv_displacement import PIVDisplacementAnalyzer
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 

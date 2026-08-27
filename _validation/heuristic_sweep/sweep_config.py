@@ -1,7 +1,7 @@
 """Central configuration for the TFM regularization-heuristic sweep.
 
 One place to define every axis of the experiment, so `build_cache.py` and
-`sweep_forces.py` can never disagree about the grid.
+`build_force_cache.py` can never disagree about the grid.
 
 Design (agreed 2026-07-20):
   * Force nRMSE vs an *analytic* ground-truth traction is the ONLY objective.
@@ -29,7 +29,9 @@ from __future__ import annotations
 # fallback default for single-condition runs.
 CONDITIONS = ["realistic"]
 REF_FRAME = 0                    # frame 0 = zero-jitter reference (per stack metadata)
-JITTER_FRAMES = [1, 3]           # deform-source frames -> 2 conditions/scenario (mild/severe jitter)
+JITTER_FRAMES = [1]              # deform-source frame -> 1 condition/scenario (mild jitter only;
+                                 # severe jitter j3 dropped for the redo -- it never differentiated
+                                 # the methods and sat below the detectability frontier)
 
 # --- displacement stage -----------------------------------------------------
 DISP_METHOD = "PIV"          # single-method fallback (used when --methods omitted)
@@ -63,15 +65,20 @@ CONV_LADDER = {
 }
 CONV_TOL = 0.01              # rel. L2 change between successive settings -> converged
 
-# Displacement-side smoothing knob: a per-pass Gaussian sigma on the recovered
-# vector field (PIV's `piv_smooth`; the coarse->fine passes carry it). SEARCHED
-# like resolution -- one cached field per (resolution, smooth) pair, force J
-# adjudicates it jointly with (l1, l2). 0 = no displacement-side smoothing (clean
-# separation, L1+L2 do all the regularizing); 1.0 = the tool default (what real
-# users get). Only PIV exposes it; ILK/FFD carry a single None = "use the method
-# default", so the cache loop stays uniform across methods.
-SMOOTH_KNOB = {"PIV": "piv_smooth", "ILK": None, "FFD": None}
-SMOOTH_VALUES = {"PIV": [0.0, 1.0], "ILK": [None], "FFD": [None]}
+# Displacement-side smoothing knob: each method's INTERNAL regularizer -- PIV's
+# `piv_smooth` (per-pass Gaussian sigma on the vector field) and FFD's `ffd_elastic`
+# (Navier strain-energy weight in the registration loss). NOT searched against the
+# force objective (circular): for each (method, resolution) build_cache runs this
+# candidate grid, picks the smoothing by the GT-free L-CURVE corner of the photometric
+# warp residual vs field roughness (validated to match the disp-nRMSE oracle), and
+# caches that ONE field. The chosen value is recorded in the npz metadata. iLK has no
+# separate smoother (its radius is both scale and smoothing) -> a single None.
+SMOOTH_KNOB = {"PIV": "piv_smooth", "ILK": None, "FFD": "ffd_elastic"}
+SMOOTH_VALUES = {
+    "PIV": [0.0, 0.5, 1.0, 2.0, 4.0, 6.0],           # per-pass Gaussian sigma (sparse-grid cells)
+    "ILK": [None],
+    "FFD": [0.0, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0],  # elastic weight; <0.01 inert, optimum can reach >=10
+}
 DOWNSCALE_FACTOR = 1         # no binning: displacement + traction stay on the native
                              # 512 grid. Downsampling to 128 band-limited the traction
                              # (sharp adhesions unrecoverable) and the 128->512 rescale
@@ -112,8 +119,13 @@ CROP_SIZE = GT_REFERENCE_SIZE    # synthetic stacks are already 512²; no crop n
 # axis, and the traction magnitude is DERIVED per cell to hit it (Green's op is
 # linear, so one forward solve per footprint sets the scale). E and separation are
 # absorbed into the derived magnitude.
-FOOTPRINTS_UM = [round(x, 3) for x in np.geomspace(0.1, 5.0, 5)]    # Gaussian sigma, µm
-PEAK_DISP_PX = [round(x, 3) for x in np.geomspace(0.5, 50.0, 6)]    # target |u|max, px
+# Redo extrema: span the detectability frontier, not the dead corners. Old grid
+# (0.1-5 um x 0.5-50 px) left ~half the cells below the floor -- footprints <0.3 um
+# are sub-PSF (undetectable at any force) and u<1.3 px sits in the jitter noise floor,
+# while u=50 px is gross deformation that breaks the correlation windows. Same cell
+# count, better-placed: footprint 0.3-3 um, peak displacement 1.5-25 px.
+FOOTPRINTS_UM = [round(x, 3) for x in np.geomspace(0.3, 3.0, 5)]    # Gaussian sigma, µm
+PEAK_DISP_PX = [round(x, 3) for x in np.geomspace(1.5, 25.0, 6)]    # target |u|max, px
 SEPARATION_UM = 30.0             # centre-to-centre; on 512 keeps boundary leak ~8% (vs 11% at 40)
 AXIS_DEG = 45.0
 

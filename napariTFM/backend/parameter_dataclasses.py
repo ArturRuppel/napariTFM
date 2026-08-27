@@ -18,6 +18,8 @@ class DisplacementParameters:
     # Method + shared device selector.
     disp_method: str = "PIV"      # "PIV" | "Lucas-Kanade" | "FFD"
     disp_device: str = "auto"     # "auto" | "cuda" | "cpu" (shared by all methods)
+    disp_tune_selector: str = "L-curve"  # "L-curve" | "Masked holdout CV" for tune button
+    disp_remove_stage_drift: bool = False  # opt-in: phase-register frames before measuring
 
     # PIV (multi-pass FFT cross-correlation): one torch backend, CPU or CUDA.
     piv_window: int = 24          # final interrogation window (px); heuristic-sweep default (24-32)
@@ -177,6 +179,8 @@ class UnifiedParameters:
     # Displacement parameters (PIV / iLK / FFD backends; see DisplacementParameters)
     disp_method: str = "PIV"  # "PIV" | "Lucas-Kanade" | "FFD"
     disp_device: str = "auto"  # "auto" | "cuda" | "cpu" (shared by all methods)
+    disp_tune_selector: str = "L-curve"  # smoothing selector for Tune current frame
+    disp_remove_stage_drift: bool = False  # opt-in: phase-register frames before measuring
     piv_window: int = 24          # heuristic-sweep default (24-32)
     piv_overlap: float = 0.75
     piv_passes: int = 8

@@ -237,6 +237,10 @@ class PIVDisplacementAnalyzer(BaseDisplacementAnalyzer):
     """
 
     algorithm_name = "PIV"
+    smoothing_param_name = "piv_smooth"
+    smoothing_candidates = (0.0, 0.5, 1.0, 2.0, 4.0, 6.0)
+    convergence_param_name = "piv_passes"
+    convergence_candidates = (1, 2, 4, 6, 8, 10, 12)
 
     def __init__(self, params: Optional[DisplacementParameters] = None):
         super().__init__(params)

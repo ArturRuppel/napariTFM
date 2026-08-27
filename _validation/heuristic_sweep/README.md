@@ -30,18 +30,32 @@ uniformly through the DC-stripped, band-limited Green's operator, so minimizing
 it can rank displacement settings wrongly. Let the operator do the spectral
 weighting and measure the output.
 
-## Two-stage decomposition (see `sweep_config.py`)
+## Three stages (see `sweep_config.py`)
 
 1. **Displacement caching** (`build_cache.py`): per scene, sweep the *resolution*
    knob. At each resolution, raise the *convergence* knob until the field stops
    changing (`CONV_TOL`) and cache that converged field. Convergence is set by a
    convergence criterion, **not** by force score: an under-converged field is an
-   accidental second regularizer, and we want L1+L2 to do all the regularizing.
-2. **Force sweep** (`sweep_forces.py`): read the cached fields; for each, invert
-   over the full `FRAC1 × FRAC2` grid; upsample each recovery to the common
-   reference grid; record J and its components (+ nRMSE, corr). Resolution stays
-   *in* this search — one cached field per resolution, J adjudicates resolution
-   jointly with `(l1, l2)`.
+   accidental second regularizer, and we want the force-side regularizer to do all
+   the regularizing.
+2. **Oracle force caching** (`build_force_cache.py`): read the cached fields; for
+   each, run *both* regularizer paths over their own grids and keep the map that
+   scores best against GT — `FTTC + L2` over `LAMBDA_GRID`, and `FISTA + L1` over
+   `FRAC1`. Each cached map is therefore the achievable **ceiling** of that path on
+   that displacement field, and the full objective curve is stored alongside it, so
+   the cost of a wrong regularization is recoverable without re-solving. Resolution
+   stays *in* the search: one cached field per resolution, the objective adjudicates
+   resolution jointly with the regularizer.
+3. **Rendering and analysis** (`render_cache.py`, then `analyze.py`): the renderer
+   bakes one 3×3 comparison card per (condition, scene, displacement input) plus a
+   tidy `renders/index.csv`; `analyze.py` reduces that index and the stored curves
+   into the report's figures. `browse.py` is a thin viewer over the same cards.
+
+> The earlier design swept the full elastic-net `FRAC1 × FRAC2` grid through a
+> `sweep_forces.py` driver into `results/*.csv`. That was retired: the oracle cache
+> subsumes it (it answers "what is each path's ceiling?" directly instead of by
+> exhaustive search), and the pure-L1 and pure-L2 paths turned out to bracket the
+> mixed grid. `scoring.py` keeps the GT and metric primitives that driver owned.
 
 ## Why a balanced pair, never a monopole
 
@@ -108,7 +122,7 @@ as the dipole run does. These land in their own condition dir (`cell_s6j1`).
 The contract inverts in one key place: **for a cell scene the GT is the stored
 `gt_traction.npy` field, not the `scene.toml`.** There is no `[pair]` block and
 nothing is rasterized from the toml; the toml carries only metadata, and the scorer
-loads `gt_traction.npy` directly (see `sweep_forces.py`, `meta.kind == "cell"`).
+loads `gt_traction.npy` directly (see `build_force_cache.load_gt`, `meta.kind == "cell"`).
 
 | file             | meaning                                                            |
 |------------------|--------------------------------------------------------------------|
@@ -139,10 +153,10 @@ Because the diffuse field merges adjacent sources and its mean vector cancels, t
 per-adhesion Sabass terms (and so `J`) degenerate; cell scenes are therefore ranked
 on whole-field **nRMSE** — the blended error that is only a cross-check for dipoles
 but is well-defined here. The `field_metrics` (`mag_bias`, `ang_field`, `bg_leak`;
-see `field_metrics` in `sweep_forces.py`) are recorded as a diagnostic decomposition
-of that error, not the ranking key. Everything downstream (cache, sweep, resolution
-search) is identical to the dipole run; only the GT construction and the ranking
-metric differ.
+see `field_metrics` in `scoring.py`) are recorded as a diagnostic decomposition
+of that error, not the ranking key. Everything downstream (displacement cache, force
+cache, resolution search) is identical to the dipole run; only the GT construction and
+the ranking metric differ.
 
 ## Layout
 
@@ -151,8 +165,9 @@ $STAGE/ (= /helix/…/tfm_heuristic, set in env.sh, NOT in the repo)
   images/tif_stacks/{scenario*_dens*_NA*_expo*.tif,manifest.csv}          ← make_stacks.py
   scenes/<condition>/<scene_id>/{reference.tif,deformed.tif,scene.toml}  ← make_scenes.py (dipole)
   scenes/cell_s6j1/<scene_id>/{reference.tif,deformed.tif,gt_traction.npy,cell_mask.npy,scene.toml}  ← make_cells.py
-  cache/<condition>/<scene_id>/disp_res<k>.npz                            ← build_cache.py
-  results/                                                                ← sweep_forces.py
+  cache/<condition>/<scene_id>/disp_<method>_res<k>_sm0.npz               ← build_cache.py
+  cache/<condition>/<scene_id>/force_<method>_res<k>_sm0.npz              ← build_force_cache.py
+  renders/<condition>/<scene_id>/<input>.png + renders/index.csv          ← render_cache.py
   logs/                                                                   ← SLURM out/err
   code/                                                                   ← synced repo (sync_code.sh)
 ```
@@ -173,42 +188,61 @@ python make_scenes.py --images-dir "$STAGE/images/tif_stacks" --stage "$STAGE"  
 bash jobs/sync_code.sh          # stage repo code + napariTFM pkg -> $STAGE/code
 ssh aruppel@maestro.pasteur.fr
 source /helix/…/tfm_heuristic/code/env.sh   # sets STAGE, PYTHONPATH
-bash jobs/submit.sh cache        # displacement cache (GPU array over scenes)
-bash jobs/submit.sh sweep        # force sweep (after cache completes)
-sbatch jobs/sweep.sbatch        # force sweep -> results/
+bash jobs/submit.sh pipeline     # displacement cache (GPU) -> oracle force cache, chained
+#   or run the stages separately:
+#   bash jobs/submit.sh cache               # stage 1 only
+#   bash jobs/submit.sh force --after JOBID # stage 2 only
+```
+
+Then, back where the stage is readable:
+
+```bash
+python render_cache.py --stage "$STAGE" --workers 8   # cards + renders/index.csv
 ```
 
 ## Reproducing the report
 
 The findings are written up in
 [`docs/specs/2026-07-20-heuristic-sweep-method-parameter-selection.md`](../../docs/specs/2026-07-20-heuristic-sweep-method-parameter-selection.md).
-Every figure in that report is regenerated by a script here, from the same
-`results/*.csv` shards the sweep produces. The scripts read the stage from
-`$STAGE` (or `--stage`), so `source env.sh` first; no path is baked in.
-
-The cross-method sweep caches all three displacement methods per scene
-(`disp_<method>_res<k>.npz`), so `results/` carries a `method` column.
+Every figure in that report is regenerated by `analyze.py` from `renders/index.csv`
+and the objective curves stored in the force cache — no re-solving, seconds to run.
+The scripts read the stage from `$STAGE` (or `--stage`), so `source env.sh` first;
+no path is baked in.
 
 ```bash
-source env.sh                                    # sets STAGE (see above)
-IMG=../../docs/images                            # write straight into the report's images
+source env.sh                                     # sets STAGE (see above)
+IMG=../../docs/images                             # write straight into the report's images
 
-python aggregate.py       --outdir "$IMG"        # competence + winners, parameter heuristics
-python imaging_quality.py --outdir "$IMG"        # imaging-parameter drivers, recoverable envelope
-python compare_reg.py     --outdir "$IMG"        # L1 sensitivity vs parameter-free Bayesian-L2 (~15 min)
-python compare_methods.py --outdir "$IMG"        # illustrative best-J recoveries per method (dipoles)
-python cell_aggregate.py  --outdir "$IMG"        # diffuse-cell competence + L1 heuristic transfer
-python cell_examples.py   --outdir "$IMG"        # illustrative cell recoveries per method
-python cell_compare_reg.py --outdir "$IMG"       # L1 vs parameter-free Bayesian-L2 on cells
-python cell_confinement.py --outdir "$IMG"       # does mask confinement earn its keep? (re-inverts cache, no sweep)
+python analyze.py          --outdir "$IMG"        # all six report figures + sweep_summary.csv
+python analyze.py --clip-test                     # + does post-hoc mask clipping change the
+                                                  #   L1-vs-L2 verdict? (cells only, ~1 min)
 ```
 
-`cell_confinement.py` is the one analysis that consumes `cell_mask.npy`. It holds the
+**A warning about the ranked objective.** `J` contains `DTMS`, a reward for a clean background,
+and group-L1 zeroes the background by construction — so `J` structurally prefers L1. The fourth
+panel of the regularization figure re-scores the same configurations on criteria without a
+background term, and the verdict changes (L1 wins 89% on `J`, 56% on nRMSE, 19% on angular
+error). Do not read `J`-ranked results as a recommendation between the two regularizer paths;
+see the report's "What the objective was hiding".
+
+**`cell_confinement.py` is stale and its figure is no longer in the report.** It sweeps
+`fwd_mask_strength` 0→100 as if it were the old in-solver soft-penalty dial; commit `468cb38`
+turned that parameter into an on/off gate for *post-hoc* clipping in `fttc.py` and deleted the
+in-solver penalty from `forward_l1.py`. Its "soft" arm therefore now returns results identical
+to the no-mask baseline, and only its post-hoc arm is meaningful (that arm is what the report's
+confinement table quotes). Rewrite it against the current design before trusting it again.
+
+Two analyses stand outside the report because they answer questions about the
+*solver* rather than about the regimes, and both re-solve rather than reading the
+cache: `compare_l2_reg.py` (GCV vs Bayesian vs GT-optimal λ on the L2 path) and
+`compare_devices.py` (CPU/GPU parity).
+
+`cell_confinement.py` remains the one analysis that consumes `cell_mask.npy`. It holds the
 displacement (cached PIV window-24) and regularization (shipped default `l1=0.05`, `l2=0`)
 fixed and varies **only** the mask: `fwd_mask_strength` 0→100 with the cell outline, against
-the no-mask baseline, with the GT-support mask as an oracle ceiling. It re-inverts the existing
-cache (no new sweep). If the stage was generated before `make_cells.py` saved `cell_mask.npy`,
-pass `--scenarios-dir <benchmarkTFM>/benchmarks/scenarios` once to backfill the masks without
+the no-mask baseline, with the GT-support mask as an oracle ceiling. If the stage was
+generated before `make_cells.py` saved `cell_mask.npy`, pass
+`--scenarios-dir <benchmarkTFM>/benchmarks/scenarios` once to backfill the masks without
 touching `reference.tif`/`deformed.tif` (so the displacement cache stays valid).
 
 The diffuse-cell scenes (condition `cell_s6j1`) are staged from the benchmarkTFM synth cells by
@@ -219,22 +253,21 @@ the sweep (needs the benchmarkTFM scenarios locally):
 ```bash
 python make_cells.py --scenarios-dir <benchmarkTFM>/benchmarks/scenarios \
                      --images-dir "$STAGE/images/tif_stacks" --stage "$STAGE"
-# then the usual two-stage pipeline, scoped to the cell condition:
+# then the usual pipeline, scoped to the cell condition:
 SCENE_GLOB="cell_s6j1/*" bash jobs/submit.sh pipeline    # on Maestro, after source env.sh
 ```
 
 Figure map (script → files in `docs/images/`, and the report section they serve):
 
-| script | figures | report section |
+| script | figure | report section |
 |---|---|---|
-| `aggregate.py` | `heuristic-sweep-competence.png`, `heuristic-sweep-parameters.png` | Which method wins where; Regularization |
-| `imaging_quality.py` | `heuristic-sweep-imaging-drivers.png`, `heuristic-sweep-imaging-envelope.png` | Imaging parameters; Recoverable envelope |
-| `compare_reg.py` | `heuristic-sweep-regularization-sensitivity.png` (+ `reg_compare.csv`) | The cost of a wrong L1 |
-| `compare_methods.py` | `heuristic-sweep-examples.png` | What winning looks like |
-| `cell_aggregate.py` | `heuristic-sweep-cells-competence.png` | Diffuse fields: realistic cells |
-| `cell_examples.py` | `heuristic-sweep-cells-examples.png` | Diffuse fields: realistic cells |
-| `cell_compare_reg.py` | `heuristic-sweep-cells-regularization.png` (+ `cell_reg_compare.csv`) | Does smoothness win on diffuse fields? |
-| `cell_confinement.py` | `heuristic-sweep-cells-confinement.png` (+ `cell_confinement.csv`) | Does mask confinement earn its keep? |
+| `analyze.py` | `heuristic-sweep-competence.png` | Which method wins where |
+| `analyze.py` | `heuristic-sweep-parameters.png` | Sparsity or smoothness? |
+| `analyze.py` | `heuristic-sweep-regularization.png` | The cost of a wrong regularization; What the objective was hiding |
+| `analyze.py` | `heuristic-sweep-examples.png` | What the ceiling looks like |
+| `analyze.py` | `heuristic-sweep-imaging.png` | How imaging parameters set quality |
+| `analyze.py` | `heuristic-sweep-cells.png` | Diffuse fields: realistic cells |
+| `analyze.py` | `heuristic-sweep-edge-artifact.png` | Where the artifacts actually are |
 
 Omit `--outdir` and each script writes to `figures/` (gitignored) instead, for
 scratch runs that should not touch the committed report images.

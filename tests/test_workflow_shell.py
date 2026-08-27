@@ -25,6 +25,8 @@ class _StubParameterManager(QObject):
             "outer_iterations": 5,
             "disp_method": "PIV",
             "disp_device": "auto",
+            "disp_tune_selector": "L-curve",
+            "disp_remove_stage_drift": False,
             "piv_window": 16,
             "piv_overlap": 0.75,
             "piv_passes": 8,
@@ -1763,6 +1765,7 @@ def test_workflow_parameter_panel_exposes_one_control_per_managed_parameter(app)
         "pixel_size",
         "piv_passes",
         "piv_window",
+        "disp_remove_stage_drift",
         "young_modulus",
         "force_method",
         "bism_regularization",
@@ -1780,6 +1783,19 @@ def test_workflow_parameter_panel_writes_through_ui_parameter_api(app):
     panel.parameter_controls["young_modulus"].setValue(8.5)
 
     assert manager.ui_writes[-1] == ("young_modulus", 8.5)
+
+
+def test_workflow_parameter_panel_writes_stage_drift_checkbox(app):
+    manager = _StubParameterManager()
+    panel = _widget.WorkflowParameterPanel(manager, section_titles=("Displacement",))
+
+    checkbox = panel.parameter_controls["disp_remove_stage_drift"]
+    assert isinstance(checkbox, QCheckBox)
+
+    checkbox.setChecked(True)
+
+    assert manager.get_ui_parameter("disp_remove_stage_drift") is True
+    assert manager.ui_writes[-1] == ("disp_remove_stage_drift", True)
 
 
 def test_workflow_parameter_panel_syncs_from_parameter_manager(app):

@@ -26,7 +26,7 @@ import tifffile
 from scipy.ndimage import map_coordinates
 
 import sweep_config as C
-from sweep_forces import rasterize_gt
+from scoring import rasterize_gt
 from napariTFM.backend.forward_tfm import _greens_operator
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 

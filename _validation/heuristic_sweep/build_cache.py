@@ -13,14 +13,16 @@ Usage (paths come from $STAGE; see env.sh):
                           [--method PIV]
 """
 from __future__ import annotations
-import argparse, os, sys
+import argparse, os, sys, tomllib
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "4")
 os.environ.setdefault("OMP_NUM_THREADS", "4")
 import numpy as np
 from PIL import Image
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, map_coordinates, zoom
 
 import sweep_config as C
+from scoring import rasterize_gt
+from make_scenes import greens_displacement
 from napariTFM.backend.displacement_analysis import calculate_displacement_field
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 
@@ -70,6 +72,66 @@ def converge(ref, dfm, method, res_val, smooth_val=None):
     return prev, C.CONV_LADDER[method][-1], float("nan")   # never settled -> last
 
 
+# --------------------------------------------------------------------------- #
+# Discrepancy smoothing selection. For each (method, resolution) we solve at every
+# candidate smoothing and keep the LARGEST smoothing whose photometric warp residual
+# still sits within tol* the noise floor. The floor is the residual of the TRUE (GT)
+# displacement field -- the irreducible image mismatch from jitter+photon noise -- so
+# "residual back up to the floor" means "stop smoothing once you're only fitting
+# noise." Validated to reproduce the disp-nRMSE-vs-GT optimum across regimes (an
+# L-curve corner on the same residual/roughness does NOT: the residual has no sharp
+# corner). The floor uses GT for one scalar per scene only; it is fully decoupled from
+# the downstream force objective (not circular). One field cached per (method, res).
+# --------------------------------------------------------------------------- #
+DISCREPANCY_TOL = 1.05
+
+
+def _to_full_px(field, N):
+    """(h,h,2) um displacement -> (2,N,N) px ([0]=x,[1]=y) for warping N-sized images."""
+    h = field.shape[0]
+    up = field if h == N else np.stack(
+        [zoom(field[..., c], N / h, order=1) for c in range(2)], axis=-1)
+    return np.stack([up[..., 0], up[..., 1]], axis=0) / C.PIXEL_SIZE_UM
+
+
+def _warp(img, upx):
+    N = img.shape[0]
+    yy, xx = np.mgrid[0:N, 0:N]
+    return map_coordinates(img, [yy + upx[1], xx + upx[0]], order=1, mode="nearest")
+
+
+def _resid(ref, dfm, field):
+    """Symmetric photometric warp residual (matches the PIV objective): warp ref by
+    -u/2 and dfm by +u/2, RMS of the leftover mismatch, normalized by image std.
+    Lower = the field better explains the observed motion."""
+    upx = _to_full_px(field, ref.shape[0])
+    a = _warp(ref, -0.5 * upx); b = _warp(dfm, 0.5 * upx)
+    return float(np.sqrt(((a - b) ** 2).mean()) / (ref.std() + 1e-9))
+
+
+def _roughness(field):
+    gx = np.gradient(field[..., 0]); gy = np.gradient(field[..., 1])
+    return float((gx[0] ** 2 + gx[1] ** 2 + gy[0] ** 2 + gy[1] ** 2).mean())
+
+
+def gt_floor(stage, condition, scene_id, ref, dfm):
+    """Noise floor = photometric residual of the analytic GT displacement field.
+    Dipoles only (GT is analytic via rasterize_gt -> greens_displacement)."""
+    N = C.GT_REFERENCE_SIZE
+    with open(os.path.join(stage, "scenes", condition, scene_id, "scene.toml"), "rb") as fh:
+        sc = tomllib.load(fh)
+    gt, _ = rasterize_gt(sc, N)
+    u_gt = np.moveaxis(greens_displacement(gt, N), 0, -1).astype(np.float32)   # (N,N,2) um
+    return _resid(ref, dfm, u_gt)
+
+
+def _discrepancy_pick(resids, floor):
+    """Largest-smoothing index whose residual is within DISCREPANCY_TOL*floor;
+    fall back to the min-residual candidate if none qualify."""
+    ok = [i for i, r in enumerate(resids) if r <= DISCREPANCY_TOL * floor]
+    return max(ok) if ok else int(np.argmin(resids))
+
+
 def cache_scene(stage, condition, scene_id, methods):
     """Cache every method x resolution for one scene. Returns the number of
     fields written. A method that raises (e.g. FFD on a node without CUDA) is
@@ -80,35 +142,52 @@ def cache_scene(stage, condition, scene_id, methods):
     dfm = prep(load(os.path.join(sdir, "deformed.tif")))
     outdir = os.path.join(stage, "cache", condition, scene_id)
     os.makedirs(outdir, exist_ok=True)
+    floor = gt_floor(stage, condition, scene_id, ref, dfm)   # noise floor, one per scene
     n_written = 0
     for method in methods:
-        smooths = C.SMOOTH_VALUES.get(method, [None])
+        cands = C.SMOOTH_VALUES.get(method, [None])
+        multi = len(cands) > 1
         for k, res_val in enumerate(C.RES_VALUES[method]):
-            for si, smooth_val in enumerate(smooths):
+            # Solve at every candidate smoothing, score each by its warp residual, and
+            # keep the largest smoothing still within tol*floor (discrepancy). One
+            # field cached per (method, resolution).
+            solved = []
+            for smooth_val in cands:
                 try:
                     field, conv_val, rel = converge(ref, dfm, method, res_val, smooth_val)
                 except Exception as exc:                   # noqa: BLE001 -- log & skip
-                    print(f"  [{scene_id}] {method} res#{k}={res_val} sm#{si}={smooth_val} "
+                    print(f"  [{scene_id}] {method} res#{k}={res_val} sm={smooth_val} "
                           f"FAILED: {type(exc).__name__}: {exc}", flush=True)
                     continue
-                out = os.path.join(outdir, f"disp_{method}_res{k}_sm{si}.npz")
-                # Stored as float16: displacement fields are good to ~2 sig figs,
-                # float16's 10-bit mantissa (~0.05% rel) is well below solver noise,
-                # and it halves the cache (savez DEFLATE is ~useless on float32
-                # mantissa entropy). Readers promote back to float32 on load.
-                np.savez_compressed(
-                    out, field=field.astype(np.float16),
-                    method=method, res_knob=C.RES_KNOB[method], res_val=res_val,
-                    conv_knob=C.CONV_KNOB[method], conv_val=conv_val, conv_rel=rel,
-                    smooth_knob=str(C.SMOOTH_KNOB.get(method)),
-                    smooth_val=(np.nan if smooth_val is None else float(smooth_val)),
-                    downscale=C.DOWNSCALE_FACTOR, pixel_size=C.PIXEL_SIZE_UM,
-                )
-                n_written += 1
-                print(f"  [{scene_id}] {method} res {C.RES_KNOB[method]}={res_val:<5} "
-                      f"sm={smooth_val} conv {C.CONV_KNOB[method]}={conv_val} "
-                      f"(rel={rel:.4f}) grid={field.shape[:2]} -> {os.path.basename(out)}",
-                      flush=True)
+                rs = _resid(ref, dfm, field) if multi else float("nan")
+                rg = _roughness(field) if multi else float("nan")
+                solved.append((smooth_val, field, conv_val, rel, rs, rg))
+            if not solved:
+                continue
+            pick = (_discrepancy_pick([s[4] for s in solved], floor)
+                    if len(solved) > 1 else 0)
+            smooth_val, field, conv_val, rel, rs, rg = solved[pick]
+            out = os.path.join(outdir, f"disp_{method}_res{k}_sm0.npz")
+            # Stored as float16: displacement fields are good to ~2 sig figs, float16's
+            # 10-bit mantissa (~0.05% rel) is well below solver noise, and it halves the
+            # cache (savez DEFLATE is ~useless on float32 mantissa entropy). Readers
+            # promote back to float32 on load. smooth_val = the L-curve-chosen knob.
+            np.savez_compressed(
+                out, field=field.astype(np.float16),
+                method=method, res_knob=C.RES_KNOB[method], res_val=res_val,
+                conv_knob=C.CONV_KNOB[method], conv_val=conv_val, conv_rel=rel,
+                smooth_knob=str(C.SMOOTH_KNOB.get(method)),
+                smooth_val=(np.nan if smooth_val is None else float(smooth_val)),
+                smooth_resid=rs, smooth_rough=rg, smooth_floor=floor,
+                smooth_candidates=np.asarray(
+                    [np.nan if c is None else float(c) for c in cands], np.float32),
+                downscale=C.DOWNSCALE_FACTOR, pixel_size=C.PIXEL_SIZE_UM,
+            )
+            n_written += 1
+            print(f"  [{scene_id}] {method} res {C.RES_KNOB[method]}={res_val:<5} "
+                  f"discrepancy sm={smooth_val} (of {len(solved)}/{len(cands)}; "
+                  f"resid {rs:.4f} vs floor {floor:.4f}) conv {C.CONV_KNOB[method]}={conv_val} "
+                  f"grid={field.shape[:2]} -> {os.path.basename(out)}", flush=True)
     return n_written
 
 

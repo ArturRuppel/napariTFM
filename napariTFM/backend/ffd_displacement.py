@@ -50,6 +50,10 @@ class FFDDisplacementAnalyzer(BaseDisplacementAnalyzer):
     """Estimate displacement by grid-pyramid free-form deformation (GPU-only)."""
 
     algorithm_name = "FFD"
+    smoothing_param_name = "ffd_elastic"
+    smoothing_candidates = (0.0, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0)
+    convergence_param_name = "ffd_num_iters"
+    convergence_candidates = (10, 25, 50, 75, 100)
 
     def __init__(self, params: Optional[DisplacementParameters] = None):
         super().__init__(params)

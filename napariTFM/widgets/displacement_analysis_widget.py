@@ -149,6 +149,41 @@ class DisplacementController(VectorStageController):
         )
         return True
 
+    def tune_current_frame(self, *, completion=None):
+        """Tune current-frame displacement parameters, write them back, then preview.
+
+        This is intentionally explicit and opt-in: the worker runs a small
+        candidate grid for the selected method's convergence and smoothing knobs,
+        so it costs several full solves. The chosen values are copied into the UI
+        parameters before the preview is painted, making subsequent runs fully
+        reproducible from visible settings.
+        """
+        try:
+            self._validate()
+        except Exception as e:
+            QMessageBox.warning(None, "Warning", str(e))
+            return False
+
+        current_frame = self._current_frame()
+        moving = self.data_manager.bead_stack[current_frame]
+        reference = self.data_manager.reference
+        params = self.parameter_manager.get_displacement_parameters()
+        mask = self._confinement_mask(params, frame=current_frame)
+
+        worker = self._tune_preview_worker(reference, moving, params, mask)
+
+        def _apply_and_show(result):
+            self._apply_tuned_parameters(result)
+            self._show_displacement_preview(result, result.parameters)
+
+        self._start_preview_worker(
+            worker,
+            _apply_and_show,
+            status="Tuning displacement parameters for current frame...",
+            completion=completion,
+        )
+        return True
+
     @thread_worker
     def _preview_worker(self, reference, moving, params, mask):
         """Single-frame displacement solve (worker thread; no napari access)."""
@@ -162,6 +197,32 @@ class DisplacementController(VectorStageController):
         if final_result is None:
             raise RuntimeError("Preview calculation failed")
         return final_result
+
+    @thread_worker
+    def _tune_preview_worker(self, reference, moving, params, mask):
+        """Single-frame parameter tune + displacement solve (worker thread)."""
+        gen = calculate_displacement_field(
+            reference, moving, params, mask=mask, tune_parameters=True,
+        )
+        final_result = None
+        try:
+            while True:
+                next(gen)
+        except StopIteration as e:
+            final_result = e.value
+        if final_result is None:
+            raise RuntimeError("Displacement parameter tuning failed")
+        return final_result
+
+    def _apply_tuned_parameters(self, final_result):
+        metadata = getattr(final_result, "metadata", None) or {}
+        frames = metadata.get("parameter_tuning", {}).get("frames", [])
+        if not frames:
+            self.progress_updated.emit(100, "No tunable displacement parameters for this method")
+            return
+        chosen = frames[0].get("chosen", {})
+        for name in chosen:
+            self.parameter_manager.set_parameter(name, getattr(final_result.parameters, name))
 
     def _show_displacement_preview(self, final_result, params):
         """Paint the previewed displacement field (GUI thread)."""
@@ -446,7 +507,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
             visualization_manager=visualization_manager,
         )
 
-        self._action_enabled = {"run": False, "preview": False, "cancel": True}
+        self._action_enabled = {"run": False, "preview": False, "tune": False, "cancel": True}
 
         # Set up the UI
         self._setup_ui()
@@ -499,6 +560,9 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
     def preview_action(self):
         return self.controller.preview_displacement()
 
+    def tune_action(self):
+        return self.controller.tune_current_frame()
+
     def cancel_action(self):
         self.controller.cancel()
 
@@ -510,6 +574,7 @@ class DisplacementAnalysisWidget(BaseAnalysisWidget):
         can_analyze = has_reference and has_beads
         self._action_enabled["preview"] = can_analyze
         self._action_enabled["run"] = can_analyze
+        self._action_enabled["tune"] = can_analyze
         self._action_enabled["cancel"] = True
         self.action_states_changed.emit()
 

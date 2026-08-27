@@ -6,6 +6,7 @@ GPU-parity tests are gated behind CUDA. FFD is GPU-only, so its run test is
 CUDA-gated; its unavailable path (no GPU) is checked directly.
 """
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,12 @@ from napariTFM.backend.displacement_analysis import (
     build_analyzer,
     calculate_displacement_field,
     validate_displacement_image,
+)
+from napariTFM.backend._displacement_base import (
+    BaseDisplacementAnalyzer,
+    autotune_parameter,
+    pick_lcurve_corner,
+    pick_residual_plateau,
 )
 from napariTFM.backend.ffd_displacement import FFDDisplacementAnalyzer
 from napariTFM.backend.ilk_displacement import ILKDisplacementAnalyzer
@@ -46,6 +53,117 @@ def _textured_image(seed=0, size=128):
     rng = np.random.default_rng(seed)
     img = rng.standard_normal((size, size))
     return ndimage.gaussian_filter(img, sigma=2.0).astype(np.float64)
+
+
+# ---------------------------------------------------------- auto-tuning #
+def test_lcurve_corner_picker_finds_synthetic_corner():
+    candidates = [0.0, 0.5, 1.0, 2.0, 4.0]
+    roughness = [100.0, 40.0, 10.0, 8.0, 7.0]
+    residual = [0.7, 0.75, 1.0, 4.0, 12.0]
+
+    idx, reason = pick_lcurve_corner(candidates, residual, roughness)
+
+    assert idx == 2
+    assert reason == "lcurve_corner"
+
+
+def test_lcurve_corner_picker_falls_back_to_residual_plateau():
+    candidates = [0.0, 1.0]
+    residual = [1.0, 1.04]
+    roughness = [10.0, 1.0]
+
+    idx, reason = pick_lcurve_corner(candidates, residual, roughness)
+
+    assert idx == 1
+    assert reason == "fallback_largest_candidate_within_5pct_min_residual"
+
+
+def test_residual_plateau_picker_prefers_cheapest_converged_candidate():
+    candidates = [1, 2, 4, 8]
+    residual = [1.4, 1.01, 1.0, 0.99]
+
+    idx, reason = pick_residual_plateau(candidates, residual)
+
+    assert idx == 1
+    assert reason == "residual_plateau_first_within_5pct_min"
+
+
+def test_masked_holdout_cv_selector_requires_mask():
+    class FakeAnalyzer(BaseDisplacementAnalyzer):
+        smoothing_param_name = "smooth"
+        algorithm_name = "fake"
+
+        def __init__(self):
+            self.params = SimpleNamespace(smooth=0.0)
+
+        def calculate_flow(self, reference, moving, weight=None):
+            h, w = reference.shape
+            flow = np.zeros((h, w, 2), dtype=np.float32)
+            flow[..., 0] = float(self.params.smooth)
+            return flow
+
+    ref = _textured_image(seed=201, size=32)
+    moving = ndimage.shift(ref, shift=(0.0, 2.0), order=3, mode="reflect")
+
+    with pytest.raises(ValueError, match="needs a displacement mask"):
+        autotune_parameter(
+            FakeAnalyzer(), ref, moving,
+            param_name="smooth", candidates=[0.0, 1.0, 2.0],
+            selector="masked_cv", weight=None,
+        )
+
+
+def test_masked_holdout_cv_selector_picks_lowest_validation_residual():
+    class FakeAnalyzer(BaseDisplacementAnalyzer):
+        smoothing_param_name = "smooth"
+        algorithm_name = "fake"
+
+        def __init__(self):
+            self.params = SimpleNamespace(smooth=0.0)
+
+        def calculate_flow(self, reference, moving, weight=None):
+            h, w = reference.shape
+            flow = np.zeros((h, w, 2), dtype=np.float32)
+            flow[..., 0] = float(self.params.smooth)
+            return flow
+
+    ref = _textured_image(seed=202, size=48)
+    moving = ndimage.shift(ref, shift=(0.0, 2.0), order=3, mode="reflect")
+    weight = np.zeros_like(ref, dtype=np.float32)
+    weight[8:40, 8:40] = 1.0
+
+    _field, chosen, diag = autotune_parameter(
+        FakeAnalyzer(), ref, moving,
+        param_name="smooth", candidates=[0.0, 1.0, 2.0, 3.0],
+        selector="masked_cv", weight=weight,
+    )
+
+    assert chosen == 2.0
+    assert diag["selection"] == "min_validation_residual"
+    assert diag["candidates"][0]["score_pixels"] > 0
+
+
+def test_ilk_tuning_is_noop_and_does_not_error():
+    ref = _textured_image(seed=101, size=64)
+    moving = ndimage.shift(ref, shift=(0.5, -0.25), order=3, mode="reflect")
+    params = _params(
+        disp_method="Lucas-Kanade", ilk_radius=5, ilk_num_warp=3, downscale_factor=1,
+    )
+
+    gen = calculate_displacement_field(ref, moving, params, tune_parameters=True)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as e:
+        result = e.value
+
+    assert params.ilk_radius == 5
+    assert params.ilk_num_warp == 3
+    assert result.displacement_field.shape == (1, 64, 64, 2)
+    assert np.isfinite(result.displacement_field).all()
+    frame_diag = result.metadata["parameter_tuning"]["frames"][0]
+    assert frame_diag["selection"] == "no_tunable_parameters"
+    assert frame_diag["chosen"] == {}
 
 
 # ------------------------------------------------------------- dispatch #
@@ -284,10 +402,9 @@ def test_backend_calculates_displacement_result_with_progress():
     assert np.isfinite(result.displacement_field).all()
 
 
-def test_registration_folds_interframe_drift_into_drift_pixels():
-    """Registration removes bulk stage drift before measurement: each frame is
-    aligned to the anchor (first frame), so the reported field is ~0 for pure drift
-    and drift_pixels captures the shift (pixels, ordered [u_x, u_y])."""
+def test_piv_preserves_uniform_displacement_by_default():
+    """Default displacement analysis measures the image pair directly, so a global
+    displacement component remains in the returned field."""
     base = _textured_image(seed=11, size=160)
     dx, dy = 6.0, -4.0                       # columns (x), rows (y): a bulk stage drift
     frame0 = base                            # anchor: relaxed, no deformation
@@ -302,12 +419,39 @@ def test_registration_folds_interframe_drift_into_drift_pixels():
     except StopIteration as exc:
         result = exc.value
 
-    # Frame 1's bulk drift is captured (~ (dx, dy)); frame 0 is the anchor (~0).
+    assert np.abs(result.drift_pixels).max() == 0.0
+
+    m = slice(48, -48)
+    field = result.displacement_field[1]
+    assert abs(np.median(field[m, m, 0]) - dx) < 0.5
+    assert abs(np.median(field[m, m, 1]) - dy) < 0.5
+
+
+def test_stage_drift_removal_is_opt_in():
+    """The checkbox path preserves the older behaviour: align to the first target
+    frame, report pure stage drift in drift_pixels, and remove it from the field."""
+    base = _textured_image(seed=11, size=160)
+    dx, dy = 6.0, -4.0
+    frame0 = base
+    frame1 = ndimage.shift(base, shift=(dy, dx), order=3, mode="nearest")
+    stack = np.stack([frame0, frame1])
+
+    params = _params(
+        pixel_size=1.0,
+        downscale_factor=1,
+        disp_remove_stage_drift=True,
+    )
+    gen = calculate_displacement_field(base, stack, params)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as exc:
+        result = exc.value
+
     assert abs(result.drift_pixels[1, 0] - dx) < 0.3
     assert abs(result.drift_pixels[1, 1] - dy) < 0.3
     assert np.abs(result.drift_pixels[0]).max() < 0.3
 
-    # ...and removed from every reported field, which is ~0 (pure drift, no strain).
     m = slice(48, -48)
     for f in (0, 1):
         field = result.displacement_field[f]
@@ -328,7 +472,7 @@ def test_registration_keeps_localized_deformation_over_drift():
     frame1 = ndimage.map_coordinates(base, [yy, xx - (bump + drift_x)], order=3, mode="nearest")
     stack = np.stack([frame0, frame1])
 
-    params = _params(pixel_size=1.0, downscale_factor=1)
+    params = _params(pixel_size=1.0, downscale_factor=1, disp_remove_stage_drift=True)
     gen = calculate_displacement_field(base, stack, params)
     try:
         while True:
@@ -433,7 +577,13 @@ def test_registration_removes_large_drift_for_all_methods(method):
     frame1 = ndimage.shift(base, shift=(-6.0, 8.0), order=3, mode="nearest")  # ~10 px drift
     stack = np.stack([base, frame1])
 
-    params = _params(disp_method=method, disp_device="cpu", pixel_size=1.0, downscale_factor=1)
+    params = _params(
+        disp_method=method,
+        disp_device="cpu",
+        pixel_size=1.0,
+        downscale_factor=1,
+        disp_remove_stage_drift=True,
+    )
     gen = calculate_displacement_field(base, stack, params)
     try:
         while True:

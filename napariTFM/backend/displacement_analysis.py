@@ -4,7 +4,11 @@ from typing import Generator, Optional, Tuple, Union
 
 import numpy as np
 
-from napariTFM.backend._displacement_base import BaseDisplacementAnalyzer, resolve_gpu_device
+from napariTFM.backend._displacement_base import (
+    BaseDisplacementAnalyzer,
+    autotune_displacement_parameters,
+    resolve_gpu_device,
+)
 from napariTFM.backend.parameter_dataclasses import DisplacementParameters
 from napariTFM.backend.ffd_displacement import FFDDisplacementAnalyzer
 from napariTFM.backend.ilk_displacement import ILKDisplacementAnalyzer
@@ -77,6 +81,7 @@ class DisplacementResult:
     # that removed it before measurement; retained so the same shift registers
     # the cell channel into the anchor frame for overlays.
     drift_pixels: Optional[np.ndarray] = None
+    metadata: Optional[dict] = None
 
 
 def validate_displacement_image(image: np.ndarray) -> Tuple[bool, str]:
@@ -130,17 +135,19 @@ def calculate_displacement_field(
     analyzer: Optional[BaseDisplacementAnalyzer] = None,
     drift_cache: Optional[Union[str, Path]] = None,
     mask: Optional[np.ndarray] = None,
+    tune_parameters: bool = False,
 ) -> Generator[Tuple[np.ndarray, int, int], None, DisplacementResult]:
     """Calculate the displacement field between a reference image and target image(s).
 
     Dispatches to the backend selected by ``params.disp_method`` (PIV, Lucas-Kanade,
-    or FFD) via :func:`build_analyzer`. Before measuring, it removes bulk stage drift
-    by rigidly registering the reference and every target frame to a common anchor
-    (the first target frame) with parameter-free phase cross-correlation, so the
-    displacement method only ever sees cell-induced deformation, not drift. This is
-    what keeps the residual within each method's capture range (critical for the
-    capture-limited Lucas-Kanade and FFD). The per-frame drift is recorded in
-    ``drift_pixels`` and reused to register the cell channel for overlays.
+    or FFD) via :func:`build_analyzer`. By default, the backend measures the
+    reference/target pair directly so a uniform displacement component remains in
+    the returned field. If ``params.disp_remove_stage_drift`` is true, it first
+    rigidly registers the reference and every target frame to a common anchor (the
+    first target frame) with parameter-free phase cross-correlation, so the
+    displacement method sees deformation after bulk stage drift removal. In that
+    opt-in mode the per-frame drift is recorded in ``drift_pixels`` and reused to
+    register the cell channel for overlays.
 
     Registering by a shift fabricates a border strip (edge replication), so the
     measurement is confined to the interior region every registered frame still
@@ -159,13 +166,20 @@ def calculate_displacement_field(
     box corners pull the control grid. Off by default; when off, or when no mask is
     given, behaviour is identical to the full-frame path.
 
-    ``drift_cache`` (optional) is a CSV path the estimated drift is persisted to
-    and read back from. Registration drift depends only on the reference and the
-    bead frames, not on the displacement method or its knobs, so a tune-loop that
-    re-runs the same folder can skip re-estimation. The cache is keyed by a content
-    fingerprint of the inputs (see :func:`registration.drift_fingerprint`): any
-    change to the images fails safe to a fresh estimate. The resample still runs
-    every frame, so the cache saves the estimate, not the whole registration step.
+    ``drift_cache`` (optional) is used only when ``disp_remove_stage_drift`` is
+    true. It is a CSV path the estimated drift is persisted to and read back from.
+    Registration drift depends only on the reference and the bead frames, not on the
+    displacement method or its knobs, so a tune-loop that re-runs the same folder
+    can skip re-estimation. The cache is keyed by a content fingerprint of the
+    inputs (see :func:`registration.drift_fingerprint`): any change to the images
+    fails safe to a fresh estimate. The resample still runs every frame, so the
+    cache saves the estimate, not the whole registration step.
+
+    ``tune_parameters`` is reserved for the explicit UI "tune current frame"
+    action. When true, each frame's crop runs a small candidate grid that tunes
+    only the selected backend's declared convergence and smoothing parameters,
+    then returns the chosen field and diagnostics. Normal preview/run calls leave
+    it false so parameters are exactly the visible manual values.
 
     Yields per-frame displacement fields in physical units with 1-based frame
     progress, and returns a complete :class:`DisplacementResult` when exhausted.
@@ -196,55 +210,67 @@ def calculate_displacement_field(
 
     displacement_field_stack = np.zeros(displacement_field_shape, dtype=np.float32)
     drift_pixels = np.zeros((total_frames, 2), dtype=np.float32)
+    tuning_frames = []
 
-    # Register everything to the first target frame (the anchor) so bulk stage drift
-    # is gone before the displacement method runs. Estimate every bulk drift first
-    # (reference + all frames): the whole set is needed up front to fix the common
-    # measurement region. drift_pixels[frame] is that frame's bulk (u_x, u_y) drift
-    # relative to the anchor, reused to move the cell channel into the same frame
-    # downstream (batch_analysis._cells_for_overlay). FTTC nulls the DC mode, so the
-    # shared anchor leaves traction unchanged.
-    anchor = target[0]
-    # GPU phase-correlation + grid_sample resample when the device is CUDA (drift
-    # bit-identical to the scikit-image reference), else the CPU reference. Bound to
-    # the fixed anchor so its spectrum is computed once for the whole stack.
-    estimate, apply = _registration_ops(anchor, params)
-
-    # Reuse a persisted drift estimate when the inputs are unchanged (a tune-loop
-    # re-running the same folder), else estimate and persist. The fingerprint keys
-    # the cache to the exact reference + bead frames, so a swapped/edited dataset
-    # fails safe to recomputation rather than silently reusing stale drift.
-    cached = None
-    fingerprint = None
-    if drift_cache is not None:
-        fingerprint = drift_fingerprint(reference, target)
-        cached = load_drift_csv(drift_cache, total_frames, fingerprint)
-
-    if cached is not None:
-        ref_drift, drift_pixels = cached
-    else:
-        ref_drift = estimate(reference)
-        for frame in range(total_frames):
-            drift_pixels[frame] = estimate(target[frame])
-        if drift_cache is not None:
-            save_drift_csv(drift_cache, ref_drift, drift_pixels, fingerprint)
-
-    # Registering by a shift fabricates a border strip (edge replication). Crop every
-    # registered frame to the interior box that ALL frames still fill with real,
-    # co-observed data, so no method measures a fabricated border. The measurement
-    # runs on the crop and is re-embedded into a full-size zero field, so the excluded
-    # border reads as no motion and the output shape is unchanged.
     frame_shape = (target.shape[1], target.shape[2])
-    valid = valid_region(ref_drift, drift_pixels, frame_shape)
+    remove_stage_drift = bool(getattr(params, "disp_remove_stage_drift", False))
+
+    if remove_stage_drift:
+        # Register everything to the first target frame (the anchor) so bulk stage
+        # drift is gone before the displacement method runs. Estimate every bulk
+        # drift first (reference + all frames): the whole set is needed up front to
+        # fix the common measurement region. drift_pixels[frame] is that frame's
+        # bulk (u_x, u_y) drift relative to the anchor, reused to move the cell
+        # channel into the same frame downstream (batch_analysis._cells_for_overlay).
+        # FTTC nulls the DC mode, so the shared anchor leaves traction unchanged.
+        anchor = target[0]
+        # GPU phase-correlation + grid_sample resample when the device is CUDA
+        # (drift bit-identical to the scikit-image reference), else the CPU
+        # reference. Bound to the fixed anchor so its spectrum is computed once for
+        # the whole stack.
+        estimate, apply = _registration_ops(anchor, params)
+
+        # Reuse a persisted drift estimate when the inputs are unchanged (a
+        # tune-loop re-running the same folder), else estimate and persist. The
+        # fingerprint keys the cache to the exact reference + bead frames, so a
+        # swapped/edited dataset fails safe to recomputation rather than silently
+        # reusing stale drift.
+        cached = None
+        fingerprint = None
+        if drift_cache is not None:
+            fingerprint = drift_fingerprint(reference, target)
+            cached = load_drift_csv(drift_cache, total_frames, fingerprint)
+
+        if cached is not None:
+            ref_drift, drift_pixels = cached
+        else:
+            ref_drift = estimate(reference)
+            for frame in range(total_frames):
+                drift_pixels[frame] = estimate(target[frame])
+            if drift_cache is not None:
+                save_drift_csv(drift_cache, ref_drift, drift_pixels, fingerprint)
+
+        # Registering by a shift fabricates a border strip (edge replication). Crop
+        # every registered frame to the interior box that ALL frames still fill with
+        # real, co-observed data, so no method measures a fabricated border. The
+        # measurement runs on the crop and is re-embedded into a full-size zero
+        # field, so the excluded border reads as no motion and the output shape is
+        # unchanged.
+        valid = valid_region(ref_drift, drift_pixels, frame_shape)
+        reference_registered_full = apply(reference, ref_drift)
+    else:
+        ref_drift = np.zeros(2, dtype=np.float32)
+        valid = (0, frame_shape[0], 0, frame_shape[1])
+        reference_registered_full = np.asarray(reference)
     # Mask confinement (opt-in via disp_mask_confine, and only if a mask is given):
     # margin in px from the µm knob. A mask whose frame axis matches is indexed per
     # frame; a 2D mask is reused for every frame.
     confine = mask is not None and getattr(params, "disp_mask_confine", False)
     margin_px = (params.disp_mask_margin_um / params.pixel_size
                  if params.pixel_size else float("inf"))
-    # The reference is constant across frames; register it once, then slice each
-    # frame's own box out of it (the box follows a migrating cell frame-to-frame).
-    reference_registered_full = apply(reference, ref_drift)
+    # The reference is constant across frames; register it once in drift-removal
+    # mode, then slice each frame's own box out of it (the box follows a migrating
+    # cell frame-to-frame). In direct mode this is the unmodified reference.
 
     # Downsample-before vs downsample-after: with the flag on (and an actual factor),
     # bin the registered images and measure on 1/df^2 the pixels -- faster, and on
@@ -254,7 +280,10 @@ def calculate_displacement_field(
     downscale_before = df > 1 and getattr(params, "disp_downscale_before", False)
 
     for frame in range(total_frames):
-        frame_registered_full = apply(target[frame], drift_pixels[frame])
+        if remove_stage_drift:
+            frame_registered_full = apply(target[frame], drift_pixels[frame])
+        else:
+            frame_registered_full = target[frame]
         mask_frame = (mask[frame] if mask.ndim == 3 else mask) if confine else None
         r0, r1, c0, c1 = mask_region(
             mask_frame, drift_pixels[frame], margin_px, valid, frame_shape
@@ -274,9 +303,18 @@ def calculate_displacement_field(
             # scale by df to express it in full-res px -- matching the other path's
             # units -- then drop it onto the coarse grid at the crop's floored origin.
             w_small = _bin_image(weight, df) if weight is not None else None
-            field_small = analyzer.calculate_flow(
-                _bin_image(ref_crop, df), _bin_image(mov_crop, df), weight=w_small,
-            ) * df
+            ref_small = _bin_image(ref_crop, df)
+            mov_small = _bin_image(mov_crop, df)
+            if tune_parameters:
+                field_small, _, diag = autotune_displacement_parameters(
+                    analyzer, ref_small, mov_small, weight=w_small,
+                    smoothing_selector=getattr(params, "disp_tune_selector", "L-curve"),
+                )
+                diag.update({"frame": frame + 1, "downscale_before": True})
+                tuning_frames.append(diag)
+            else:
+                field_small = analyzer.calculate_flow(ref_small, mov_small, weight=w_small)
+            field_small = field_small * df
             if w_small is not None:
                 field_small = field_small * w_small[..., None]
             coarse = np.zeros(
@@ -290,7 +328,15 @@ def calculate_displacement_field(
             yield displacement_field_stack[frame].copy(), frame + 1, total_frames
             continue
 
-        field_crop = analyzer.calculate_flow(ref_crop, mov_crop, weight=weight)
+        if tune_parameters:
+            field_crop, _, diag = autotune_displacement_parameters(
+                analyzer, ref_crop, mov_crop, weight=weight,
+                smoothing_selector=getattr(params, "disp_tune_selector", "L-curve"),
+            )
+            diag.update({"frame": frame + 1, "downscale_before": False})
+            tuning_frames.append(diag)
+        else:
+            field_crop = analyzer.calculate_flow(ref_crop, mov_crop, weight=weight)
         if weight is not None:
             field_crop = field_crop * weight[..., None]
 
@@ -318,6 +364,13 @@ def calculate_displacement_field(
         "time_interval_units": "min",
     }
 
+    metadata = {}
+    if tuning_frames:
+        metadata["parameter_tuning"] = {
+            "mode": "current_frame_button" if total_frames == 1 else "per_frame",
+            "frames": tuning_frames,
+        }
+
     return DisplacementResult(
         displacement_field=displacement_field_stack,
         original_shape=reference.shape,
@@ -325,9 +378,5 @@ def calculate_displacement_field(
         parameters=params,
         physical_scale=physical_scale,
         drift_pixels=drift_pixels,
+        metadata=metadata,
     )
-
-
-
-
-

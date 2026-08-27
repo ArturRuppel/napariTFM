@@ -38,7 +38,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 import sweep_config as C
-from sweep_forces import rasterize_gt
+from scoring import rasterize_gt
 from make_scenes import greens_displacement
 
 N = C.GT_REFERENCE_SIZE
@@ -193,21 +193,29 @@ def render_card(stage, cond, scene, disp_path, force_path, out_png):
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
-def process_scene(stage, out_root, cond, scene, rows):
+def process_scene(stage, out_root, cond, scene, rows=None):
+    """Render every (disp, force) pair of one scene. Returns the rows it produced
+    (and also appends to `rows` when given, for the serial caller)."""
     cdir = os.path.join(stage, "cache", cond, scene)
     disps = sorted(f for f in glob.glob(os.path.join(cdir, "disp_*_res*.npz"))
                    if ".tmp." not in os.path.basename(f))
-    n = 0
+    out = []
     for dp in disps:
         suffix = re.sub(r"^disp_", "", os.path.basename(dp))         # <method>_res..npz
         fp = os.path.join(cdir, "force_" + suffix)
         if not os.path.exists(fp):
             continue
         out_png = os.path.join(out_root, cond, scene, re.sub(r"\.npz$", ".png", suffix))
-        row = render_card(stage, cond, scene, dp, fp, out_png)
-        rows.append(row)
-        n += 1
-    print(f"  [{cond}/{scene}] {n} cards", flush=True)
+        out.append(render_card(stage, cond, scene, dp, fp, out_png))
+    print(f"  [{cond}/{scene}] {len(out)} cards", flush=True)
+    if rows is not None:
+        rows.extend(out)
+    return out
+
+
+def _render_scene_task(job):
+    """Picklable entry point for the worker pool (one scene per task)."""
+    return process_scene(*job)
 
 
 def main():
@@ -216,6 +224,8 @@ def main():
     ap.add_argument("--condition", default=None)
     ap.add_argument("--scene", default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--workers", type=int, default=1,
+                    help="render scenes in parallel processes (cards are independent)")
     a = ap.parse_args()
     out_root = a.out or os.path.join(a.stage, "renders")
     os.makedirs(out_root, exist_ok=True)
@@ -223,13 +233,24 @@ def main():
     conds = [a.condition] if a.condition else sorted(
         d for d in os.listdir(os.path.join(a.stage, "cache"))
         if os.path.isdir(os.path.join(a.stage, "cache", d)))
-    rows = []
+    jobs = []
     for cond in conds:
         scenes = [a.scene] if a.scene else sorted(
             d for d in os.listdir(os.path.join(a.stage, "cache", cond))
             if os.path.isdir(os.path.join(a.stage, "cache", cond, d)))
-        for scene in scenes:
-            process_scene(a.stage, out_root, cond, scene, rows)
+        jobs += [(a.stage, out_root, cond, scene) for scene in scenes]
+
+    rows = []
+    if a.workers > 1:
+        # Scenes are independent (own PNG dir, own rows); the parent does the only
+        # shared write, index.csv, after the pool drains.
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(a.workers) as ex:
+            for got in ex.map(_render_scene_task, jobs):
+                rows.extend(got)
+    else:
+        for job in jobs:
+            rows.extend(_render_scene_task(job))
 
     # merge into index.csv (replace rows for the cond/scene we just rendered)
     idx = os.path.join(out_root, "index.csv")

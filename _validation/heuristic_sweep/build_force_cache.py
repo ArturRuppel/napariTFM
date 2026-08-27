@@ -38,7 +38,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "4")
 import numpy as np
 
 import sweep_config as C
-from sweep_forces import rasterize_gt, metrics
+from scoring import rasterize_gt, metrics
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 from napariTFM.backend.fttc import FTTC
 from napariTFM.backend.forward_l1 import l1_traction_frame

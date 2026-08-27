@@ -46,6 +46,8 @@ class ILKDisplacementAnalyzer(BaseDisplacementAnalyzer):
     """
 
     algorithm_name = "Lucas-Kanade"
+    smoothing_param_name = None
+    convergence_param_name = None
 
     def __init__(self, params: Optional[DisplacementParameters] = None):
         super().__init__(params)

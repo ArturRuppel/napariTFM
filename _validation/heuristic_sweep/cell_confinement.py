@@ -34,7 +34,7 @@ in-objective penalty re-explains with interior force (better peaks). Measured he
 the soft solver lowers in-cell nRMSE below baseline in every useful-window scene,
 while the post-hoc zero leaves it exactly at baseline.
 
-Companion to cell_compare_reg.py. Cells rank on whole-field nRMSE (the Sabass J is
+Cells rank on whole-field nRMSE (the Sabass J is
 undefined on a diffuse centripetal field). GT is the stored fitted-fibre traction.
 
 Usage:  python cell_confinement.py [--stage $STAGE] [--outdir figures]
@@ -50,7 +50,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import zoom
 import tifffile
 import sweep_config as C
-from sweep_forces import metrics
+from scoring import metrics
 from napariTFM.backend.forward_l1 import l1_traction_frame
 from napariTFM.backend.parameter_dataclasses import FTTCParameters
 
@@ -61,7 +61,7 @@ RES = 24.0                      # PIV window held fixed (the sweep-recommended d
 L1_FIXED = 0.05                 # shipped-default sparsity -- "with the defaults, does a mask help?"
 DIALS = [0, 20, 40, 60, 80, 100]        # fwd_mask_strength; 0 == no confinement (baseline)
 GT_FRAC = 0.05                  # GT-support oracle mask: |t_gt| > frac * max
-# strength bands: noise floor / useful window / breakdown (px), matching cell_compare_reg's USEFUL
+# strength bands: noise floor / useful window / breakdown (px)
 BANDS = [("noisy (|u|≤1.2)", lambda p: p <= 1.2),
          ("useful (1.2–8)",  lambda p: 1.2 < p <= 8.0),
          ("strong (|u|>8)",  lambda p: p > 8.0)]

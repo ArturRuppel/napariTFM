@@ -171,7 +171,11 @@ def test_calculate_displacement_field_writes_then_reuses_cache(tmp_path):
         ndimage.shift(anchor, shift=(1.0, -1.5), order=3, mode="nearest"),
     ]).astype(np.float32)
     reference = _speckle(H=96, W=96, seed=21)
-    params = DisplacementParameters(disp_device="cpu", downscale_factor=1)
+    params = DisplacementParameters(
+        disp_device="cpu",
+        downscale_factor=1,
+        disp_remove_stage_drift=True,
+    )
     path = tmp_path / "registration_drift.csv"
 
     def _run():
