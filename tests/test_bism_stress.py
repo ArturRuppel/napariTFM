@@ -34,6 +34,48 @@ def test_compute_bism_stress_runs_masked():
     assert 0.0 <= res.r2_traction <= 1.0 + 1e-6
 
 
+def _unbalanced_traction(R=12, C=12):
+    """Tractions with a net force — what a window inside a larger tissue sees."""
+    jj, ii = np.meshgrid(np.arange(C), np.arange(R))
+    return 1.0 + jj / C, 1.0 + ii / R
+
+
+def test_image_border_is_not_a_free_boundary():
+    # Whole-frame mask: the tissue continues out of view, so the border faces
+    # carry the net force and the tractions are reproduced.
+    tx, ty = _unbalanced_traction()
+    res = bism.compute_bism_stress(tx, ty, l=1.0, mask=np.ones(tx.shape, bool))
+    assert res.r2_traction > 0.99
+    assert np.abs(res.sxx[:, 0]).min() > 0.5
+    assert np.abs(res.syy[0, :]).min() > 0.5
+
+
+def test_tissue_edge_inside_image_stays_stress_free():
+    # Same tractions on an island that ends inside the image: its contour is
+    # stress-free, which a net force cannot satisfy.
+    tx, ty = _unbalanced_traction()
+    pad = 3
+    res = bism.compute_bism_stress(
+        np.pad(tx, pad), np.pad(ty, pad), l=1.0,
+        mask=np.pad(np.ones(tx.shape, bool), pad),
+    )
+    assert res.r2_traction < 0.5
+
+
+def test_mask_touching_part_of_image_border_is_open_only_there():
+    tx, ty = _unbalanced_traction()
+    R, C = tx.shape
+    pad = 3
+    mask = np.zeros((R + pad, C + pad), bool)
+    mask[:R, :C] = True                       # touches the top and left border
+    txp = np.zeros(mask.shape); txp[:R, :C] = tx
+    typ = np.zeros(mask.shape); typ[:R, :C] = ty
+    res = bism.compute_bism_stress(txp, typ, l=1.0, mask=mask)
+    at_image_border = np.abs(res.sxx[:R, 0]).mean()
+    at_tissue_edge = np.abs(res.sxx[:R, C - 1]).mean()
+    assert at_image_border > 5 * at_tissue_edge
+
+
 def test_process_mask_data_resizes_to_force_field():
     mask_data = np.array([[0, 2], [3, 0]], dtype=np.uint8)
     force_field = np.zeros((1, 4, 4, 2), dtype=np.float32)

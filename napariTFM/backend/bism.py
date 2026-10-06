@@ -12,8 +12,8 @@ BISM:
 Forward model ``A @ sigma = T`` (the discretized divergence operator):
     sigma_MAP = (lambda*B + l^2 A^T A)^{-1} (l^2 A^T T)
 where B is the prior covariance (stress-norm regularization + shear-symmetry
-term + optional free-stress boundary conditions). Lambda is a fixed,
-user-supplied regularization hyperparameter.
+term + free-stress boundary conditions on tissue edges inside the image).
+Lambda is a fixed, user-supplied regularization hyperparameter.
 
 :func:`compute_bism_stress` is the per-frame entry point;
 :func:`calculate_bism_stresses` is the stage generator.
@@ -73,8 +73,10 @@ def compute_bism_stress(
         mask:   boolean (R, C). The divergence operator and free-stress boundary
                 conditions are restricted to the masked region and its actual
                 contour — the correct formulation for a monolayer that does not
-                fill the field. A mask is required (a TFM stress solve is always
-                over an externally supplied cell/monolayer mask).
+                fill the field. Where the mask reaches the image border the
+                tissue is taken to continue out of view, so no boundary
+                condition is imposed there. A mask is required (a TFM stress
+                solve is always over an externally supplied cell/monolayer mask).
 
     Returns:
         BISMResult with sxx, syy, sxy in units of [traction]*[l] (Pa*um).
@@ -95,8 +97,13 @@ def _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc) -> BISMResult
     Stress lives on cell faces (a staggered grid):
       * x-faces (vertical, between horizontal neighbours) carry sigma_xx, sigma_yx
       * y-faces (horizontal, between vertical neighbours) carry sigma_yy, sigma_xy
-    Only faces touching an in-mask cell are unknowns; a face touching exactly one
-    in-mask cell is a free boundary (its normal traction is penalized to zero).
+    Only faces touching an in-mask cell are unknowns; a face between an in-mask
+    and an out-of-mask cell is a free boundary (its normal traction is penalized
+    to zero). Faces on the image border are not: the tissue continues out of
+    view there, so they stay ordinary unknowns (as in Saw et al., Nature 544,
+    2017, for patches within a larger monolayer). Stress within ~10% of the
+    field size of such a border is unreliable, and stress components with a
+    wavelength longer than the field of view are not recovered.
     """
     tx = np.nan_to_num(np.asarray(tx, dtype=float), nan=0.0)
     ty = np.nan_to_num(np.asarray(ty, dtype=float), nan=0.0)
@@ -114,6 +121,7 @@ def _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc) -> BISMResult
     x_left = np.zeros((R, C + 1), bool); x_left[:, 1:] = mask
     x_right = np.zeros((R, C + 1), bool); x_right[:, :C] = mask
     x_bound = x_active & (x_left ^ x_right)        # exactly one neighbour in mask
+    x_bound[:, [0, C]] = False                     # image border is not a tissue edge
     x_id = np.full((R, C + 1), -1, int)
     x_id[x_active] = np.arange(int(x_active.sum()))
     nx = int(x_active.sum())
@@ -125,6 +133,7 @@ def _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc) -> BISMResult
     y_top = np.zeros((R + 1, C), bool); y_top[1:, :] = mask
     y_bot = np.zeros((R + 1, C), bool); y_bot[:R, :] = mask
     y_bound = y_active & (y_top ^ y_bot)
+    y_bound[[0, R], :] = False
     y_id = np.full((R + 1, C), -1, int)
     y_id[y_active] = np.arange(int(y_active.sum()))
     ny = int(y_active.sum())
@@ -167,13 +176,15 @@ def _compute_bism_masked(tx, ty, mask, l, lam, alpha_xy, alpha_bc) -> BISMResult
     Bdiff = sp.csr_matrix((dval, (drow, dcol)), shape=(ncell, ninf))
     B = B + (alpha_xy ** 2) * (Bdiff.T @ Bdiff)
 
-    # free-stress boundary conditions on the mask contour
+    # free-stress boundary conditions on the mask contour (none if the mask
+    # only ends at the image border)
     xb = x_id[x_bound]          # boundary x-faces -> sigma_xx = sigma_yx = 0
     yb = y_id[y_bound]          # boundary y-faces -> sigma_yy = sigma_xy = 0
     bc_cols = np.concatenate([o_xx + xb, o_yx + xb, o_yy + yb, o_xy + yb])
     nb = bc_cols.size
     Bbc = sp.csr_matrix((np.ones(nb), (np.arange(nb), bc_cols)), shape=(nb, ninf))
-    B = B + (alpha_bc ** 2) * (Bbc.T @ Bbc)
+    if nb:
+        B = B + (alpha_bc ** 2) * (Bbc.T @ Bbc)
 
     # ---- solve ----------------------------------------------------------- #
     AtA = (A.T @ A).tocsc()
